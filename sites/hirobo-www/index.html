@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Hirobo — Private Holding</title>
+    <meta
+      name="description"
+      content="Hirobo B.V. — a privately held investment vehicle stewarding capital across jurisdictions and across generations. Governed under Dutch law, from the Netherlands."
+    />
+    <meta name="theme-color" content="#1C1814" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Hirobo — Private Holding" />
+    <meta
+      property="og:description"
+      content="A privately held investment vehicle. Capital held across generations."
+    />
+    <meta property="og:url" content="https://www.hirobo.nl/" />
+
+    <!-- Official brand favicons (05-favicons) -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
+
+    <!-- Brand type: Lora (display) + Poppins (functional) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400;1,500&family=Poppins:ital,wght@0,300;0,400;0,500;1,300&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      :root {
+        /* HIROBO color system — Sumi / Washi / Cinnabar / Kōka / Shirako */
+        --sumi: #1c1814;
+        --washi: #f4efe4;
+        --cinnabar: #bf3930;
+        --koka: #8c8278;
+        --shirako: #eae4d8;
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; }
+
+      body {
+        background: var(--washi);
+        color: var(--sumi);
+        font-family: "Poppins", system-ui, sans-serif;
+        font-weight: 400;
+        font-size: 15px;
+        line-height: 1.75;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
+      }
+
+      /* The single Cinnabar moment — the brand's signature top rule. */
+      .top-rule { height: 2px; width: 100%; background: var(--cinnabar); }
+
+      .display { font-family: "Lora", Georgia, serif; }
+      .label {
+        font-family: "Poppins", system-ui, sans-serif;
+        text-transform: uppercase;
+        font-weight: 400;
+        color: var(--koka);
+      }
+
+      /* ---- Masthead ---- */
+      header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: clamp(24px, 5vw, 44px) clamp(24px, 6vw, 68px) 0;
+      }
+      header .mark { width: 38px; height: 38px; flex: none; }
+      .lockup-text { line-height: 1; }
+      .lockup-text .wm {
+        font-family: "Lora", Georgia, serif;
+        font-weight: 400;
+        font-size: 19px;
+        letter-spacing: 0.18em;
+        color: var(--sumi);
+      }
+      .lockup-text .sub {
+        font-size: 8.5px;
+        letter-spacing: 0.28em;
+        margin-top: 5px;
+      }
+
+      /* ---- Hero ---- */
+      main {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        padding: clamp(30px, 6vw, 60px) clamp(24px, 6vw, 68px);
+      }
+      .inner { max-width: 760px; }
+
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.3em;
+        margin-bottom: clamp(22px, 4vw, 32px);
+      }
+
+      h1 {
+        font-family: "Lora", Georgia, serif;
+        font-weight: 400;
+        font-size: clamp(46px, 9vw, 88px);
+        line-height: 1;
+        letter-spacing: 0.02em;
+        color: var(--sumi);
+      }
+      .tagline {
+        font-family: "Lora", Georgia, serif;
+        font-style: italic;
+        font-weight: 400;
+        font-size: clamp(22px, 3.6vw, 33px);
+        line-height: 1.35;
+        color: var(--sumi);
+        margin-top: clamp(16px, 2.4vw, 24px);
+      }
+
+      .statement {
+        font-size: clamp(15px, 2vw, 17px);
+        line-height: 1.85;
+        max-width: 60ch;
+        margin-top: clamp(26px, 4vw, 38px);
+        color: var(--sumi);
+        font-weight: 400;
+      }
+
+      .rule {
+        height: 0.5px;
+        background: var(--shirako);
+        max-width: 60ch;
+        margin: clamp(36px, 5vw, 50px) 0;
+      }
+
+      .pillars {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: clamp(22px, 4vw, 44px);
+        max-width: 60ch;
+      }
+      .pillar h2 {
+        font-family: "Lora", Georgia, serif;
+        font-weight: 400;
+        font-size: clamp(17px, 2.2vw, 19px);
+        color: var(--sumi);
+        margin-bottom: 10px;
+      }
+      .pillar p {
+        font-size: 13px;
+        line-height: 1.85;
+        color: var(--koka);
+        letter-spacing: 0.01em;
+      }
+
+      .origin {
+        font-family: "Lora", Georgia, serif;
+        font-style: italic;
+        font-weight: 400;
+        font-size: clamp(15px, 1.9vw, 17px);
+        line-height: 1.9;
+        color: var(--koka);
+        max-width: 56ch;
+        margin-top: clamp(36px, 5vw, 52px);
+      }
+
+      /* ---- Footer ---- */
+      footer {
+        border-top: 0.5px solid var(--shirako);
+        padding: clamp(22px, 4vw, 34px) clamp(24px, 6vw, 68px);
+        display: flex;
+        align-items: center;
+        gap: 14px 22px;
+        flex-wrap: wrap;
+      }
+      footer .mark { width: 22px; height: 22px; flex: none; }
+      footer .fwm {
+        font-family: "Lora", Georgia, serif;
+        font-weight: 400;
+        font-size: 13px;
+        letter-spacing: 0.18em;
+        color: var(--sumi);
+      }
+      footer .meta { font-size: 9.5px; letter-spacing: 0.2em; }
+      footer .note {
+        font-family: "Lora", Georgia, serif;
+        font-style: italic;
+        font-size: 14px;
+        color: var(--koka);
+        margin-left: auto;
+      }
+
+      /* ---- Entrance ---- */
+      @media (prefers-reduced-motion: no-preference) {
+        .fade { opacity: 0; transform: translateY(10px); animation: rise 0.9s cubic-bezier(0.2, 0.7, 0.3, 1) forwards; }
+        .d1 { animation-delay: 0.05s; }
+        .d2 { animation-delay: 0.16s; }
+        .d3 { animation-delay: 0.28s; }
+        .d4 { animation-delay: 0.4s; }
+        .d5 { animation-delay: 0.52s; }
+        @keyframes rise { to { opacity: 1; transform: none; } }
+      }
+
+      @media (max-width: 560px) {
+        .pillars { grid-template-columns: 1fr; gap: 22px; }
+        footer .note { margin-left: 0; width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="top-rule"></div>
+
+    <header class="fade d1">
+      <svg class="mark" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><clipPath id="m-head"><circle cx="50" cy="50" r="44" /></clipPath></defs>
+        <circle cx="50" cy="50" r="44" fill="#1C1814" />
+        <g clip-path="url(#m-head)">
+          <rect x="20" y="6" width="13" height="88" fill="#F4EFE4" />
+          <rect x="67" y="6" width="13" height="88" fill="#F4EFE4" />
+          <rect x="33" y="43" width="34" height="14" fill="#F4EFE4" />
+        </g>
+      </svg>
+      <div class="lockup-text">
+        <div class="wm">HIROBO</div>
+        <div class="sub label">B.V. · Personal Holding</div>
+      </div>
+    </header>
+
+    <main>
+      <div class="inner">
+        <p class="eyebrow label fade d1">Private Holding Company · Netherlands</p>
+
+        <h1 class="fade d2">Hirobo</h1>
+        <p class="tagline fade d2">Capital held across generations.</p>
+
+        <p class="statement fade d3">
+          Hirobo B.V. is a privately held investment vehicle — established to
+          consolidate and steward capital across jurisdictions and across
+          generations. Governed under Dutch law, from the Netherlands.
+        </p>
+
+        <div class="rule fade d3"></div>
+
+        <div class="pillars fade d4">
+          <div class="pillar">
+            <h2>Private</h2>
+            <p>No public presence by design. Hirobo communicates through documents and direct correspondence.</p>
+          </div>
+          <div class="pillar">
+            <h2>Enduring</h2>
+            <p>Built to remain unchanged for decades. Restraint over fashion — nothing that time will date.</p>
+          </div>
+          <div class="pillar">
+            <h2>Grounded</h2>
+            <p>Dutch legal structure, Japanese origin, operational presence across three continents.</p>
+          </div>
+        </div>
+
+        <p class="origin fade d5">
+          The name joins two: Hiro, the grandfather — and Bo, his grandchild.
+          Two names, one mark, held within an unbroken circle.
+        </p>
+      </div>
+    </main>
+
+    <footer class="fade d5">
+      <svg class="mark" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><clipPath id="m-foot"><circle cx="50" cy="50" r="44" /></clipPath></defs>
+        <circle cx="50" cy="50" r="44" fill="#1C1814" />
+        <g clip-path="url(#m-foot)">
+          <rect x="20" y="6" width="13" height="88" fill="#F4EFE4" />
+          <rect x="67" y="6" width="13" height="88" fill="#F4EFE4" />
+          <rect x="33" y="43" width="34" height="14" fill="#F4EFE4" />
+        </g>
+      </svg>
+      <span class="fwm">HIROBO B.V.</span>
+      <span class="meta label">Registered in the Netherlands</span>
+      <span class="note">Correspondence by introduction.</span>
+    </footer>
+  </body>
+</html>

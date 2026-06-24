@@ -23,3 +23,6 @@ coverage/
 *.log
 .DS_Store
 Thumbs.db
+
+# Claude Code — local machine settings (permissions, paths)
+.claude/settings.local.json
