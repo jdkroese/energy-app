@@ -1,6 +1,6 @@
 # Energy App — Project Brief
 
-> Status: **DRAFT — discovery largely complete; API research in progress**
+> Status: **MVP scaffolded & deployed (energy.hirobo.nl); monitoring build next**
 > Owner: Joris Kroese
 > Last updated: 2026-06-24
 
@@ -175,19 +175,29 @@ User is registering a Fleet API app. Settings entered:
 
 ---
 
-## 8. Tech stack
+## 8. Tech stack (decided + built)
 
-To be recommended by Claude once API research lands (control loop + dashboards +
-easy coexistence on the existing VPS). Decision pending §6.1.
+pnpm monorepo mirroring the proven `app.hirobo.nl` setup on the same VPS:
+- **apps/api** — Node 24 + TypeScript + Express 5; Sonnen (local, over the VPN) and
+  Tesla Fleet (cloud) connectors; bundled with esbuild → single `dist/index.cjs`.
+- **apps/web** — React 19 + Vite 7 + Tailwind v4 (dark control-room tokens); PWA-ready.
+- **Deploy** — GitHub Actions build → rsync artifacts → systemd `energy-api` behind
+  nginx. DB (Postgres + Drizzle) to be added when history/reporting lands.
+- Repo: https://github.com/jdkroese/energy-app. Full detail: `docs/04-deployment.md`.
 
 ---
 
-## 9. Open items
-- [ ] Read in API research (Tesla Fleet + Sonnen) → decide connectivity (A/B/C).
-- [ ] Confirm which system meters Array A (Sonnen vs Tesla) post-migration.
-- [ ] Confirm Sonnen local API token availability + whether API access is enabled.
-- [ ] VPS specs / OS / web server already present (for coexistence with Hirobo app).
-- [ ] EV charger make/model + whether smart-charge API exists (controllable load).
-- [ ] Recommend tech stack + draft architecture.
-- [ ] Create GitHub repo + DEV→LIVE pipeline.
-- [ ] Move secrets (gateway password, tokens) into a proper secrets store.
+## 9. Status & open items
+**Done:** API research (Tesla Fleet + Sonnen); **VPN** Spain↔VPS live; Sonnen read
++ control verified over the tunnel; Tesla Fleet API onboarded; **app scaffolded &
+deployed** to https://energy.hirobo.nl (live Sonnen + Tesla on `/api/live`); GitHub
+repo + CI/CD pipeline; secrets in `/opt/energy/.env` + GH Actions secrets (not git).
+
+**Open:**
+- [ ] Build out MVP pages (Dashboard, Reporting, Alerts, Settings) per `08`/`09` design.
+- [ ] Add Postgres (`energy` DB) + Drizzle for telemetry history & reporting.
+- [ ] Confirm which system meters Array A (Sungrow) post-migration; wire Sungrow read
+      (likely `192.168.1.210`).
+- [ ] EV charger make/model + smart-charge API (controllable load).
+- [ ] Coordinator/control engine + scenario profiles (V1, after monitoring MVP).
+- [ ] Notifications (WhatsApp + PWA push).

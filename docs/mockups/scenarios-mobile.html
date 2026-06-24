@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Power — Scenarios (mobile / PWA)</title>
+<link rel="stylesheet" href="_ds/styles.css" />
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: radial-gradient(circle at 50% 0%, #0c1418, var(--bg-0)); color: var(--text-1);
+    min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+  .phone { width: 390px; height: 844px; border-radius: 46px; background: var(--bg-0); border: 10px solid #1a2227;
+    box-shadow: 0 40px 90px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.04); overflow: hidden;
+    display: flex; flex-direction: column; position: relative; }
+  .scroll { flex: 1; overflow-y: auto; }
+  .scroll::-webkit-scrollbar { width: 0; }
+  .chiprow { display:flex; gap:10px; overflow-x:auto; padding:2px 14px 4px; scrollbar-width:none; }
+  .chiprow::-webkit-scrollbar { display:none; }
+  .scard { flex:none; width:150px; border-radius:14px; padding:13px; cursor:pointer; border:1px solid var(--border-2); background:var(--surface-1); transition:border-color .15s,background .15s; }
+  .scard.on { border-color:var(--solar); background:var(--solar-wash); }
+  .frow { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 0; }
+  .frow + .frow { border-top:1px solid var(--border-1); }
+  .sublabel { font-size:14px; }
+  .hint { font-size:11.5px; color:var(--text-3); margin-top:2px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="_ds/_ds_bundle.js"></script>
+<script type="text/babel">
+const DS = window.PowerDesignSystem_138199 || {};
+const { Card, StatTile, Slider, Switch, SegmentedControl, Badge, Button } = DS;
+const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
+function Eyebrow({children}){ return <span style={{fontSize:9,fontWeight:600,letterSpacing:'.12em',textTransform:'uppercase',color:'var(--text-2)'}}>{children}</span>; }
+
+const SCENARIOS = {
+  selfuse:  { name:'Max self-consumption', icon:'leaf',           w:{save:55,self:90,indep:70,comfort:50}, reserve:20, dyn:true,  gridChg:false, exportRule:'PV only', ev:'Solar',    precond:true,  activation:'Auto',     trig:'Active May–Sep, sunny days' },
+  savings:  { name:'Max savings',           icon:'piggy-bank',     w:{save:95,self:60,indep:40,comfort:40}, reserve:15, dyn:false, gridChg:true,  exportRule:'PV only', ev:'P3 night', precond:true,  activation:'Manual',   trig:'You switch it on' },
+  independ: { name:'Max independence',      icon:'unplug',         w:{save:50,self:80,indep:100,comfort:45},reserve:25, dyn:true,  gridChg:false, exportRule:'PV only', ev:'Solar',    precond:true,  activation:'Manual',   trig:'You switch it on' },
+  storm:    { name:'Storm / backup',        icon:'cloud-lightning',w:{save:30,self:50,indep:60,comfort:55}, reserve:80, dyn:true,  gridChg:true,  exportRule:'Never',   ev:'Off',      precond:true,  activation:'Auto',     trig:'Auto-activates on a storm forecast' },
+  evnight:  { name:'Cheap-night EV',        icon:'plug-zap',       w:{save:80,self:55,indep:45,comfort:45}, reserve:18, dyn:false, gridChg:true,  exportRule:'PV only', ev:'P3 night', precond:false, activation:'Schedule', trig:'Nightly 00:00–08:00 (P3)' },
+};
+const ORDER = ['selfuse','savings','independ','storm','evnight'];
+
+function App(){
+  const [active,setActive] = React.useState('selfuse');
+  const [sel,setSel] = React.useState('selfuse');
+  const base = SCENARIOS[sel];
+  const [w,setW] = React.useState(base.w);
+  const [reserve,setReserve] = React.useState(base.reserve);
+  const [dyn,setDyn] = React.useState(base.dyn);
+  const [gridChg,setGridChg] = React.useState(base.gridChg);
+  const [exportRule,setExportRule] = React.useState(base.exportRule);
+  const [ev,setEv] = React.useState(base.ev);
+  const [precond,setPrecond] = React.useState(base.precond);
+  const [activation,setActivation] = React.useState(base.activation);
+
+  function pick(key){ const s=SCENARIOS[key]; setSel(key); setW(s.w); setReserve(s.reserve); setDyn(s.dyn); setGridChg(s.gridChg); setExportRule(s.exportRule); setEv(s.ev); setPrecond(s.precond); setActivation(s.activation); }
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+
+  // brain twin — projected impact
+  const selfSuff = Math.max(50, Math.min(96, Math.round(58 + w.self*0.18 + w.indep*0.13 - (gridChg?6:0))));
+  const saved = (3.0 + w.save*0.035 + (gridChg?1.4:0) + w.self*0.012).toFixed(2);
+  const backupH = Math.round((reserve/100)*27/0.6);
+
+  const tabs = [['live','Live','activity'],['reports','Reports','bar-chart-3'],['batteries','Batteries','battery-charging'],['alerts','Alerts','bell'],['more','More','menu']];
+
+  return (
+    <div className="phone">
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px 4px',fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text-1)',fontWeight:600}}>
+        <span>9:41</span><div style={{display:'flex',gap:6}}><Ico n="signal" s={{width:16,height:16}}/><Ico n="wifi" s={{width:16,height:16}}/><Ico n="battery-full" s={{width:18,height:18}}/></div></div>
+
+      <div className="scroll">
+        <div style={{padding:'12px 18px 12px'}}>
+          <Eyebrow>Scenarios</Eyebrow>
+          <h1 style={{fontSize:24,fontWeight:700,letterSpacing:'-.02em',margin:'2px 0 0'}}>Strategy profiles</h1>
+        </div>
+
+        {/* selector */}
+        <div className="chiprow">
+          {ORDER.map(key=>{ const s=SCENARIOS[key]; const on=sel===key;
+            return (<div key={key} className={'scard'+(on?' on':'')} onClick={()=>pick(key)}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                <span style={{width:30,height:30,borderRadius:9,display:'grid',placeItems:'center',background:on?'transparent':'var(--surface-3)',color:on?'var(--solar)':'var(--text-2)'}}><Ico n={s.icon} s={{width:17,height:17}}/></span>
+                {active===key && <span style={{fontSize:9,fontWeight:600,color:'var(--solar)',background:'var(--solar-wash)',padding:'3px 7px',borderRadius:999}}>ACTIVE</span>}
+              </div>
+              <div style={{fontSize:13.5,fontWeight:500,marginTop:9,lineHeight:1.25}}>{s.name}</div>
+            </div>); })}
+          <div className="scard" style={{display:'grid',placeItems:'center',color:'var(--text-3)'}}><div style={{textAlign:'center'}}><Ico n="plus" s={{width:20,height:20}}/><div style={{fontSize:12,marginTop:6}}>New</div></div></div>
+        </div>
+
+        <div style={{display:'flex',flexDirection:'column',gap:12,padding:'12px 14px 10px'}}>
+          {/* optimize for */}
+          <Card style={{padding:16}}>
+            <Eyebrow>Optimize for</Eyebrow>
+            <div style={{marginTop:8}}>
+              {Slider ? <React.Fragment>
+                <Slider label="Savings" unit="%" value={w.save} onChange={v=>setW({...w,save:v})} />
+                <Slider label="Self-consumption" unit="%" value={w.self} onChange={v=>setW({...w,self:v})} />
+                <Slider label="Independence" unit="%" value={w.indep} onChange={v=>setW({...w,indep:v})} />
+                <Slider label="Comfort" unit="%" value={w.comfort} onChange={v=>setW({...w,comfort:v})} />
+              </React.Fragment> : null}
+            </div>
+          </Card>
+
+          {/* batteries */}
+          <Card style={{padding:16}}>
+            <Eyebrow>Batteries</Eyebrow>
+            <div style={{marginTop:8}}>{Slider ? <Slider label="Tesla backup reserve" unit="%" value={reserve} onChange={setReserve} /> : null}</div>
+            <div className="frow"><div><div className="sublabel">Weather-aware reserve</div><div className="hint">Raise reserve automatically on storm / outage risk</div></div>{Switch ? <Switch checked={dyn} onChange={e=>setDyn(e.target.checked)} /> : null}</div>
+            <div className="frow"><div><div className="sublabel">Grid charging</div><div className="hint">{gridChg?'Allowed in P3 (cheap) only':'Solar only — never buy to store'}</div></div>{Switch ? <Switch checked={gridChg} onChange={e=>setGridChg(e.target.checked)} /> : null}</div>
+            <div style={{paddingTop:11}}><div className="sublabel" style={{marginBottom:8}}>Export rule</div>{SegmentedControl ? <SegmentedControl block options={['PV only','Battery OK','Never']} value={exportRule} onChange={setExportRule} /> : null}</div>
+          </Card>
+
+          {/* flexible loads */}
+          <Card style={{padding:16}}>
+            <Eyebrow>Flexible loads</Eyebrow>
+            <div style={{paddingTop:10}}><div className="sublabel" style={{marginBottom:8}}>EV charging · 2× BMW i3</div>{SegmentedControl ? <SegmentedControl block options={['Solar','P3 night','Off']} value={ev} onChange={setEv} /> : null}</div>
+            <div className="frow" style={{marginTop:4}}><div><div className="sublabel">Pre-condition home</div><div className="hint">Pre-cool / pre-heat the slab to dodge the P1 peak</div></div>{Switch ? <Switch checked={precond} onChange={e=>setPrecond(e.target.checked)} /> : null}</div>
+          </Card>
+
+          {/* activation */}
+          <Card style={{padding:16}}>
+            <Eyebrow>When it runs</Eyebrow>
+            <div style={{paddingTop:10}}>{SegmentedControl ? <SegmentedControl block options={['Manual','Schedule','Auto']} value={activation} onChange={setActivation} /> : null}</div>
+            <div style={{marginTop:10,fontSize:12.5,color:'var(--text-2)',display:'flex',alignItems:'center',gap:8}}><Ico n="info" s={{width:15,height:15,color:'var(--text-3)'}}/>{base.trig}</div>
+          </Card>
+
+          {/* impact preview */}
+          <Card accent="solar" style={{padding:16}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}><Eyebrow>Projected impact</Eyebrow><span style={{fontSize:11,color:'var(--text-3)'}}>brain twin · estimate</span></div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10}}>
+              <div style={{background:'var(--surface-2)',borderRadius:12,padding:'12px'}}><div style={{fontSize:11,color:'var(--text-2)'}}>Self-sufficiency</div><div style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:600,color:'var(--battery)',marginTop:4}}>{selfSuff}<small style={{fontSize:11,color:'var(--text-3)'}}>%</small></div></div>
+              <div style={{background:'var(--surface-2)',borderRadius:12,padding:'12px'}}><div style={{fontSize:11,color:'var(--text-2)'}}>Saved / day</div><div style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:600,color:'var(--solar)',marginTop:4}}>€{saved}</div></div>
+              <div style={{background:'var(--surface-2)',borderRadius:12,padding:'12px'}}><div style={{fontSize:11,color:'var(--text-2)'}}>Backup</div><div style={{fontFamily:'var(--font-mono)',fontSize:22,fontWeight:600,color:'var(--text-1)',marginTop:4}}>{backupH}<small style={{fontSize:11,color:'var(--text-3)'}}>h</small></div></div>
+            </div>
+            <div style={{marginTop:11,fontSize:11,color:'var(--text-3)',display:'flex',alignItems:'center',gap:7}}><Ico n="shield-check" s={{width:14,height:14}}/>14 kW grid cap, SoC limits &amp; fail-safe always enforced</div>
+          </Card>
+
+          {/* actions */}
+          <div style={{display:'flex',gap:10,marginTop:2}}>
+            {Button ? <Button variant="primary" block iconLeft={<Ico n="check"/>} onClick={()=>setActive(sel)}>{active===sel?'Active':'Apply scenario'}</Button> : null}
+            {Button ? <Button variant="secondary" iconLeft={<Ico n="copy"/>}>Save</Button> : null}
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:'flex',padding:'9px 10px 22px',borderTop:'1px solid var(--border-1)',background:'var(--glass-fill, rgba(15,22,25,.8))',backdropFilter:'blur(var(--blur-glass, 18px))'}}>
+        {tabs.map(t=>{ const on=t[0]==='more';
+          return (<button key={t[0]} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4,border:'none',background:'transparent',cursor:'pointer',color:on?'var(--solar)':'var(--text-3)'}}>
+            <Ico n={t[2]} s={{width:21,height:21}}/><span style={{fontSize:10,fontWeight:on?600:500}}>{t[1]}</span></button>); })}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 60);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 400);
+</script>
+</body>
+</html>

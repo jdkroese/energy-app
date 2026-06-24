@@ -1,0 +1,6 @@
+/* Power Design System — Fonts
+ * Type pairing: Space Grotesk (UI / display) + JetBrains Mono (data / numerals).
+ * NOTE: loaded from Google Fonts CDN. For offline / production, replace with
+ * self-hosted woff2 binaries + @font-face rules and re-point these families.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');

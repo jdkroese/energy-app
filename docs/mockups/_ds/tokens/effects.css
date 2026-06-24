@@ -1,0 +1,42 @@
+/* Power Design System — Effects: radii, shadows, glows, blur, motion.
+ * Cards are flat dark panels with hairline borders; elevation reads through
+ * deep soft shadows + a faint top inner-highlight, never heavy drop shadows.
+ * Glow is reserved for LIVE / energy-carrying elements only.
+ */
+:root {
+  /* Radii — medium-rounded shape language */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-card: 14px;
+  --radius-pill: 999px;
+
+  /* Shadows (dark-room depth) */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-card: 0 14px 44px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 18px 50px rgba(0, 0, 0, 0.6);
+  --hairline-top: inset 0 1px 0 rgba(233, 245, 242, 0.05); /* @kind shadow */
+
+  /* Glows — energy/live emphasis */
+  --glow-solar: 0 0 0 1px rgba(46, 230, 160, 0.4), 0 0 24px rgba(46, 230, 160, 0.3);
+  --glow-battery: 0 0 0 1px rgba(56, 217, 245, 0.4), 0 0 24px rgba(56, 217, 245, 0.28);
+  --glow-grid: 0 0 0 1px rgba(245, 165, 36, 0.4), 0 0 24px rgba(245, 165, 36, 0.28);
+  --glow-soft: 0 0 20px rgba(46, 230, 160, 0.18);
+
+  /* Focus ring */
+  --focus-ring: 0 0 0 2px var(--bg-0), 0 0 0 4px rgba(46, 230, 160, 0.6);
+
+  /* Glass / blur */
+  --blur-glass: 18px; /* @kind other */
+  --glass-fill: rgba(15, 22, 25, 0.72);
+
+  /* Motion */
+  --dur-fast: 120ms; /* @kind other */
+  --dur: 200ms; /* @kind other */
+  --dur-slow: 360ms; /* @kind other */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1); /* @kind other */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* @kind other */
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1); /* @kind other */
+}

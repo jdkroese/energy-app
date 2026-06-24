@@ -97,7 +97,21 @@ ssh jdkroese01@149.210.189.239 "sudo systemctl restart energy-api"
 Dirs `/var/energy`, `/opt/energy/.env`; systemd unit; nginx vhost; web-root chown.
 Reproducible via `scripts/setup-vps.sh` + `scripts/{energy-api.service,nginx-energy.conf}`.
 
+### Repo & CI status (2026-06-24)
+- **Repo:** https://github.com/jdkroese/energy-app (**private**); `main` pushed.
+- **Actions secrets:** `VPS_HOST`=149.210.189.239, `VPS_USER`=jdkroese01,
+  `VPS_SSH_KEY`= the CI deploy key (`~/.ssh/energy_ci_deploy`; public half in the VPS
+  `authorized_keys`). The deploy step strips CR from the key (robust to paste).
+- **Trigger:** push to `main`, or Actions → Deploy → "Run workflow" (workflow_dispatch).
+- **Verified green 2026-06-24** (run #5): build → rsync → `systemctl restart energy-api`;
+  live site updated with fresh data. Gotchas fixed along the way: don't set pnpm
+  `version` in the workflow (it conflicts with `packageManager`); approve esbuild's
+  build via `allowBuilds:` in `pnpm-workspace.yaml` (pnpm 11 exits 1 on unapproved
+  build scripts; `onlyBuiltDependencies` was NOT honored there); strip CR from the
+  pasted deploy key.
+- Code was pushed via HTTPS using the machine's cached git credentials (the user's
+  SSH key is not on GitHub; CI uses the dedicated deploy key for the VPS, not GitHub).
+
 ### Still open
-- **GitHub repo + secrets:** run `gh auth login` then `bash scripts/github-setup.sh`.
-- **Database:** not yet added (MVP reads live data without persistence). Add Postgres
-  (separate `energy` DB on the existing instance) + Drizzle when history/reporting lands.
+- **Database:** not yet added (MVP reads live data without persistence). Add a separate
+  `energy` Postgres DB on the existing instance + Drizzle when history/reporting lands.

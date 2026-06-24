@@ -70,7 +70,12 @@ Sonnen SoC + cell/health, Tesla SoC + backup, tariff band, history (€ & kWh).
 Use realistic Jávea/all-electric numbers and the 2.0TD bands in mockups.
 
 ## 7. Non-negotiables
-- **PWA**: installable, mobile-first responsive, push-ready.
+- **PWA**: installable, **mobile-first** responsive, push-ready.
+- **Delivery = installable PWA, NO App Store.** Install via Safari "Add to home
+  screen" (no Apple Developer account / review). Web Push on iOS 16.4+ once
+  installed. The 24/7 work (polling, coordinator, alert generation) runs
+  **server-side on the VPS**; the PWA is the client — so iOS background limits
+  don't matter. Front-end = PWA on energy.hirobo.nl; back-end = always-on service.
 - **Backup readiness = Tesla only** (never show Sonnen as backup).
 - Accessibility: AA contrast on dark, reduced-motion, large tap targets.
 - Near-real-time refresh without jarring reflow.

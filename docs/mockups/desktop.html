@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Power — Desktop (Live + Reports)</title>
+<link rel="stylesheet" href="_ds/styles.css" />
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg-0); color: var(--text-1); overflow: hidden; }
+  #root { height: 100vh; }
+  .app { display: flex; height: 100%; }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .scroll { flex: 1; overflow-y: auto; padding: 22px 28px 40px; }
+  .scroll::-webkit-scrollbar { width: 10px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
+  .navitem { display:flex; align-items:center; height:42px; border-radius:var(--radius-md); cursor:pointer;
+    color:var(--text-2); font-size:14px; font-weight:500; transition:background .12s,color .12s; white-space:nowrap; overflow:hidden; }
+  .navitem.on { background:var(--solar-wash); color:var(--solar); font-weight:600; box-shadow:inset 2px 0 0 var(--solar); }
+  .navitem .ti { flex:none; }
+
+  .pwr2{ position:relative; width:100%; aspect-ratio:1.08/1; min-height:360px; font-family:var(--font-sans); }
+  .pwr2__svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .pwr2__base{ stroke:var(--border-2); stroke-width:1.2; fill:none; }
+  .pwr2__line{ fill:none; stroke-width:2.2; stroke-linecap:round; stroke-dasharray:5 6; animation:pwr2move .9s linear infinite; }
+  @keyframes pwr2move{ from{stroke-dashoffset:11;} to{stroke-dashoffset:0;} }
+  .pwr2__node{ position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:4px; width:104px; text-align:center; }
+  .pwr2__chip{ display:flex; align-items:center; justify-content:center; width:52px; height:52px; border-radius:16px;
+    background:var(--surface-2); border:1px solid var(--border-2); color:var(--_c, var(--text-3)); box-shadow:var(--shadow-1), var(--hairline-top); transition:box-shadow .2s,border-color .2s,color .2s; }
+  .pwr2__chip svg{ width:22px; height:22px; }
+  .pwr2__node--active .pwr2__chip{ border-color:var(--_c); box-shadow:0 0 0 1px var(--_c), 0 0 18px color-mix(in srgb, var(--_c) 45%, transparent); }
+  .pwr2__name{ font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-2); }
+  .pwr2__kw{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:14px; font-weight:500; color:var(--_c, var(--text-1)); line-height:1; }
+  .pwr2__kw small{ font-size:9px; color:var(--text-3); }
+  .pwr2__sub{ font-family:var(--font-mono); font-size:10px; color:var(--text-3); line-height:1.1; }
+  .pwr2__hub{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:60px; height:60px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; color:var(--accent);
+    background:radial-gradient(circle at 50% 35%, var(--surface-3), var(--surface-1)); border:1px solid var(--border-3); box-shadow:var(--glow-soft, 0 0 22px rgba(46,230,160,.18)); }
+  .pwr2__hub svg{ width:24px; height:24px; }
+  .pwr2__hub::after{ content:""; position:absolute; inset:-6px; border-radius:50%; border:1px solid rgba(46,230,160,.25); animation:pwr2ring 2.6s ease-out infinite; }
+  @keyframes pwr2ring{ 0%{transform:scale(.85);opacity:.7;} 70%{transform:scale(1.5);opacity:0;} 100%{opacity:0;} }
+  .tband{ display:flex; gap:2px; height:10px; margin-top:10px; border-radius:4px; overflow:hidden; }
+  .tband i{ flex:1; }
+  .splitbar { display:flex; height:34px; border-radius:9px; overflow:hidden; }
+  .splitbar > div { display:flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-size:12px; font-weight:600; }
+  @media (prefers-reduced-motion: reduce){ .pwr2__line,.pwr2__hub::after{ animation:none; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="_ds/_ds_bundle.js"></script>
+<script type="text/babel">
+const DS = window.PowerDesignSystem_138199 || {};
+const { Card, StatTile, RadialGauge, ProgressBar, Sparkline, Badge, SegmentedControl } = DS;
+const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
+function Eyebrow({children}){ return <span style={{fontSize:10,fontWeight:600,letterSpacing:'.12em',textTransform:'uppercase',color:'var(--text-2)'}}>{children}</span>; }
+
+const FLOW = {
+  solar:  { name:'Solar',  val:'11.1', unit:'kW', sub:'A 6.6 · B 4.5', kw:11.1 },
+  sonnen: { name:'Sonnen', val:'100',  unit:'%',  sub:'9.2 kWh · idle', kw:0, dir:'idle' },
+  tesla:  { name:'Tesla',  val:'100',  unit:'%',  sub:'27 kWh · idle',  kw:0, dir:'idle' },
+  grid:   { name:'Grid',   val:'5.6',  unit:'kW', sub:'Exporting',      kw:5.56, dir:'exporting' },
+  home:   { name:'Home',   val:'5.5',  unit:'kW', sub:'Load',           kw:5.5 },
+};
+const TARIFF = [0,0,0,0,0,0,0,0, 1,1, 2,2,2,2, 1,1,1,1, 2,2,2,2, 1,1];
+const BAND_COLOR = ['var(--solar)','var(--grid-dim)','var(--grid)'];
+function series(n, base, amp, seed){ let s=seed||1; const r=()=>{ s=(s*9301+49297)%233280; return s/233280; };
+  const o=[]; for(let i=0;i<n;i++){ const d=Math.sin((i/n)*Math.PI); o.push(Math.max(0, base + d*amp + (r()-0.5)*amp*0.3)); } return o; }
+const solarDay = series(24,0.2,9.6,7).map((v,i)=> (i<7||i>21?0:v));
+const homeDay  = series(24,0.7,2.6,13);
+const BANDS = [ {k:'P1',kwh:35,eur:6.80,rate:'€0.209'},{k:'P2',kwh:77,eur:9.88,rate:'€0.131'},{k:'P3',kwh:332,eur:31.42,rate:'€0.096'} ];
+const weeks = [ {l:'W1',p:268,c:104},{l:'W2',p:241,c:118},{l:'W3',p:290,c:96},{l:'W4',p:251,c:126} ];
+const loads = [
+  { name:'Heat pump + floor', icon:'thermometer', tone:'var(--grid)', kwh:128, pct:34 },
+  { name:'A/C cooling', icon:'wind', tone:'var(--battery)', kwh:79, pct:21 },
+  { name:'EV · 2× BMW i3', icon:'plug-zap', tone:'var(--ev)', kwh:71, pct:19 },
+  { name:'Water heating', icon:'droplet', tone:'var(--home)', kwh:45, pct:12 },
+  { name:'Appliances', icon:'washing-machine', tone:'var(--solar)', kwh:34, pct:9 },
+  { name:'Lighting & other', icon:'lightbulb', tone:'var(--text-2)', kwh:19, pct:5 },
+];
+
+function TwoBatteryFlow({ f }){
+  const HUB = {x:50,y:50};
+  const POS = { solar:{x:50,y:14}, sonnen:{x:10,y:34}, tesla:{x:10,y:70}, grid:{x:90,y:50}, home:{x:50,y:90} };
+  const COLOR = { solar:'var(--solar)', sonnen:'var(--battery)', tesla:'var(--battery)', grid:'var(--grid)', home:'var(--home)' };
+  const ICON = { solar:'sun', sonnen:'battery-charging', tesla:'battery-charging', grid:'utility-pole', home:'house' };
+  const seg = (k,a,b)=>({key:k,d:`M${a.x} ${a.y} L${b.x} ${b.y}`,color:COLOR[k]});
+  const links=[];
+  if(f.solar.kw>0.05) links.push(seg('solar',POS.solar,HUB));
+  if(f.home.kw>0.05) links.push(seg('home',HUB,POS.home));
+  if(f.grid.dir==='exporting'&&f.grid.kw>0.05) links.push(seg('grid',HUB,POS.grid));
+  ['sonnen','tesla'].forEach(b=>{ if(f[b].dir==='charging')links.push(seg(b,HUB,POS[b])); if(f[b].dir==='discharging')links.push(seg(b,POS[b],HUB)); });
+  const active=new Set(links.map(l=>l.key));
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (
+    <div className="pwr2">
+      <svg className="pwr2__svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {Object.keys(POS).map(k=><line key={k} className="pwr2__base" x1={HUB.x} y1={HUB.y} x2={POS[k].x} y2={POS[k].y}/>)}
+        {links.map(l=><path key={l.key} className="pwr2__line" d={l.d} style={{stroke:l.color}}/>)}
+      </svg>
+      {Object.keys(POS).map(k=>{ const n=f[k]; const on=active.has(k); const above=(k==='solar');
+        const chip=<div className="pwr2__chip"><Ico n={ICON[k]}/></div>;
+        const labels=(<React.Fragment><span className="pwr2__name">{n.name}</span><span className="pwr2__kw">{n.val}<small> {n.unit}</small></span><span className="pwr2__sub">{n.sub}</span></React.Fragment>);
+        return (<div key={k} className={'pwr2__node'+(on?' pwr2__node--active':'')} style={{left:POS[k].x+'%',top:POS[k].y+'%','--_c':COLOR[k]}}>{above?<React.Fragment>{labels}{chip}</React.Fragment>:<React.Fragment>{chip}{labels}</React.Fragment>}</div>); })}
+      <div className="pwr2__hub"><Ico n="zap"/></div>
+    </div>
+  );
+}
+function AreaChart({ series, height=200, labels }){
+  const w=1000,h=height,padY=16; const id=React.useMemo(()=>'c'+Math.floor(Math.random()*1e6),[]);
+  const niceMax=Math.ceil(Math.max(...series.flatMap(s=>s.data),1)); const stepX=w/(series[0].data.length-1);
+  const tone=t=>({solar:'var(--solar)',home:'var(--home)'}[t]||t);
+  return (<svg viewBox={`0 0 ${w} ${h+26}`} width="100%" preserveAspectRatio="none" style={{display:'block',overflow:'visible'}}>
+    <defs>{series.map((s,i)=>(<linearGradient key={i} id={`${id}-${i}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={tone(s.tone)} stopOpacity="0.26"/><stop offset="100%" stopColor={tone(s.tone)} stopOpacity="0"/></linearGradient>))}</defs>
+    {[0,.25,.5,.75,1].map((g,i)=>(<g key={i}><line x1="0" y1={padY+g*(h-padY*2)} x2={w} y2={padY+g*(h-padY*2)} stroke="var(--grid-line)" strokeWidth="1"/><text x="6" y={padY+g*(h-padY*2)-5} fill="var(--text-3)" style={{font:'500 16px var(--font-mono)'}}>{Math.round(niceMax*(1-g))}</text></g>))}
+    {series.map((s,i)=>{ const pts=s.data.map((d,j)=>[j*stepX,padY+(1-d/niceMax)*(h-padY*2)]); const line=pts.map((p,k)=>`${k?'L':'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' '); const fill=`${line} L${w} ${h-padY} L0 ${h-padY} Z`;
+      return (<g key={i}>{s.fill!==false&&<path d={fill} fill={`url(#${id}-${i})`}/>}<path d={line} fill="none" stroke={tone(s.tone)} strokeWidth={s.dash?2:2.5} strokeDasharray={s.dash?'5 5':undefined} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/></g>); })}
+    {(labels||['00','06','12','18','24']).map((lb,i,a)=>(<text key={i} x={(i/(a.length-1))*w} y={h+18} textAnchor={i===0?'start':i===a.length-1?'end':'middle'} fill="var(--text-3)" style={{font:'500 15px var(--font-mono)'}}>{lb}</text>))}
+  </svg>);
+}
+function WeekBars({ data, height=200 }){
+  const max=Math.ceil(Math.max(...data.flatMap(d=>[d.p,d.c]),1));
+  return (<div style={{display:'flex',flexDirection:'column',gap:10}}>
+    <div style={{display:'flex',alignItems:'flex-end',gap:22,height,borderBottom:'1px solid var(--border-1)',padding:'0 6px'}}>
+      {data.map((g,i)=>(<div key={i} style={{flex:1,display:'flex',alignItems:'flex-end',gap:7,justifyContent:'center',height:'100%'}}>
+        <div style={{width:20,height:`${g.p/max*100}%`,background:'var(--solar)',borderRadius:'4px 4px 0 0',boxShadow:'0 0 10px color-mix(in srgb,var(--solar) 40%,transparent)'}}></div>
+        <div style={{width:20,height:`${g.c/max*100}%`,background:'var(--home)',borderRadius:'4px 4px 0 0'}}></div></div>))}
+    </div>
+    <div style={{display:'flex',gap:22,padding:'0 6px'}}>{data.map((g,i)=>(<div key={i} style={{flex:1,textAlign:'center',font:'500 13px var(--font-mono)',color:'var(--text-3)'}}>{g.l}</div>))}</div>
+  </div>);
+}
+
+function TariffCard(){ return (
+  <Card style={{display:'flex',flexDirection:'column'}}>
+    <Eyebrow>Tariff · 2.0TD</Eyebrow>
+    <div style={{display:'flex',alignItems:'baseline',gap:8,marginTop:8}}><span style={{fontFamily:'var(--font-mono)',fontSize:30,fontWeight:600}}>P2</span><span style={{fontSize:13,color:'var(--text-2)'}}>shoulder · <span style={{fontFamily:'var(--font-mono)',color:'var(--text-1)'}}>€0.131</span>/kWh</span></div>
+    <div className="tband">{TARIFF.map((b,i)=>(<i key={i} style={{background:BAND_COLOR[b],opacity:i===16?1:.5}}></i>))}</div>
+    <div style={{marginTop:12,fontSize:12,color:'var(--grid)',fontFamily:'var(--font-mono)'}}>P1 peak 18:00 · in 1h 12m</div>
+  </Card>); }
+function BackupCard(){ return (
+  <Card accent="battery" style={{display:'flex',flexDirection:'column',gap:4}}>
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}><Eyebrow>Backup · Tesla only</Eyebrow><Ico n="shield-check" s={{width:18,height:18,color:'var(--battery)'}}/></div>
+    <div style={{display:'flex',alignItems:'baseline',gap:8,marginTop:6}}><span style={{fontFamily:'var(--font-mono)',fontSize:30,fontWeight:600,color:'var(--battery)'}}>27</span><span style={{fontSize:13,color:'var(--text-2)'}}>kWh · ≈ 16 h autonomy</span></div>
+    <div style={{marginTop:6,fontSize:11,color:'var(--text-3)'}}>Sonnen excluded — no backup module installed</div>
+  </Card>); }
+
+function LiveScreen(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (<div style={{display:'flex',flexDirection:'column',gap:18}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:14}}>
+      <Card><StatTile label="Produced today" value="42.3" unit="kWh" tone="solar" icon={<Ico n="sun"/>} delta={9} footnote="vs yesterday"/></Card>
+      <Card><StatTile label="Consumed today" value="28.6" unit="kWh" tone="home" icon={<Ico n="plug"/>} delta={-4} footnote="vs yesterday"/></Card>
+      <Card><StatTile label="Grid feed-in" value="18.4" unit="kWh" tone="grid" icon={<Ico n="upload"/>} delta={14} footnote="exported today"/></Card>
+      <Card><StatTile label="Self-sufficiency" value="71" unit="%" tone="battery" icon={<Ico n="leaf"/>} delta={5} footnote="vs avg"/></Card>
+      <Card><StatTile label="Saved today" value="€5.40" tone="solar" icon={<Ico n="piggy-bank"/>} delta={7} footnote="vs grid-only"/></Card>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1.18fr 1fr',gap:20}}>
+      <Card title="Live energy flow" subtitle="Updated just now" accent="solar" icon={<Ico n="zap"/>} actions={Badge?<Badge tone="solar" variant="soft" icon={<Ico n="radio"/>}>Live</Badge>:null}><TwoBatteryFlow f={FLOW}/></Card>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,alignContent:'start'}}>
+        <Card glow accent="solar"><StatTile label="Solar now" value="11.1" unit="kW" tone="solar" icon={<Ico n="sun"/>} footnote="18.2 kWp · 2 arrays"/></Card>
+        <Card accent="home"><StatTile label="Home load" value="5.5" unit="kW" tone="home" icon={<Ico n="house"/>} footnote="all-electric"/></Card>
+        <div style={{gridColumn:'span 2'}}><TariffCard/></div>
+        <div style={{gridColumn:'span 2'}}><BackupCard/></div>
+      </div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:20}}>
+      <Card title="Batteries" subtitle="Sonnen + Tesla · combined 36 kWh" icon={<Ico n="battery-charging"/>}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          {[['Sonnen','9.2 kWh'],['Tesla','27 kWh']].map((b,i)=>(<React.Fragment key={b[0]}>
+            <div style={{flex:1,display:'flex',alignItems:'center',gap:16}}>{RadialGauge?<RadialGauge value={100} tone="battery" label={b[0]} size={104}/>:null}
+              <div style={{display:'flex',flexDirection:'column',gap:5}}><div style={{fontFamily:'var(--font-mono)',fontSize:18,fontWeight:500}}>{b[1]}</div><div style={{fontSize:12,color:'var(--text-2)'}}>idle</div></div></div>
+            {i===0&&<div style={{width:1,alignSelf:'stretch',background:'var(--border-1)'}}></div>}</React.Fragment>))}
+        </div>
+        <div style={{marginTop:18}}><div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-2)',marginBottom:7}}><span>Self-sufficiency today</span><span style={{fontFamily:'var(--font-mono)',color:'var(--text-1)'}}>71%</span></div>
+          {ProgressBar?<ProgressBar height={6} segments={[{value:71,tone:'solar'},{value:29,tone:'grid'}]}/>:null}</div>
+      </Card>
+      <Card accent="grid" style={{display:'flex',flexDirection:'column',gap:10}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}><span style={{width:30,height:30,borderRadius:9,display:'grid',placeItems:'center',background:'var(--grid-wash)',color:'var(--grid)'}}><Ico n="alert-triangle" s={{width:17,height:17}}/></span><Eyebrow>Why this matters</Eyebrow></div>
+        <div style={{fontSize:15,color:'var(--text-1)',lineHeight:1.5}}>Both batteries full · exporting <span style={{fontFamily:'var(--font-mono)',color:'var(--grid)'}}>5.6 kW</span> at €0.029/kWh.</div>
+        <div style={{fontSize:13,color:'var(--text-2)',lineHeight:1.5}}>Nothing reserved for the <span style={{color:'var(--grid)'}}>18:00 P1 peak</span>. The coordinator will hold capacity for the evening.</div>
+      </Card>
+    </div>
+    <Card title="Production & consumption" subtitle="Today · kW" icon={<Ico n="activity"/>}><AreaChart height={200} series={[{data:solarDay,tone:'solar'},{data:homeDay,tone:'home',dash:true,fill:false}]} labels={['00','04','08','12','16','20','24']}/></Card>
+  </div>);
+}
+
+function ReportsScreen(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (<div style={{display:'flex',flexDirection:'column',gap:20}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:16}}>
+      <Card><StatTile label="Produced" value="1,050" unit="kWh" tone="solar" icon={<Ico n="sun"/>} delta={8} footnote="this month"/></Card>
+      <Card><StatTile label="Consumed" value="444" unit="kWh" tone="home" icon={<Ico n="plug"/>} delta={-3} footnote="this month"/></Card>
+      <Card><StatTile label="Exported" value="625" unit="kWh" tone="grid" icon={<Ico n="upload"/>} delta={14} footnote="to grid"/></Card>
+      <Card><StatTile label="Self-sufficiency" value="71" unit="%" tone="battery" icon={<Ico n="leaf"/>} delta={5} footnote="vs avg"/></Card>
+      <Card><StatTile label="CO₂ avoided" value="412" unit="kg" tone="solar" icon={<Ico n="sprout"/>} delta={8} footnote="this month"/></Card>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1.3fr 1fr',gap:20}}>
+      <Card accent="grid">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}><Eyebrow>Solar value · captured vs lost</Eyebrow><Ico n="trending-up" s={{width:18,height:18,color:'var(--solar)'}}/></div>
+        <div className="splitbar"><div style={{flex:68,background:'var(--solar)',color:'#06090b'}}>68% self-used</div><div style={{flex:32,background:'var(--surface-3)',color:'var(--text-2)'}}>32% exported</div></div>
+        <div style={{marginTop:14,display:'flex',gap:12}}>
+          <div style={{flex:1,padding:'12px 14px',borderRadius:10,background:'var(--solar-wash)'}}><div style={{fontSize:12,color:'var(--text-2)'}}>Self-consumed worth</div><div style={{fontFamily:'var(--font-mono)',fontSize:20,fontWeight:600,color:'var(--solar)',marginTop:4}}>€0.21<small style={{fontSize:10,color:'var(--text-3)'}}>/kWh</small></div></div>
+          <div style={{flex:1,padding:'12px 14px',borderRadius:10,background:'var(--grid-wash)'}}><div style={{fontSize:12,color:'var(--text-2)'}}>Exported 625 kWh</div><div style={{fontFamily:'var(--font-mono)',fontSize:20,fontWeight:600,color:'var(--grid)',marginTop:4}}>€13.72<small style={{fontSize:10,color:'var(--text-3)'}}> back</small></div></div>
+        </div>
+        <div style={{marginTop:13,fontSize:14,color:'var(--text-1)',lineHeight:1.5}}>That exported solar would've been worth <span style={{fontFamily:'var(--font-mono)',color:'var(--solar)'}}>€131</span> if self-consumed — <span style={{color:'var(--grid)'}}>€117 of value left on the table.</span></div>
+      </Card>
+      <Card>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}><Eyebrow>Grid cost · by band</Eyebrow><span style={{fontFamily:'var(--font-mono)',fontSize:16,fontWeight:600}}>€48.10</span></div>
+        <div style={{display:'flex',flexDirection:'column',gap:13,marginTop:16}}>
+          {BANDS.map(b=>(<div key={b.k} style={{display:'flex',flexDirection:'column',gap:6}}>
+            <div style={{display:'flex',alignItems:'center',gap:8}}><span style={{width:34,fontFamily:'var(--font-mono)',fontWeight:600,color:b.k==='P3'?'var(--solar)':'var(--grid)'}}>{b.k}</span><span style={{flex:1,fontSize:12,color:'var(--text-2)'}}>{b.kwh} kWh · {b.rate}/kWh</span><span style={{fontFamily:'var(--font-mono)',fontSize:13}}>€{b.eur.toFixed(2)}</span></div>
+            <ProgressBar height={6} segments={[{value:(b.eur/48.10)*100,tone:b.k==='P3'?'solar':'grid'}]}/></div>))}
+        </div>
+        <div style={{marginTop:13,fontSize:11,color:'var(--text-3)'}}>+ fixed power term €36.19/mo (14 kW)</div>
+      </Card>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+      <Card title="Production vs consumption" subtitle="This month · kWh" icon={<Ico n="bar-chart-3"/>} actions={<div style={{display:'flex',gap:16,fontSize:12,color:'var(--text-2)'}}><span><i style={{display:'inline-block',width:9,height:9,borderRadius:2,background:'var(--solar)',marginRight:5}}></i>Prod</span><span><i style={{display:'inline-block',width:9,height:9,borderRadius:2,background:'var(--home)',marginRight:5}}></i>Used</span></div>}><WeekBars data={weeks} height={210}/></Card>
+      <Card title="Consumption by load" subtitle="all-electric" icon={<Ico n="pie-chart"/>} actions={Badge?<Badge tone="battery" variant="soft">estimated</Badge>:null}>
+        <div style={{display:'flex',flexDirection:'column',gap:14,marginTop:4}}>
+          {loads.map(l=>(<div key={l.name} style={{display:'flex',flexDirection:'column',gap:7}}>
+            <div style={{display:'flex',alignItems:'center',gap:10}}><span style={{width:28,height:28,borderRadius:8,display:'grid',placeItems:'center',background:'var(--surface-3)',color:l.tone}}><Ico n={l.icon} s={{width:15,height:15}}/></span><span style={{flex:1,fontSize:14}}>{l.name}</span><span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--text-2)'}}>{l.kwh} kWh</span></div>
+            <ProgressBar height={6} segments={[{value:l.pct,tone:l.tone}]}/></div>))}
+        </div>
+      </Card>
+    </div>
+  </div>);
+}
+
+function Rail({ screen, setScreen, expanded, setExpanded }){
+  const nav=[['live','Live','activity'],['reports','Reports','bar-chart-3'],['batteries','Batteries','battery-charging'],['alerts','Alerts','bell'],['settings','Settings','settings']];
+  const soon=[['scenarios','Scenarios','sliders-horizontal'],['forecast','Forecast','cloud-sun']];
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  const W = expanded?232:74;
+  const pad = expanded?'0 12px':'0';
+  return (
+    <aside style={{width:W,flex:'none',height:'100%',display:'flex',flexDirection:'column',background:'var(--bg-1)',borderRight:'1px solid var(--border-1)',padding:'18px 12px',transition:'width .2s',overflow:'hidden'}}>
+      <div style={{display:'flex',alignItems:'center',gap:11,padding:'4px 6px 20px',justifyContent:expanded?'flex-start':'center'}}>
+        <img src="_ds/assets/logo-mark.svg" width="32" height="32" alt="" />
+        {expanded && <span style={{fontSize:19,fontWeight:700,letterSpacing:'-.02em',color:'var(--solar)'}}>Power</span>}
+      </div>
+      <nav style={{display:'flex',flexDirection:'column',gap:3}}>
+        {nav.map(n=>(<div key={n[0]} title={n[1]} className={'navitem'+(screen===n[0]?' on':'')} onClick={()=>setScreen(n[0])}
+          style={{justifyContent:expanded?'flex-start':'center',gap:expanded?11:0,padding:expanded?'0 12px':'0'}}>
+          <Ico n={n[2]} s={{width:18,height:18}}/>{expanded && <span>{n[1]}</span>}</div>))}
+        <div style={{height:1,background:'var(--border-1)',margin:'10px 8px'}}></div>
+        {soon.map(n=>(<div key={n[0]} title={n[1]+' (soon)'} className="navitem" style={{justifyContent:expanded?'flex-start':'center',gap:expanded?11:0,padding:expanded?'0 12px':'0',color:'var(--text-3)',cursor:'default'}}>
+          <Ico n={n[2]} s={{width:18,height:18}}/>{expanded && <span style={{flex:1}}>{n[1]}</span>}{expanded && <span style={{fontSize:9,letterSpacing:'.08em'}}>SOON</span>}</div>))}
+      </nav>
+      <div style={{marginTop:'auto',display:'flex',flexDirection:'column',gap:10}}>
+        {expanded && <div style={{padding:14,borderRadius:'var(--radius-lg)',background:'var(--surface-1)',border:'1px solid var(--border-1)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><Eyebrow>System</Eyebrow><span style={{display:'flex',alignItems:'center',gap:6,color:'var(--solar)',fontSize:12}}><span style={{width:8,height:8,borderRadius:'50%',background:'var(--solar)',boxShadow:'0 0 8px var(--solar)'}}></span>Online</span></div>
+          <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-2)',lineHeight:1.7}}><div style={{display:'flex',justifyContent:'space-between'}}><span>Tesla</span><span style={{color:'var(--solar)'}}>cloud ok</span></div><div style={{display:'flex',justifyContent:'space-between'}}><span>Sonnen</span><span style={{color:'var(--solar)'}}>LAN ok</span></div></div>
+        </div>}
+        <div className="navitem" onClick={()=>setExpanded(!expanded)} title={expanded?'Collapse':'Expand'} style={{justifyContent:expanded?'flex-start':'center',gap:expanded?11:0,padding:expanded?'0 12px':'0'}}>
+          <Ico n={expanded?'chevrons-left':'chevrons-right'} s={{width:18,height:18}}/>{expanded && <span>Collapse</span>}</div>
+      </div>
+    </aside>
+  );
+}
+function TopBar({ screen, range, setRange }){
+  const meta = { live:['Live overview','Your home, right now'], reports:['Reports','This month'], batteries:['Batteries','Sonnen + Tesla'], alerts:['Alerts','Notifications'], settings:['Settings','System'] }[screen];
+  return (<header style={{display:'flex',alignItems:'center',gap:20,padding:'18px 28px',borderBottom:'1px solid var(--border-1)'}}>
+    <div><Eyebrow>{meta[0]}</Eyebrow><h1 style={{fontSize:22,fontWeight:600,letterSpacing:'-.01em',margin:'2px 0 0'}}>{meta[1]}</h1></div>
+    <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:14}}>
+      {screen==='reports' && SegmentedControl ? <SegmentedControl options={['Day','Week','Month','Year']} value={range} onChange={setRange} size="sm"/> : null}
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',borderRadius:'var(--radius-pill)',background:'var(--surface-1)',border:'1px solid var(--border-1)',fontSize:13,color:'var(--text-2)'}}><Ico n="sun" s={{width:16,height:16,color:'var(--grid)'}}/><span style={{fontFamily:'var(--font-mono)'}}>26°</span><span style={{color:'var(--text-3)'}}>· Jávea</span></div>
+      <div style={{width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,var(--solar-dim),var(--battery-dim))',display:'grid',placeItems:'center',fontWeight:700,fontSize:13,color:'#06090b'}}>JK</div>
+    </div>
+  </header>);
+}
+function App(){
+  const [screen,setScreen]=React.useState('live');
+  const [expanded,setExpanded]=React.useState(false);
+  const [range,setRange]=React.useState('Month');
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  let Body;
+  if(screen==='live') Body=<LiveScreen/>;
+  else if(screen==='reports') Body=<ReportsScreen/>;
+  else Body=<div style={{padding:60,textAlign:'center',color:'var(--text-3)'}}>{screen} — designed on mobile; desktop view next</div>;
+  return (<div className="app"><Rail screen={screen} setScreen={setScreen} expanded={expanded} setExpanded={setExpanded}/>
+    <div className="main"><TopBar screen={screen} range={range} setRange={setRange}/><div className="scroll">{Body}</div></div></div>);
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 60);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 400);
+</script>
+</body>
+</html>

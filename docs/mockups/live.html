@@ -86,7 +86,7 @@ const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
 // ---- two-battery energy flow (extends the signature EnergyFlow) ----
 function TwoBatteryFlow({ f }){
   const HUB = {x:50,y:50};
-  const POS = { solar:{x:50,y:9}, sonnen:{x:10,y:32}, tesla:{x:10,y:68}, grid:{x:90,y:50}, home:{x:50,y:91} };
+  const POS = { solar:{x:50,y:14}, sonnen:{x:10,y:34}, tesla:{x:10,y:70}, grid:{x:90,y:50}, home:{x:50,y:90} };
   const COLOR = { solar:'var(--solar)', sonnen:'var(--battery)', tesla:'var(--battery)', grid:'var(--grid)', home:'var(--home)' };
   const ICON = { solar:'sun', sonnen:'battery-charging', tesla:'battery-charging', grid:'utility-pole', home:'house' };
   const seg = (k, a, b) => ({ key:k, d:`M${a.x} ${a.y} L${b.x} ${b.y}`, color:COLOR[k] });
@@ -108,14 +108,17 @@ function TwoBatteryFlow({ f }){
         {links.map(l => <path key={l.key} className="pwr2__line" d={l.d} style={{stroke:l.color}} />)}
       </svg>
       {Object.keys(POS).map(k => {
-        const n = f[k]; const on = active.has(k);
+        const n = f[k]; const on = active.has(k); const above = (k === 'solar');
+        const chip = <div className="pwr2__chip"><Ico n={ICON[k]} /></div>;
+        const labels = (<React.Fragment>
+          <span className="pwr2__name">{n.name}</span>
+          <span className="pwr2__kw">{n.val}<small> {n.unit}</small></span>
+          <span className="pwr2__sub">{n.sub}</span>
+        </React.Fragment>);
         return (
           <div key={k} className={'pwr2__node'+(on?' pwr2__node--active':'')}
                style={{ left:POS[k].x+'%', top:POS[k].y+'%', '--_c':COLOR[k] }}>
-            <div className="pwr2__chip"><Ico n={ICON[k]} /></div>
-            <span className="pwr2__name">{n.name}</span>
-            <span className="pwr2__kw">{n.val}<small> {n.unit}</small></span>
-            <span className="pwr2__sub">{n.sub}</span>
+            {above ? <React.Fragment>{labels}{chip}</React.Fragment> : <React.Fragment>{chip}{labels}</React.Fragment>}
           </div>
         );
       })}
@@ -258,7 +261,15 @@ function LiveScreen(){
   React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
   const t = { produced:'42.3', consumed:'28.6', selfSuff:71, saved:'5.40' };
   return (
-    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+    <div style={{display:'flex',flexDirection:'column',gap:18}}>
+      {/* today totals — above the fold */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:14}}>
+        <Card><StatTile label="Produced today" value="42.3" unit="kWh" tone="solar" icon={<Ico n="sun" />} delta={9} footnote="vs yesterday" /></Card>
+        <Card><StatTile label="Consumed today" value="28.6" unit="kWh" tone="home" icon={<Ico n="plug" />} delta={-4} footnote="vs yesterday" /></Card>
+        <Card><StatTile label="Grid feed-in" value="18.4" unit="kWh" tone="grid" icon={<Ico n="upload" />} delta={14} footnote="exported today" /></Card>
+        <Card><StatTile label="Self-sufficiency" value="71" unit="%" tone="battery" icon={<Ico n="leaf" />} delta={5} footnote="vs avg" /></Card>
+        <Card><StatTile label="Saved today" value="€5.40" tone="solar" icon={<Ico n="piggy-bank" />} delta={7} footnote="vs grid-only" /></Card>
+      </div>
       {/* hero */}
       <div style={{display:'grid',gridTemplateColumns:'1.18fr 1fr',gap:20}}>
         <Card title="Live energy flow" subtitle="Updated just now" accent="solar" icon={<Ico n="zap" />}
@@ -281,9 +292,9 @@ function LiveScreen(){
               <React.Fragment key={b[0]}>
                 <div style={{flex:1,display:'flex',alignItems:'center',gap:16}}>
                   {RadialGauge ? <RadialGauge value={100} tone="battery" label={b[0]} size={104} /> : null}
-                  <div style={{display:'flex',flexDirection:'column',gap:6}}>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:20,fontWeight:500,color:'var(--battery)'}}>100<small style={{fontSize:11,color:'var(--text-3)'}}>%</small></div>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-2)'}}>{b[1]} · {b[2]}</div>
+                  <div style={{display:'flex',flexDirection:'column',gap:5}}>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:18,fontWeight:500,color:'var(--text-1)'}}>{b[1]}</div>
+                    <div style={{fontSize:12,color:'var(--text-2)'}}>{b[2]}</div>
                   </div>
                 </div>
                 {i===0 && <div style={{width:1,alignSelf:'stretch',background:'var(--border-1)'}}></div>}
@@ -307,14 +318,6 @@ function LiveScreen(){
           <div style={{fontSize:15,color:'var(--text-1)',lineHeight:1.5}}>Both batteries are full and the house is exporting <span style={{fontFamily:'var(--font-mono)',color:'var(--grid)'}}>5.6 kW</span> at <span style={{fontFamily:'var(--font-mono)'}}>€0.029</span>/kWh.</div>
           <div style={{fontSize:13,color:'var(--text-2)',lineHeight:1.5}}>Nothing is reserved for the <span style={{color:'var(--grid)'}}>18:00 P1 peak</span> (€0.209/kWh). The coordinator will hold capacity for the evening.</div>
         </Card>
-      </div>
-
-      {/* KPI row */}
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
-        <Card><StatTile label="Produced today" value="42.3" unit="kWh" tone="solar" icon={<Ico n="sun" />} delta={9} footnote="vs yesterday">{Sparkline ? <Sparkline data={solarDay.filter((_,i)=>i%2===0)} tone="solar" width={210} height={32} /> : null}</StatTile></Card>
-        <Card><StatTile label="Consumed" value="28.6" unit="kWh" tone="home" icon={<Ico n="plug" />} delta={-4} footnote="vs yesterday">{Sparkline ? <Sparkline data={homeDay.filter((_,i)=>i%2===0)} tone="home" width={210} height={32} /> : null}</StatTile></Card>
-        <Card><StatTile label="Self-sufficiency" value="71" unit="%" tone="battery" icon={<Ico n="leaf" />} delta={5} footnote="vs avg" /></Card>
-        <Card><StatTile label="Saved today" value="€5.40" tone="solar" icon={<Ico n="piggy-bank" />} delta={7} footnote="vs grid-only" /></Card>
       </div>
 
       {/* day chart */}

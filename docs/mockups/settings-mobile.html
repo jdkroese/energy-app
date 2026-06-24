@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Power — Settings (mobile / PWA)</title>
+<link rel="stylesheet" href="_ds/styles.css" />
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: radial-gradient(circle at 50% 0%, #0c1418, var(--bg-0)); color: var(--text-1);
+    min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+  .phone { width: 390px; height: 844px; border-radius: 46px; background: var(--bg-0); border: 10px solid #1a2227;
+    box-shadow: 0 40px 90px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.04); overflow: hidden;
+    display: flex; flex-direction: column; position: relative; }
+  .scroll { flex: 1; overflow-y: auto; }
+  .scroll::-webkit-scrollbar { width: 0; }
+  .row { display:flex; align-items:center; gap:12px; padding:13px 16px; }
+  .chip { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; flex:none; background:var(--surface-3); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="_ds/_ds_bundle.js"></script>
+<script type="text/babel">
+const DS = window.PowerDesignSystem_138199 || {};
+const { Card, Badge } = DS;
+const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
+function Eyebrow({children}){ return <span style={{fontSize:9,fontWeight:600,letterSpacing:'.12em',textTransform:'uppercase',color:'var(--text-2)'}}>{children}</span>; }
+function Dot({tone}){ return <span style={{width:8,height:8,borderRadius:'50%',background:`var(--${tone})`,boxShadow:`0 0 8px var(--${tone})`,display:'inline-block'}}></span>; }
+const Chev = () => <Ico n="chevron-right" s={{width:18,height:18,color:'var(--text-3)'}} />;
+
+const CONN = [
+  ['Tesla Fleet API', 'cloud', 'cloud', 'solar', 'Connected'],
+  ['Sonnen local API', 'battery-charging', 'battery', 'solar', 'Connected · VPN'],
+  ['Weather · Jávea', 'cloud-sun', 'grid', 'solar', 'Open-Meteo'],
+  ['Sungrow inverters', 'sun', 'home', 'grid', 'Pending'],
+];
+const ASSETS = [
+  ['Sonnen battery', 'battery-charging', 'battery', '11 kWh · 4.6 kW'],
+  ['Tesla · 2× Powerwall 3', 'battery-charging', 'battery', '27 kWh · backup'],
+  ['Solar · 2 arrays', 'sun', 'solar', '18.2 kWp'],
+  ['EV · 2× BMW i3', 'plug-zap', 'ev', '~42 kWh each'],
+  ['Heat pump + A/C', 'thermometer', 'grid', 'all-electric'],
+  ['Grid connection', 'utility-pole', 'grid', '1-phase · 14 kW'],
+];
+
+function Section({title, children}){
+  return (<Card title={title} style={{padding:0}}>{children}</Card>);
+}
+function LinkRow({icon, tone, name, detail, right, last}){
+  return (
+    <div className="row" style={{borderTop: last===false?'none':'1px solid var(--border-1)'}}>
+      <span className="chip" style={{color:`var(--${tone})`}}><Ico n={icon} s={{width:17,height:17}}/></span>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:14}}>{name}</div>
+        {detail && <div style={{fontSize:12,color:'var(--text-2)',fontFamily:'var(--font-mono)'}}>{detail}</div>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function SettingsMobile(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (
+    <React.Fragment>
+      <div style={{padding:'12px 18px 12px'}}>
+        <Eyebrow>Settings</Eyebrow>
+        <h1 style={{fontSize:24,fontWeight:700,letterSpacing:'-.02em',margin:'2px 0 0'}}>System</h1>
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:12,padding:'0 14px 22px'}}>
+        {/* connections */}
+        <Section title="Connections">
+          {CONN.map((c,i)=>(
+            <LinkRow key={c[0]} icon={c[1]} tone={c[2]} name={c[0]} last={i!==0}
+              detail={null}
+              right={<div style={{display:'flex',alignItems:'center',gap:9}}>
+                <Dot tone={c[3]} /><span style={{fontSize:12,color:c[3]==='solar'?'var(--solar)':'var(--grid)'}}>{c[4]}</span><Chev/>
+              </div>} />
+          ))}
+        </Section>
+
+        {/* tariff */}
+        <Card title="Tariff · Spain 2.0TD" style={{padding:0}}>
+          <div style={{padding:'4px 16px 14px'}}>
+            <div style={{display:'flex',gap:8,marginTop:8}}>
+              {[['P1','€0.209','var(--grid)'],['P2','€0.131','var(--grid-dim)'],['P3','€0.096','var(--solar)']].map(b=>(
+                <div key={b[0]} style={{flex:1,padding:'10px',borderRadius:10,background:'var(--surface-2)',textAlign:'center'}}>
+                  <div style={{fontFamily:'var(--font-mono)',fontWeight:600,color:b[2]}}>{b[0]}</div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-2)',marginTop:3}}>{b[1]}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',marginTop:12,fontSize:12,color:'var(--text-2)'}}>
+              <span>Power term</span><span style={{fontFamily:'var(--font-mono)',color:'var(--text-1)'}}>€36.19/mo · 14 kW</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',marginTop:6,fontSize:12,color:'var(--text-2)'}}>
+              <span>Export (excedentes)</span><span style={{fontFamily:'var(--font-mono)',color:'var(--grid)'}}>€0.003–0.029</span>
+            </div>
+          </div>
+          <LinkRow icon="pencil" tone="text-2" name="Edit tariff & rates" right={<Chev/>} />
+        </Card>
+
+        {/* assets */}
+        <Section title="My system">
+          {ASSETS.map((a,i)=>(
+            <LinkRow key={a[0]} icon={a[1]} tone={a[2]} name={a[0]} detail={a[3]} last={i!==0} right={<Chev/>} />
+          ))}
+        </Section>
+
+        {/* app */}
+        <Section title="App">
+          <LinkRow icon="smartphone-nfc" tone="solar" name="Add to home screen" detail="Install as a full-screen app" last={false} right={<Chev/>} />
+          <LinkRow icon="user" tone="home" name="Joris Kroese" detail="j.kroese@levante.nl" right={<Chev/>} />
+          <LinkRow icon="moon" tone="battery" name="Theme" detail="Dark (control-room)" right={<Chev/>} />
+          <LinkRow icon="info" tone="text-2" name="Version" detail="0.1.0 · energy.hirobo.nl" right={null} />
+        </Section>
+      </div>
+    </React.Fragment>
+  );
+}
+
+function StatusBar(){
+  return (<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px 4px',fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text-1)',fontWeight:600}}>
+    <span>9:41</span><div style={{display:'flex',gap:6}}><Ico n="signal" s={{width:16,height:16}}/><Ico n="wifi" s={{width:16,height:16}}/><Ico n="battery-full" s={{width:18,height:18}}/></div></div>);
+}
+function PhoneApp(){
+  const [tab,setTab] = React.useState('more');
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  const tabs = [['live','Live','activity'],['reports','Reports','bar-chart-3'],['batteries','Batteries','battery-charging'],['alerts','Alerts','bell'],['more','More','menu']];
+  return (
+    <div className="phone">
+      <StatusBar />
+      <div className="scroll">{tab==='more' ? <SettingsMobile /> : <div style={{padding:40,textAlign:'center',color:'var(--text-3)'}}>{tab} — see other mockups</div>}</div>
+      <div style={{display:'flex',padding:'9px 10px 22px',borderTop:'1px solid var(--border-1)',background:'var(--glass-fill, rgba(15,22,25,.8))',backdropFilter:'blur(var(--blur-glass, 18px))'}}>
+        {tabs.map(t=>{ const on=tab===t[0];
+          return (<button key={t[0]} onClick={()=>setTab(t[0])} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4,border:'none',background:'transparent',cursor:'pointer',color:on?'var(--solar)':'var(--text-3)'}}>
+            <Ico n={t[2]} s={{width:21,height:21}}/><span style={{fontSize:10,fontWeight:on?600:500}}>{t[1]}</span></button>); })}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<PhoneApp />);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 60);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 400);
+</script>
+</body>
+</html>

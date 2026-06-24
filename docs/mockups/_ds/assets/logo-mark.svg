@@ -1,0 +1,11 @@
+<svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Power logomark">
+  <rect x="1" y="1" width="42" height="42" rx="12" fill="#0F1619" stroke="#2EE6A0" stroke-opacity="0.5" stroke-width="1.5"></rect>
+  <rect x="1" y="1" width="42" height="42" rx="12" fill="url(#pwr_glow)"></rect>
+  <path d="M24.5 9 L14 24.2 h6.4 l-2.9 10.8 L31 19.4 h-6.4 z" fill="#2EE6A0"></path>
+  <defs>
+    <radialGradient id="pwr_glow" cx="0.5" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#2EE6A0" stop-opacity="0.18"></stop>
+      <stop offset="1" stop-color="#2EE6A0" stop-opacity="0"></stop>
+    </radialGradient>
+  </defs>
+</svg>

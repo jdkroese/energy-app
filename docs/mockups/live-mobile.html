@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Power — Live (mobile / PWA)</title>
+<link rel="stylesheet" href="_ds/styles.css" />
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: radial-gradient(circle at 50% 0%, #0c1418, var(--bg-0)); color: var(--text-1);
+    min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+  .phone { width: 390px; height: 844px; border-radius: 46px; background: var(--bg-0); border: 10px solid #1a2227;
+    box-shadow: 0 40px 90px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.04); overflow: hidden;
+    display: flex; flex-direction: column; position: relative; }
+  .scroll { flex: 1; overflow-y: auto; }
+  .scroll::-webkit-scrollbar { width: 0; }
+
+  .pwr2{ position:relative; width:100%; aspect-ratio:1.02/1; min-height:300px; font-family:var(--font-sans); }
+  .pwr2__svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .pwr2__base{ stroke:var(--border-2); stroke-width:1.2; fill:none; }
+  .pwr2__line{ fill:none; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:5 6; animation:pwr2move .9s linear infinite; }
+  @keyframes pwr2move{ from{stroke-dashoffset:11;} to{stroke-dashoffset:0;} }
+  .pwr2__node{ position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:3px; width:82px; text-align:center; }
+  .pwr2__chip{ display:flex; align-items:center; justify-content:center; width:46px; height:46px; border-radius:14px;
+    background:var(--surface-2); border:1px solid var(--border-2); color:var(--_c, var(--text-3)); box-shadow:var(--shadow-1), var(--hairline-top); }
+  .pwr2__chip svg{ width:20px; height:20px; }
+  .pwr2__node--active .pwr2__chip{ border-color:var(--_c); box-shadow:0 0 0 1px var(--_c), 0 0 16px color-mix(in srgb, var(--_c) 45%, transparent); }
+  .pwr2__name{ font-size:9px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-2); }
+  .pwr2__kw{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13px; font-weight:500; color:var(--_c, var(--text-1)); line-height:1; }
+  .pwr2__kw small{ font-size:8px; color:var(--text-3); }
+  .pwr2__sub{ font-family:var(--font-mono); font-size:9px; color:var(--text-3); line-height:1.1; }
+  .pwr2__hub{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:52px; height:52px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; color:var(--accent);
+    background:radial-gradient(circle at 50% 35%, var(--surface-3), var(--surface-1)); border:1px solid var(--border-3); box-shadow:var(--glow-soft, 0 0 20px rgba(46,230,160,.18)); }
+  .pwr2__hub svg{ width:22px; height:22px; }
+  .pwr2__hub::after{ content:""; position:absolute; inset:-6px; border-radius:50%; border:1px solid rgba(46,230,160,.25); animation:pwr2ring 2.6s ease-out infinite; }
+  @keyframes pwr2ring{ 0%{transform:scale(.85);opacity:.7;} 70%{transform:scale(1.5);opacity:0;} 100%{opacity:0;} }
+  .tband{ display:flex; gap:2px; height:8px; margin-top:9px; border-radius:4px; overflow:hidden; }
+  .tband i{ flex:1; display:block; }
+  @media (prefers-reduced-motion: reduce){ .pwr2__line,.pwr2__hub::after{ animation:none; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="_ds/_ds_bundle.js"></script>
+<script type="text/babel">
+const DS = window.PowerDesignSystem_138199 || {};
+const { Card, StatTile, RadialGauge, ProgressBar, Badge } = DS;
+const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
+
+const FLOW = {
+  solar:  { name:'Solar',  val:'11.1', unit:'kW', sub:'2 arrays', kw:11.1 },
+  sonnen: { name:'Sonnen', val:'100',  unit:'%',  sub:'9.2 kWh', kw:0, dir:'idle' },
+  tesla:  { name:'Tesla',  val:'100',  unit:'%',  sub:'27 kWh',  kw:0, dir:'idle' },
+  grid:   { name:'Grid',   val:'5.6',  unit:'kW', sub:'Export',  kw:5.56, dir:'exporting' },
+  home:   { name:'Home',   val:'5.5',  unit:'kW', sub:'Load',    kw:5.5 },
+};
+const TARIFF = [0,0,0,0,0,0,0,0, 1,1, 2,2,2,2, 1,1,1,1, 2,2,2,2, 1,1];
+const BAND_COLOR = ['var(--solar)','var(--grid-dim)','var(--grid)'];
+function series(n, base, amp, seed){ let s=seed||1; const r=()=>{ s=(s*9301+49297)%233280; return s/233280; };
+  const o=[]; for(let i=0;i<n;i++){ const d=Math.sin((i/n)*Math.PI); o.push(Math.max(0, base + d*amp + (r()-0.5)*amp*0.3)); } return o; }
+const solarDay = series(24,0.2,9.6,7).map((v,i)=> (i<7||i>21?0:v));
+const homeDay  = series(24,0.7,2.6,13);
+
+function TwoBatteryFlow({ f }){
+  const HUB = {x:50,y:50};
+  const POS = { solar:{x:50,y:16}, sonnen:{x:15,y:37}, tesla:{x:15,y:70}, grid:{x:85,y:50}, home:{x:50,y:88} };
+  const COLOR = { solar:'var(--solar)', sonnen:'var(--battery)', tesla:'var(--battery)', grid:'var(--grid)', home:'var(--home)' };
+  const ICON = { solar:'sun', sonnen:'battery-charging', tesla:'battery-charging', grid:'utility-pole', home:'house' };
+  const seg = (k, a, b) => ({ key:k, d:`M${a.x} ${a.y} L${b.x} ${b.y}`, color:COLOR[k] });
+  const links = [];
+  if (f.solar.kw > 0.05) links.push(seg('solar', POS.solar, HUB));
+  if (f.home.kw > 0.05)  links.push(seg('home', HUB, POS.home));
+  if (f.grid.dir==='exporting' && f.grid.kw>0.05) links.push(seg('grid', HUB, POS.grid));
+  if (f.grid.dir==='importing' && f.grid.kw>0.05) links.push(seg('grid', POS.grid, HUB));
+  ['sonnen','tesla'].forEach(b => { if (f[b].dir==='charging') links.push(seg(b, HUB, POS[b])); if (f[b].dir==='discharging') links.push(seg(b, POS[b], HUB)); });
+  const active = new Set(links.map(l=>l.key));
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (
+    <div className="pwr2">
+      <svg className="pwr2__svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {Object.keys(POS).map(k => <line key={k} className="pwr2__base" x1={HUB.x} y1={HUB.y} x2={POS[k].x} y2={POS[k].y} />)}
+        {links.map(l => <path key={l.key} className="pwr2__line" d={l.d} style={{stroke:l.color}} />)}
+      </svg>
+      {Object.keys(POS).map(k => {
+        const n = f[k]; const on = active.has(k); const above = (k === 'solar');
+        const chip = <div className="pwr2__chip"><Ico n={ICON[k]} /></div>;
+        const labels = (<React.Fragment>
+          <span className="pwr2__name">{n.name}</span>
+          <span className="pwr2__kw">{n.val}<small> {n.unit}</small></span>
+          <span className="pwr2__sub">{n.sub}</span>
+        </React.Fragment>);
+        return (
+          <div key={k} className={'pwr2__node'+(on?' pwr2__node--active':'')}
+               style={{ left:POS[k].x+'%', top:POS[k].y+'%', '--_c':COLOR[k] }}>
+            {above ? <React.Fragment>{labels}{chip}</React.Fragment> : <React.Fragment>{chip}{labels}</React.Fragment>}
+          </div>
+        );
+      })}
+      <div className="pwr2__hub"><Ico n="zap" /></div>
+    </div>
+  );
+}
+
+function AreaChart({ series, height=150, labels }){
+  const w=1000, h=height, padY=14;
+  const id = React.useMemo(()=> 'c'+Math.floor(Math.random()*1e6), []);
+  const niceMax = Math.ceil(Math.max(...series.flatMap(s=>s.data), 1));
+  const stepX = w/(series[0].data.length-1);
+  const tone = t => ({solar:'var(--solar)',home:'var(--home)'}[t]||t);
+  return (
+    <svg viewBox={`0 0 ${w} ${h+24}`} width="100%" preserveAspectRatio="none" style={{display:'block',overflow:'visible'}}>
+      <defs>{series.map((s,i)=>(<linearGradient key={i} id={`${id}-${i}`} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor={tone(s.tone)} stopOpacity="0.26"/><stop offset="100%" stopColor={tone(s.tone)} stopOpacity="0"/></linearGradient>))}</defs>
+      {[0,.5,1].map((g,i)=>(<line key={i} x1="0" y1={padY+g*(h-padY*2)} x2={w} y2={padY+g*(h-padY*2)} stroke="var(--grid-line)" strokeWidth="1"/>))}
+      {series.map((s,i)=>{ const pts=s.data.map((d,j)=>[j*stepX, padY+(1-d/niceMax)*(h-padY*2)]);
+        const line=pts.map((p,k)=>`${k?'L':'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+        const fill=`${line} L${w} ${h-padY} L0 ${h-padY} Z`;
+        return (<g key={i}>{s.fill!==false && <path d={fill} fill={`url(#${id}-${i})`}/>}
+          <path d={line} fill="none" stroke={tone(s.tone)} strokeWidth={s.dash?2:2.5} strokeDasharray={s.dash?'5 5':undefined} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/></g>); })}
+      {(labels||['00','08','16','24']).map((lb,i,a)=>(<text key={i} x={(i/(a.length-1))*w} y={h+16} textAnchor={i===0?'start':i===a.length-1?'end':'middle'} fill="var(--text-3)" style={{font:'500 16px var(--font-mono)'}}>{lb}</text>))}
+    </svg>
+  );
+}
+
+function Eyebrow({children}){ return <span style={{fontSize:9,fontWeight:600,letterSpacing:'.12em',textTransform:'uppercase',color:'var(--text-2)'}}>{children}</span>; }
+
+function StatusBar(){
+  return (<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px 4px',fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text-1)',fontWeight:600}}>
+    <span>9:41</span><div style={{display:'flex',gap:6}}><Ico n="signal" s={{width:16,height:16}}/><Ico n="wifi" s={{width:16,height:16}}/><Ico n="battery-full" s={{width:18,height:18}}/></div></div>);
+}
+
+function LiveMobile(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (
+    <React.Fragment>
+      <div style={{display:'flex',alignItems:'center',gap:12,padding:'12px 18px 14px'}}>
+        <div style={{flex:1}}>
+          <Eyebrow>Live · Jávea · 26° sunny</Eyebrow>
+          <h1 style={{fontSize:24,fontWeight:700,letterSpacing:'-.02em',margin:'2px 0 0'}}>Your home</h1>
+        </div>
+        <div style={{width:38,height:38,borderRadius:'50%',background:'linear-gradient(135deg,var(--solar-dim),var(--battery-dim))',display:'grid',placeItems:'center',fontWeight:700,fontSize:13,color:'#06090b'}}>JK</div>
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:12,padding:'0 14px 22px'}}>
+        {/* today totals — above the fold */}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <Card style={{padding:14}}><StatTile size="sm" label="Produced today" value="42.3" unit="kWh" tone="solar" icon={<Ico n="sun"/>} delta={9} /></Card>
+          <Card style={{padding:14}}><StatTile size="sm" label="Consumed" value="28.6" unit="kWh" tone="home" icon={<Ico n="plug"/>} delta={-4} /></Card>
+          <Card style={{padding:14}}><StatTile size="sm" label="Grid feed-in" value="18.4" unit="kWh" tone="grid" icon={<Ico n="upload"/>} delta={14} /></Card>
+          <Card style={{padding:14}}><StatTile size="sm" label="Self-sufficiency" value="71" unit="%" tone="battery" icon={<Ico n="leaf"/>} delta={5} /></Card>
+          <div style={{gridColumn:'span 2'}}><Card glow accent="solar" style={{padding:14}}><StatTile size="sm" label="Saved today" value="€5.40" tone="solar" icon={<Ico n="piggy-bank"/>} delta={7} footnote="vs grid-only" /></Card></div>
+        </div>
+
+        {/* live flow */}
+        <Card accent="solar" glow style={{padding:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}}>
+            <Eyebrow>Live flow</Eyebrow>{Badge ? <Badge tone="solar" variant="soft" icon={<Ico n="radio" s={{width:12,height:12}}/>}>Live</Badge> : null}
+          </div>
+          <TwoBatteryFlow f={FLOW} />
+        </Card>
+
+        {/* tariff */}
+        <Card style={{padding:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <Eyebrow>Tariff · 2.0TD</Eyebrow>
+            <span style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--grid)'}}>P1 peak in 1h 12m</span>
+          </div>
+          <div style={{display:'flex',alignItems:'baseline',gap:8,marginTop:6}}>
+            <span style={{fontFamily:'var(--font-mono)',fontSize:26,fontWeight:600}}>P2</span>
+            <span style={{fontSize:12,color:'var(--text-2)'}}>shoulder · <span style={{fontFamily:'var(--font-mono)',color:'var(--text-1)'}}>€0.131</span>/kWh</span>
+          </div>
+          <div className="tband">{TARIFF.map((b,i)=>(<i key={i} style={{background:BAND_COLOR[b],opacity:i===16?1:.5}}></i>))}</div>
+        </Card>
+
+        {/* backup */}
+        <Card accent="battery" style={{padding:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <Eyebrow>Backup · Tesla only</Eyebrow><Ico n="shield-check" s={{width:17,height:17,color:'var(--battery)'}}/>
+          </div>
+          <div style={{display:'flex',alignItems:'baseline',gap:8,marginTop:6}}>
+            <span style={{fontFamily:'var(--font-mono)',fontSize:26,fontWeight:600,color:'var(--battery)'}}>27</span>
+            <span style={{fontSize:12,color:'var(--text-2)'}}>kWh · ≈ 16 h autonomy</span>
+          </div>
+          <div style={{marginTop:5,fontSize:10.5,color:'var(--text-3)'}}>Sonnen excluded — no backup module</div>
+        </Card>
+
+        {/* batteries */}
+        <Card title="Batteries" style={{padding:16}}>
+          <div style={{display:'flex',gap:8,marginTop:6}}>
+            {[['Sonnen','9.2 kWh'],['Tesla','27 kWh']].map((b,i)=>(
+              <div key={b[0]} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:6}}>
+                {RadialGauge ? <RadialGauge value={100} tone="battery" label={b[0]} size={92} /> : null}
+                <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-2)'}}>{b[1]} · idle</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:14}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-2)',marginBottom:6}}><span>Self-sufficiency</span><span style={{fontFamily:'var(--font-mono)',color:'var(--text-1)'}}>71%</span></div>
+            {ProgressBar ? <ProgressBar height={6} segments={[{value:71,tone:'solar'},{value:29,tone:'grid'}]} /> : null}
+          </div>
+        </Card>
+
+        {/* insight */}
+        <Card accent="grid" style={{padding:16,display:'flex',flexDirection:'column',gap:8}}>
+          <div style={{display:'flex',alignItems:'center',gap:9}}>
+            <span style={{width:28,height:28,borderRadius:8,display:'grid',placeItems:'center',background:'var(--grid-wash)',color:'var(--grid)'}}><Ico n="alert-triangle" s={{width:16,height:16}}/></span>
+            <Eyebrow>Why this matters</Eyebrow>
+          </div>
+          <div style={{fontSize:14,color:'var(--text-1)',lineHeight:1.5}}>Both batteries full · exporting <span style={{fontFamily:'var(--font-mono)',color:'var(--grid)'}}>5.6 kW</span> at €0.029/kWh — nothing held for the <span style={{color:'var(--grid)'}}>18:00 peak</span>.</div>
+        </Card>
+
+        {/* day chart */}
+        <Card title="Today · kW" style={{padding:16}}>
+          <AreaChart height={150} series={[{data:solarDay,tone:'solar'},{data:homeDay,tone:'home',dash:true,fill:false}]} labels={['00','08','16','24']} />
+        </Card>
+      </div>
+    </React.Fragment>
+  );
+}
+
+function PhoneApp(){
+  const [tab,setTab] = React.useState('live');
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  const tabs = [['live','Live','activity'],['reports','Reports','bar-chart-3'],['batteries','Batteries','battery-charging'],['alerts','Alerts','bell'],['more','More','menu']];
+  return (
+    <div className="phone">
+      <StatusBar />
+      <div className="scroll">{tab==='live' ? <LiveMobile /> : <div style={{padding:40,textAlign:'center',color:'var(--text-3)'}}>{tab} — coming next</div>}</div>
+      <div style={{display:'flex',padding:'9px 10px 22px',borderTop:'1px solid var(--border-1)',background:'var(--glass-fill, rgba(15,22,25,.8))',backdropFilter:'blur(var(--blur-glass, 18px))'}}>
+        {tabs.map(t=>{ const on=tab===t[0];
+          return (<button key={t[0]} onClick={()=>setTab(t[0])} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4,border:'none',background:'transparent',cursor:'pointer',color:on?'var(--solar)':'var(--text-3)'}}>
+            <Ico n={t[2]} s={{width:21,height:21}}/><span style={{fontSize:10,fontWeight:on?600:500}}>{t[1]}</span></button>); })}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<PhoneApp />);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 60);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 400);
+</script>
+</body>
+</html>

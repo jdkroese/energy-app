@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Power — Energy brain</title>
+<link rel="stylesheet" href="_ds/styles.css" />
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg-0); color: var(--text-1); }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 20px 28px 48px; }
+  .top { display:flex; align-items:center; gap:14px; margin-bottom:20px; }
+  .brand { display:flex; align-items:center; gap:10px; font-size:19px; font-weight:700; letter-spacing:-.02em; }
+  .pill { background:var(--surface-2); border:1px solid var(--border-2); border-radius:999px; padding:7px 14px; font-size:13px; display:flex; align-items:center; gap:8px; }
+  .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+  .layers { display:flex; align-items:stretch; gap:8px; flex-wrap:wrap; }
+  .layer { flex:1; min-width:150px; background:var(--surface-2); border:1px solid var(--border-2); border-radius:12px; padding:12px 14px; }
+  .layer .n { font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--text-3); }
+  .layer .t { font-size:14px; font-weight:600; margin-top:4px; }
+  .layer .d { font-size:11.5px; color:var(--text-2); margin-top:3px; line-height:1.45; }
+  .arrow { display:flex; align-items:center; color:var(--text-3); }
+  .act { display:flex; gap:12px; padding:13px 4px; border-top:1px solid var(--border-1); }
+  .num { width:24px; height:24px; border-radius:50%; flex:none; display:grid; place-items:center; font-family:var(--font-mono); font-size:12px; font-weight:600; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="_ds/_ds_bundle.js"></script>
+<script type="text/babel">
+const DS = window.PowerDesignSystem_138199 || {};
+const { Card, StatTile, Badge } = DS;
+const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
+function Eyebrow({children}){ return <span style={{fontSize:10,fontWeight:600,letterSpacing:'.12em',textTransform:'uppercase',color:'var(--text-2)'}}>{children}</span>; }
+
+// hourly forecast/plan for a sunny Jávea summer day
+const H = Array.from({length:25},(_,i)=>i);
+const solar = [0,0,0,0,0,0,0.3,1.5,3.8,6.5,8.8,10.2,10.9,11.0,10.2,8.6,6.4,4.0,1.8,0.4,0,0,0,0,0];
+const load  = [0.5,0.4,0.4,0.4,0.4,0.5,0.7,1.0,1.2,1.4,2.6,3.0,2.8,2.4,2.6,2.8,2.2,1.8,3.4,3.8,3.2,1.6,0.9,0.6,0.5];
+const soc   = [38,34,30,28,28,28,30,42,58,72,84,92,98,100,100,100,98,92,78,58,40,30,30,32,34];
+const TARIFF= [0,0,0,0,0,0,0,0,1,1,2,2,2,2,1,1,1,1,2,2,2,2,1,1]; // 0 P3 · 1 P2 · 2 P1
+const BANDFILL = ['rgba(46,230,160,.06)','transparent','rgba(245,165,36,.10)'];
+const BANDSOLID = ['var(--solar)','var(--grid-dim)','var(--grid)'];
+const NOW = 16.8;
+const ACTIONS = [
+  { h:2.0,  icon:'moon',          tone:'battery', title:'No overnight charge', why:'Sunny tomorrow — solar will refill the batteries for free.' },
+  { h:7.5,  icon:'sun',           tone:'solar',   title:'Charging from solar',  why:'House covered; surplus banked into both batteries.' },
+  { h:11.0, icon:'wind',          tone:'battery', title:'Pre-cooling the house',why:'>31 °C forecast — A/C runs on solar now so the slab coasts cool through the evening peak.' },
+  { h:13.5, icon:'upload',        tone:'grid',    title:'Surplus to grid',      why:'Batteries full; export is unavoidable (and worth little).' },
+  { h:18.0, icon:'battery-charging',tone:'solar', title:'Discharging for P1 peak',why:'Both batteries cover the house 18:00–22:00 — near-zero grid import at €0.209.' },
+  { h:22.0, icon:'shield-check',  tone:'battery', title:'Holding 20% backup',   why:'Storm-free — standard Tesla reserve kept for resilience.' },
+];
+
+function Timeline(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  const W=1000,Hh=330, PADL=34,PADR=12,PADT=12,PADB=46;
+  const PW=W-PADL-PADR, PH=Hh-PADT-PADB, PMAX=12;
+  const X=h=>PADL + h/24*PW;
+  const Yp=v=>PADT + (1-v/PMAX)*PH;       // power axis
+  const Ys=v=>PADT + (1-v/100)*PH;        // soc axis
+  const lineFrom=(arr,Y)=>arr.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
+  const solarArea = `${lineFrom(solar,Yp)} L${X(24)} ${Yp(0)} L${X(0)} ${Yp(0)} Z`;
+  return (
+    <svg viewBox={`0 0 ${W} ${Hh}`} width="100%" preserveAspectRatio="none" style={{display:'block',overflow:'visible'}}>
+      <defs><linearGradient id="sa" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--solar)" stopOpacity="0.28"/><stop offset="100%" stopColor="var(--solar)" stopOpacity="0"/></linearGradient></defs>
+      {/* tariff band tints */}
+      {TARIFF.map((b,i)=>(<rect key={i} x={X(i)} y={PADT} width={X(i+1)-X(i)} height={PH} fill={BANDFILL[b]} />))}
+      {/* gridlines */}
+      {[0,.5,1].map((g,i)=>(<line key={i} x1={PADL} y1={PADT+g*PH} x2={W-PADR} y2={PADT+g*PH} stroke="var(--grid-line)" strokeWidth="1"/>))}
+      {/* solar forecast */}
+      <path d={solarArea} fill="url(#sa)"/>
+      <path d={lineFrom(solar,Yp)} fill="none" stroke="var(--solar)" strokeWidth="2.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>
+      {/* house load */}
+      <path d={lineFrom(load,Yp)} fill="none" stroke="var(--home)" strokeWidth="2" strokeDasharray="5 5" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>
+      {/* battery SoC plan */}
+      <path d={lineFrom(soc,Ys)} fill="none" stroke="var(--battery)" strokeWidth="2.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>
+      {/* action markers */}
+      {ACTIONS.map((a,i)=>(<g key={i}>
+        <line x1={X(a.h)} y1={PADT+2} x2={X(a.h)} y2={PADT+PH} stroke="var(--border-3)" strokeWidth="1" strokeDasharray="2 4"/>
+        <circle cx={X(a.h)} cy={PADT-2} r="9" fill="var(--surface-3)" stroke={`var(--${a.tone})`}/>
+        <text x={X(a.h)} y={PADT+2} textAnchor="middle" fill={`var(--${a.tone})`} style={{font:'600 11px var(--font-mono)'}}>{i+1}</text>
+      </g>))}
+      {/* now */}
+      <line x1={X(NOW)} y1={PADT} x2={X(NOW)} y2={PADT+PH} stroke="var(--text-1)" strokeWidth="1.5"/>
+      <circle cx={X(NOW)} cy={Ys(soc[17])} r="4.5" fill="var(--battery)" stroke="var(--bg-0)" strokeWidth="2"/>
+      {/* band strip + labels */}
+      {TARIFF.map((b,i)=>(<rect key={'s'+i} x={X(i)+1} y={PADT+PH+8} width={X(i+1)-X(i)-2} height="6" rx="2" fill={BANDSOLID[b]} opacity={b===1?.5:.9}/>))}
+      {[0,4,8,12,16,20,24].map((h,i,a)=>(<text key={h} x={X(h)} y={PADT+PH+34} textAnchor={i===0?'start':i===a.length-1?'end':'middle'} fill="var(--text-3)" style={{font:'500 14px var(--font-mono)'}}>{String(h).padStart(2,'0')}</text>))}
+    </svg>
+  );
+}
+
+function Legend(){
+  const items=[['Solar forecast','var(--solar)'],['House load','var(--home)'],['Battery SoC plan','var(--battery)']];
+  return (<div style={{display:'flex',gap:18,fontSize:12,color:'var(--text-2)'}}>
+    {items.map(it=>(<span key={it[0]} style={{display:'flex',alignItems:'center',gap:6}}><i style={{width:14,height:3,borderRadius:2,background:it[1],display:'inline-block'}}></i>{it[0]}</span>))}
+    <span style={{display:'flex',alignItems:'center',gap:6,marginLeft:'auto'}}><i style={{width:10,height:10,borderRadius:2,background:'var(--grid)',opacity:.6}}></i>P1</span>
+    <span style={{display:'flex',alignItems:'center',gap:6}}><i style={{width:10,height:10,borderRadius:2,background:'var(--grid-dim)',opacity:.6}}></i>P2</span>
+    <span style={{display:'flex',alignItems:'center',gap:6}}><i style={{width:10,height:10,borderRadius:2,background:'var(--solar)',opacity:.6}}></i>P3</span>
+  </div>);
+}
+
+function App(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (
+    <div className="wrap">
+      <div className="top">
+        <div className="brand"><img src="_ds/assets/logo-mark.svg" width="30" height="30" alt=""/><span style={{color:'var(--solar)'}}>Power</span></div>
+        <div style={{marginLeft:8}}><Eyebrow>Energy brain</Eyebrow><h1 style={{fontSize:22,fontWeight:600,letterSpacing:'-.01em',margin:'2px 0 0'}}>Today's plan</h1></div>
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
+          <div className="pill"><Ico n="sparkles" s={{width:15,height:15,color:'var(--solar)'}}/> Autopilot · Max self-consumption</div>
+          <div style={{width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,var(--solar-dim),var(--battery-dim))',display:'grid',placeItems:'center',fontWeight:700,fontSize:13,color:'#06090b'}}>JK</div>
+        </div>
+      </div>
+
+      {/* status */}
+      <div className="grid4" style={{marginBottom:18}}>
+        <Card><StatTile label="Projected saved today" value="€6.10" tone="solar" icon={<Ico n="piggy-bank"/>} delta={13} footnote="vs vendor default"/></Card>
+        <Card><StatTile label="Self-sufficiency (plan)" value="84" unit="%" tone="battery" icon={<Ico n="leaf"/>} footnote="solar + stored"/></Card>
+        <Card><StatTile label="Backup reserve" value="20" unit="%" tone="battery" icon={<Ico n="shield-check"/>} footnote="Tesla · calm · dynamic"/></Card>
+        <Card><StatTile label="P1 import avoided" value="11.2" unit="kWh" tone="grid" icon={<Ico n="trending-down"/>} footnote="this evening's peak"/></Card>
+      </div>
+
+      {/* hero timeline */}
+      <Card title="The plan — next 24 h" subtitle="solar forecast · battery trajectory · tariff bands · the brain's moves"
+        icon={<Ico n="brain"/>} actions={Badge?<Badge tone="solar" variant="soft" icon={<Ico n="radio"/>}>Live plan</Badge>:null} style={{marginBottom:18}}>
+        <Timeline/>
+        <div style={{marginTop:10}}><Legend/></div>
+      </Card>
+
+      <div style={{display:'grid',gridTemplateColumns:'1.25fr 1fr',gap:18,marginBottom:18}}>
+        {/* schedule */}
+        <Card title="What the boss is doing" subtitle="today's scheduled moves" icon={<Ico n="list-checks"/>} style={{padding:'18px 20px 8px'}}>
+          {ACTIONS.map((a,i)=>(
+            <div key={i} className="act">
+              <span className="num" style={{background:`color-mix(in srgb, var(--${a.tone}) 18%, transparent)`,color:`var(--${a.tone})`}}>{i+1}</span>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-3)'}}>{String(Math.floor(a.h)).padStart(2,'0')}:{String(Math.round((a.h%1)*60)).padStart(2,'0')}</span>
+                  <Ico n={a.icon} s={{width:15,height:15,color:`var(--${a.tone})`}}/>
+                  <span style={{fontSize:14,fontWeight:500}}>{a.title}</span>
+                </div>
+                <div style={{fontSize:12.5,color:'var(--text-2)',marginTop:3,lineHeight:1.45}}>{a.why}</div>
+              </div>
+            </div>
+          ))}
+        </Card>
+
+        {/* why now */}
+        <Card accent="battery" style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <span style={{width:32,height:32,borderRadius:9,display:'grid',placeItems:'center',background:'var(--battery-wash)',color:'var(--battery)'}}><Ico n="brain" s={{width:18,height:18}}/></span>
+            <div><Eyebrow>Why now · 16:48</Eyebrow><div style={{fontSize:15,fontWeight:600,marginTop:2}}>Holding full, banking sun</div></div>
+          </div>
+          <div style={{fontSize:14,color:'var(--text-1)',lineHeight:1.55}}>Both batteries are full and the slab is pre-cooled. Surplus is exporting for now — there's nowhere left to store it.</div>
+          <div style={{fontSize:13.5,color:'var(--text-2)',lineHeight:1.55}}>In <span style={{fontFamily:'var(--font-mono)',color:'var(--grid)'}}>1h 12m</span> the <span style={{color:'var(--grid)'}}>P1 peak</span> starts. The plan: discharge both batteries to carry the house to ~22:00, avoiding <span style={{fontFamily:'var(--font-mono)'}}>~11 kWh</span> of imports at <span style={{fontFamily:'var(--font-mono)'}}>€0.209</span>/kWh, while keeping Tesla's 20% backup.</div>
+          <div style={{marginTop:'auto',display:'flex',gap:8,fontSize:12,color:'var(--text-3)'}}>
+            <Ico n="cpu" s={{width:14,height:14}}/> Re-planned every 10 min · MPC over 36 h
+          </div>
+        </Card>
+      </div>
+
+      {/* how it decides */}
+      <Card title="How the brain decides" subtitle="five layers, replanned continuously" icon={<Ico n="layers"/>}>
+        <div className="layers" style={{marginTop:6}}>
+          {[
+            ['1 · Sense','Telemetry','Sonnen · Tesla · solar · grid · weather · EV'],
+            ['2 · Forecast','Foresight','solar yield · temp→demand · load · prices'],
+            ['3 · Plan','MPC brain','36 h rolling optimize, value-priced'],
+            ['4 · Act','Hands','Tesla policy · Sonnen setpoints · loads'],
+            ['5 · Guard','Safety','SoC/14 kW limits · fail-safe · override'],
+          ].map((l,i,a)=>(<React.Fragment key={i}>
+            <div className="layer"><div className="n">{l[0]}</div><div className="t">{l[1]}</div><div className="d">{l[2]}</div></div>
+            {i<a.length-1 && <div className="arrow"><Ico n="chevron-right" s={{width:18,height:18}}/></div>}
+          </React.Fragment>))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 60);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 400);
+</script>
+</body>
+</html>

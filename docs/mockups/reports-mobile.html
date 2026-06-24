@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Power — Reports (mobile / PWA)</title>
+<link rel="stylesheet" href="_ds/styles.css" />
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: radial-gradient(circle at 50% 0%, #0c1418, var(--bg-0)); color: var(--text-1);
+    min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+  .phone { width: 390px; height: 844px; border-radius: 46px; background: var(--bg-0); border: 10px solid #1a2227;
+    box-shadow: 0 40px 90px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.04); overflow: hidden;
+    display: flex; flex-direction: column; position: relative; }
+  .scroll { flex: 1; overflow-y: auto; }
+  .scroll::-webkit-scrollbar { width: 0; }
+  .splitbar { display:flex; height:30px; border-radius:8px; overflow:hidden; }
+  .splitbar > div { display:flex; align-items:center; justify-content:center; font-family:var(--font-mono); font-size:11px; font-weight:600; }
+  .barcol { display:flex; flex-direction:column; align-items:center; gap:6px; flex:1; height:100%; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="_ds/_ds_bundle.js"></script>
+<script type="text/babel">
+const DS = window.PowerDesignSystem_138199 || {};
+const { Card, StatTile, ProgressBar, Badge, SegmentedControl } = DS;
+const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
+function Eyebrow({children}){ return <span style={{fontSize:9,fontWeight:600,letterSpacing:'.12em',textTransform:'uppercase',color:'var(--text-2)'}}>{children}</span>; }
+
+// real 2.0TD month (30 Apr–31 May): import by band, export, power term
+const BANDS = [
+  { k:'P1', kwh:35,  eur:6.80,  color:'var(--grid)',     rate:'€0.209' },
+  { k:'P2', kwh:77,  eur:9.88,  color:'var(--grid-dim)', rate:'€0.131' },
+  { k:'P3', kwh:332, eur:31.42, color:'var(--solar)',    rate:'€0.096' },
+];
+const weeks = [ {l:'W1',p:268,c:104}, {l:'W2',p:241,c:118}, {l:'W3',p:290,c:96}, {l:'W4',p:251,c:126} ];
+const loads = [
+  { name:'Heat pump + floor', icon:'thermometer', tone:'var(--grid)',    kwh:128, pct:34 },
+  { name:'A/C cooling',       icon:'wind',         tone:'var(--battery)', kwh:79,  pct:21 },
+  { name:'EV · 2× BMW i3',    icon:'plug-zap',     tone:'var(--ev)',      kwh:71,  pct:19 },
+  { name:'Water heating',     icon:'droplet',      tone:'var(--home)',    kwh:45,  pct:12 },
+  { name:'Appliances',        icon:'washing-machine', tone:'var(--solar)', kwh:34, pct:9 },
+  { name:'Lighting & other',  icon:'lightbulb',    tone:'var(--text-2)',  kwh:19,  pct:5 },
+];
+
+function MiniBars({ data, height=150 }){
+  const max = Math.ceil(Math.max(...data.flatMap(d=>[d.p,d.c]),1));
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:8}}>
+      <div style={{display:'flex',alignItems:'flex-end',gap:14,height,borderBottom:'1px solid var(--border-1)',padding:'0 2px'}}>
+        {data.map((g,i)=>(
+          <div key={i} className="barcol" style={{justifyContent:'flex-end'}}>
+            <div style={{flex:1,display:'flex',alignItems:'flex-end',gap:4,justifyContent:'center',width:'100%'}}>
+              <div title={g.p+' kWh'} style={{width:14,height:`${g.p/max*100}%`,background:'var(--solar)',borderRadius:'4px 4px 0 0',boxShadow:'0 0 10px color-mix(in srgb,var(--solar) 40%,transparent)'}}></div>
+              <div title={g.c+' kWh'} style={{width:14,height:`${g.c/max*100}%`,background:'var(--home)',borderRadius:'4px 4px 0 0'}}></div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:14,padding:'0 2px'}}>{data.map((g,i)=>(<div key={i} style={{flex:1,textAlign:'center',font:'500 12px var(--font-mono)',color:'var(--text-3)'}}>{g.l}</div>))}</div>
+    </div>
+  );
+}
+
+function ReportsMobile(){
+  const [range,setRange] = React.useState('Month');
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  const exported = 625, backEur = 13.72, worthEur = 131; // real: export pays pennies
+  return (
+    <React.Fragment>
+      <div style={{padding:'12px 18px 12px'}}>
+        <Eyebrow>Reports</Eyebrow>
+        <h1 style={{fontSize:24,fontWeight:700,letterSpacing:'-.02em',margin:'2px 0 0'}}>This month</h1>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:12,padding:'0 14px 22px'}}>
+        {SegmentedControl ? <SegmentedControl block options={['Day','Week','Month','Year']} value={range} onChange={setRange} /> : null}
+
+        {/* KPI tiles */}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <Card style={{padding:14}}><StatTile size="sm" label="Produced" value="1,050" unit="kWh" tone="solar" icon={<Ico n="sun"/>} delta={8} /></Card>
+          <Card style={{padding:14}}><StatTile size="sm" label="Consumed" value="444" unit="kWh" tone="home" icon={<Ico n="plug"/>} delta={-3} /></Card>
+          <Card style={{padding:14}}><StatTile size="sm" label="Self-sufficiency" value="71" unit="%" tone="battery" icon={<Ico n="leaf"/>} delta={5} /></Card>
+          <Card style={{padding:14}}><StatTile size="sm" label="CO₂ avoided" value="412" unit="kg" tone="solar" icon={<Ico n="sprout"/>} delta={8} /></Card>
+        </div>
+
+        {/* THE money story: self-consumption vs export */}
+        <Card accent="grid" style={{padding:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+            <Eyebrow>Solar value · captured vs lost</Eyebrow><Ico n="trending-up" s={{width:16,height:16,color:'var(--solar)'}}/>
+          </div>
+          <div className="splitbar">
+            <div style={{flex:68,background:'var(--solar)',color:'#06090b'}}>68% self-used</div>
+            <div style={{flex:32,background:'var(--surface-3)',color:'var(--text-2)'}}>32% exported</div>
+          </div>
+          <div style={{marginTop:12,display:'flex',gap:10}}>
+            <div style={{flex:1,padding:'10px 12px',borderRadius:10,background:'var(--solar-wash)'}}>
+              <div style={{fontSize:11,color:'var(--text-2)'}}>Self-consumed</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:16,fontWeight:600,color:'var(--solar)',marginTop:3}}>worth €0.21<small style={{fontSize:9,color:'var(--text-3)'}}>/kWh</small></div>
+            </div>
+            <div style={{flex:1,padding:'10px 12px',borderRadius:10,background:'var(--grid-wash)'}}>
+              <div style={{fontSize:11,color:'var(--text-2)'}}>Exported {exported} kWh</div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:16,fontWeight:600,color:'var(--grid)',marginTop:3}}>€{backEur}<small style={{fontSize:9,color:'var(--text-3)'}}> back</small></div>
+            </div>
+          </div>
+          <div style={{marginTop:11,fontSize:12.5,color:'var(--text-1)',lineHeight:1.5}}>That exported solar would've been worth <span style={{fontFamily:'var(--font-mono)',color:'var(--solar)'}}>€{worthEur}</span> if self-consumed — <span style={{color:'var(--grid)'}}>€{(worthEur-backEur).toFixed(0)} of value left on the table.</span></div>
+        </Card>
+
+        {/* where the money goes — by tariff band */}
+        <Card style={{padding:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+            <Eyebrow>Grid cost · by band</Eyebrow>
+            <span style={{fontFamily:'var(--font-mono)',fontSize:15,fontWeight:600}}>€48.10</span>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:12,marginTop:14}}>
+            {BANDS.map(b=>(
+              <div key={b.k} style={{display:'flex',flexDirection:'column',gap:6}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{width:34,fontFamily:'var(--font-mono)',fontWeight:600,color:b.color}}>{b.k}</span>
+                  <span style={{flex:1,fontSize:12,color:'var(--text-2)'}}>{b.kwh} kWh · {b.rate}/kWh</span>
+                  <span style={{fontFamily:'var(--font-mono)',fontSize:13}}>€{b.eur.toFixed(2)}</span>
+                </div>
+                <ProgressBar height={6} segments={[{value:(b.eur/48.10)*100,tone: b.k==='P3'?'solar':'grid'}]} />
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:12,fontSize:11,color:'var(--text-3)'}}>+ fixed power term €36.19/mo (14 kW)</div>
+        </Card>
+
+        {/* production vs consumption */}
+        <Card style={{padding:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <Eyebrow>Production vs consumption · kWh</Eyebrow>
+            <div style={{display:'flex',gap:12,fontSize:11,color:'var(--text-2)'}}>
+              <span><i style={{display:'inline-block',width:8,height:8,borderRadius:2,background:'var(--solar)',marginRight:5}}></i>Prod</span>
+              <span><i style={{display:'inline-block',width:8,height:8,borderRadius:2,background:'var(--home)',marginRight:5}}></i>Used</span>
+            </div>
+          </div>
+          <MiniBars data={weeks} height={140} />
+        </Card>
+
+        {/* consumption by load */}
+        <Card style={{padding:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <Eyebrow>Consumption by load</Eyebrow>
+            {Badge ? <Badge tone="battery" variant="soft">estimated</Badge> : null}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:13,marginTop:14}}>
+            {loads.map(l=>(
+              <div key={l.name} style={{display:'flex',flexDirection:'column',gap:6}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <span style={{width:26,height:26,borderRadius:8,display:'grid',placeItems:'center',background:'var(--surface-3)',color:l.tone}}><Ico n={l.icon} s={{width:14,height:14}}/></span>
+                  <span style={{flex:1,fontSize:13.5}}>{l.name}</span>
+                  <span style={{fontFamily:'var(--font-mono)',fontSize:12.5,color:'var(--text-2)'}}>{l.kwh} kWh</span>
+                </div>
+                <ProgressBar height={6} segments={[{value:l.pct,tone:l.tone}]} />
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </React.Fragment>
+  );
+}
+
+function StatusBar(){
+  return (<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px 4px',fontFamily:'var(--font-mono)',fontSize:14,color:'var(--text-1)',fontWeight:600}}>
+    <span>9:41</span><div style={{display:'flex',gap:6}}><Ico n="signal" s={{width:16,height:16}}/><Ico n="wifi" s={{width:16,height:16}}/><Ico n="battery-full" s={{width:18,height:18}}/></div></div>);
+}
+function PhoneApp(){
+  const [tab,setTab] = React.useState('reports');
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  const tabs = [['live','Live','activity'],['reports','Reports','bar-chart-3'],['batteries','Batteries','battery-charging'],['alerts','Alerts','bell'],['more','More','menu']];
+  return (
+    <div className="phone">
+      <StatusBar />
+      <div className="scroll">{tab==='reports' ? <ReportsMobile /> : <div style={{padding:40,textAlign:'center',color:'var(--text-3)'}}>{tab} — see other mockups</div>}</div>
+      <div style={{display:'flex',padding:'9px 10px 22px',borderTop:'1px solid var(--border-1)',background:'var(--glass-fill, rgba(15,22,25,.8))',backdropFilter:'blur(var(--blur-glass, 18px))'}}>
+        {tabs.map(t=>{ const on=tab===t[0];
+          return (<button key={t[0]} onClick={()=>setTab(t[0])} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4,border:'none',background:'transparent',cursor:'pointer',color:on?'var(--solar)':'var(--text-3)'}}>
+            <Ico n={t[2]} s={{width:21,height:21}}/><span style={{fontSize:10,fontWeight:on?600:500}}>{t[1]}</span></button>); })}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<PhoneApp />);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 60);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 400);
+</script>
+</body>
+</html>
