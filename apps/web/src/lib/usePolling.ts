@@ -1,0 +1,74 @@
+import { useEffect, useRef, useState } from 'react';
+
+export interface PollingState<T> {
+  /** Last successfully-fetched value (kept on error → keep-last-good). */
+  data: T | null;
+  /** True until the first successful (or failed) fetch resolves. */
+  loading: boolean;
+  /** Most recent error, cleared on the next success. */
+  error: Error | null;
+  /** True when the last refetch failed but we're still showing older data. */
+  stale: boolean;
+  /** Timestamp (ms) of the last successful fetch. */
+  updatedAt: number | null;
+  /** Force an immediate refetch. */
+  refetch: () => void;
+}
+
+/**
+ * usePolling — fetch + setInterval, keeping the last good value across refetch
+ * errors and exposing a `stale` flag. No external data-lib dependency.
+ *
+ * @param fetcher async function returning the data
+ * @param intervalMs poll cadence; pass 0/undefined to fetch once
+ * @param deps re-create the loop when these change (e.g. a range selector)
+ */
+export function usePolling<T>(
+  fetcher: () => Promise<T>,
+  intervalMs = 0,
+  deps: ReadonlyArray<unknown> = [],
+): PollingState<T> {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [stale, setStale] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const fetcherRef = useRef(fetcher);
+  fetcherRef.current = fetcher;
+
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      try {
+        const d = await fetcherRef.current();
+        if (!alive) return;
+        setData(d);
+        setError(null);
+        setStale(false);
+        setUpdatedAt(Date.now());
+      } catch (e) {
+        if (!alive) return;
+        setError(e as Error);
+        setStale(true);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    run();
+    if (intervalMs > 0) {
+      const id = setInterval(run, intervalMs);
+      return () => {
+        alive = false;
+        clearInterval(id);
+      };
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intervalMs, tick, ...deps]);
+
+  return { data, loading, error, stale, updatedAt, refetch: () => setTick((t) => t + 1) };
+}

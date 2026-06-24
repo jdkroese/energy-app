@@ -24,3 +24,77 @@ export function getStatus(): Promise<unknown> {
 export function getConfigurations(): Promise<unknown> {
   return get('/configurations', true);
 }
+
+/** latestdata: USOC/RSOC, Pac_total_W, SetPoint_W, FullChargeCapacity, ic_status. */
+export function getLatestData(): Promise<unknown> {
+  return get('/latestdata');
+}
+
+/** Per-channel powermeter: kwh_imported/kwh_exported, w_total, per-phase V/A. */
+export function getPowermeter(): Promise<unknown> {
+  return get('/powermeter');
+}
+
+// ---- Normalized shape for /api/live -------------------------------------
+
+export interface SonnenStatusRaw {
+  USOC?: number; // user state of charge %
+  RSOC?: number;
+  Pac_total_W?: number; // +discharge / -charge (sign per device; normalized below)
+  GridFeedIn_W?: number; // + exporting / - importing
+  Production_W?: number;
+  Consumption_W?: number;
+  RemainingCapacity_Wh?: number;
+  OperatingMode?: number | string;
+  SystemStatus?: string; // "OnGrid" / "OffGrid"
+  BatteryCharging?: boolean;
+  BatteryDischarging?: boolean;
+}
+
+export interface SonnenNormalized {
+  soc: number;
+  kwh: number;
+  kw: number;
+  dir: 'charging' | 'discharging' | 'idle';
+  mode?: string;
+  productionW: number;
+  gridFeedInW: number;
+  consumptionW: number;
+  online: true;
+}
+
+function modeLabel(m: number | string | undefined): string | undefined {
+  if (m === undefined) return undefined;
+  const n = typeof m === 'string' ? Number(m) : m;
+  if (n === 1) return 'manual';
+  if (n === 2) return 'self-consumption';
+  if (n === 10) return 'time-of-use';
+  return typeof m === 'string' ? m : undefined;
+}
+
+/** Fetch /status and normalize to the /api/live sonnen shape. */
+export async function getNormalized(): Promise<SonnenNormalized> {
+  const raw = (await getStatus()) as SonnenStatusRaw;
+  const soc = Math.round(raw.USOC ?? raw.RSOC ?? 0);
+  const remainingWh = raw.RemainingCapacity_Wh ?? 0;
+  const kwh = remainingWh > 0 ? Math.round((remainingWh / 1000) * 10) / 10 : Math.round(soc * 0.092 * 10) / 10;
+
+  // Pac_total_W: on Sonnen, negative = charging, positive = discharging.
+  const pac = raw.Pac_total_W ?? 0;
+  let dir: SonnenNormalized['dir'] = 'idle';
+  if (raw.BatteryCharging || pac < -25) dir = 'charging';
+  else if (raw.BatteryDischarging || pac > 25) dir = 'discharging';
+  const kw = Math.round((Math.abs(pac) / 1000) * 100) / 100;
+
+  return {
+    soc,
+    kwh,
+    kw,
+    dir,
+    mode: modeLabel(raw.OperatingMode),
+    productionW: raw.Production_W ?? 0,
+    gridFeedInW: raw.GridFeedIn_W ?? 0,
+    consumptionW: raw.Consumption_W ?? 0,
+    online: true,
+  };
+}

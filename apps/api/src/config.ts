@@ -25,4 +25,19 @@ export const config = {
     refreshToken: process.env.TESLA_REFRESH_TOKEN ?? '',
     siteId: process.env.TESLA_ENERGY_SITE_ID ?? '',
   },
+  site: {
+    // Jávea (Xàbia), Costa Blanca.
+    lat: Number(process.env.SITE_LAT ?? 38.79),
+    lon: Number(process.env.SITE_LON ?? 0.17),
+    solarKwp: Number(process.env.SITE_SOLAR_KWP ?? 18.2),
+  },
+  assets: {
+    // Real nameplate facts (see docs/00-project-brief, capability matrix).
+    sonnenUsableKwh: 9.2,
+    sonnenNominalKwh: 11,
+    sonnenMaxKw: 4.6,
+    teslaUsableKwh: 27, // 2× PW3
+    teslaMaxKw: 10, // nameplate_power
+    criticalLoadKw: 0.6, // critical-load estimate for backup autonomy
+  },
 } as const;

@@ -1,18 +1,196 @@
 @import "tailwindcss";
 
-/* Design tokens from docs/08-design-brief.md — "calm dark control-room". */
+/* ============================================================================
+ * Power design tokens — dark control-room. Source of truth: /Design system.
+ * Real CSS variables (consumed by the ported DS primitives) live in :root.
+ * Tailwind 4 @theme maps a subset to utilities so classes stay on-brand.
+ * ==========================================================================*/
+
+:root {
+  /* base neutrals */
+  --bg-0: #06090b;
+  --bg-1: #0a1013;
+  --surface-1: #0f1619;
+  --surface-2: #141d21;
+  --surface-3: #1b262b;
+  --surface-4: #233136;
+
+  /* borders & lines */
+  --border-1: rgba(233, 245, 242, 0.08);
+  --border-2: rgba(233, 245, 242, 0.14);
+  --border-3: rgba(233, 245, 242, 0.22);
+  --grid-line: rgba(233, 245, 242, 0.05);
+
+  /* text */
+  --text-1: #e9f5f2;
+  --text-2: #9bb0ad;
+  --text-3: #5f7672;
+  --text-disabled: #41534f;
+  --text-inverse: #06090b;
+
+  /* energy palette */
+  --solar: #2ee6a0;
+  --solar-dim: #1f9c6e;
+  --battery: #38d9f5;
+  --battery-dim: #2596ad;
+  --grid: #f5a524;
+  --grid-dim: #b3781a;
+  --home: #c4a6ff;
+  --home-dim: #8f72d6;
+  --ev: #8b8cff;
+  --ev-dim: #6263cc;
+
+  /* brand accent (alias to solar) */
+  --accent: var(--solar);
+  --accent-dim: var(--solar-dim);
+  --accent-contrast: #06090b;
+
+  /* semantic */
+  --success: #2ee6a0;
+  --warning: #f5a524;
+  --danger: #ff5d5d;
+  --danger-dim: #b53e3e;
+  --info: #38d9f5;
+
+  /* tinted washes */
+  --solar-wash: rgba(46, 230, 160, 0.12);
+  --battery-wash: rgba(56, 217, 245, 0.12);
+  --grid-wash: rgba(245, 165, 36, 0.12);
+  --home-wash: rgba(196, 166, 255, 0.12);
+  --danger-wash: rgba(255, 93, 93, 0.12);
+
+  /* semantic surface aliases */
+  --surface-card: var(--surface-1);
+  --surface-raised: var(--surface-2);
+  --surface-app: var(--bg-0);
+  --text-body: var(--text-1);
+  --text-muted: var(--text-2);
+
+  /* typography */
+  --font-sans: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --fs-display: 40px;
+  --fs-h1: 30px;
+  --fs-h2: 24px;
+  --fs-h3: 20px;
+  --fs-h4: 17px;
+  --fs-body: 15px;
+  --fs-sm: 13px;
+  --fs-xs: 11px;
+
+  --fs-metric-xl: 56px;
+  --fs-metric-lg: 36px;
+  --fs-metric-md: 24px;
+  --fs-metric-sm: 15px;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --lh-tight: 1.05;
+  --lh-snug: 1.2;
+  --lh-normal: 1.45;
+  --lh-relaxed: 1.6;
+
+  --ls-display: -0.02em;
+  --ls-heading: -0.01em;
+  --ls-normal: 0;
+  --ls-label: 0.08em;
+  --ls-mono: -0.01em;
+
+  /* radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-card: 14px;
+  --radius-pill: 999px;
+
+  /* shadows */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-card: 0 14px 44px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 18px 50px rgba(0, 0, 0, 0.6);
+  --hairline-top: inset 0 1px 0 rgba(233, 245, 242, 0.05);
+
+  /* glows */
+  --glow-solar: 0 0 0 1px rgba(46, 230, 160, 0.4), 0 0 24px rgba(46, 230, 160, 0.3);
+  --glow-battery: 0 0 0 1px rgba(56, 217, 245, 0.4), 0 0 24px rgba(56, 217, 245, 0.28);
+  --glow-grid: 0 0 0 1px rgba(245, 165, 36, 0.4), 0 0 24px rgba(245, 165, 36, 0.28);
+  --glow-soft: 0 0 20px rgba(46, 230, 160, 0.18);
+
+  --focus-ring: 0 0 0 2px var(--bg-0), 0 0 0 4px rgba(46, 230, 160, 0.6);
+
+  /* glass / blur */
+  --blur-glass: 18px;
+  --glass-fill: rgba(15, 22, 25, 0.72);
+
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --control-sm: 30px;
+  --control-md: 38px;
+  --control-lg: 46px;
+
+  /* motion */
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 360ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* ---- Tailwind 4 theme map (utilities key off the real tokens) ---- */
 @theme {
-  --color-bg: #0b0e14;
-  --color-surface: #141a24;
-  --color-surface-2: #1c2430;
-  --color-border: #26303d;
-  --color-text: #e6eaf0;
-  --color-muted: #8a95a5;
-  --color-solar: #f5a623;
-  --color-battery: #4fc3f7;
-  --color-grid: #ff6b5e;
-  --color-ok: #3dd68c;
-  --color-accent: #7aa2f7;
+  --color-bg-0: var(--bg-0);
+  --color-bg-1: var(--bg-1);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
+
+  --color-border-1: var(--border-1);
+  --color-border-2: var(--border-2);
+  --color-border-3: var(--border-3);
+
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+
+  --color-solar: var(--solar);
+  --color-battery: var(--battery);
+  --color-grid: var(--grid);
+  --color-home: var(--home);
+  --color-ev: var(--ev);
+  --color-danger: var(--danger);
+  --color-accent: var(--solar);
+
+  --font-sans: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+}
+
+/* ---- base resets ---- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 html,
@@ -20,10 +198,72 @@ body,
 #root {
   height: 100%;
 }
+
 body {
   margin: 0;
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+  letter-spacing: var(--ls-normal);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4, p {
+  margin: 0;
+}
+
+::selection {
+  background: rgba(46, 230, 160, 0.28);
+  color: var(--text-1);
+}
+
+/* tabular numerals helper */
+.pwr-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: var(--ls-mono);
+}
+
+/* uppercase eyebrow / overline label */
+.pwr-eyebrow {
+  font-size: 9px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+/* custom scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+@keyframes pwr-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* keyframe used by EnergyFlow / live elements (also defined inline per-component
+   but kept here so reduced-motion override applies globally) */
+@media (prefers-reduced-motion: reduce) {
+  .pwr2__line,
+  .pwr2__hub::after,
+  .pwr-status--live .pwr-status__dot::after {
+    animation: none !important;
+  }
 }
