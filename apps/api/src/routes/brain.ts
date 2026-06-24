@@ -3,6 +3,8 @@ import * as sonnen from '../connectors/sonnen';
 import * as tesla from '../connectors/tesla';
 import * as weather from '../connectors/weather';
 import { bandCodesForDay, RATES, type Band } from '../tariff';
+import * as store from '../store';
+import type { ScenarioDef } from '../store';
 
 function round(n: number, dp = 1): number {
   const f = 10 ** dp;
@@ -68,11 +70,19 @@ function plan(
   startSoc: number,
   reservePct: number,
   temp: number[] | null,
+  scenario: ScenarioDef,
 ) {
   const capKwh = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh; // combined tank
   const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
   const socPct: number[] = [];
   const actions: Array<{ h: number; icon: string; tone: string; title: string; why: string }> = [];
+
+  // Scenario bias: a self/independence-leaning scenario discharges the battery
+  // more eagerly in cheaper bands (P2/P3) to lean less on the grid; a savings-
+  // leaning one keeps more in reserve for the P1 jackpot. Range ~0.7..1.3.
+  const selfBias = 1 + (scenario.weights.self + scenario.weights.indep - 0.5) * 0.6;
+  const p2Frac = Math.max(0.3, Math.min(1, 0.7 * selfBias));
+  const p3Frac = Math.max(0.05, Math.min(0.6, 0.2 * selfBias));
 
   let soc = startSoc; // %
   let p1AvoidedKwh = 0;
@@ -95,11 +105,11 @@ function plan(
     } else {
       const deficit = -surplus; // kW we still need
       const availKwh = Math.max(0, ((soc - reservePct) / 100) * capKwh);
-      // Discharge harder in P1/P2, hold in P3 (cheap grid).
+      // Discharge harder in P1/P2, hold in P3 (cheap grid). Scenario biases P2/P3.
       let discharge = 0;
       if (band === 2) discharge = Math.min(deficit, maxKw, availKwh); // P1 evening
-      else if (band === 1) discharge = Math.min(deficit * 0.7, maxKw, availKwh);
-      else discharge = Math.min(deficit * 0.2, maxKw, availKwh);
+      else if (band === 1) discharge = Math.min(deficit * p2Frac, maxKw, availKwh);
+      else discharge = Math.min(deficit * p3Frac, maxKw, availKwh);
       deltaKwh = -discharge;
       const gridImport = deficit - discharge;
       importedKwh += gridImport;
@@ -187,6 +197,10 @@ export async function getPlan(): Promise<unknown> {
   const loadKw = loadForecast(temp);
   const bandCodes = bandCodesForDay(now);
 
+  // Active scenario drives the reserve floor + discharge bias.
+  const state = store.get();
+  const scenario = state.scenarios[state.activeScenario] ?? store.DEFAULT_SCENARIOS.balanced;
+
   // Combined starting SoC across both batteries (energy-weighted).
   const sonnenKwh = config.assets.sonnenUsableKwh;
   const teslaKwh = config.assets.teslaUsableKwh;
@@ -194,9 +208,14 @@ export async function getPlan(): Promise<unknown> {
     s && t
       ? Math.round((s.soc * sonnenKwh + t.soc * teslaKwh) / (sonnenKwh + teslaKwh))
       : t?.soc ?? s?.soc ?? 50;
-  const reservePct = t?.reservePct ?? 20;
+  // Honour the scenario's reserve. With dynReserve, never go below the device's
+  // own configured reserve (so we keep at least the hardware floor).
+  const deviceReserve = t?.reservePct ?? 20;
+  const reservePct = scenario.dynReserve
+    ? Math.max(scenario.reserve, deviceReserve)
+    : scenario.reserve;
 
-  const result = plan(solarKw, loadKw, bandCodes, startSoc, reservePct, temp);
+  const result = plan(solarKw, loadKw, bandCodes, startSoc, reservePct, temp, scenario);
 
   // Tariff rate array for the chart (0=P3,1=P2,2=P1 already from bandCodes).
   const tariff = bandCodes;
@@ -208,6 +227,7 @@ export async function getPlan(): Promise<unknown> {
 
   return {
     ts: now.toISOString(),
+    scenario: { id: state.activeScenario, name: scenario.name, reservePct },
     projected: result.projected,
     forecast: { solarKw, loadKw },
     socPct: result.socPct,

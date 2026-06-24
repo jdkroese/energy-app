@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { cached } from '../cache';
 
 // Sonnen local REST API v2 (reachable from the VPS over the WireGuard tunnel).
 // Read endpoints are open; configuration/control endpoints need the Auth-Token.
@@ -17,7 +18,7 @@ async function get(path: string, auth = false): Promise<unknown> {
 
 /** Live snapshot: SoC, power flows, production/consumption, grid feed-in. */
 export function getStatus(): Promise<unknown> {
-  return get('/status');
+  return cached('sonnen.status', 10_000, () => get('/status'));
 }
 
 /** Authenticated config read: EM_OperatingMode, EM_USOC (backup reserve), etc. */

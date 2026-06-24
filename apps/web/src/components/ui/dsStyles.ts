@@ -230,6 +230,17 @@ const CSS = `
 .pwr2--lg .pwr2__hub{ width:60px; height:60px; }
 .pwr2--lg .pwr2__hub svg{ width:24px; height:24px; }
 
+/* ---- Input ---- */
+.pwr-input-field{ display:flex; flex-direction:column; gap:6px; }
+.pwr-input-field__label{ font-size:var(--fs-sm); font-weight:var(--fw-medium); color:var(--text-2); }
+.pwr-input{ width:100%; height:var(--control-md); padding:0 12px; background:var(--surface-2); color:var(--text-1);
+  border:1px solid var(--border-2); border-radius:var(--radius-md); font-family:var(--font-sans); font-size:var(--fs-sm); line-height:1; -webkit-appearance:none; appearance:none;
+  transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.pwr-input::placeholder{ color:var(--text-3); }
+.pwr-input:hover{ border-color:var(--border-3); }
+.pwr-input:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(46,230,160,0.18); }
+.pwr-input:disabled{ opacity:0.5; cursor:not-allowed; }
+
 /* tariff strip */
 .tband{ display:flex; gap:2px; height:8px; margin-top:9px; border-radius:4px; overflow:hidden; }
 .tband i{ flex:1; display:block; }

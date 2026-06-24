@@ -16,6 +16,9 @@ build/
 .next/
 coverage/
 
+# Local state store (JSON persistence) — runtime data, not source
+.data/
+
 # Logs / OS
 *.log
 .DS_Store

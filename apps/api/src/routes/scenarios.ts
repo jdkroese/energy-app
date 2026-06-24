@@ -1,74 +1,74 @@
 import { config } from '../config';
+import * as store from '../store';
 
-// In-memory scenario store (resets on restart — fine for MVP).
+// Scenarios are now persisted in the store (definitions + active selection).
 
-interface Scenario {
-  id: string;
-  name: string;
-  icon: string;
-  active: boolean;
-  weights: { save: number; self: number; indep: number; comfort: number };
-  reserve: number;
-  gridCharge: boolean;
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+function round(n: number, dp = 1): number {
+  const f = 10 ** dp;
+  return Math.round(n * f) / f;
 }
 
-const scenarios: Scenario[] = [
-  {
-    id: 'balanced',
-    name: 'Balanced',
-    icon: 'scale',
-    active: true,
-    weights: { save: 0.4, self: 0.3, indep: 0.2, comfort: 0.1 },
-    reserve: 20,
-    gridCharge: false,
-  },
-  {
-    id: 'max-savings',
-    name: 'Max savings',
-    icon: 'piggy-bank',
-    active: false,
-    weights: { save: 0.7, self: 0.2, indep: 0.05, comfort: 0.05 },
-    reserve: 10,
-    gridCharge: true,
-  },
-  {
-    id: 'self-sufficient',
-    name: 'Self-sufficient',
-    icon: 'leaf',
-    active: false,
-    weights: { save: 0.2, self: 0.5, indep: 0.25, comfort: 0.05 },
-    reserve: 20,
-    gridCharge: false,
-  },
-  {
-    id: 'resilient',
-    name: 'Storm-ready',
-    icon: 'shield',
-    active: false,
-    weights: { save: 0.15, self: 0.25, indep: 0.5, comfort: 0.1 },
-    reserve: 50,
-    gridCharge: true,
-  },
-];
-
 export function getScenarios(): unknown {
-  const active = scenarios.find((s) => s.active)?.id ?? null;
+  const state = store.get();
+  const active = state.activeScenario;
   return {
     ts: new Date().toISOString(),
     active,
-    scenarios: scenarios.map((s) => ({ id: s.id, name: s.name, icon: s.icon, active: s.active })),
+    scenarios: Object.entries(state.scenarios).map(([id, def]) => ({
+      id,
+      name: def.name,
+      icon: def.icon,
+      active: id === active,
+      weights: def.weights,
+      reserve: def.reserve,
+      dynReserve: def.dynReserve,
+      gridCharge: def.gridCharge,
+      exportRule: def.exportRule,
+      ev: def.ev,
+      precondition: def.precondition,
+      activation: def.activation,
+      trigger: def.trigger,
+    })),
   };
 }
 
 export function applyScenario(id: string): unknown {
-  const target = scenarios.find((s) => s.id === id);
-  if (!target) throw new Error(`scenario ${id} not found`);
-  for (const s of scenarios) s.active = s.id === id;
+  const exists = store.get().scenarios[id];
+  if (!exists) throw new Error(`scenario ${id} not found`);
+  store.update((s) => {
+    s.activeScenario = id;
+  });
   return { ts: new Date().toISOString(), active: id };
 }
 
+/** Persist (create or replace) a scenario definition. Partial defs merge over existing. */
+export function saveScenario(id: string, def: Partial<store.ScenarioDef>): unknown {
+  const saved = store.update((s) => {
+    const existing = s.scenarios[id] ?? store.DEFAULT_SCENARIOS.balanced;
+    const merged: store.ScenarioDef = {
+      name: def.name ?? existing.name,
+      icon: def.icon ?? existing.icon,
+      weights: { ...existing.weights, ...(def.weights ?? {}) },
+      reserve: clamp(def.reserve ?? existing.reserve, 0, 100),
+      dynReserve: def.dynReserve ?? existing.dynReserve,
+      gridCharge: def.gridCharge ?? existing.gridCharge,
+      exportRule: def.exportRule ?? existing.exportRule,
+      ev: def.ev ?? existing.ev,
+      precondition: def.precondition ?? existing.precondition,
+      activation: def.activation ?? existing.activation,
+      trigger: def.trigger ?? existing.trigger,
+    };
+    s.scenarios[id] = merged;
+    return merged;
+  });
+  return { ts: new Date().toISOString(), id, def: saved };
+}
+
 export interface PreviewInput {
-  weights?: Partial<Scenario['weights']>;
+  weights?: Partial<store.ScenarioWeights>;
   reserve?: number;
   gridCharge?: boolean;
 }
@@ -107,12 +107,4 @@ export function previewScenario(input: PreviewInput): unknown {
   const backupHours = round((tankKwh * (reserve / 100)) / config.assets.criticalLoadKw, 1);
 
   return { selfSufficiencyPct, savedPerDayEur, backupHours };
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, n));
-}
-function round(n: number, dp = 1): number {
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
 }

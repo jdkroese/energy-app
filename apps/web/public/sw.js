@@ -48,3 +48,41 @@ self.addEventListener('fetch', (e) => {
     );
   }
 });
+
+// ---- Web Push ----
+// Payload shape (from the backend): { title, body, url?, tag?, severity? }.
+self.addEventListener('push', (e) => {
+  let data = {};
+  try {
+    data = e.data ? e.data.json() : {};
+  } catch (_) {
+    data = { body: e.data ? e.data.text() : '' };
+  }
+  const title = data.title || 'Power';
+  const options = {
+    body: data.body || '',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    tag: data.tag || undefined,
+    data: { url: data.url || '/' },
+    vibrate: data.severity === 'danger' ? [120, 60, 120] : undefined,
+  };
+  e.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Focus an existing app window or open a new one on click.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const target = (e.notification.data && e.notification.data.url) || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if ('focus' in client) {
+          client.navigate(target).catch(() => {});
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow ? self.clients.openWindow(target) : undefined;
+    })
+  );
+});

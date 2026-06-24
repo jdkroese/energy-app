@@ -1,4 +1,6 @@
 import { config } from '../config';
+import * as store from '../store';
+import { cached as memo } from '../cache';
 
 // Tesla Fleet API (cloud, EU host). Uses the stored refresh token to mint
 // short-lived access tokens; energy endpoints are plain Bearer REST (no signing).
@@ -8,10 +10,13 @@ async function accessToken(): Promise<string> {
   const now = Date.now();
   if (cached && cached.exp > now + 60_000) return cached.token;
 
+  // Prefer a rotated refresh token persisted to the store, else the env-configured one.
+  const refreshToken = store.get().teslaRefreshToken ?? config.tesla.refreshToken;
+
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     client_id: config.tesla.clientId,
-    refresh_token: config.tesla.refreshToken,
+    refresh_token: refreshToken,
   });
   if (config.tesla.clientSecret) body.set('client_secret', config.tesla.clientSecret);
 
@@ -22,8 +27,20 @@ async function accessToken(): Promise<string> {
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`Tesla token refresh -> HTTP ${res.status}`);
-  const json = (await res.json()) as { access_token: string; expires_in?: number };
+  const json = (await res.json()) as {
+    access_token: string;
+    expires_in?: number;
+    refresh_token?: string;
+  };
   cached = { token: json.access_token, exp: now + (json.expires_in ?? 28_800) * 1000 };
+
+  // Tesla Fleet refresh tokens are usually reusable, but persist a rotated one if returned.
+  if (json.refresh_token && json.refresh_token !== refreshToken) {
+    store.update((s) => {
+      s.teslaRefreshToken = json.refresh_token as string;
+    });
+    console.log('[tesla] refresh token rotated — persisted to store');
+  }
   return cached.token;
 }
 
@@ -42,12 +59,12 @@ async function apiGet(path: string): Promise<unknown> {
 
 /** Live power flow for the energy site (solar/battery/load/grid + SoC). */
 export function getLiveStatus(): Promise<unknown> {
-  return apiGet('/live_status');
+  return memo('tesla.live', 15_000, () => apiGet('/live_status'));
 }
 
 /** Site settings + nameplate: backup_reserve_percent, nameplate_energy, export rule, etc. */
 export function getSiteInfo(): Promise<unknown> {
-  return apiGet('/site_info');
+  return memo('tesla.site', 300_000, () => apiGet('/site_info'));
 }
 
 /**
@@ -59,7 +76,9 @@ export function getCalendarHistory(
   period: 'day' | 'week' | 'month' | 'year' = 'day',
 ): Promise<unknown> {
   const tz = encodeURIComponent('Europe/Madrid');
-  return apiGet(`/calendar_history?kind=${kind}&period=${period}&time_zone=${tz}`);
+  return memo(`tesla.hist.${kind}.${period}`, 120_000, () =>
+    apiGet(`/calendar_history?kind=${kind}&period=${period}&time_zone=${tz}`),
+  );
 }
 
 // ---- Normalized shapes --------------------------------------------------

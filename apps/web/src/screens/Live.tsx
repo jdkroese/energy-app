@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_LIVE } from '../lib/mock';
@@ -23,6 +24,106 @@ function toFlow(d: LiveResponse): FlowData {
 
 function bandLabel(b: string) {
   return b === 'P1' ? 'peak' : b === 'P2' ? 'shoulder' : 'off-peak';
+}
+
+interface Insight {
+  tone: 'solar' | 'battery' | 'grid';
+  icon: string;
+  title: string;
+  body: ReactNode;
+}
+
+const HEADROOM = 96; // SoC% below which a battery still has capacity to store
+
+/** Compute the "Why this matters" insight from the live snapshot. */
+function deriveInsight(d: LiveResponse): Insight {
+  const { grid, sonnen, tesla, tariff } = d;
+  const exporting = grid.dir === 'exporting' && grid.kw > 0.1;
+  const hasHeadroom = sonnen.soc < HEADROOM || tesla.soc < HEADROOM;
+  const bothFull = sonnen.soc >= HEADROOM && tesla.soc >= HEADROOM;
+  const discharging = sonnen.dir === 'discharging' || tesla.dir === 'discharging';
+  const exportEur = tariff.band === 'P1' ? 0.029 : 0.003;
+
+  // 1) Discharging during the P1 peak — covering the peak from batteries.
+  if (tariff.band === 'P1' && discharging) {
+    return {
+      tone: 'battery',
+      icon: 'battery-charging',
+      title: 'Covering the peak',
+      body: (
+        <>
+          Running the house from the batteries through the{' '}
+          <span style={{ color: 'var(--grid)' }}>P1 peak</span> — near{' '}
+          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--solar)' }}>€0</span> grid import at €
+          {tariff.rateEur.toFixed(3)}/kWh.
+        </>
+      ),
+    };
+  }
+
+  // 2) Exporting while there's still headroom to store it.
+  if (exporting && hasHeadroom) {
+    return {
+      tone: 'solar',
+      icon: 'upload',
+      title: 'Surplus going cheap',
+      body: (
+        <>
+          Exporting{' '}
+          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{grid.kw.toFixed(1)} kW</span> at ≈€
+          {exportEur.toFixed(3)} — there's still capacity to store it instead.
+        </>
+      ),
+    };
+  }
+
+  // 3) Both full and a P1 peak is near — nothing reserved.
+  if (bothFull && tariff.nextBand === 'P1') {
+    const h = Math.floor(tariff.minsToNext / 60);
+    const m = tariff.minsToNext % 60;
+    const when = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    return {
+      tone: 'grid',
+      icon: 'alert-triangle',
+      title: 'Both full · peak ahead',
+      body: (
+        <>
+          Both batteries full and the <span style={{ color: 'var(--grid)' }}>P1 peak</span> lands in{' '}
+          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{when}</span> — nothing held back yet.
+        </>
+      ),
+    };
+  }
+
+  // 4) Both full, exporting (no peak imminent).
+  if (bothFull && exporting) {
+    return {
+      tone: 'grid',
+      icon: 'upload',
+      title: 'Nowhere left to store',
+      body: (
+        <>
+          Both batteries full · exporting{' '}
+          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{grid.kw.toFixed(1)} kW</span> at ≈€
+          {exportEur.toFixed(3)}/kWh — banked sun has nowhere to go.
+        </>
+      ),
+    };
+  }
+
+  // 5) Neutral — self-sufficiency framing.
+  return {
+    tone: 'battery',
+    icon: 'leaf',
+    title: 'Running on your own power',
+    body: (
+      <>
+        Solar and storage are covering the house ·{' '}
+        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{d.today.selfSufficiencyPct}%</span>{' '}
+        self-sufficient today on the {tariff.band} band.
+      </>
+    ),
+  };
 }
 
 export function Live({ ctx }: { ctx: ShellContext }) {
@@ -131,18 +232,20 @@ export function Live({ ctx }: { ctx: ShellContext }) {
         </Card>
 
         {/* insight */}
-        <Card accent="grid" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <span style={{ width: 28, height: 28, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'var(--grid-wash)', color: 'var(--grid)' }}>
-              <Icon name="alert-triangle" size={16} />
-            </span>
-            <Eyebrow>Why this matters</Eyebrow>
-          </div>
-          <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.5 }}>
-            Both batteries full · exporting <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{live.grid.kw.toFixed(1)} kW</span> at €0.029/kWh — nothing held
-            for the <span style={{ color: 'var(--grid)' }}>18:00 peak</span>.
-          </div>
-        </Card>
+        {(() => {
+          const ins = deriveInsight(live);
+          return (
+            <Card accent={ins.tone} style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <span style={{ width: 28, height: 28, borderRadius: 8, display: 'grid', placeItems: 'center', background: `var(--${ins.tone}-wash)`, color: `var(--${ins.tone})` }}>
+                  <Icon name={ins.icon} size={16} />
+                </span>
+                <Eyebrow>Why this matters</Eyebrow>
+              </div>
+              <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.5 }}>{ins.body}</div>
+            </Card>
+          );
+        })()}
 
         {/* day chart */}
         <Card title="Today · kW" style={{ padding: 16 }}>
@@ -258,20 +361,7 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
             />
           </div>
         </Card>
-        <Card accent="grid" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--grid-wash)', color: 'var(--grid)' }}>
-              <Icon name="alert-triangle" size={17} />
-            </span>
-            <Eyebrow>Why this matters</Eyebrow>
-          </div>
-          <div style={{ fontSize: 15, color: 'var(--text-1)', lineHeight: 1.5 }}>
-            Both batteries full · exporting <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{live.grid.kw.toFixed(1)} kW</span> at €0.029/kWh.
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
-            Nothing reserved for the <span style={{ color: 'var(--grid)' }}>18:00 P1 peak</span>. The coordinator will hold capacity for the evening.
-          </div>
-        </Card>
+        <InsightCard live={live} />
       </div>
 
       <Card title="Production & consumption" subtitle="Today · kW" icon={<Icon name="activity" />}>
@@ -286,5 +376,24 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         />
       </Card>
     </div>
+  );
+}
+
+function InsightCard({ live }: { live: LiveResponse }) {
+  const ins = deriveInsight(live);
+  return (
+    <Card accent={ins.tone} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: `var(--${ins.tone}-wash)`, color: `var(--${ins.tone})` }}>
+          <Icon name={ins.icon} size={17} />
+        </span>
+        <Eyebrow>Why this matters</Eyebrow>
+      </div>
+      <div style={{ fontSize: 15, color: 'var(--text-1)', lineHeight: 1.5, fontWeight: 600 }}>{ins.title}</div>
+      <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.5 }}>{ins.body}</div>
+      <div style={{ marginTop: 'auto', fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 7 }}>
+        <Icon name="cpu" size={14} /> Advisory — the coordinator plans, holds capacity for the evening.
+      </div>
+    </Card>
   );
 }

@@ -15,4 +15,5 @@ export { Switch } from './Switch';
 export { Slider } from './Slider';
 export { SegmentedControl } from './SegmentedControl';
 export { Select } from './Select';
+export { Input } from './Input';
 export { Eyebrow } from './Eyebrow';

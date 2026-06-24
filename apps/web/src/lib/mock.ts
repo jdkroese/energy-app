@@ -114,6 +114,11 @@ export const MOCK_SETTINGS: SettingsResponse = {
     { name: 'Heat pump + A/C', icon: 'thermometer', tone: 'grid', detail: 'all-electric' },
     { name: 'Grid connection', icon: 'utility-pole', tone: 'grid', detail: '1-phase · 14 kW' },
   ],
+  channels: {
+    whatsapp: { number: '+34 600 123 489', enabled: true },
+    push: { enabled: true },
+    email: { address: 'j.kroese@levante.nl', enabled: false },
+  },
 };
 
 export const MOCK_PLAN: BrainPlanResponse = {
@@ -142,6 +147,7 @@ export const MOCK_PLAN: BrainPlanResponse = {
 
 export const MOCK_SCENARIOS: ScenariosResponse = {
   ts: new Date().toISOString(),
+  active: 'selfuse',
   scenarios: [
     { id: 'selfuse', name: 'Max self-consumption', icon: 'leaf', active: true, weights: { save: 55, self: 90, indep: 70, comfort: 50 }, reserve: 20, dynReserve: true, gridCharge: false, exportRule: 'PV only', ev: 'Solar', precondition: true, activation: 'Auto', trigger: 'Active May–Sep, sunny days' },
     { id: 'savings', name: 'Max savings', icon: 'piggy-bank', active: false, weights: { save: 95, self: 60, indep: 40, comfort: 40 }, reserve: 15, dynReserve: false, gridCharge: true, exportRule: 'PV only', ev: 'P3 night', precondition: true, activation: 'Manual', trigger: 'You switch it on' },

@@ -54,6 +54,14 @@ export function Brain({ ctx }: { ctx: ShellContext }) {
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, padding: wide ? 0 : '8px 14px 0', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
+        {/* shadow-mode note */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--battery-wash)', fontSize: 12.5, lineHeight: 1.45 }}>
+          <Icon name="eye" size={15} color="var(--battery)" />
+          <span style={{ color: 'var(--text-2)' }}>
+            <strong style={{ color: 'var(--battery)' }}>Advisory / shadow mode.</strong> The brain plans and explains every move below, but doesn't command the batteries yet — it's watching, not acting.
+          </span>
+        </div>
+
         {/* status tiles */}
         <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(4,1fr)' : '1fr 1fr', gap: wide ? 16 : 10 }}>
           <Card style={wide ? undefined : { padding: 14 }}>

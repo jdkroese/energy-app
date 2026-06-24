@@ -24,6 +24,7 @@ interface EnergyRow {
   consumer_energy_imported_from_grid?: number;
   consumer_energy_imported_from_solar?: number;
   consumer_energy_imported_from_battery?: number;
+  battery_energy_imported_from_solar?: number;
 }
 
 function rowHome(r: EnergyRow): number {
@@ -34,7 +35,16 @@ function rowHome(r: EnergyRow): number {
   );
 }
 function rowSolar(r: EnergyRow): number {
-  return r.total_solar_generation ?? r.solar_energy_exported ?? 0;
+  // Real PV produced this bucket. Tesla's `total_solar_generation` is the metered
+  // figure; if absent, reconstruct from where the solar energy went (self-use +
+  // battery + export) so `series.prod` carries real generation, not zeros.
+  if (typeof r.total_solar_generation === 'number') return r.total_solar_generation;
+  const reconstructed =
+    (r.consumer_energy_imported_from_solar ?? 0) +
+    (r.battery_energy_imported_from_solar ?? 0) +
+    (r.grid_energy_exported_from_solar ?? 0);
+  if (reconstructed > 0) return reconstructed;
+  return r.solar_energy_exported ?? 0;
 }
 function rowExport(r: EnergyRow): number {
   return (r.grid_energy_exported_from_solar ?? 0) + (r.grid_energy_exported_from_battery ?? 0);
@@ -156,6 +166,9 @@ export async function getHistory(range: Range): Promise<unknown> {
     solarValue: { selfUsedPct, exportedKwh, exportEur, worthIfSelfUsedEur },
     byBand,
     powerTermEur: powerTermFor(range),
+    // series.prod = real per-bucket solar generation (Tesla calendar_history);
+    // series.cons = real per-bucket home consumption. byBand (above) is the
+    // documented weighting APPROXIMATION since Tesla history is not band-resolved.
     series: { prod, cons, labels },
     byLoad,
   };

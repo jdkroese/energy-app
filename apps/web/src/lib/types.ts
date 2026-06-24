@@ -91,6 +91,15 @@ export interface AlertsResponse {
   rules: { id: string; icon: string; label: string; enabled: boolean }[];
 }
 
+/** Notification channel config (shared by Settings + Alerts contract). */
+export interface Channels {
+  whatsapp: { number: string; enabled: boolean };
+  push: { enabled: boolean };
+  email: { address: string; enabled: boolean };
+}
+
+export type ChannelType = 'whatsapp' | 'push' | 'email';
+
 export interface SettingsResponse {
   ts: string;
   connections: { name: string; icon: string; tone: string; status: string; detail: string }[];
@@ -100,6 +109,7 @@ export interface SettingsResponse {
     exportRange: string;
   };
   assets: { name: string; icon: string; tone: string; detail: string }[];
+  channels: Channels;
 }
 
 export interface PlanAction {
@@ -144,11 +154,21 @@ export interface Scenario {
 
 export interface ScenariosResponse {
   ts: string;
+  /** id of the currently-active scenario. */
+  active?: string;
   scenarios: Scenario[];
 }
+
+/** Editable definition of a scenario (everything but identity/active flag). */
+export type ScenarioDef = Omit<Scenario, 'id' | 'name' | 'icon' | 'active'>;
 
 export interface ScenarioPreview {
   selfSufficiencyPct: number;
   savedPerDayEur: number;
   backupHours: number;
+}
+
+/** VAPID public key for Web Push subscription. */
+export interface VapidPublicResponse {
+  publicKey: string;
 }

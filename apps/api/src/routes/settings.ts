@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { RATES, POWER_TERM_EUR_MONTH, EXPORT_RANGE } from '../tariff';
 import { probeAll } from './health-probe';
+import * as store from '../store';
 
 function tone(ok: boolean): string {
   return ok ? 'ok' : 'danger';
@@ -9,11 +10,36 @@ function statusLabel(ok: boolean): string {
   return ok ? 'connected' : 'offline';
 }
 
+// Loose international phone validation: optional +, 8–15 digits (spaces/dashes ok).
+const PHONE_RE = /^\+?[\d][\d\s().-]{6,18}\d$/;
+
+/** PUT /api/settings/whatsapp {number} → validate + persist the WhatsApp number. */
+export function setWhatsAppNumber(numberRaw: unknown): unknown {
+  const number = String(numberRaw ?? '').trim();
+  const digits = number.replace(/\D/g, '');
+  if (!PHONE_RE.test(number) || digits.length < 8 || digits.length > 15) {
+    const err = new Error('invalid phone number') as Error & { code?: string };
+    err.code = 'BAD_INPUT';
+    throw err;
+  }
+  const channels = store.update((s) => {
+    s.channels.whatsapp.number = number;
+    return s.channels;
+  });
+  return { ts: new Date().toISOString(), channels };
+}
+
 export async function getSettings(): Promise<unknown> {
   const probe = await probeAll();
+  const channels = store.get().channels;
 
   return {
     ts: new Date().toISOString(),
+    channels: {
+      whatsapp: { number: channels.whatsapp.number, enabled: channels.whatsapp.enabled },
+      push: { enabled: channels.push.enabled },
+      email: { address: channels.email.address, enabled: channels.email.enabled },
+    },
     connections: [
       {
         name: 'Tesla cloud',
