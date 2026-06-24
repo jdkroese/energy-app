@@ -1,6 +1,7 @@
 packages:
   - apps/*
 
-# esbuild ships its binary as an optional dep; allow its build script to run.
-onlyBuiltDependencies:
-  - esbuild
+# pnpm 11 build-script gate. esbuild ships its binary via an optional dependency,
+# so running its install script is safe. (This is the key pnpm itself honors.)
+allowBuilds:
+  esbuild: true
