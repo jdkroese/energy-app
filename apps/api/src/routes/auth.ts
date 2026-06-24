@@ -50,7 +50,9 @@ import {
   revokeUserOtps,
   revokeUserResetTokens,
   verifyOtp,
+  uaLabel,
 } from '../auth/sessions';
+import { tokenMatches } from '../auth/tokens';
 import type { AuthUser, TwoFactorChannel } from '../store';
 
 export const authRouter = Router();
@@ -262,21 +264,25 @@ authRouter.post('/2fa', requireAuth, (req: Request, res: Response) => {
 
 authRouter.get('/sessions', requireAuth, (req: Request, res: Response) => {
   const user = req.user as AuthUser;
+  const sidRaw = readCookie(req, SID);
+  const tdidRaw = readCookie(req, TDID);
+  // Shape matches the web SessionsResponse contract exactly
+  // ({ sessions: SessionInfo[], trusted: TrustedDevice[] }). Mismatched keys
+  // here previously crashed the Settings screen (undefined.length).
   const sessions = listSessions(user.id).map((s) => ({
     id: s.tokenHash, // hash doubles as the opaque revoke id (not the raw token)
-    createdAt: s.createdAt,
-    expiresAt: s.expiresAt,
-    ua: s.ua,
-    ip: s.ip,
+    device: uaLabel(s.ua),
+    location: s.ip,
+    lastSeen: new Date(s.createdAt).toISOString(),
+    current: sidRaw ? tokenMatches(sidRaw, s.tokenHash) : false,
   }));
-  const trustedDevices = listTrustedDevices(user.id).map((d) => ({
+  const trusted = listTrustedDevices(user.id).map((d) => ({
     id: d.id,
-    label: d.label,
-    createdAt: d.createdAt,
-    expiresAt: d.expiresAt,
-    lastUsed: d.lastUsed,
+    device: d.label,
+    expiresAt: new Date(d.expiresAt).toISOString(),
+    current: tdidRaw ? tokenMatches(tdidRaw, d.tokenHash) : false,
   }));
-  res.json({ sessions, trustedDevices });
+  res.json({ sessions, trusted });
 });
 
 authRouter.delete('/sessions/:id', requireAuth, (req: Request, res: Response) => {

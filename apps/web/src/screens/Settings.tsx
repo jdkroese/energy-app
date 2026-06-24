@@ -332,6 +332,9 @@ function DeviceList({
 }) {
   const navigate = useNavigate();
   const { logout } = useAuth();
+  // Defensive: never let a missing array blank the whole app (no error boundary).
+  const sessions = data.sessions ?? [];
+  const trusted = data.trusted ?? [];
 
   const onRevokeSession = async (id: string, current?: boolean) => {
     await auth.revokeSession(id);
@@ -348,10 +351,10 @@ function DeviceList({
       <div style={{ padding: '12px 16px 4px' }}>
         <Eyebrow>Active sessions</Eyebrow>
       </div>
-      {data.sessions.length === 0 && (
+      {sessions.length === 0 && (
         <div style={{ ...row, color: 'var(--text-3)', fontSize: 13 }}>No active sessions.</div>
       )}
-      {data.sessions.map((s, i) => (
+      {sessions.map((s, i) => (
         <div key={s.id} style={{ ...row, borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
           <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: 'var(--text-2)' }}>
             <Icon name="monitor" size={17} />
@@ -371,12 +374,12 @@ function DeviceList({
         </div>
       ))}
 
-      {data.trusted.length > 0 && (
+      {trusted.length > 0 && (
         <>
           <div style={{ padding: '14px 16px 4px', borderTop: '1px solid var(--border-1)' }}>
             <Eyebrow>Trusted devices</Eyebrow>
           </div>
-          {data.trusted.map((t, i) => (
+          {trusted.map((t, i) => (
             <div key={t.id} style={{ ...row, borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
               <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: 'var(--text-2)' }}>
                 <Icon name="shield" size={17} />
