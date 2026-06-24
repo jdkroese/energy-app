@@ -4,7 +4,7 @@ import { Eyebrow } from '../components/ui';
 /** Mobile screen header (eyebrow + h1), matching the *-mobile mockups. */
 export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; title: string; right?: ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px 12px' }}>
+    <div className="flex md:hidden" style={{ alignItems: 'center', gap: 12, padding: '12px 18px 12px' }}>
       <div style={{ flex: 1 }}>
         <Eyebrow>{eyebrow}</Eyebrow>
         <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>{title}</h1>

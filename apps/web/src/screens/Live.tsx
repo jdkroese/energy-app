@@ -77,7 +77,7 @@ export function Live({ ctx }: { ctx: ShellContext }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Eyebrow>Tariff · 2.0TD</Eyebrow>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--grid)' }}>
-              {t.nextBand} peak in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
+              Next · {t.nextBand} in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
@@ -205,7 +205,7 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
               </div>
               <TariffBand current={new Date(live.ts).getHours()} height={10} />
               <div style={{ marginTop: 12, fontSize: 12, color: 'var(--grid)', fontFamily: 'var(--font-mono)' }}>
-                {t.nextBand} peak · in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
+                Next · {t.nextBand} in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
               </div>
             </Card>
           </div>
