@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './index.css';
+import './lib/install'; // capture beforeinstallprompt at startup (Add to Home Screen)
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

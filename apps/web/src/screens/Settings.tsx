@@ -6,6 +6,8 @@ import type { Channels, ChannelType, OtpChannel, SettingsResponse, SessionsRespo
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
+import { InstallSheet } from '../components/InstallSheet';
+import { isStandalone } from '../lib/install';
 import { useAuth } from '../auth/AuthProvider';
 import { useNavigate } from 'react-router-dom';
 
@@ -31,6 +33,7 @@ function LinkRow({
   detail,
   right,
   first,
+  onClick,
 }: {
   icon: string;
   tone?: string;
@@ -38,9 +41,16 @@ function LinkRow({
   detail?: ReactNode;
   right?: ReactNode;
   first?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <div style={{ ...row, borderTop: first ? 'none' : '1px solid var(--border-1)' }}>
+    <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+      style={{ ...row, borderTop: first ? 'none' : '1px solid var(--border-1)', cursor: onClick ? 'pointer' : undefined }}
+    >
       <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: tone ? `var(--${tone})` : 'var(--text-2)' }}>
         <Icon name={icon} size={17} />
       </span>
@@ -584,6 +594,8 @@ function SecurityCard() {
 export function Settings() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [installOpen, setInstallOpen] = useState(false);
+  const installed = isStandalone();
   const signOut = async () => {
     await logout();
     navigate('/login', { replace: true });
@@ -672,7 +684,15 @@ export function Settings() {
 
         {/* app */}
         <Card title="App" style={{ padding: 0 }}>
-          <LinkRow first icon="smartphone-nfc" tone="solar" name="Add to home screen" detail="Install as a full-screen app" right={<Chev />} />
+          <LinkRow
+            first
+            icon="smartphone-nfc"
+            tone="solar"
+            name={installed ? 'Installed on this device' : 'Add to home screen'}
+            detail={installed ? 'Running as a full-screen app' : 'Install Power as a full-screen app'}
+            onClick={() => setInstallOpen(true)}
+            right={installed ? <Icon name="check" size={18} color="var(--solar)" /> : <Chev />}
+          />
           <LinkRow
             icon="user"
             tone="home"
@@ -684,6 +704,7 @@ export function Settings() {
           <LinkRow icon="info" tone="text-2" name="Version" detail="0.1.0 · energy.hirobo.nl" />
         </Card>
       </div>
+      {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
     </>
   );
 }
