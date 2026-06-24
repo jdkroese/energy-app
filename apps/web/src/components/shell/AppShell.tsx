@@ -48,7 +48,9 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
     }
   }, [expanded]);
 
-  const meta = META[location.pathname] || { eyebrow: 'Power', title: '' };
+  const meta =
+    META[location.pathname] ||
+    (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Batteries', title: 'Battery detail' } : { eyebrow: 'Power', title: '' });
   const ctx: ShellContext = { desktop, range, setRange };
 
   if (desktop) {

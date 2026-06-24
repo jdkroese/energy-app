@@ -1,6 +1,7 @@
 import type {
   AlertsResponse,
   AuthUser,
+  BatteriesResponse,
   BrainPlanResponse,
   Channels,
   ChannelType,
@@ -105,6 +106,7 @@ const enc = encodeURIComponent;
 export const api = {
   // reads
   live: () => getJSON<LiveResponse>('/api/live'),
+  batteries: () => getJSON<BatteriesResponse>('/api/batteries'),
   history: (range: string) => getJSON<HistoryResponse>(`/api/history?range=${enc(range)}`),
   alerts: () => getJSON<AlertsResponse>('/api/alerts'),
   settings: () => getJSON<SettingsResponse>('/api/settings'),

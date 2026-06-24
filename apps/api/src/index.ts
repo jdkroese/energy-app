@@ -3,6 +3,7 @@ import { config } from './config';
 import * as sonnen from './connectors/sonnen';
 import * as tesla from './connectors/tesla';
 import { getLive } from './routes/live';
+import { getBatteries } from './routes/batteries';
 import { getHistory } from './routes/history';
 import {
   getAlerts,
@@ -66,6 +67,7 @@ app.get('/api/tesla/live', wrap(() => tesla.getLiveStatus()));
 
 // Normalized frontend contract.
 app.get('/api/live', wrap(() => getLive()));
+app.get('/api/batteries', wrap(() => getBatteries()));
 
 app.get(
   '/api/history',

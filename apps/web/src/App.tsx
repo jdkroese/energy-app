@@ -7,6 +7,7 @@ import { Settings } from './screens/Settings';
 import { Scenarios } from './screens/Scenarios';
 import { Brain } from './screens/Brain';
 import { Batteries } from './screens/Batteries';
+import { BatteryDetail } from './screens/BatteryDetail';
 import { Login } from './screens/auth/Login';
 import { Setup } from './screens/auth/Setup';
 import { Reset } from './screens/auth/Reset';
@@ -39,7 +40,8 @@ function AppRoutes() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/scenarios" element={<Scenarios />} />
           <Route path="/brain" element={<Brain ctx={ctx} />} />
-          <Route path="/batteries" element={<Batteries />} />
+          <Route path="/batteries" element={<Batteries ctx={ctx} />} />
+          <Route path="/batteries/:id" element={<BatteryDetail ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

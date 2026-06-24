@@ -232,6 +232,64 @@ export type ControlLever = 'reserve' | 'mode' | 'gridCharge';
 export type ControlCommandValue = string | number | boolean;
 
 /* ============================================================================
+ * Batteries — per-device detail (GET /api/batteries).
+ * Current state is real; day history is a best-effort rolling buffer; health
+ * fields are null where the device/API doesn't expose them (UI shows "—").
+ * ==========================================================================*/
+
+export type BatteryId = 'sonnen' | 'tesla';
+
+export interface BatterySpec {
+  label: string;
+  value: string;
+}
+
+export interface BatteryDetail {
+  id: BatteryId;
+  name: string;
+  vendor: string;
+  role: string;
+  online: boolean;
+  soc: number;
+  kwh: number;
+  usableKwh: number;
+  nominalKwh: number;
+  power: { kw: number; dir: FlowDir };
+  maxKw: number;
+  mode: string;
+  hasBackup: boolean;
+  reservePct: number | null;
+  backupKwh: number | null;
+  backupHours: number | null;
+  island: boolean | null;
+  stormMode: boolean | null;
+  exportRule: string | null;
+  gridChargeAllowed: boolean | null;
+  headroomKwh: number;
+  aboveReserveKwh: number | null;
+  health: number | null;
+  capacityKwh: number | null;
+  cyclesTotal: number | null;
+  throughputKwh: number | null;
+  roundTripPct: number | null;
+  tempC: number | null;
+  warrantyPct: number | null;
+  installedYear: number | null;
+  todayInKwh: number;
+  todayOutKwh: number;
+  socDay: number[];
+  chargeKwDay: number[];
+  dischargeKwDay: number[];
+  specs: BatterySpec[];
+}
+
+export interface BatteriesResponse {
+  ts: string;
+  combined: { usableKwh: number; storedKwh: number; soc: number };
+  batteries: BatteryDetail[];
+}
+
+/* ============================================================================
  * Auth contract (see prompt §backend). Cookies carry the session.
  * ==========================================================================*/
 
