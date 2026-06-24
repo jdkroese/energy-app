@@ -146,3 +146,40 @@ export async function sendWhatsApp(number: string, text: string): Promise<SendRe
   console.log('[notify] whatsapp skipped — provider not configured');
   return { sent: false, reason: 'provider not configured' };
 }
+
+/**
+ * Send an email via Resend if RESEND_API_KEY is set; otherwise log and return
+ * {sent:false}. Best-effort — NEVER throws.
+ */
+export async function sendEmail(to: string, subject: string, text: string): Promise<SendResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.log(`[email] (no provider) to ${to}: ${text}`);
+    return { sent: false, reason: 'provider not configured' };
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: 'Power <noreply@energy.hirobo.nl>',
+        to: [to],
+        subject,
+        text,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      console.error('[notify] email(resend) HTTP', res.status, detail.slice(0, 200));
+      return { sent: false, reason: `resend HTTP ${res.status}` };
+    }
+    return { sent: true };
+  } catch (e) {
+    console.error('[notify] email send failed:', (e as Error).message);
+    return { sent: false, reason: (e as Error).message };
+  }
+}

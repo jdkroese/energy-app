@@ -1,11 +1,13 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { api } from '../lib/api';
+import { api, auth } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, SettingsResponse } from '../lib/types';
-import { Card, Icon, Eyebrow, Switch, Input, Button } from '../components/ui';
+import type { Channels, ChannelType, OtpChannel, SettingsResponse, SessionsResponse, UserRole, AuthUser } from '../lib/types';
+import { Card, Icon, Eyebrow, Switch, Input, Button, Select } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
+import { useAuth } from '../auth/AuthProvider';
+import { useNavigate } from 'react-router-dom';
 
 const Chev = () => <Icon name="chevron-right" size={18} color="var(--text-3)" />;
 const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px' };
@@ -225,7 +227,364 @@ function NotificationsCard({ channels, onChannels }: { channels: Channels; onCha
   );
 }
 
+/* ============================================================================
+ * Security card — 2FA, sessions, trusted devices, and (admin) user management.
+ * ==========================================================================*/
+
+function relTime(iso?: string): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '';
+  const diff = Date.now() - t;
+  const m = Math.round(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return `${d}d ago`;
+}
+
+function RevokeBtn({ onClick, label = 'Revoke' }: { onClick: () => void; label?: string }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      loading={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await onClick();
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {label}
+    </Button>
+  );
+}
+
+function TwoFactorRow() {
+  const [enabled, setEnabled] = useState(false);
+  const [channel, setChannel] = useState<OtpChannel>('whatsapp');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async (nextEnabled: boolean, nextChannel: OtpChannel) => {
+    setBusy(true);
+    setErr(null);
+    const prevEnabled = enabled;
+    const prevChannel = channel;
+    setEnabled(nextEnabled);
+    setChannel(nextChannel);
+    try {
+      await auth.set2fa(nextEnabled, nextChannel);
+    } catch {
+      setEnabled(prevEnabled);
+      setChannel(prevChannel);
+      setErr('Could not update — try again');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ ...row, borderTop: 'none', alignItems: 'flex-start' }}>
+      <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: enabled ? 'var(--solar)' : 'var(--text-3)' }}>
+        <Icon name="shield-check" size={17} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14 }}>Two-factor authentication</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.45 }}>
+          Require a one-time code at sign-in. Codes use the same channels as your alerts.
+        </div>
+        {enabled && (
+          <div style={{ marginTop: 10, maxWidth: 200 }}>
+            <Select
+              label="Code channel"
+              value={channel}
+              disabled={busy}
+              options={[
+                { value: 'whatsapp', label: 'WhatsApp' },
+                { value: 'email', label: 'Email' },
+              ]}
+              onChange={(e) => void save(true, e.target.value as OtpChannel)}
+            />
+          </div>
+        )}
+        {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 6 }}>{err}</div>}
+      </div>
+      <Switch checked={enabled} disabled={busy} onChange={(e) => void save(e.target.checked, channel)} />
+    </div>
+  );
+}
+
+function DeviceList({
+  data,
+  reload,
+  currentLabel,
+}: {
+  data: SessionsResponse;
+  reload: () => void;
+  currentLabel: string;
+}) {
+  const navigate = useNavigate();
+  const { logout } = useAuth();
+
+  const onRevokeSession = async (id: string, current?: boolean) => {
+    await auth.revokeSession(id);
+    if (current) {
+      await logout();
+      navigate('/login', { replace: true });
+      return;
+    }
+    reload();
+  };
+
+  return (
+    <>
+      <div style={{ padding: '12px 16px 4px' }}>
+        <Eyebrow>Active sessions</Eyebrow>
+      </div>
+      {data.sessions.length === 0 && (
+        <div style={{ ...row, color: 'var(--text-3)', fontSize: 13 }}>No active sessions.</div>
+      )}
+      {data.sessions.map((s, i) => (
+        <div key={s.id} style={{ ...row, borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+          <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: 'var(--text-2)' }}>
+            <Icon name="monitor" size={17} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {s.device}
+              {s.current && (
+                <span style={{ fontSize: 10.5, color: 'var(--solar)', background: 'var(--solar-wash)', borderRadius: 999, padding: '1px 8px', fontWeight: 600 }}>This device</span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+              {[s.location, relTime(s.lastSeen)].filter(Boolean).join(' · ') || currentLabel}
+            </div>
+          </div>
+          <RevokeBtn onClick={() => onRevokeSession(s.id, s.current)} label={s.current ? 'Sign out' : 'Revoke'} />
+        </div>
+      ))}
+
+      {data.trusted.length > 0 && (
+        <>
+          <div style={{ padding: '14px 16px 4px', borderTop: '1px solid var(--border-1)' }}>
+            <Eyebrow>Trusted devices</Eyebrow>
+          </div>
+          {data.trusted.map((t, i) => (
+            <div key={t.id} style={{ ...row, borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+              <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: 'var(--text-2)' }}>
+                <Icon name="shield" size={17} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {t.device}
+                  {t.current && (
+                    <span style={{ fontSize: 10.5, color: 'var(--solar)', background: 'var(--solar-wash)', borderRadius: 999, padding: '1px 8px', fontWeight: 600 }}>This device</span>
+                  )}
+                </div>
+                {t.expiresAt && (
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                    Trusted until {new Date(t.expiresAt).toLocaleDateString()}
+                  </div>
+                )}
+              </div>
+              <RevokeBtn onClick={async () => { await auth.revokeTrusted(t.id); reload(); }} label="Remove" />
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
+function AddUserForm({ onCreated }: { onCreated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<UserRole>('member');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [setupUrl, setSetupUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const submit = async () => {
+    if (!email.trim() || !name.trim()) {
+      setErr('Email and name are required');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await auth.createUser(email.trim(), name.trim(), role);
+      setSetupUrl(res.setupUrl);
+      setEmail('');
+      setName('');
+      setRole('member');
+      onCreated();
+    } catch {
+      setErr('Could not create user — try again');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (setupUrl) {
+    return (
+      <div style={{ padding: '12px 16px 16px', borderTop: '1px solid var(--border-1)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.45 }}>
+          User created. Share this one-time setup link so they can set a password:
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Input readOnly value={setupUrl} onFocus={(e) => e.currentTarget.select()} />
+          <Button
+            size="md"
+            variant="secondary"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(setupUrl);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              } catch {
+                /* ignore */
+              }
+            }}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </Button>
+        </div>
+        <div>
+          <Button size="sm" variant="ghost" onClick={() => { setSetupUrl(null); setOpen(false); }}>Done</Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <div style={{ padding: '10px 16px 14px', borderTop: '1px solid var(--border-1)' }}>
+        <Button size="sm" variant="secondary" iconLeft={<Icon name="user-plus" />} onClick={() => { setOpen(true); setErr(null); }}>
+          Add user
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '12px 16px 16px', borderTop: '1px solid var(--border-1)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <Input label="Email" type="email" placeholder="name@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <Input label="Name" type="text" placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />
+      <Select
+        label="Role"
+        value={role}
+        options={[
+          { value: 'member', label: 'Member' },
+          { value: 'admin', label: 'Admin' },
+        ]}
+        onChange={(e) => setRole(e.target.value as UserRole)}
+      />
+      {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button size="sm" variant="primary" loading={busy} onClick={() => void submit()}>Create &amp; get link</Button>
+        <Button size="sm" variant="ghost" onClick={() => { setOpen(false); setErr(null); }}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+function UsersSection() {
+  const { user: me } = useAuth();
+  const [users, setUsers] = useState<AuthUser[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const res = await auth.listUsers();
+      setUsers(res.users);
+      setErr(null);
+    } catch {
+      setErr('Could not load users');
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const remove = async (id: string) => {
+    await auth.deleteUser(id);
+    void load();
+  };
+
+  return (
+    <Card title="Users" subtitle="People with access to this Power install" style={{ padding: 0 }}>
+      {err && <div style={{ ...row, color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      {users === null && !err && <div style={{ ...row, color: 'var(--text-3)', fontSize: 13 }}>Loading…</div>}
+      {users?.map((u, i) => (
+        <div key={u.id} style={{ ...row, borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+          <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: u.role === 'admin' ? 'var(--solar)' : 'var(--home)' }}>
+            <Icon name={u.role === 'admin' ? 'shield' : 'user'} size={17} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {u.name}
+              {u.id === me?.id && (
+                <span style={{ fontSize: 10.5, color: 'var(--text-2)', background: 'var(--surface-3)', borderRadius: 999, padding: '1px 8px', fontWeight: 600 }}>You</span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{u.email} · {u.role}</div>
+          </div>
+          {u.id !== me?.id && <RevokeBtn onClick={() => remove(u.id)} label="Remove" />}
+        </div>
+      ))}
+      <AddUserForm onCreated={() => void load()} />
+    </Card>
+  );
+}
+
+function SecurityCard() {
+  const { user } = useAuth();
+  const [sessions, setSessions] = useState<SessionsResponse | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
+
+  const load = async () => {
+    try {
+      setSessions(await auth.sessions());
+      setLoadErr(false);
+    } catch {
+      setLoadErr(true);
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  return (
+    <>
+      <Card title="Security" subtitle={user ? `${user.name} · ${user.email}` : undefined} style={{ padding: 0 }}>
+        <TwoFactorRow />
+        <div style={{ borderTop: '1px solid var(--border-1)' }}>
+          {loadErr && <div style={{ ...row, color: 'var(--danger)', fontSize: 13 }}>Could not load sessions.</div>}
+          {!loadErr && !sessions && <div style={{ ...row, color: 'var(--text-3)', fontSize: 13 }}>Loading sessions…</div>}
+          {sessions && <DeviceList data={sessions} reload={() => void load()} currentLabel="Active now" />}
+        </div>
+      </Card>
+      {user?.role === 'admin' && <UsersSection />}
+    </>
+  );
+}
+
 export function Settings() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const signOut = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
   const { data, loading, stale, updatedAt } = usePolling<SettingsResponse>(api.settings, 0);
   const fetched = data || (loading ? null : MOCK_SETTINGS) || MOCK_SETTINGS;
 
@@ -272,6 +631,9 @@ export function Settings() {
         {/* notifications */}
         <NotificationsCard channels={ch} onChannels={setChannels} />
 
+        {/* security: 2FA, sessions, trusted devices, (admin) users */}
+        <SecurityCard />
+
         {/* tariff */}
         <Card title="Tariff · Spain 2.0TD" style={{ padding: 0 }}>
           <div style={{ padding: '4px 16px 14px' }}>
@@ -308,7 +670,13 @@ export function Settings() {
         {/* app */}
         <Card title="App" style={{ padding: 0 }}>
           <LinkRow first icon="smartphone-nfc" tone="solar" name="Add to home screen" detail="Install as a full-screen app" right={<Chev />} />
-          <LinkRow icon="user" tone="home" name="Joris Kroese" detail="j.kroese@levante.nl" right={<Chev />} />
+          <LinkRow
+            icon="user"
+            tone="home"
+            name={user?.name || 'Account'}
+            detail={user?.email || 'Signed in'}
+            right={<Button size="sm" variant="ghost" iconLeft={<Icon name="log-out" />} onClick={() => void signOut()}>Sign out</Button>}
+          />
           <LinkRow icon="moon" tone="battery" name="Theme" detail="Dark (control-room)" right={<Chev />} />
           <LinkRow icon="info" tone="text-2" name="Version" detail="0.1.0 · energy.hirobo.nl" />
         </Card>

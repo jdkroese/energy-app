@@ -172,3 +172,60 @@ export interface ScenarioPreview {
 export interface VapidPublicResponse {
   publicKey: string;
 }
+
+/* ============================================================================
+ * Auth contract (see prompt §backend). Cookies carry the session.
+ * ==========================================================================*/
+
+export type UserRole = 'admin' | 'member';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+}
+
+export interface MeResponse {
+  user: AuthUser;
+}
+
+export type OtpChannel = 'whatsapp' | 'email';
+
+/** POST /api/auth/login → user (done) | otp step | (401 throws). */
+export type LoginResponse = { user: AuthUser } | { step: 'otp'; channel: OtpChannel };
+
+export interface SessionInfo {
+  id: string;
+  /** human label, e.g. "Chrome · macOS" */
+  device: string;
+  /** e.g. "Jávea, ES" or an IP */
+  location?: string;
+  /** ISO timestamp of last activity */
+  lastSeen?: string;
+  /** true for the session making this request */
+  current?: boolean;
+}
+
+export interface TrustedDevice {
+  id: string;
+  device: string;
+  /** ISO timestamp the trust expires */
+  expiresAt?: string;
+  /** true if this is the device making the request */
+  current?: boolean;
+}
+
+export interface SessionsResponse {
+  sessions: SessionInfo[];
+  trusted: TrustedDevice[];
+}
+
+export interface UsersResponse {
+  users: AuthUser[];
+}
+
+export interface CreateUserResponse {
+  /** one-time URL the new user opens to set their password */
+  setupUrl: string;
+}

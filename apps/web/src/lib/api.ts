@@ -1,20 +1,77 @@
 import type {
   AlertsResponse,
+  AuthUser,
   BrainPlanResponse,
   Channels,
   ChannelType,
+  CreateUserResponse,
   HistoryResponse,
   LiveResponse,
+  LoginResponse,
+  MeResponse,
+  OtpChannel,
   ScenarioDef,
   ScenarioPreview,
   ScenariosResponse,
+  SessionsResponse,
   SettingsResponse,
+  UserRole,
+  UsersResponse,
   VapidPublicResponse,
 } from './types';
 
+/**
+ * Thrown for non-2xx responses. Carries the HTTP status and any parsed JSON
+ * error body so callers (e.g. Login) can distinguish 401 from other failures.
+ */
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+  constructor(status: number, message: string, body?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/* ---- Global unauthorized handler ------------------------------------------
+ * On any 401 outside the auth routes, notify the app so it can flip to the
+ * "logged out" state. AuthProvider registers a callback; we also dispatch a
+ * DOM event so non-React code can react if needed. */
+export const AUTH_UNAUTHORIZED_EVENT = 'power:unauthorized';
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+function isAuthRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  return /^\/(login|setup|reset)\b/.test(window.location.pathname);
+}
+function notifyUnauthorized(): void {
+  if (isAuthRoute()) return;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
+  }
+  onUnauthorized?.();
+}
+
 export async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
-  if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`);
+  const res = await fetch(path, { credentials: 'same-origin', ...init });
+  if (!res.ok) {
+    let body: unknown;
+    try {
+      body = await res.clone().json();
+    } catch {
+      /* non-JSON error body */
+    }
+    if (res.status === 401) notifyUnauthorized();
+    const msg =
+      (body && typeof body === 'object' && 'error' in body && typeof (body as { error: unknown }).error === 'string'
+        ? (body as { error: string }).error
+        : `${path} -> HTTP ${res.status}`);
+    throw new ApiError(res.status, msg, body);
+  }
   return (await res.json()) as T;
 }
 
@@ -22,9 +79,15 @@ export async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
 async function sendJSON<T>(method: string, path: string, body?: unknown): Promise<T> {
   return getJSON<T>(path, {
     method,
+    credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+/** DELETE helper (some endpoints return no body). */
+async function delJSON<T>(path: string): Promise<T> {
+  return getJSON<T>(path, { method: 'DELETE', credentials: 'same-origin' });
 }
 
 export const postJSON = <T>(path: string, body?: unknown) => sendJSON<T>('POST', path, body);
@@ -64,3 +127,37 @@ export const api = {
   pushSubscribe: (subscription: PushSubscriptionJSON) =>
     postJSON<{ ok: boolean }>('/api/push/subscribe', { subscription }),
 };
+
+/* ---- Auth API -------------------------------------------------------------
+ * Every call is cookie-authed (same-origin). 401s surface as ApiError so the
+ * Login screen can show "Invalid email or password" without a global flip. */
+export const auth = {
+  me: () => getJSON<MeResponse>('/api/auth/me'),
+  login: (email: string, password: string) =>
+    postJSON<LoginResponse>('/api/auth/login', { email, password }),
+  verifyOtp: (email: string, code: string, trustDevice: boolean) =>
+    postJSON<MeResponse>('/api/auth/verify-otp', { email, code, trustDevice }),
+  logout: () => postJSON<{ ok: boolean }>('/api/auth/logout', {}),
+  requestReset: (email: string) =>
+    postJSON<{ ok: true }>('/api/auth/request-reset', { email }),
+  reset: (token: string, password: string) =>
+    postJSON<{ ok: boolean }>('/api/auth/reset', { token, password }),
+  setup: (token: string, password: string, name?: string) =>
+    postJSON<MeResponse>('/api/auth/setup', { token, password, name }),
+  set2fa: (enabled: boolean, channel: OtpChannel) =>
+    postJSON<{ ok: boolean }>('/api/auth/2fa', { enabled, channel }),
+
+  // sessions & trusted devices
+  sessions: () => getJSON<SessionsResponse>('/api/auth/sessions'),
+  revokeSession: (id: string) => delJSON<{ ok: boolean }>(`/api/auth/sessions/${enc(id)}`),
+  revokeTrusted: (id: string) => delJSON<{ ok: boolean }>(`/api/auth/trusted/${enc(id)}`),
+
+  // admin user management
+  listUsers: () => getJSON<UsersResponse>('/api/auth/users'),
+  createUser: (email: string, name: string, role: UserRole) =>
+    postJSON<CreateUserResponse>('/api/auth/users', { email, name, role }),
+  deleteUser: (id: string) => delJSON<{ ok: boolean }>(`/api/auth/users/${enc(id)}`),
+};
+
+// re-export for convenience
+export type { AuthUser };

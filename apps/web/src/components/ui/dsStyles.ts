@@ -244,6 +244,19 @@ const CSS = `
 /* tariff strip */
 .tband{ display:flex; gap:2px; height:8px; margin-top:9px; border-radius:4px; overflow:hidden; }
 .tband i{ flex:1; display:block; }
+
+/* ---- OTP code input (mono, monospaced 6-digit) ---- */
+.pwr-otp{ width:100%; height:var(--control-lg); text-align:center; background:var(--surface-2); color:var(--text-1);
+  border:1px solid var(--border-2); border-radius:var(--radius-md); -webkit-appearance:none; appearance:none;
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:24px; font-weight:500; letter-spacing:0.5em; padding-left:0.5em;
+  transition:border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.pwr-otp::placeholder{ color:var(--text-3); letter-spacing:0.5em; }
+.pwr-otp:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(46,230,160,0.18); }
+
+/* ---- Auth splash pulse ---- */
+.pwr-splash{ min-height:100dvh; display:grid; place-items:center; background:var(--bg-0); }
+.pwr-splash__mark{ animation:pwr-splash-pulse 1.6s var(--ease-out) infinite; }
+@keyframes pwr-splash-pulse{ 0%,100%{ opacity:0.45; transform:scale(0.97); } 50%{ opacity:1; transform:scale(1); } }
 `;
 
 let injected = false;

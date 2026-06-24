@@ -22,10 +22,22 @@ import {
 import { getVapidPublic, subscribe } from './routes/push';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
+import { authRouter } from './routes/auth';
+import { requireAuth } from './auth/middleware';
+import { bootstrapAdmin } from './auth/users';
 import type { ScenarioDef, AlertStatus } from './store';
 
 const app = express();
 app.use(express.json());
+
+// --- PUBLIC routes (no session required): /api/health and /api/auth/* only ---
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ ok: true, service: 'energy-api', env: config.env, time: new Date().toISOString() });
+});
+app.use('/api/auth', authRouter);
+
+// --- Everything below this line requires a valid session ---
+app.use(requireAuth);
 
 const wrap =
   (fn: (req: Request) => Promise<unknown> | unknown) => async (req: Request, res: Response) => {
@@ -39,10 +51,6 @@ const wrap =
         .json({ error: err.message, code: err.code ?? 'UPSTREAM' });
     }
   };
-
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({ ok: true, service: 'energy-api', env: config.env, time: new Date().toISOString() });
-});
 
 // Individual connectors (handy while developing).
 app.get('/api/sonnen/status', wrap(() => sonnen.getStatus()));
@@ -124,6 +132,13 @@ try {
   notify.ensureVapid();
 } catch (e) {
   console.error('[energy-api] VAPID init failed:', (e as Error).message);
+}
+
+// Seed the first admin + setup link if no users exist yet (no open self-signup).
+try {
+  bootstrapAdmin();
+} catch (e) {
+  console.error('[energy-api] auth bootstrap failed:', (e as Error).message);
 }
 
 // Start the background alert loop (shadow/read-only — notifications only).

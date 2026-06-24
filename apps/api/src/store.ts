@@ -84,6 +84,88 @@ export interface VapidKeys {
   privateKey: string;
 }
 
+// ---- Auth ---------------------------------------------------------------
+
+export type UserRole = 'admin' | 'user';
+export type TwoFactorChannel = 'whatsapp' | 'email';
+export type OtpPurpose = 'login' | 'reset';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  /** bcrypt hash, or null for a pre-seeded account awaiting first-time setup. */
+  passwordHash: string | null;
+  twoFactor: {
+    enabled: boolean;
+    channel: TwoFactorChannel;
+  };
+  createdAt: number;
+}
+
+export interface AuthSession {
+  /** sha256(rawToken) — the raw token only ever lives in the `sid` cookie. */
+  tokenHash: string;
+  userId: string;
+  createdAt: number;
+  expiresAt: number;
+  ua: string;
+  ip: string;
+}
+
+export interface AuthTrustedDevice {
+  id: string;
+  /** sha256(rawToken) — the raw token only ever lives in the `tdid` cookie. */
+  tokenHash: string;
+  userId: string;
+  label: string;
+  createdAt: number;
+  expiresAt: number;
+  lastUsed: number;
+}
+
+export interface AuthOtp {
+  userId: string;
+  /** sha256(6-digit code). */
+  codeHash: string;
+  purpose: OtpPurpose;
+  createdAt: number;
+  expiresAt: number;
+  attempts: number;
+}
+
+export interface AuthResetToken {
+  /** sha256(rawToken). */
+  tokenHash: string;
+  userId: string;
+  expiresAt: number;
+}
+
+export interface AuthSetupToken {
+  /** sha256(rawToken). */
+  tokenHash: string;
+  userId: string;
+  email: string;
+  expiresAt: number;
+}
+
+export interface LoginAttempt {
+  count: number;
+  /** epoch ms until which the email is locked, or 0 when not locked. */
+  lockedUntil: number;
+}
+
+export interface AuthState {
+  users: AuthUser[];
+  sessions: AuthSession[];
+  trustedDevices: AuthTrustedDevice[];
+  otps: AuthOtp[];
+  resetTokens: AuthResetToken[];
+  setupTokens: AuthSetupToken[];
+  loginAttempts: Record<string, LoginAttempt>;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -95,6 +177,7 @@ export interface StoreSchema {
   teslaRefreshToken: string | null;
   /** alert id -> first-seen epoch ms, for notification dedupe. */
   seenAlerts: Record<string, number>;
+  auth: AuthState;
 }
 
 // ---- Defaults -----------------------------------------------------------
@@ -177,6 +260,19 @@ function defaults(): StoreSchema {
     vapid: null,
     teslaRefreshToken: null,
     seenAlerts: {},
+    auth: defaultAuth(),
+  };
+}
+
+export function defaultAuth(): AuthState {
+  return {
+    users: [],
+    sessions: [],
+    trustedDevices: [],
+    otps: [],
+    resetTokens: [],
+    setupTokens: [],
+    loginAttempts: {},
   };
 }
 
@@ -222,6 +318,23 @@ function hydrate(raw: unknown): StoreSchema {
     vapid: p.vapid ?? base.vapid,
     teslaRefreshToken: p.teslaRefreshToken ?? base.teslaRefreshToken,
     seenAlerts: p.seenAlerts ?? base.seenAlerts,
+    auth: hydrateAuth(p.auth, base.auth),
+  };
+}
+
+function hydrateAuth(p: Partial<AuthState> | undefined, base: AuthState): AuthState {
+  if (!p || typeof p !== 'object') return base;
+  return {
+    users: Array.isArray(p.users) ? p.users : base.users,
+    sessions: Array.isArray(p.sessions) ? p.sessions : base.sessions,
+    trustedDevices: Array.isArray(p.trustedDevices) ? p.trustedDevices : base.trustedDevices,
+    otps: Array.isArray(p.otps) ? p.otps : base.otps,
+    resetTokens: Array.isArray(p.resetTokens) ? p.resetTokens : base.resetTokens,
+    setupTokens: Array.isArray(p.setupTokens) ? p.setupTokens : base.setupTokens,
+    loginAttempts:
+      p.loginAttempts && typeof p.loginAttempts === 'object'
+        ? p.loginAttempts
+        : base.loginAttempts,
   };
 }
 

@@ -1,8 +1,9 @@
 import type { CSSProperties } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
 import { Eyebrow } from '../ui/Eyebrow';
 import { NAV, NAV_MORE } from './nav';
+import { useAuth } from '../../auth/AuthProvider';
 
 type Props = {
   expanded: boolean;
@@ -32,6 +33,12 @@ function railItem(expanded: boolean) {
 
 /** Rail — desktop collapsing icon-rail (74↔232 px), toggle persisted to localStorage. */
 export function Rail({ expanded, onToggle }: Props) {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const signOut = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
   return (
     <aside
       style={{
@@ -98,6 +105,29 @@ export function Rail({ expanded, onToggle }: Props) {
             </div>
           </div>
         )}
+        <button
+          onClick={() => void signOut()}
+          title={user ? `Sign out — ${user.email}` : 'Sign out'}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            height: 42,
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            color: 'var(--text-2)',
+            borderRadius: 'var(--radius-md)',
+            fontSize: 14,
+            fontWeight: 500,
+            justifyContent: expanded ? 'flex-start' : 'center',
+            gap: expanded ? 11 : 0,
+            padding: expanded ? '0 12px' : '0',
+          }}
+        >
+          <Icon name="log-out" size={18} />
+          {expanded && <span>Sign out</span>}
+        </button>
+
         <button
           onClick={onToggle}
           title={expanded ? 'Collapse' : 'Expand'}
