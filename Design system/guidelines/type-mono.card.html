@@ -1,0 +1,31 @@
+<!-- @dsCard group="Type" viewport="700x240" name="Mono numerals" subtitle="JetBrains Mono — tabular digital readouts" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg-0); }
+  .wrap { display: flex; flex-direction: column; gap: 18px; }
+  .readouts { display: flex; gap: 36px; align-items: baseline; flex-wrap: wrap; }
+  .unit { font-size: 16px; color: var(--text-2); }
+  .cap { font-size: var(--fs-xs); letter-spacing:.08em; text-transform:uppercase; color: var(--text-3); display:block; margin-bottom: 6px; }
+  .tok { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); }
+  .digits { display:flex; gap:18px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="readouts">
+      <div><span class="cap">Hero readout</span><span class="pwr-mono" style="font-size:var(--fs-metric-xl);color:var(--solar);font-weight:500">4.21<span class="unit"> kW</span></span></div>
+      <div><span class="cap">Card metric</span><span class="pwr-mono" style="font-size:var(--fs-metric-lg);color:var(--battery);font-weight:500">78<span class="unit"> %</span></span></div>
+      <div><span class="cap">Inline</span><span class="pwr-mono" style="font-size:var(--fs-metric-md);color:var(--text-1)">28.4<span class="unit"> kWh</span></span></div>
+    </div>
+    <div>
+      <span class="cap">Tabular figures (0–9 align in columns, no jitter on live updates)</span>
+      <span class="pwr-mono" style="font-size:26px;color:var(--text-1);letter-spacing:2px">0123456789</span>
+    </div>
+    <div class="tok">--font-mono · JetBrains Mono · tabular-nums</div>
+  </div>
+</body>
+</html>

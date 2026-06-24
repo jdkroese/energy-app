@@ -1,0 +1,69 @@
+<!-- @dsCard group="Components" viewport="700x520" name="Data — StatTile, Gauge, Sparkline, Bars, EnergyFlow" subtitle="Live readouts & the signature flow diagram" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg-0); }
+  .grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 20px; align-items: start; }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .gauges { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .panel { background: var(--surface-1); border: 1px solid var(--border-1);
+    border-radius: var(--radius-card); padding: 18px; box-shadow: var(--shadow-2); }
+  .lbl { font-size: var(--fs-xs); font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--text-3); margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+  const { StatTile, RadialGauge, Sparkline, ProgressBar, EnergyFlow } = window.PowerDesignSystem_138199;
+  const I = (n) => <i data-lucide={n}></i>;
+  function Demo() {
+    return (
+      <div className="grid">
+        <div className="stack">
+          <div className="tiles">
+            <StatTile label="Solar today" value="28.4" unit="kWh" tone="solar" icon={I('sun')} delta={12} footnote="vs yest." />
+            <StatTile label="Grid import" value="3.1" unit="kW" tone="grid" icon={I('utility-pole')} delta={-8} footnote="vs last hr" />
+          </div>
+          <div className="panel">
+            <div className="lbl">Sparkline · in a tile</div>
+            <StatTile label="Self-consumption" value="64" unit="%" tone="battery">
+              <Sparkline data={[6,8,7,11,9,14,12,16,15,19]} tone="battery" width={240} height={40} showDot />
+            </StatTile>
+          </div>
+          <div className="panel">
+            <div className="lbl">Progress · energy mix</div>
+            <ProgressBar label="EV charge" value={62} tone="ev" showValue glow />
+            <div style={{height:14}}></div>
+            <ProgressBar height={10} segments={[
+              { value: 54, tone: 'solar' }, { value: 28, tone: 'battery' }, { value: 18, tone: 'grid' }]} />
+          </div>
+        </div>
+        <div className="stack">
+          <div className="panel">
+            <div className="lbl">Energy flow · live</div>
+            <EnergyFlow solar={{kw:4.2}} battery={{kw:1.1,dir:'charging',soc:78}} grid={{kw:0.8,dir:'exporting'}} home={{kw:2.3}} />
+          </div>
+          <div className="panel gauges">
+            <RadialGauge value={78} tone="battery" label="Battery" />
+            <RadialGauge value={64} tone="solar" label="Self-suff." />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+  setTimeout(() => window.lucide && window.lucide.createIcons(), 80);
+</script>
+</body>
+</html>

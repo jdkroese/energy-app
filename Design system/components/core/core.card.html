@@ -1,0 +1,73 @@
+<!-- @dsCard group="Components" viewport="700x440" name="Core — Buttons, Cards, Badges" subtitle="Actions, surfaces, status pills & dots" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg-0); }
+  .wrap { display: flex; flex-direction: column; gap: 20px; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .lbl { font-size: var(--fs-xs); font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--text-3); width: 100%; margin-bottom: -4px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+</style>
+</head>
+<body>
+<div id="root" class="wrap"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+  const { Button, IconButton, Card, Badge, StatusDot } = window.PowerDesignSystem_138199;
+  const I = (n) => <i data-lucide={n}></i>;
+  function Demo() {
+    return (
+      <>
+        <div className="row">
+          <span className="lbl">Buttons</span>
+          <Button iconLeft={I('zap')}>Optimize now</Button>
+          <Button variant="secondary">Schedule</Button>
+          <Button variant="ghost" iconRight={I('chevron-right')}>Details</Button>
+          <Button variant="danger" iconLeft={I('power')}>Disconnect</Button>
+          <Button loading>Saving</Button>
+          <Button disabled>Disabled</Button>
+        </div>
+        <div className="row">
+          <Button size="sm">Small</Button>
+          <Button size="md">Medium</Button>
+          <Button size="lg">Large</Button>
+          <IconButton label="Refresh" variant="solid">{I('refresh-cw')}</IconButton>
+          <IconButton label="Add" variant="accent">{I('plus')}</IconButton>
+          <IconButton label="More">{I('more-horizontal')}</IconButton>
+        </div>
+        <div className="row">
+          <span className="lbl">Status</span>
+          <Badge tone="solar" icon={I('sun')}>Producing</Badge>
+          <Badge tone="battery" variant="solid">Charging</Badge>
+          <Badge tone="grid">Importing</Badge>
+          <Badge tone="danger">Fault</Badge>
+          <StatusDot tone="solar" live>Producing 4.2 kW</StatusDot>
+          <StatusDot tone="offline">Offline</StatusDot>
+        </div>
+        <div className="grid2">
+          <Card title="Solar production" subtitle="Live" accent="solar" glow
+            icon={I('sun')}
+            actions={<IconButton label="Expand">{I('maximize-2')}</IconButton>}>
+            <div className="pwr-mono" style={{ fontSize: 'var(--fs-metric-lg)', color: 'var(--solar)' }}>4.21<span style={{ fontSize: 14, color: 'var(--text-2)' }}> kW</span></div>
+          </Card>
+          <Card title="Home battery" subtitle="Discharging" accent="battery" icon={I('battery-charging')}>
+            <div className="pwr-mono" style={{ fontSize: 'var(--fs-metric-lg)', color: 'var(--battery)' }}>78<span style={{ fontSize: 14, color: 'var(--text-2)' }}> %</span></div>
+          </Card>
+        </div>
+      </>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+  setTimeout(() => window.lucide && window.lucide.createIcons(), 60);
+</script>
+</body>
+</html>

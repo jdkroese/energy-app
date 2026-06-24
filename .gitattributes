@@ -1,0 +1,8 @@
+# Normalize all text to LF in the repo (so shell scripts work on the Linux VPS).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary
+*.docx binary

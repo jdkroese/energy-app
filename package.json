@@ -1,0 +1,22 @@
+{
+  "name": "energy-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Home energy coordinator + dashboard (Sonnen + Tesla Powerwall + solar) for energy.hirobo.nl",
+  "packageManager": "pnpm@11.8.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"pnpm --filter @energy/api dev\" \"pnpm --filter @energy/web dev\"",
+    "build": "pnpm --filter @energy/api build && pnpm --filter @energy/web build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "start": "pnpm --filter @energy/api start",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.9.2"
+  }
+}

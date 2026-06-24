@@ -1,0 +1,21 @@
+# systemd unit for the Energy API. Install at /etc/systemd/system/energy-api.service
+# (this reference copy is applied by scripts/setup-vps.sh).
+[Unit]
+Description=Energy App API (energy.hirobo.nl)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jdkroese01
+WorkingDirectory=/var/energy/apps/api
+EnvironmentFile=/opt/energy/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env node /var/energy/apps/api/dist/index.cjs
+Restart=on-failure
+RestartSec=3
+MemoryMax=256M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

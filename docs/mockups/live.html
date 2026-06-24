@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Power — Live (monitoring)</title>
+<link rel="stylesheet" href="_ds/styles.css" />
+<style>
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg-0); color: var(--text-1); overflow: hidden; }
+  #root { height: 100vh; }
+  .app { display: flex; height: 100%; }
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .scroll { flex: 1; overflow-y: auto; padding: 22px 28px 40px; }
+  .scroll::-webkit-scrollbar { width: 10px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
+
+  /* two-battery energy flow — Power visual language, extended */
+  .pwr2{ position:relative; width:100%; aspect-ratio:1.08/1; min-height:360px; font-family:var(--font-sans); }
+  .pwr2__svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .pwr2__base{ stroke:var(--border-2); stroke-width:1.2; fill:none; }
+  .pwr2__line{ fill:none; stroke-width:2.2; stroke-linecap:round; stroke-dasharray:5 6;
+    animation:pwr2move .9s linear infinite; }
+  @keyframes pwr2move{ from{stroke-dashoffset:11;} to{stroke-dashoffset:0;} }
+  .pwr2__node{ position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column;
+    align-items:center; gap:4px; width:104px; text-align:center; }
+  .pwr2__chip{ display:flex; align-items:center; justify-content:center; width:52px; height:52px;
+    border-radius:16px; background:var(--surface-2); border:1px solid var(--border-2);
+    color:var(--_c, var(--text-3)); box-shadow:var(--shadow-1), var(--hairline-top);
+    transition:box-shadow .2s, border-color .2s, color .2s; }
+  .pwr2__chip svg{ width:22px; height:22px; }
+  .pwr2__node--active .pwr2__chip{ border-color:var(--_c);
+    box-shadow:0 0 0 1px var(--_c), 0 0 18px color-mix(in srgb, var(--_c) 45%, transparent); }
+  .pwr2__name{ font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-2); }
+  .pwr2__kw{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:14px; font-weight:500;
+    color:var(--_c, var(--text-1)); line-height:1; }
+  .pwr2__kw small{ font-size:9px; color:var(--text-3); }
+  .pwr2__sub{ font-family:var(--font-mono); font-size:10px; color:var(--text-3); line-height:1.1; }
+  .pwr2__hub{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:60px; height:60px;
+    border-radius:50%; display:flex; align-items:center; justify-content:center; color:var(--accent);
+    background:radial-gradient(circle at 50% 35%, var(--surface-3), var(--surface-1));
+    border:1px solid var(--border-3); box-shadow:var(--glow-soft, 0 0 22px rgba(46,230,160,.18)); }
+  .pwr2__hub svg{ width:24px; height:24px; }
+  .pwr2__hub::after{ content:""; position:absolute; inset:-6px; border-radius:50%;
+    border:1px solid rgba(46,230,160,.25); animation:pwr2ring 2.6s ease-out infinite; }
+  @keyframes pwr2ring{ 0%{transform:scale(.85);opacity:.7;} 70%{transform:scale(1.5);opacity:0;} 100%{opacity:0;} }
+
+  /* tariff strip */
+  .tband{ display:flex; gap:2px; height:10px; margin-top:10px; border-radius:4px; overflow:hidden; }
+  .tband i{ flex:1; display:block; }
+  .tnow{ position:relative; height:0; }
+  .tnow span{ position:absolute; top:-13px; width:2px; height:16px; background:var(--text-1); border-radius:2px; }
+
+  @media (prefers-reduced-motion: reduce){ .pwr2__line,.pwr2__hub::after{ animation:none; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="_ds/_ds_bundle.js"></script>
+<script type="text/babel">
+const DS = window.PowerDesignSystem_138199 || {};
+const { Card, StatTile, RadialGauge, ProgressBar, Sparkline, Badge, StatusDot } = DS;
+
+// ---- real values (Jávea, 2026-06-24 16:48) ----
+const FLOW = {
+  solar:  { name:'Solar',  val:'11.1', unit:'kW', sub:'A 6.6 · B 4.5', kw:11.1 },
+  sonnen: { name:'Sonnen', val:'100',  unit:'%',  sub:'9.2 kWh · idle', kw:0, dir:'idle' },
+  tesla:  { name:'Tesla',  val:'100',  unit:'%',  sub:'27 kWh · idle',  kw:0, dir:'idle' },
+  grid:   { name:'Grid',   val:'5.6',  unit:'kW', sub:'Exporting',      kw:5.56, dir:'exporting' },
+  home:   { name:'Home',   val:'5.5',  unit:'kW', sub:'Load',           kw:5.5 },
+};
+function series(n, base, amp, seed){ let s=seed||1; const r=()=>{ s=(s*9301+49297)%233280; return s/233280; };
+  const o=[]; for(let i=0;i<n;i++){ const d=Math.sin((i/n)*Math.PI); o.push(Math.max(0, base + d*amp + (r()-0.5)*amp*0.3)); } return o; }
+const solarDay = series(24,0.2,9.6,7).map((v,i)=> (i<7||i>21?0:v));
+const homeDay  = series(24,0.7,2.6,13);
+// 0=P3 valley · 1=P2 shoulder · 2=P1 peak
+const TARIFF = [0,0,0,0,0,0,0,0, 1,1, 2,2,2,2, 1,1,1,1, 2,2,2,2, 1,1];
+const BAND_COLOR = ['var(--solar)','var(--grid-dim)','var(--grid)'];
+
+const Ico = ({n, s}) => <i data-lucide={n} style={s}></i>;
+
+// ---- two-battery energy flow (extends the signature EnergyFlow) ----
+function TwoBatteryFlow({ f }){
+  const HUB = {x:50,y:50};
+  const POS = { solar:{x:50,y:9}, sonnen:{x:10,y:32}, tesla:{x:10,y:68}, grid:{x:90,y:50}, home:{x:50,y:91} };
+  const COLOR = { solar:'var(--solar)', sonnen:'var(--battery)', tesla:'var(--battery)', grid:'var(--grid)', home:'var(--home)' };
+  const ICON = { solar:'sun', sonnen:'battery-charging', tesla:'battery-charging', grid:'utility-pole', home:'house' };
+  const seg = (k, a, b) => ({ key:k, d:`M${a.x} ${a.y} L${b.x} ${b.y}`, color:COLOR[k] });
+  const links = [];
+  if (f.solar.kw > 0.05) links.push(seg('solar', POS.solar, HUB));
+  if (f.home.kw > 0.05)  links.push(seg('home', HUB, POS.home));
+  if (f.grid.dir==='exporting' && f.grid.kw>0.05) links.push(seg('grid', HUB, POS.grid));
+  if (f.grid.dir==='importing' && f.grid.kw>0.05) links.push(seg('grid', POS.grid, HUB));
+  ['sonnen','tesla'].forEach(b => {
+    if (f[b].dir==='charging')    links.push(seg(b, HUB, POS[b]));
+    if (f[b].dir==='discharging') links.push(seg(b, POS[b], HUB));
+  });
+  const active = new Set(links.map(l=>l.key));
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (
+    <div className="pwr2">
+      <svg className="pwr2__svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {Object.keys(POS).map(k => <line key={k} className="pwr2__base" x1={HUB.x} y1={HUB.y} x2={POS[k].x} y2={POS[k].y} />)}
+        {links.map(l => <path key={l.key} className="pwr2__line" d={l.d} style={{stroke:l.color}} />)}
+      </svg>
+      {Object.keys(POS).map(k => {
+        const n = f[k]; const on = active.has(k);
+        return (
+          <div key={k} className={'pwr2__node'+(on?' pwr2__node--active':'')}
+               style={{ left:POS[k].x+'%', top:POS[k].y+'%', '--_c':COLOR[k] }}>
+            <div className="pwr2__chip"><Ico n={ICON[k]} /></div>
+            <span className="pwr2__name">{n.name}</span>
+            <span className="pwr2__kw">{n.val}<small> {n.unit}</small></span>
+            <span className="pwr2__sub">{n.sub}</span>
+          </div>
+        );
+      })}
+      <div className="pwr2__hub"><Ico n="zap" /></div>
+    </div>
+  );
+}
+
+// ---- inline area chart (Power kit style) ----
+function AreaChart({ series, height=200, labels }){
+  const w=1000, h=height, padY=16;
+  const id = React.useMemo(()=> 'c'+Math.floor(Math.random()*1e6), []);
+  const niceMax = Math.ceil(Math.max(...series.flatMap(s=>s.data), 1));
+  const stepX = w/(series[0].data.length-1);
+  const grid = [0,.25,.5,.75,1];
+  const tone = t => ({solar:'var(--solar)',home:'var(--home)',battery:'var(--battery)',grid:'var(--grid)'}[t]||t);
+  return (
+    <svg viewBox={`0 0 ${w} ${h+26}`} width="100%" preserveAspectRatio="none" style={{display:'block',overflow:'visible'}}>
+      <defs>{series.map((s,i)=>(
+        <linearGradient key={i} id={`${id}-${i}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={tone(s.tone)} stopOpacity="0.26"/><stop offset="100%" stopColor={tone(s.tone)} stopOpacity="0"/>
+        </linearGradient>))}</defs>
+      {grid.map((g,i)=>(<g key={i}>
+        <line x1="0" y1={padY+g*(h-padY*2)} x2={w} y2={padY+g*(h-padY*2)} stroke="var(--grid-line)" strokeWidth="1"/>
+        <text x="6" y={padY+g*(h-padY*2)-5} fill="var(--text-3)" style={{font:'500 16px var(--font-mono)'}}>{Math.round(niceMax*(1-g))}</text>
+      </g>))}
+      {series.map((s,i)=>{ const pts=s.data.map((d,j)=>[j*stepX, padY+(1-d/niceMax)*(h-padY*2)]);
+        const line=pts.map((p,k)=>`${k?'L':'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+        const fill=`${line} L${w} ${h-padY} L0 ${h-padY} Z`;
+        return (<g key={i}>{s.fill!==false && <path d={fill} fill={`url(#${id}-${i})`}/>}
+          <path d={line} fill="none" stroke={tone(s.tone)} strokeWidth={s.dash?2:2.5} strokeDasharray={s.dash?'5 5':undefined} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/></g>); })}
+      {(labels||['00','04','08','12','16','20','24']).map((lb,i,a)=>(
+        <text key={i} x={(i/(a.length-1))*w} y={h+18} textAnchor={i===0?'start':i===a.length-1?'end':'middle'} fill="var(--text-3)" style={{font:'500 15px var(--font-mono)'}}>{lb}</text>))}
+    </svg>
+  );
+}
+
+function Eyebrow({children}){ return <span style={{fontSize:10,fontWeight:600,letterSpacing:'.12em',textTransform:'uppercase',color:'var(--text-2)'}}>{children}</span>; }
+
+// ---- sidebar + topbar (Power chrome) ----
+function Sidebar(){
+  const nav = [
+    {id:'live', label:'Live', icon:'activity', on:true},
+    {id:'reports', label:'Reports', icon:'bar-chart-3'},
+    {id:'batteries', label:'Batteries', icon:'battery-charging'},
+    {id:'alerts', label:'Alerts', icon:'bell'},
+    {id:'settings', label:'Settings', icon:'settings'},
+  ];
+  const soon = ['Scenarios','Forecast'];
+  return (
+    <aside style={{width:236, flex:'none', height:'100%', display:'flex', flexDirection:'column', background:'var(--bg-1)', borderRight:'1px solid var(--border-1)', padding:'20px 14px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:11,padding:'4px 8px 22px'}}>
+        <img src="_ds/assets/logo-mark.svg" width="32" height="32" alt="" />
+        <span style={{fontSize:19,fontWeight:700,letterSpacing:'-.02em'}}><span style={{color:'var(--solar)'}}>Power</span></span>
+      </div>
+      <nav style={{display:'flex',flexDirection:'column',gap:3}}>
+        {nav.map(n=>(
+          <div key={n.id} style={{display:'flex',alignItems:'center',gap:11,height:42,padding:'0 12px',borderRadius:'var(--radius-md)',
+            background:n.on?'var(--solar-wash)':'transparent', color:n.on?'var(--solar)':'var(--text-2)', cursor:'pointer',
+            fontSize:14, fontWeight:n.on?600:500, boxShadow:n.on?'inset 2px 0 0 var(--solar)':'none'}}>
+            <Ico n={n.icon} s={{width:18,height:18}} />{n.label}
+          </div>
+        ))}
+        <div style={{height:1,background:'var(--border-1)',margin:'10px 8px'}}></div>
+        {soon.map(s=>(
+          <div key={s} style={{display:'flex',alignItems:'center',gap:11,height:38,padding:'0 12px',color:'var(--text-3)',fontSize:14}}>
+            <Ico n="lock" s={{width:15,height:15}} />{s}<span style={{marginLeft:'auto',fontSize:9,letterSpacing:'.08em',color:'var(--text-3)'}}>SOON</span>
+          </div>
+        ))}
+      </nav>
+      <div style={{marginTop:'auto',padding:14,borderRadius:'var(--radius-lg)',background:'var(--surface-1)',border:'1px solid var(--border-1)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+          <Eyebrow>System</Eyebrow>{StatusDot ? <StatusDot tone="solar" live>Online</StatusDot> : <span style={{color:'var(--solar)',fontSize:12}}>● Online</span>}
+        </div>
+        <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-2)',lineHeight:1.7}}>
+          <div style={{display:'flex',justifyContent:'space-between'}}><span>Tesla</span><span style={{color:'var(--solar)'}}>cloud ok</span></div>
+          <div style={{display:'flex',justifyContent:'space-between'}}><span>Sonnen</span><span style={{color:'var(--solar)'}}>LAN ok</span></div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+function TopBar(){
+  return (
+    <header style={{display:'flex',alignItems:'center',gap:20,padding:'18px 28px',borderBottom:'1px solid var(--border-1)'}}>
+      <div>
+        <Eyebrow>Live overview</Eyebrow>
+        <h1 style={{fontSize:22,fontWeight:600,letterSpacing:'-.01em',margin:'2px 0 0'}}>Your home, right now</h1>
+      </div>
+      <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:14}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',borderRadius:'var(--radius-pill)',background:'var(--surface-1)',border:'1px solid var(--border-1)',fontSize:13,color:'var(--text-2)'}}>
+          <Ico n="sun" s={{width:16,height:16,color:'var(--grid)'}} /><span style={{fontFamily:'var(--font-mono)'}}>26°</span><span style={{color:'var(--text-3)'}}>· Jávea · sunny</span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',borderRadius:'var(--radius-pill)',background:'var(--surface-1)',border:'1px solid var(--border-1)',fontSize:13,color:'var(--text-2)',fontFamily:'var(--font-mono)'}}>16:48</div>
+        <div style={{width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,var(--solar-dim),var(--battery-dim))',display:'grid',placeItems:'center',fontWeight:700,fontSize:13,color:'#06090b'}}>JK</div>
+      </div>
+    </header>
+  );
+}
+
+// ---- tariff card ----
+function TariffCard(){
+  const nowIdx = 16; // 16:48
+  return (
+    <Card style={{display:'flex',flexDirection:'column'}}>
+      <Eyebrow>Tariff · 2.0TD</Eyebrow>
+      <div style={{display:'flex',alignItems:'baseline',gap:8,marginTop:8}}>
+        <span style={{fontFamily:'var(--font-mono)',fontSize:30,fontWeight:600,color:'var(--text-1)'}}>P2</span>
+        <span style={{fontSize:13,color:'var(--text-2)'}}>shoulder · <span style={{fontFamily:'var(--font-mono)',color:'var(--text-1)'}}>€0.131</span>/kWh</span>
+      </div>
+      <div className="tband">{TARIFF.map((b,i)=>(<i key={i} style={{background:BAND_COLOR[b],opacity:i===nowIdx?1:.5}}></i>))}</div>
+      <div className="tnow"><span style={{left:`calc(${(nowIdx+0.5)/24*100}% )`}}></span></div>
+      <div style={{display:'flex',gap:14,marginTop:14,fontSize:11,color:'var(--text-3)'}}>
+        <span><i style={{display:'inline-block',width:8,height:8,borderRadius:2,background:'var(--solar)',marginRight:5}}></i>P3 €0.096</span>
+        <span><i style={{display:'inline-block',width:8,height:8,borderRadius:2,background:'var(--grid-dim)',marginRight:5}}></i>P2 €0.131</span>
+        <span><i style={{display:'inline-block',width:8,height:8,borderRadius:2,background:'var(--grid)',marginRight:5}}></i>P1 €0.209</span>
+      </div>
+      <div style={{marginTop:10,fontSize:12,color:'var(--grid)',fontFamily:'var(--font-mono)'}}>P1 peak 18:00 · in 1h 12m</div>
+    </Card>
+  );
+}
+
+// ---- backup card (Tesla only) ----
+function BackupCard(){
+  return (
+    <Card accent="battery" style={{display:'flex',flexDirection:'column',gap:4}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <Eyebrow>Backup · Tesla only</Eyebrow><Ico n="shield-check" s={{width:18,height:18,color:'var(--battery)'}} />
+      </div>
+      <div style={{display:'flex',alignItems:'baseline',gap:8,marginTop:6}}>
+        <span style={{fontFamily:'var(--font-mono)',fontSize:30,fontWeight:600,color:'var(--battery)'}}>27</span>
+        <span style={{fontSize:13,color:'var(--text-2)'}}>kWh · ≈ 16 h autonomy</span>
+      </div>
+      <div style={{marginTop:6,fontSize:11,color:'var(--text-3)'}}>Sonnen excluded — no backup module installed</div>
+    </Card>
+  );
+}
+
+function LiveScreen(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  const t = { produced:'42.3', consumed:'28.6', selfSuff:71, saved:'5.40' };
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:20}}>
+      {/* hero */}
+      <div style={{display:'grid',gridTemplateColumns:'1.18fr 1fr',gap:20}}>
+        <Card title="Live energy flow" subtitle="Updated just now" accent="solar" icon={<Ico n="zap" />}
+          actions={Badge ? <Badge tone="solar" variant="soft" icon={<Ico n="radio" />}>Live</Badge> : null}>
+          <TwoBatteryFlow f={FLOW} />
+        </Card>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,alignContent:'start'}}>
+          <Card glow accent="solar"><StatTile label="Solar now" value="11.1" unit="kW" tone="solar" icon={<Ico n="sun" />} footnote="18.2 kWp · 2 arrays" /></Card>
+          <Card accent="home"><StatTile label="Home load" value="5.5" unit="kW" tone="home" icon={<Ico n="house" />} footnote="all-electric" /></Card>
+          <div style={{gridColumn:'span 2'}}><TariffCard /></div>
+          <div style={{gridColumn:'span 2'}}><BackupCard /></div>
+        </div>
+      </div>
+
+      {/* batteries + insight */}
+      <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:20}}>
+        <Card title="Batteries" subtitle="Sonnen + Tesla · combined 36 kWh" icon={<Ico n="battery-charging" />}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            {[['Sonnen','9.2 kWh','idle'],['Tesla','27 kWh','idle']].map((b,i)=>(
+              <React.Fragment key={b[0]}>
+                <div style={{flex:1,display:'flex',alignItems:'center',gap:16}}>
+                  {RadialGauge ? <RadialGauge value={100} tone="battery" label={b[0]} size={104} /> : null}
+                  <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:20,fontWeight:500,color:'var(--battery)'}}>100<small style={{fontSize:11,color:'var(--text-3)'}}>%</small></div>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:12,color:'var(--text-2)'}}>{b[1]} · {b[2]}</div>
+                  </div>
+                </div>
+                {i===0 && <div style={{width:1,alignSelf:'stretch',background:'var(--border-1)'}}></div>}
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{marginTop:18}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-2)',marginBottom:7}}>
+              <span>Self-sufficiency today</span><span style={{fontFamily:'var(--font-mono)',color:'var(--text-1)'}}>{t.selfSuff}%</span>
+            </div>
+            {ProgressBar ? <ProgressBar height={6} segments={[{value:t.selfSuff,tone:'solar'},{value:100-t.selfSuff,tone:'grid'}]} /> : null}
+            <div style={{fontSize:11,color:'var(--text-3)',marginTop:7,fontFamily:'var(--font-mono)'}}><span style={{color:'var(--solar)'}}>{t.selfSuff}% solar</span> · {100-t.selfSuff}% grid</div>
+          </div>
+        </Card>
+
+        <Card accent="grid" style={{display:'flex',flexDirection:'column',gap:10}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <span style={{width:30,height:30,borderRadius:9,display:'grid',placeItems:'center',background:'var(--grid-wash)',color:'var(--grid)'}}><Ico n="alert-triangle" s={{width:17,height:17}} /></span>
+            <Eyebrow>Why this matters</Eyebrow>
+          </div>
+          <div style={{fontSize:15,color:'var(--text-1)',lineHeight:1.5}}>Both batteries are full and the house is exporting <span style={{fontFamily:'var(--font-mono)',color:'var(--grid)'}}>5.6 kW</span> at <span style={{fontFamily:'var(--font-mono)'}}>€0.029</span>/kWh.</div>
+          <div style={{fontSize:13,color:'var(--text-2)',lineHeight:1.5}}>Nothing is reserved for the <span style={{color:'var(--grid)'}}>18:00 P1 peak</span> (€0.209/kWh). The coordinator will hold capacity for the evening.</div>
+        </Card>
+      </div>
+
+      {/* KPI row */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
+        <Card><StatTile label="Produced today" value="42.3" unit="kWh" tone="solar" icon={<Ico n="sun" />} delta={9} footnote="vs yesterday">{Sparkline ? <Sparkline data={solarDay.filter((_,i)=>i%2===0)} tone="solar" width={210} height={32} /> : null}</StatTile></Card>
+        <Card><StatTile label="Consumed" value="28.6" unit="kWh" tone="home" icon={<Ico n="plug" />} delta={-4} footnote="vs yesterday">{Sparkline ? <Sparkline data={homeDay.filter((_,i)=>i%2===0)} tone="home" width={210} height={32} /> : null}</StatTile></Card>
+        <Card><StatTile label="Self-sufficiency" value="71" unit="%" tone="battery" icon={<Ico n="leaf" />} delta={5} footnote="vs avg" /></Card>
+        <Card><StatTile label="Saved today" value="€5.40" tone="solar" icon={<Ico n="piggy-bank" />} delta={7} footnote="vs grid-only" /></Card>
+      </div>
+
+      {/* day chart */}
+      <Card title="Production & consumption" subtitle="Today · kW" icon={<Ico n="activity" />}
+        actions={<div style={{display:'flex',gap:16,fontSize:12,color:'var(--text-2)'}}>
+          <span style={{display:'flex',alignItems:'center',gap:6}}><i style={{width:9,height:9,borderRadius:2,background:'var(--solar)'}}></i>Solar</span>
+          <span style={{display:'flex',alignItems:'center',gap:6}}><i style={{width:9,height:9,borderRadius:2,background:'var(--home)'}}></i>Home</span>
+        </div>}>
+        <AreaChart height={200} series={[{data:solarDay,tone:'solar'},{data:homeDay,tone:'home',dash:true,fill:false}]} labels={['00','04','08','12','16','20','24']} />
+      </Card>
+    </div>
+  );
+}
+
+function App(){
+  React.useEffect(()=>{ if(window.lucide) window.lucide.createIcons(); });
+  return (
+    <div className="app">
+      <Sidebar />
+      <div className="main">
+        <TopBar />
+        <div className="scroll"><LiveScreen /></div>
+      </div>
+    </div>
+  );
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 50);
+setTimeout(()=>{ if(window.lucide) window.lucide.createIcons(); }, 400);
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!-- @dsCard group="Spacing" viewport="700x150" name="Radii" subtitle="Medium-rounded shape language" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg-0); }
+  .row { display: flex; gap: 18px; align-items: flex-end; }
+  .item { text-align: center; }
+  .box { width: 76px; height: 56px; background: var(--surface-2); border: 1px solid var(--border-2);
+    border-top: 2px solid var(--solar); }
+  .tok { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); margin-top: 8px; }
+  .px { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="item"><div class="box" style="border-radius:var(--radius-sm)"></div><div class="tok">sm</div><div class="px">6px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-md)"></div><div class="tok">md</div><div class="px">10px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-lg)"></div><div class="tok">lg / card</div><div class="px">14px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-xl)"></div><div class="tok">xl</div><div class="px">20px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-pill);width:110px"></div><div class="tok">pill</div><div class="px">999px</div></div>
+  </div>
+</body>
+</html>

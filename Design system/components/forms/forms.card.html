@@ -1,0 +1,55 @@
+<!-- @dsCard group="Components" viewport="700x420" name="Forms — Switch, Segmented, Slider, Input, Select" subtitle="Controls for settings, automation & config" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; padding: 24px; background: var(--bg-0); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px 28px; align-items: start; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+  .lbl { font-size: var(--fs-xs); font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--text-3); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+  const { Switch, SegmentedControl, Slider, Input, Select } = window.PowerDesignSystem_138199;
+  const I = (n) => <i data-lucide={n}></i>;
+  function Demo() {
+    const [range, setRange] = React.useState('week');
+    const [reserve, setReserve] = React.useState(20);
+    const [mode, setMode] = React.useState('Self-use');
+    return (
+      <div className="grid">
+        <div className="stack">
+          <span className="lbl">Segmented control</span>
+          <SegmentedControl options={['Day','Week','Month','Year']} value={range} onChange={setRange} block />
+          <span className="lbl" style={{marginTop:8}}>Switches</span>
+          <Switch label="Battery-first charging" defaultChecked />
+          <Switch label="Grid export limit" />
+          <Switch label="Storm guard (disabled)" disabled />
+        </div>
+        <div className="stack">
+          <span className="lbl">Slider</span>
+          <Slider label="Battery reserve" unit="%" value={reserve} onChange={setReserve} />
+          <Input label="System name" placeholder="Home" icon={I('home')} />
+          <Input label="Export limit" mono suffix="kW" defaultValue="5.0" />
+          <Select label="Charge mode" options={['Self-use','Time-of-use','Backup','Manual']} value={mode} onChange={(e)=>setMode(e.target.value)} />
+        </div>
+      </div>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+  setTimeout(() => window.lucide && window.lucide.createIcons(), 60);
+</script>
+</body>
+</html>

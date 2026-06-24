@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Energy · Dashboard (mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0E14; --surface:#141A24; --surface2:#1C2430; --border:#26303D;
+    --text:#E6EAF0; --muted:#8A95A5;
+    --solar:#F5A623; --battery:#4FC3F7; --grid:#FF6B5E; --ok:#3DD68C; --accent:#7AA2F7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px 24px 32px}
+  /* top bar */
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+  .brand{font-weight:600;font-size:18px;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
+  .brand .bolt{color:var(--solar)}
+  .scenario{background:var(--surface2);border:1px solid var(--border);border-radius:999px;
+    padding:7px 16px;font-size:13px;color:var(--text);display:flex;gap:8px;align-items:center}
+  .scenario .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  .right{display:flex;align-items:center;gap:18px;font-size:13px;color:var(--muted)}
+  .health{display:flex;align-items:center;gap:7px;color:var(--ok)}
+  .health .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  /* layout */
+  .grid{display:grid;grid-template-columns:1fr 320px;gap:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:18px 20px}
+  .card h2{margin:0 0 2px;font-size:13px;font-weight:500;color:var(--muted);letter-spacing:.02em}
+  .flow-wrap{position:relative;min-height:420px;display:flex;flex-direction:column}
+  .flow-wrap svg{width:100%;height:auto;flex:1}
+  .node text{font-family:'Inter',sans-serif}
+  .nlabel{fill:var(--muted);font-size:12px}
+  .nval{fill:var(--text);font-size:19px;font-weight:600}
+  .nsub{fill:var(--muted);font-size:11px}
+  .flow{stroke-dasharray:6 9;stroke-linecap:round;fill:none;animation:dash 1.1s linear infinite}
+  @keyframes dash{to{stroke-dashoffset:-30}}
+  @media (prefers-reduced-motion:reduce){.flow{animation:none}}
+  .col{display:flex;flex-direction:column;gap:16px}
+  /* tiles */
+  .tiles{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .tile{background:var(--surface2);border-radius:14px;padding:14px}
+  .tile .lab{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .tile .val{font-size:24px;font-weight:600;margin-top:6px;letter-spacing:-.02em}
+  .tile .sub{font-size:11px;color:var(--muted);margin-top:2px}
+  .swatch{width:9px;height:9px;border-radius:3px;display:inline-block}
+  .ring{--p:100;width:54px;height:54px;border-radius:50%;
+    background:conic-gradient(var(--battery) calc(var(--p)*1%), #2a3340 0);
+    display:flex;align-items:center;justify-content:center;position:relative}
+  .ring::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--surface2)}
+  .ring span{position:relative;font-size:13px;font-weight:600}
+  .battrow{display:flex;align-items:center;gap:14px}
+  .battrow .meta .n{font-size:14px;font-weight:500}
+  .battrow .meta .s{font-size:11px;color:var(--muted)}
+  /* tariff + today */
+  .band{display:flex;gap:6px;margin-top:10px}
+  .band .seg{flex:1;height:7px;border-radius:3px;background:#2a3340}
+  .band .seg.on{background:var(--solar)}
+  .today{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 16px}
+  .stat .lab{font-size:12px;color:var(--muted)}
+  .stat .val{font-size:22px;font-weight:600;margin-top:4px;letter-spacing:-.02em}
+  .stat .d{font-size:11px;margin-top:3px}
+  .up{color:var(--ok)} .down{color:var(--grid)}
+  .footnote{color:var(--muted);font-size:11px;text-align:center;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span class="bolt">⚡</span> energy<span style="color:var(--muted)">.hirobo.nl</span></div>
+    <div class="scenario"><span class="dot"></span> Scenario · Summer self-consumption</div>
+    <div class="right">
+      <span>Jávea · 16:48</span>
+      <span class="health"><span class="dot"></span> All systems OK</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- POWER FLOW HERO -->
+    <div class="card flow-wrap">
+      <h2>Live power flow</h2>
+      <svg viewBox="0 0 720 400" role="img" aria-label="Live power flow diagram">
+        <!-- flow lines -->
+        <path class="flow" d="M360 70 V150" stroke="#F5A623" stroke-width="3"/>
+        <path class="flow" d="M330 190 H150 V210" stroke="#4FC3F7" stroke-width="2.5"/>
+        <path class="flow" d="M390 190 H570 V210" stroke="#4FC3F7" stroke-width="2.5"/>
+        <path class="flow" d="M360 230 V310" stroke="#3DD68C" stroke-width="3"/>
+        <!-- SOLAR -->
+        <g class="node">
+          <circle cx="360" cy="48" r="30" fill="#1C2430" stroke="#F5A623" stroke-width="1.5"/>
+          <text class="nlabel" x="360" y="14" text-anchor="middle">Solar · 2 arrays</text>
+          <text x="360" y="54" text-anchor="middle" font-size="22" fill="#F5A623">☀</text>
+          <text class="nval" x="360" y="104" text-anchor="middle" fill="#F5A623">11.1 kW</text>
+        </g>
+        <!-- HOUSE (center) -->
+        <g class="node">
+          <rect x="312" y="158" width="96" height="64" rx="14" fill="#1C2430" stroke="#26303D"/>
+          <text x="360" y="190" text-anchor="middle" font-size="20" fill="#E6EAF0">⌂</text>
+          <text class="nval" x="360" y="208" text-anchor="middle" font-size="15">5.5 kW</text>
+          <text class="nsub" x="360" y="240" text-anchor="middle">House load</text>
+        </g>
+        <!-- SONNEN (left) -->
+        <g class="node">
+          <circle cx="120" cy="210" r="30" fill="#1C2430" stroke="#4FC3F7" stroke-width="1.5"/>
+          <text class="nlabel" x="120" y="176" text-anchor="middle">Sonnen</text>
+          <text class="nval" x="120" y="206" text-anchor="middle" font-size="15" fill="#4FC3F7">100%</text>
+          <text class="nsub" x="120" y="224" text-anchor="middle">idle</text>
+          <text class="nsub" x="120" y="256" text-anchor="middle">9.2 kWh</text>
+        </g>
+        <!-- TESLA (right) -->
+        <g class="node">
+          <circle cx="600" cy="210" r="30" fill="#1C2430" stroke="#4FC3F7" stroke-width="1.5"/>
+          <text class="nlabel" x="600" y="176" text-anchor="middle">Tesla · 2× PW3</text>
+          <text class="nval" x="600" y="206" text-anchor="middle" font-size="15" fill="#4FC3F7">100%</text>
+          <text class="nsub" x="600" y="224" text-anchor="middle">idle</text>
+          <text class="nsub" x="600" y="256" text-anchor="middle">27 kWh</text>
+        </g>
+        <!-- GRID (bottom) -->
+        <g class="node">
+          <circle cx="360" cy="340" r="30" fill="#1C2430" stroke="#3DD68C" stroke-width="1.5"/>
+          <text x="360" y="346" text-anchor="middle" font-size="20" fill="#3DD68C">⇅</text>
+          <text class="nval" x="360" y="392" text-anchor="middle" font-size="15" fill="#3DD68C">↑ 5.56 kW</text>
+          <text class="nsub" x="430" y="330" text-anchor="start">Grid · exporting</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- RIGHT COLUMN TILES -->
+    <div class="col">
+      <div class="card">
+        <h2>Now</h2>
+        <div class="tiles">
+          <div class="tile"><div class="lab"><span class="swatch" style="background:var(--solar)"></span>Solar</div><div class="val">11.1 kW</div><div class="sub">2 arrays · 18.2 kWp</div></div>
+          <div class="tile"><div class="lab"><span class="swatch" style="background:#cdd5e0"></span>House</div><div class="val">5.5 kW</div><div class="sub">all-electric</div></div>
+          <div class="tile"><div class="lab"><span class="swatch" style="background:var(--ok)"></span>Grid</div><div class="val" style="color:var(--ok)">↑ 5.56 kW</div><div class="sub">exporting · €0.029/kWh</div></div>
+          <div class="tile"><div class="lab"><span class="swatch" style="background:var(--accent)"></span>Backup</div><div class="val">27 kWh</div><div class="sub">Tesla only · ~16 h</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Batteries</h2>
+        <div class="battrow" style="margin-top:10px">
+          <div class="ring" style="--p:100"><span>100%</span></div>
+          <div class="meta"><div class="n">Sonnen 10</div><div class="s">9.2 kWh · idle · 882 cycles</div></div>
+        </div>
+        <div class="battrow" style="margin-top:14px">
+          <div class="ring" style="--p:100"><span>100%</span></div>
+          <div class="meta"><div class="n">Tesla · 2× PW3</div><div class="s">27 kWh · idle · backup ready</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Tariff band · 2.0TD</h2>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:6px">
+          <div style="font-size:22px;font-weight:600">P2</div>
+          <div style="color:var(--muted);font-size:13px">shoulder · €0.131/kWh</div>
+        </div>
+        <div class="band"><span class="seg"></span><span class="seg on"></span><span class="seg"></span><span class="seg"></span></div>
+        <div style="color:var(--muted);font-size:11px;margin-top:8px">P1 peak 18:00 in 1h 12m → batteries full, none reserved</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TODAY SO FAR -->
+  <div class="today">
+    <div class="stat"><div class="lab">Produced today</div><div class="val">42.3 kWh</div><div class="d up">solar</div></div>
+    <div class="stat"><div class="lab">Self-sufficiency</div><div class="val">68%</div><div class="d up">▲ 4% vs avg</div></div>
+    <div class="stat"><div class="lab">Exported (lost value)</div><div class="val">18.4 kWh</div><div class="d down">€0.53 back vs €3.85 if used</div></div>
+    <div class="stat"><div class="lab">Net cost today</div><div class="val">€1.92</div><div class="d up">▼ 22% vs baseline</div></div>
+  </div>
+
+  <div class="footnote">Mockup · calm dark control-room direction · live values from Tesla Fleet API + Sonnen local API (2026-06-24)</div>
+</div>
+</body>
+</html>

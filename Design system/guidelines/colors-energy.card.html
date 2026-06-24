@@ -1,0 +1,27 @@
+<!-- @dsCard group="Colors" viewport="700x180" name="Energy palette" subtitle="Fixed hues — every flow node reads instantly" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; background: var(--bg-0); }
+  .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .sw { border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-1); }
+  .chip { height: 64px; }
+  .meta { padding: 10px 12px; background: var(--surface-1); }
+  .name { font-size: var(--fs-sm); font-weight: 600; color: var(--text-1); text-transform: capitalize; }
+  .tok { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-2); margin-top: 2px; }
+  .hex { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="sw"><div class="chip" style="background:var(--solar)"></div><div class="meta"><div class="name">Solar</div><div class="tok">--solar</div><div class="hex">#2EE6A0</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--battery)"></div><div class="meta"><div class="name">Battery</div><div class="tok">--battery</div><div class="hex">#38D9F5</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--grid)"></div><div class="meta"><div class="name">Grid</div><div class="tok">--grid</div><div class="hex">#F5A524</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--home)"></div><div class="meta"><div class="name">Home</div><div class="tok">--home</div><div class="hex">#C4A6FF</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ev)"></div><div class="meta"><div class="name">EV</div><div class="tok">--ev</div><div class="hex">#8B8CFF</div></div></div>
+  </div>
+</body>
+</html>

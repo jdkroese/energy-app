@@ -1,0 +1,25 @@
+<!-- @dsCard group="Effects" viewport="700x200" name="Elevation & glow" subtitle="Soft dark-room shadows; glow = live energy" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 28px 24px; background: var(--bg-0); }
+  .row { display: flex; gap: 26px; flex-wrap: wrap; }
+  .item { text-align: center; }
+  .box { width: 120px; height: 76px; background: var(--surface-1); border: 1px solid var(--border-1);
+    border-radius: var(--radius-card); display: grid; place-items: center; }
+  .tok { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); margin-top: 12px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-1)"></div><div class="tok">--shadow-1</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-2)"></div><div class="tok">--shadow-2</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-card)"></div><div class="tok">--shadow-card</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--glow-soft);border-color:rgba(46,230,160,.3)"></div><div class="tok">--glow-soft</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--glow-solar)"></div><div class="tok">--glow-solar</div></div>
+  </div>
+</body>
+</html>

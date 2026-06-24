@@ -1,0 +1,40 @@
+<!-- @dsCard group="Colors" viewport="700x200" name="Neutrals & surfaces" subtitle="Dark control-room canvas, panels & text" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; background: var(--bg-0); }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .sw { border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-1); }
+  .chip { height: 48px; }
+  .meta { padding: 8px 10px; background: var(--surface-1); }
+  .tok { font-family: var(--font-mono); font-size: 10px; color: var(--text-2); }
+  .hex { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); margin-top: 2px; }
+  h4 { font-size: var(--fs-xs); letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin: 0 0 12px; }
+  .blk { margin-top: 18px; }
+  .txtrow { display: flex; gap: 28px; align-items: baseline; }
+  .txt { font-size: 22px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h4>Surfaces (dark)</h4>
+  <div class="grid">
+    <div class="sw"><div class="chip" style="background:var(--bg-0)"></div><div class="meta"><div class="tok">--bg-0</div><div class="hex">#06090B</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--bg-1)"></div><div class="meta"><div class="tok">--bg-1</div><div class="hex">#0A1013</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-1)"></div><div class="meta"><div class="tok">--surface-1</div><div class="hex">#0F1619</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-2)"></div><div class="meta"><div class="tok">--surface-2</div><div class="hex">#141D21</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-3)"></div><div class="meta"><div class="tok">--surface-3</div><div class="hex">#1B262B</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-4)"></div><div class="meta"><div class="tok">--surface-4</div><div class="hex">#233136</div></div></div>
+  </div>
+  <div class="blk">
+    <h4>Text</h4>
+    <div class="txtrow">
+      <span class="txt" style="color:var(--text-1)">Primary <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-3)">--text-1</span></span>
+      <span class="txt" style="color:var(--text-2)">Secondary <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-3)">--text-2</span></span>
+      <span class="txt" style="color:var(--text-3)">Tertiary <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-3)">--text-3</span></span>
+    </div>
+  </div>
+</body>
+</html>

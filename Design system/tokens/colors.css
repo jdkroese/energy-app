@@ -1,0 +1,97 @@
+/* Power Design System — Color tokens
+ * Dark control-room theme is the canonical surface. A light theme is provided
+ * as an opt-in scope ([data-theme="light"]) for daytime / wall-panel use.
+ *
+ * Energy palette is the soul of the brand: every flow node has a fixed hue so
+ * "green = solar" reads instantly across the whole product.
+ */
+:root {
+  /* ---- Base neutrals (dark) ---- */
+  --bg-0: #06090b;          /* app canvas, near-black cool tint */
+  --bg-1: #0a1013;          /* base panel backdrop */
+  --surface-1: #0f1619;     /* card / panel */
+  --surface-2: #141d21;     /* raised panel, popover */
+  --surface-3: #1b262b;     /* hover / active fill */
+  --surface-4: #233136;     /* pressed / strong hover */
+
+  /* ---- Borders & lines ---- */
+  --border-1: rgba(233, 245, 242, 0.08);  /* hairline */
+  --border-2: rgba(233, 245, 242, 0.14);  /* default control border */
+  --border-3: rgba(233, 245, 242, 0.22);  /* strong / focus-adjacent */
+  --grid-line: rgba(233, 245, 242, 0.05);  /* chart gridlines */
+
+  /* ---- Text ---- */
+  --text-1: #e9f5f2;        /* primary */
+  --text-2: #9bb0ad;        /* secondary / labels */
+  --text-3: #5f7672;        /* tertiary / placeholder */
+  --text-disabled: #41534f;
+  --text-inverse: #06090b;  /* on bright accent fills */
+
+  /* ---- Energy palette (fixed semantic hues) ---- */
+  --solar: #2ee6a0;         /* PV production — the brand signature */
+  --solar-dim: #1f9c6e;
+  --battery: #38d9f5;       /* storage */
+  --battery-dim: #2596ad;
+  --grid: #f5a524;          /* grid import / cost */
+  --grid-dim: #b3781a;
+  --home: #c4a6ff;          /* household consumption */
+  --home-dim: #8f72d6;
+  --ev: #8b8cff;            /* EV / vehicle charging */
+  --ev-dim: #6263cc;
+
+  /* ---- Brand accent (alias to solar) ---- */
+  --accent: var(--solar);
+  --accent-dim: var(--solar-dim);
+  --accent-contrast: #06090b;
+
+  /* ---- Semantic ---- */
+  --success: #2ee6a0;
+  --warning: #f5a524;
+  --danger: #ff5d5d;
+  --danger-dim: #b53e3e;
+  --info: #38d9f5;
+
+  /* ---- Tinted glow backgrounds (for soft fills behind metrics) ---- */
+  --solar-wash: rgba(46, 230, 160, 0.12);
+  --battery-wash: rgba(56, 217, 245, 0.12);
+  --grid-wash: rgba(245, 165, 36, 0.12);
+  --home-wash: rgba(196, 166, 255, 0.12);
+  --danger-wash: rgba(255, 93, 93, 0.12);
+
+  /* ---- Semantic surface aliases ---- */
+  --surface-card: var(--surface-1);
+  --surface-raised: var(--surface-2);
+  --surface-app: var(--bg-0);
+  --text-body: var(--text-1);
+  --text-muted: var(--text-2);
+}
+
+/* ---- Light theme (opt-in) ---- */
+[data-theme="light"] {
+  --bg-0: #eef2f1;
+  --bg-1: #e6ecea;
+  --surface-1: #ffffff;
+  --surface-2: #f6f9f8;
+  --surface-3: #eaf0ee;
+  --surface-4: #dde6e3;
+
+  --border-1: rgba(6, 9, 11, 0.08);
+  --border-2: rgba(6, 9, 11, 0.14);
+  --border-3: rgba(6, 9, 11, 0.22);
+  --grid-line: rgba(6, 9, 11, 0.06);
+
+  --text-1: #0c1614;
+  --text-2: #4a5e5a;
+  --text-3: #7d918d;
+  --text-disabled: #aab8b4;
+  --text-inverse: #ffffff;
+
+  --solar-dim: #169063;
+  --battery-dim: #1f8aa3;
+  --grid-dim: #c07f15;
+
+  --solar-wash: rgba(20, 160, 110, 0.1);
+  --battery-wash: rgba(31, 138, 163, 0.1);
+  --grid-wash: rgba(192, 127, 21, 0.1);
+  --home-wash: rgba(124, 96, 200, 0.1);
+}

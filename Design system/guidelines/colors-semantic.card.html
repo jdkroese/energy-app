@@ -1,0 +1,31 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Semantic & washes" subtitle="Status colors reuse the energy hues" -->
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; padding: 22px; background: var(--bg-0); }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .item { display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    background: var(--surface-1); border: 1px solid var(--border-1); border-radius: var(--radius-md); }
+  .dot { width: 30px; height: 30px; border-radius: 9px; flex: none; }
+  .name { font-size: var(--fs-sm); font-weight: 600; color: var(--text-1); }
+  .tok { font-family: var(--font-mono); font-size: 10px; color: var(--text-2); margin-top: 2px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="item"><div class="dot" style="background:var(--success)"></div><div><div class="name">Success</div><div class="tok">--success</div></div></div>
+    <div class="item"><div class="dot" style="background:var(--warning)"></div><div><div class="name">Warning</div><div class="tok">--warning</div></div></div>
+    <div class="item"><div class="dot" style="background:var(--danger)"></div><div><div class="name">Danger</div><div class="tok">--danger</div></div></div>
+    <div class="item"><div class="dot" style="background:var(--info)"></div><div><div class="name">Info</div><div class="tok">--info</div></div></div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <div class="item"><div class="dot" style="background:var(--solar-wash)"></div><div><div class="name">Solar wash</div><div class="tok">--solar-wash</div></div></div>
+    <div class="item"><div class="dot" style="background:var(--battery-wash)"></div><div><div class="name">Battery wash</div><div class="tok">--battery-wash</div></div></div>
+    <div class="item"><div class="dot" style="background:var(--grid-wash)"></div><div><div class="name">Grid wash</div><div class="tok">--grid-wash</div></div></div>
+    <div class="item"><div class="dot" style="background:var(--danger-wash)"></div><div><div class="name">Danger wash</div><div class="tok">--danger-wash</div></div></div>
+  </div>
+</body>
+</html>
