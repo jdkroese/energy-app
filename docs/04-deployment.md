@@ -61,7 +61,43 @@
   grid exporting 5.56 kW (both batteries full mid-afternoon → cheap export, nothing
   left for the P1 evening peak — the core problem to coordinate away).
 
-## Deployment pipeline (TODO)
-- GitHub repo → publish local DEV → LIVE on the VPS (energy.hirobo.nl). Not yet set up.
-- Decide app runtime (likely Node service behind nginx, like app.hirobo.nl) + DB
-  (can reuse the existing Postgres instance or a separate DB).
+## Deployment pipeline (SET UP 2026-06-24)
+**App is live at https://energy.hirobo.nl** (dashboard + API), reading Sonnen
+(over the VPN) and Tesla (cloud).
+
+### Runtime on the VPS
+- **API:** `systemd` service **`energy-api`** runs `node /var/energy/apps/api/dist/index.cjs`
+  as `jdkroese01`, env from **`/opt/energy/.env`** (chmod 600, NOT in git), listening
+  on `127.0.0.1:3002`. `MemoryMax=256M`. Unit: `/etc/systemd/system/energy-api.service`.
+- **Web:** static build served by nginx from **`/var/www/energy`** (owned jdkroese01
+  so CI can rsync; world-readable for www-data).
+- **nginx vhost** `/etc/nginx/sites-available/energy`: serves the SPA, proxies
+  `/api/` → `:3002`, keeps the Tesla `.well-known` key. certbot SSL preserved.
+  (Backup of the pre-app vhost saved alongside as `energy.bak.<ts>`.)
+
+### CI/CD — GitHub Actions (`.github/workflows/deploy.yml`)
+Push to **`main`** → build in CI (the 1 GB VPS OOMs on builds) → rsync artifacts:
+`apps/api/dist` → `/var/energy/apps/api/dist`, `apps/web/dist` → `/var/www/energy`
+(excludes `.well-known`) → `sudo systemctl restart energy-api`.
+
+**Required Actions secrets** (set by `scripts/github-setup.sh`):
+`VPS_HOST=149.210.189.239`, `VPS_USER=jdkroese01`, `VPS_SSH_KEY` = the dedicated CI
+deploy key `~/.ssh/energy_ci_deploy` (its public key is in the VPS `authorized_keys`;
+jdkroese01 has passwordless sudo for the restart). Personal SSH key is NOT used by CI.
+
+### Manual deploy (without CI)
+```bash
+pnpm build
+tar -C apps/api/dist -czf - . | ssh jdkroese01@149.210.189.239 "tar -C /var/energy/apps/api/dist -xzf -"
+tar -C apps/web/dist -czf - . | ssh jdkroese01@149.210.189.239 "tar -C /var/www/energy -xzf -"
+ssh jdkroese01@149.210.189.239 "sudo systemctl restart energy-api"
+```
+
+### One-time provisioning (already done)
+Dirs `/var/energy`, `/opt/energy/.env`; systemd unit; nginx vhost; web-root chown.
+Reproducible via `scripts/setup-vps.sh` + `scripts/{energy-api.service,nginx-energy.conf}`.
+
+### Still open
+- **GitHub repo + secrets:** run `gh auth login` then `bash scripts/github-setup.sh`.
+- **Database:** not yet added (MVP reads live data without persistence). Add Postgres
+  (separate `energy` DB on the existing instance) + Drizzle when history/reporting lands.
