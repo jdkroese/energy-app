@@ -55,6 +55,32 @@ home server. Apps are **not business-critical** (home internet/power acceptable)
 9. **Decommission/repurpose** the VPS once both apps are stable on the mini
    (keep DNS pointers updated).
 
+## ✅ Built & validated on localhost (2026-06-25)
+Mac mini `joris@192.168.1.138` (macOS 15.7.7, M4, 16 GB). Base: Homebrew, Node 26,
+pnpm 11.8; `pmset` no-sleep + auto-restart; **Tailscale** running (pending the
+`mac-mini-energy` approval). All services are **launchd daemons** (RunAtLoad +
+KeepAlive → survive reboot, no login):
+
+| Service (launchd) | What |
+|---|---|
+| `nl.hirobo.postgres` | Postgres 16 (data `/opt/homebrew/var/postgresql@16`; `LC_ALL=en_US.UTF-8` to dodge the macOS "multithreaded" bug) |
+| `nl.hirobo.energy-api` | Energy API on `127.0.0.1:3002`, **Sonnen-only** (no Tesla token → VPS unaffected), state at `~/sites/energy/.data/state.json` |
+| `nl.hirobo.hirobo-api` | Hirobo API on `127.0.0.1:3001`, env at `~/sites/hirobo/artifacts/api-server/.env` (DATABASE_URL → local DB) |
+| `homebrew.mxcl.caddy` (root) | Caddy reverse proxy: `:8080`→energy, `:8081`→hirobo (serve web build + proxy `/api`) |
+
+**Validated** over the LAN: both login pages render (`http://192.168.1.138:8080`,
+`:8081`), APIs respond 200, energy reads the Sonnen directly, Hirobo serves the
+**restored prod DB** (1,765 txns etc.).
+
+### Migration notes / gotchas
+- **DB:** VPS Postgres is **18**, mini is **16** → binary dumps don't restore; used a
+  **plain-SQL** `pg_dump --no-privileges` → `psql` restore (one orphaned FK skipped,
+  harmless). `hirobo` role+db on the mini; fresh local password in `~/sites/hirobo-db.url`.
+- **Frontend build:** pnpm wouldn't pull macOS native binaries (rollup/lightningcss)
+  for Hirobo → **copied the pre-built `dist` from the VPS** instead (static, portable).
+  Energy + the Hirobo *API* build fine on the mini.
+- Repos deployed as clean `git archive HEAD` snapshots to `~/sites/{energy,hirobo}`.
+
 ## Open items
 - [ ] Cloudflare account + move hirobo.nl DNS (needed for the tunnel).
 - [ ] SSH: Remote Login on + key added (in progress) + mini username/IP.
