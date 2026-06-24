@@ -20,12 +20,20 @@ import {
   type PreviewInput,
 } from './routes/scenarios';
 import { getVapidPublic, subscribe } from './routes/push';
+import {
+  getStatus as getControlStatus,
+  setArm,
+  command as controlCommand,
+  applyScenarioToDevices,
+} from './routes/control';
+import { startCoordinator } from './control/coordinator';
+import type { Lever } from './control/guardrails';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
 import { authRouter } from './routes/auth';
-import { requireAuth } from './auth/middleware';
+import { requireAuth, requireAdmin } from './auth/middleware';
 import { bootstrapAdmin } from './auth/users';
-import type { ScenarioDef, AlertStatus } from './store';
+import type { ScenarioDef, AlertStatus, ControlDevice, ControlMode } from './store';
 
 const app = express();
 app.use(express.json());
@@ -127,6 +135,32 @@ app.put(
 app.get('/api/push/vapid-public', wrap(() => getVapidPublic()));
 app.post('/api/push/subscribe', wrap((req) => subscribe((req.body ?? {}) as never)));
 
+// ---- Battery control (REAL device writes) ----
+// status is read-only (any authed user); arm/command/apply are admin-gated.
+app.get('/api/control/status', wrap(() => getControlStatus()));
+app.post(
+  '/api/control/arm',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { armed?: boolean; mode?: string };
+    if (typeof body.armed !== 'boolean') {
+      const e = new Error('armed (boolean) required') as Error & { code?: string };
+      e.code = 'BAD_INPUT';
+      throw e;
+    }
+    return setArm(body.armed, body.mode as ControlMode | undefined);
+  }),
+);
+app.post(
+  '/api/control/command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { device?: string; lever?: string; value?: unknown };
+    return controlCommand(body.device as ControlDevice, body.lever as Lever, body.value);
+  }),
+);
+app.post('/api/control/apply-scenario', requireAdmin, wrap(() => applyScenarioToDevices()));
+
 // Ensure VAPID keys exist on boot (generate + persist if missing).
 try {
   notify.ensureVapid();
@@ -143,6 +177,11 @@ try {
 
 // Start the background alert loop (shadow/read-only — notifications only).
 startAlertLoop();
+
+// Start the battery-control coordinator. It self-gates on armed+auto, so it is
+// INERT on boot (defaults are DISARMED / mode 'off') and commands nothing until
+// an admin explicitly arms it in 'auto'.
+startCoordinator();
 
 app.listen(config.port, config.host, () => {
   console.log(`[energy-api] http://${config.host}:${config.port}  (env=${config.env})`);

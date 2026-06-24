@@ -1,0 +1,268 @@
+// The single, guardrailed write path to the physical batteries. NOTHING else in
+// the app should call the connector write functions directly — everything goes
+// through issue(), which enforces: armed + mode!=='off', fresh live data,
+// guardrail clamps, no-op skip, write, READ-BACK confirm, logging, and a per-lever
+// rate limit. It never throws: any failure is logged + recorded in lastError.
+
+import * as sonnen from '../connectors/sonnen';
+import * as tesla from '../connectors/tesla';
+import * as store from '../store';
+import type { ControlDevice } from '../store';
+import {
+  checkGridImportCap,
+  checkMode,
+  checkSonnenReserve,
+  checkSonnenWatts,
+  checkTeslaGridCharge,
+  checkTeslaReserve,
+  freshnessOk,
+  type ControlSnapshot,
+  type Lever,
+} from './guardrails';
+
+/** ≥60s between writes to the SAME device+lever. */
+const RATE_LIMIT_MS = 60_000;
+const lastWriteAt = new Map<string, number>();
+
+export interface IssueResult {
+  ok: boolean;
+  skipped: boolean;
+  reason: string;
+  from: string | number | null;
+  to: string | number | null;
+}
+
+/**
+ * The value shape depends on the lever:
+ *  - mode:       string ('1'|'2'|'10' for sonnen, 'self_consumption'|... for tesla)
+ *  - reserve:    number (percent)
+ *  - charge/discharge (sonnen only): number (watts)
+ *  - gridExport (tesla only): { enableGridCharge: boolean; exportRule: TeslaExportRule }
+ */
+export type IssueValue =
+  | string
+  | number
+  | { enableGridCharge: boolean; exportRule: tesla.TeslaExportRule };
+
+function key(device: ControlDevice, lever: Lever): string {
+  return `${device}:${lever}`;
+}
+
+function logEntry(
+  device: ControlDevice,
+  lever: Lever,
+  from: string | number | null,
+  to: string | number | null,
+  reason: string,
+  ok: boolean,
+  detail: string,
+): void {
+  store.update((s) => {
+    s.control.log.push({ ts: Date.now(), device, lever, from, to, reason, ok, detail });
+    if (s.control.log.length > 100) s.control.log = s.control.log.slice(-100);
+    s.control.updatedAt = Date.now();
+    if (!ok) s.control.lastError = `${device}.${lever}: ${detail}`;
+  });
+}
+
+function reject(
+  device: ControlDevice,
+  lever: Lever,
+  from: string | number | null,
+  reason: string,
+): IssueResult {
+  logEntry(device, lever, from, null, reason, false, reason);
+  return { ok: false, skipped: false, reason, from, to: null };
+}
+
+function noop(
+  device: ControlDevice,
+  lever: Lever,
+  value: string | number,
+  reason = 'unchanged',
+): IssueResult {
+  logEntry(device, lever, value, value, reason, true, 'unchanged — no write');
+  return { ok: true, skipped: true, reason, from: value, to: value };
+}
+
+/**
+ * Issue ONE guardrailed command. Returns an IssueResult; never throws.
+ * `snap` is the current live snapshot (must be fresh).
+ */
+export async function issue(
+  device: ControlDevice,
+  lever: Lever,
+  value: IssueValue,
+  reason: string,
+  snap: ControlSnapshot,
+): Promise<IssueResult> {
+  try {
+    // (1) Armed + not off + fresh data.
+    const ctrl = store.get().control;
+    if (!ctrl.armed || ctrl.mode === 'off') {
+      return reject(device, lever, null, `not armed (armed=${ctrl.armed}, mode=${ctrl.mode})`);
+    }
+    const fresh = freshnessOk(snap);
+    if (!fresh.ok) return reject(device, lever, null, fresh.reason);
+
+    // (2+3+4+5+6) dispatch per device/lever.
+    if (device === 'tesla') return await issueTesla(lever, value, reason, snap);
+    if (device === 'sonnen') return await issueSonnen(lever, value, reason, snap);
+    return reject(device, lever, null, `unknown device '${device}'`);
+  } catch (e) {
+    const detail = (e as Error).message;
+    logEntry(device, lever, null, null, reason, false, detail);
+    return { ok: false, skipped: false, reason: detail, from: null, to: null };
+  }
+}
+
+function rateLimited(device: ControlDevice, lever: Lever): boolean {
+  const last = lastWriteAt.get(key(device, lever));
+  return last !== undefined && Date.now() - last < RATE_LIMIT_MS;
+}
+
+function markWritten(device: ControlDevice, lever: Lever): void {
+  lastWriteAt.set(key(device, lever), Date.now());
+}
+
+// ---- Tesla ------------------------------------------------------------------
+
+async function issueTesla(
+  lever: Lever,
+  value: IssueValue,
+  reason: string,
+  snap: ControlSnapshot,
+): Promise<IssueResult> {
+  const cur = await tesla.readControlConfig();
+
+  if (lever === 'mode') {
+    const guard = checkMode('tesla', String(value));
+    if (!guard.ok) return reject('tesla', lever, cur.mode, guard.reason);
+    const to = guard.value as tesla.TeslaMode;
+    if (cur.mode === to) return noop('tesla', lever, to);
+    if (rateLimited('tesla', lever)) return reject('tesla', lever, cur.mode, 'rate-limited (<60s)');
+    await tesla.setMode(to);
+    markWritten('tesla', lever);
+    const after = await tesla.readControlConfig();
+    return confirm('tesla', lever, cur.mode, to, after.mode, reason);
+  }
+
+  if (lever === 'reserve') {
+    const guard = checkTeslaReserve(Number(value), snap);
+    if (!guard.ok) return reject('tesla', lever, cur.reservePct, guard.reason);
+    const to = guard.value;
+    if (cur.reservePct === to) return noop('tesla', lever, to);
+    if (rateLimited('tesla', lever)) return reject('tesla', lever, cur.reservePct, 'rate-limited (<60s)');
+    await tesla.setReserve(to);
+    markWritten('tesla', lever);
+    const after = await tesla.readControlConfig();
+    return confirm('tesla', lever, cur.reservePct, to, after.reservePct, reason);
+  }
+
+  if (lever === 'gridExport') {
+    const v = value as { enableGridCharge: boolean; exportRule: tesla.TeslaExportRule };
+    const gc = checkTeslaGridCharge(v.enableGridCharge, snap);
+    if (!gc.ok && v.enableGridCharge) {
+      return reject('tesla', lever, cur.gridChargeAllowed ? 'allowed' : 'blocked', gc.reason);
+    }
+    const enable = gc.value; // false if rejected
+    if (enable) {
+      // Enabling grid-charge adds import; respect the 14 kW cap. Tesla draws up to
+      // its ~5 kW grid-charge rate (no exact-W command), so budget that headroom.
+      const TESLA_GRID_CHARGE_KW = 5;
+      const cap = checkGridImportCap(TESLA_GRID_CHARGE_KW, snap);
+      if (!cap.ok) return reject('tesla', lever, cur.gridChargeAllowed ? 'allowed' : 'blocked', cap.reason);
+    }
+    // disallowCharge is the inverse of "enable grid-charge".
+    const disallow = !enable;
+    const fromStr = `${cur.gridChargeAllowed ? 'gc-on' : 'gc-off'}/${cur.exportRule}`;
+    const toStr = `${enable ? 'gc-on' : 'gc-off'}/${v.exportRule}`;
+    if (cur.gridChargeAllowed === enable && cur.exportRule === v.exportRule) {
+      return noop('tesla', lever, toStr);
+    }
+    if (rateLimited('tesla', lever)) return reject('tesla', lever, fromStr, 'rate-limited (<60s)');
+    await tesla.setGridImportExport(disallow, v.exportRule);
+    markWritten('tesla', lever);
+    const after = await tesla.readControlConfig();
+    const afterStr = `${after.gridChargeAllowed ? 'gc-on' : 'gc-off'}/${after.exportRule}`;
+    return confirm('tesla', lever, fromStr, toStr, afterStr, reason);
+  }
+
+  return reject('tesla', lever, null, `lever '${lever}' not supported on tesla`);
+}
+
+// ---- Sonnen -----------------------------------------------------------------
+
+async function issueSonnen(
+  lever: Lever,
+  value: IssueValue,
+  reason: string,
+  snap: ControlSnapshot,
+): Promise<IssueResult> {
+  const cur = await sonnen.readControlConfig();
+
+  if (lever === 'mode') {
+    const guard = checkMode('sonnen', String(value));
+    if (!guard.ok) return reject('sonnen', lever, cur.mode, guard.reason);
+    const to = guard.value as '1' | '2' | '10';
+    if (cur.mode === to) return noop('sonnen', lever, to);
+    if (rateLimited('sonnen', lever)) return reject('sonnen', lever, cur.mode, 'rate-limited (<60s)');
+    await sonnen.setOperatingMode(to);
+    markWritten('sonnen', lever);
+    const after = await sonnen.readControlConfig();
+    return confirm('sonnen', lever, cur.mode, to, after.mode, reason);
+  }
+
+  if (lever === 'reserve') {
+    const guard = checkSonnenReserve(Number(value));
+    if (!guard.ok) return reject('sonnen', lever, cur.reservePct, guard.reason);
+    const to = guard.value;
+    if (cur.reservePct === to) return noop('sonnen', lever, to);
+    if (rateLimited('sonnen', lever)) return reject('sonnen', lever, cur.reservePct, 'rate-limited (<60s)');
+    await sonnen.setReserve(to);
+    markWritten('sonnen', lever);
+    const after = await sonnen.readControlConfig();
+    return confirm('sonnen', lever, cur.reservePct, to, after.reservePct, reason);
+  }
+
+  if (lever === 'charge' || lever === 'discharge') {
+    const guard = checkSonnenWatts(Number(value), lever, snap);
+    if (!guard.ok) return reject('sonnen', lever, null, guard.reason);
+    // Setpoints require manual mode (EM_OperatingMode=1). Verify, don't force here.
+    if (cur.mode !== '1') {
+      return reject('sonnen', lever, cur.mode, `Sonnen not in manual mode (${cur.mode}) — setpoint skipped`);
+    }
+    if (rateLimited('sonnen', lever)) return reject('sonnen', lever, null, 'rate-limited (<60s)');
+    if (lever === 'charge') await sonnen.forceCharge(guard.value);
+    else await sonnen.forceDischarge(guard.value);
+    markWritten('sonnen', lever);
+    // Setpoints have no clean idempotent read-back key; record the commanded value.
+    logEntry('sonnen', lever, null, guard.value, reason, true, `setpoint ${guard.value}W issued`);
+    return { ok: true, skipped: false, reason, from: null, to: guard.value };
+  }
+
+  return reject('sonnen', lever, null, `lever '${lever}' not supported on sonnen`);
+}
+
+// ---- Read-back confirm ------------------------------------------------------
+
+function confirm(
+  device: ControlDevice,
+  lever: Lever,
+  from: string | number | null,
+  to: string | number,
+  readBack: string | number,
+  reason: string,
+): IssueResult {
+  const ok = String(readBack) === String(to);
+  const detail = ok
+    ? `confirmed ${to}`
+    : `read-back MISMATCH: wanted ${to}, device reports ${readBack}`;
+  logEntry(device, lever, from, readBack, reason, ok, detail);
+  return { ok, skipped: false, reason, from, to: readBack };
+}
+
+/** Clear rate-limit memory — used by revert-to-safe (safety) and tests. */
+export function _resetRateLimits(): void {
+  lastWriteAt.clear();
+}

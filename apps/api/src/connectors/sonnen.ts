@@ -36,6 +36,65 @@ export function getPowermeter(): Promise<unknown> {
   return get('/powermeter');
 }
 
+// ---- Control / write (authenticated) ------------------------------------
+// All write paths require the Auth-Token. Callers MUST guardrail-check first;
+// these functions are dumb transports and do no clamping themselves.
+
+async function put(path: string, body: unknown): Promise<unknown> {
+  const res = await fetch(`${base()}${path}`, {
+    method: 'PUT',
+    headers: { 'Auth-Token': config.sonnen.token, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`Sonnen PUT ${path} -> HTTP ${res.status}`);
+  return res.json().catch(() => ({}));
+}
+
+async function post(path: string): Promise<unknown> {
+  const res = await fetch(`${base()}${path}`, {
+    method: 'POST',
+    headers: { 'Auth-Token': config.sonnen.token },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`Sonnen POST ${path} -> HTTP ${res.status}`);
+  return res.json().catch(() => ({}));
+}
+
+/** Set EM_OperatingMode: '1' manual, '2' self-consumption, '10' time-of-use. */
+export function setOperatingMode(mode: '1' | '2' | '10'): Promise<unknown> {
+  return put('/configurations', { EM_OperatingMode: mode });
+}
+
+/** Set EM_USOC (backup reserve / min SoC, percent as string). */
+export function setReserve(pct: number): Promise<unknown> {
+  return put('/configurations', { EM_USOC: String(Math.round(pct)) });
+}
+
+/** Force charge at exact watts (manual mode only). Caller clamps 0..4600. */
+export function forceCharge(watt: number): Promise<unknown> {
+  return post(`/setpoint/charge/${Math.round(watt)}`);
+}
+
+/** Force discharge at exact watts (manual mode only). Caller clamps 0..4600. */
+export function forceDischarge(watt: number): Promise<unknown> {
+  return post(`/setpoint/discharge/${Math.round(watt)}`);
+}
+
+export interface SonnenConfigRaw {
+  EM_OperatingMode?: number | string;
+  EM_USOC?: number | string;
+}
+
+/** Read-back of the control-relevant config keys (mode + reserve). */
+export async function readControlConfig(): Promise<{ mode: string; reservePct: number }> {
+  const raw = (await getConfigurations()) as SonnenConfigRaw;
+  const m = raw.EM_OperatingMode;
+  const mode = m === undefined ? 'unknown' : String(m);
+  const reservePct = Number(raw.EM_USOC ?? 0);
+  return { mode, reservePct };
+}
+
 // ---- Normalized shape for /api/live -------------------------------------
 
 export interface SonnenStatusRaw {

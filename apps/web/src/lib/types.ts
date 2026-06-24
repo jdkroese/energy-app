@@ -174,6 +174,64 @@ export interface VapidPublicResponse {
 }
 
 /* ============================================================================
+ * Autopilot / battery-control contract (see prompt §backend).
+ * Every arm/command/apply call is cookie-authed AND admin-gated server-side.
+ * ==========================================================================*/
+
+export type ControlMode = 'off' | 'manual' | 'auto';
+
+/** Lever payloads accepted by POST /api/control/command. */
+export type TeslaMode = 'self_consumption' | 'autonomous' | 'backup';
+export type SonnenMode = 'self_consumption' | 'manual' | 'time_of_use';
+
+/** The live, on-device state Power reads back from each battery. */
+export interface ControlCurrent {
+  tesla: {
+    mode: TeslaMode | string;
+    reservePct: number;
+    gridChargeAllowed: boolean;
+    exportRule: string;
+  };
+  sonnen: {
+    mode: SonnenMode | string;
+  };
+}
+
+/** Hard limits the backend always enforces, shown read-only in the UI. */
+export interface ControlGuardrails {
+  socFloorPct: number;
+  teslaReserveMinPct: number;
+  sonnenMaxW: number;
+  gridImportCapKw: number;
+}
+
+/** One row of "what the boss did" — newest first in the response. */
+export interface ControlLogEntry {
+  ts: string;
+  device: 'tesla' | 'sonnen' | string;
+  lever: string;
+  from: string | number | boolean | null;
+  to: string | number | boolean | null;
+  reason: string;
+  ok: boolean;
+  detail?: string | null;
+}
+
+export interface ControlStatus {
+  armed: boolean;
+  mode: ControlMode;
+  lastError: string | null;
+  current: ControlCurrent;
+  guardrails: ControlGuardrails;
+  log: ControlLogEntry[];
+}
+
+/** Lever a manual command can target on each device. */
+export type ControlDevice = 'tesla' | 'sonnen';
+export type ControlLever = 'reserve' | 'mode' | 'gridCharge';
+export type ControlCommandValue = string | number | boolean;
+
+/* ============================================================================
  * Auth contract (see prompt §backend). Cookies carry the session.
  * ==========================================================================*/
 

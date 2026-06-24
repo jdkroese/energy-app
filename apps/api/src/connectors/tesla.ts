@@ -57,6 +57,21 @@ async function apiGet(path: string): Promise<unknown> {
   return json.response ?? json;
 }
 
+async function apiPost(path: string, body: unknown): Promise<unknown> {
+  if (!config.tesla.siteId) throw new Error('TESLA_ENERGY_SITE_ID not set');
+  const token = await accessToken();
+  const url = `${config.tesla.audience}/api/1/energy_sites/${config.tesla.siteId}${path}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`Tesla POST ${path} -> HTTP ${res.status}`);
+  const json = (await res.json()) as { response?: unknown };
+  return json.response ?? json;
+}
+
 /** Live power flow for the energy site (solar/battery/load/grid + SoC). */
 export function getLiveStatus(): Promise<unknown> {
   return memo('tesla.live', 15_000, () => apiGet('/live_status'));
@@ -79,6 +94,65 @@ export function getCalendarHistory(
   return memo(`tesla.hist.${kind}.${period}`, 120_000, () =>
     apiGet(`/calendar_history?kind=${kind}&period=${period}&time_zone=${tz}`),
   );
+}
+
+// ---- Control / write ----------------------------------------------------
+// Policy-level levers only (Tesla has no exact-W command). Callers MUST
+// guardrail-check first. After a write the memoized site_info is stale, so
+// readControlConfig() does an UNCACHED /site_info fetch for confirmation.
+
+export type TeslaMode = 'self_consumption' | 'autonomous' | 'backup';
+export type TeslaExportRule = 'pv_only' | 'battery_ok' | 'never';
+
+/** Set default_real_mode (self_consumption | autonomous | backup). */
+export function setMode(mode: TeslaMode): Promise<unknown> {
+  return apiPost('/operation', { default_real_mode: mode });
+}
+
+/** Set backup_reserve_percent (0..100). Caller clamps. */
+export function setReserve(pct: number): Promise<unknown> {
+  return apiPost('/backup', { backup_reserve_percent: Math.round(pct) });
+}
+
+/** Set grid-charge enable + export rule in one call. */
+export function setGridImportExport(
+  disallowCharge: boolean,
+  exportRule: TeslaExportRule,
+): Promise<unknown> {
+  return apiPost('/grid_import_export', {
+    disallow_charge_from_grid_with_solar_installed: disallowCharge,
+    customer_preferred_export_rule: exportRule,
+  });
+}
+
+export interface TeslaControlConfig {
+  mode: string;
+  reservePct: number;
+  /** true when grid-charging is allowed (disallow flag is false). */
+  gridChargeAllowed: boolean;
+  exportRule: string;
+}
+
+interface TeslaSiteInfoControlRaw extends TeslaSiteInfoRaw {
+  disallow_charge_from_grid_with_solar_installed?: boolean;
+  components?: { customer_preferred_export_rule?: string; disallow_charge_from_grid_with_solar_installed?: boolean };
+}
+
+/** UNCACHED /site_info read of the control-relevant settings, for read-back. */
+export async function readControlConfig(): Promise<TeslaControlConfig> {
+  const info = (await apiGet('/site_info')) as TeslaSiteInfoControlRaw;
+  const exportRule =
+    info.customer_preferred_export_rule ?? info.components?.customer_preferred_export_rule ?? 'unknown';
+  const disallow =
+    info.disallow_charge_from_grid_with_solar_installed ??
+    info.components?.disallow_charge_from_grid_with_solar_installed ??
+    false;
+  return {
+    mode: info.default_real_mode ?? 'unknown',
+    reservePct: typeof info.backup_reserve_percent === 'number' ? info.backup_reserve_percent : 0,
+    gridChargeAllowed: !disallow,
+    exportRule,
+  };
 }
 
 // ---- Normalized shapes --------------------------------------------------

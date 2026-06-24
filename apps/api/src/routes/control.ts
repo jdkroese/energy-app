@@ -1,0 +1,107 @@
+// Battery-control HTTP surface. All handlers require auth (mounted after the
+// requireAuth gate); arm/command/apply are additionally admin-gated at the route.
+
+import * as sonnen from '../connectors/sonnen';
+import * as tesla from '../connectors/tesla';
+import * as store from '../store';
+import type { ControlDevice, ControlMode } from '../store';
+import { issue, type IssueValue } from '../control/execute';
+import { applyActiveScenario, revertToSafe } from '../control/coordinator';
+import { takeSnapshot } from '../control/snapshot';
+import type { Lever } from '../control/guardrails';
+
+function badInput(msg: string): Error & { code: string } {
+  const e = new Error(msg) as Error & { code: string };
+  e.code = 'BAD_INPUT';
+  return e;
+}
+
+/** Current arm state + device read-back + guardrails + log. */
+export async function getStatus(): Promise<unknown> {
+  const ctrl = store.get().control;
+  const [tRes, sRes] = await Promise.allSettled([
+    tesla.readControlConfig(),
+    sonnen.readControlConfig(),
+  ]);
+  const t = tRes.status === 'fulfilled' ? tRes.value : null;
+  const s = sRes.status === 'fulfilled' ? sRes.value : null;
+
+  return {
+    ts: new Date().toISOString(),
+    armed: ctrl.armed,
+    mode: ctrl.mode,
+    lastError: ctrl.lastError,
+    current: {
+      tesla: t
+        ? {
+            mode: t.mode,
+            reservePct: t.reservePct,
+            gridChargeAllowed: t.gridChargeAllowed,
+            exportRule: t.exportRule,
+          }
+        : { offline: true },
+      sonnen: s ? { mode: s.mode } : { offline: true },
+    },
+    guardrails: ctrl.guardrails,
+    log: ctrl.log.slice(-100),
+  };
+}
+
+/** Set arm state. Disarming (or mode->'off') triggers revert-to-safe. */
+export async function setArm(armed: boolean, mode?: ControlMode): Promise<unknown> {
+  const validModes: ControlMode[] = ['off', 'manual', 'auto'];
+  const nextMode: ControlMode = mode && validModes.includes(mode) ? mode : armed ? 'manual' : 'off';
+
+  const disarming = !armed || nextMode === 'off';
+
+  if (disarming) {
+    // revertToSafe handles the writes and forces the store to DISARMED/off.
+    await revertToSafe('disarm: revert-to-safe');
+  } else {
+    store.update((st) => {
+      st.control.armed = true;
+      st.control.mode = nextMode;
+      st.control.updatedAt = Date.now();
+      st.control.lastError = null;
+    });
+  }
+  return getStatus();
+}
+
+/** One guardrailed manual command. */
+export async function command(
+  device: ControlDevice,
+  lever: Lever,
+  rawValue: unknown,
+): Promise<unknown> {
+  if (device !== 'sonnen' && device !== 'tesla') throw badInput('device must be sonnen|tesla');
+  const levers: Lever[] = ['mode', 'reserve', 'charge', 'discharge', 'gridExport'];
+  if (!levers.includes(lever)) throw badInput(`lever must be one of ${levers.join('|')}`);
+
+  let value: IssueValue;
+  if (lever === 'gridExport') {
+    const v = (rawValue ?? {}) as { enableGridCharge?: boolean; exportRule?: string };
+    const exportRule = (v.exportRule ?? 'pv_only') as tesla.TeslaExportRule;
+    value = { enableGridCharge: Boolean(v.enableGridCharge), exportRule };
+  } else if (lever === 'mode') {
+    value = String(rawValue);
+  } else {
+    value = Number(rawValue);
+    if (Number.isNaN(value)) throw badInput('value must be a number');
+  }
+
+  const snap = await takeSnapshot();
+  const result = await issue(device, lever, value, 'manual command', snap);
+  return { ts: new Date().toISOString(), result };
+}
+
+/** Push the ACTIVE scenario's target settings to the devices. Requires armed+!off. */
+export async function applyScenarioToDevices(): Promise<unknown> {
+  const ctrl = store.get().control;
+  if (!ctrl.armed || ctrl.mode === 'off') {
+    throw badInput('control is disarmed — arm (mode manual|auto) before applying a scenario');
+  }
+  const snap = await takeSnapshot();
+  await applyActiveScenario(snap, 'apply-scenario');
+  return getStatus();
+}

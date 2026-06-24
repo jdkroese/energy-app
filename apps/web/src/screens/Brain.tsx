@@ -4,6 +4,7 @@ import { MOCK_PLAN } from '../lib/mock';
 import type { BrainPlanResponse } from '../lib/types';
 import { Card, StatTile, Badge, Eyebrow, Icon } from '../components/ui';
 import { PlanTimeline } from '../components/energy/PlanTimeline';
+import { Autopilot } from './Autopilot';
 import { StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
 
@@ -47,13 +48,25 @@ export function Brain({ ctx }: { ctx: ShellContext }) {
     <div style={wide ? undefined : { padding: '8px 0 22px' }}>
       {!wide && (
         <div style={{ padding: '12px 18px 12px' }}>
-          <Eyebrow>Energy brain</Eyebrow>
-          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>Today's plan</h1>
+          <Eyebrow>Live control</Eyebrow>
+          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>Autopilot</h1>
         </div>
       )}
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, padding: wide ? 0 : '8px 14px 0', maxWidth: 1200, margin: '0 auto', width: '100%' }}>
+        {/* LIVE control — armed-state battery commands (distinct from the shadow plan below) */}
+        <Autopilot wide={wide} />
+
+        {/* divider between live control and the advisory plan */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
+          <div style={{ height: 1, flex: 1, background: 'var(--border-1)' }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>
+            <Icon name="eye" size={14} color="var(--battery)" /> Advisory plan
+          </span>
+          <div style={{ height: 1, flex: 1, background: 'var(--border-1)' }} />
+        </div>
+
         {/* shadow-mode note */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--battery-wash)', fontSize: 12.5, lineHeight: 1.45 }}>
           <Icon name="eye" size={15} color="var(--battery)" />

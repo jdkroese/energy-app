@@ -166,6 +166,44 @@ export interface AuthState {
   loginAttempts: Record<string, LoginAttempt>;
 }
 
+// ---- Battery control --------------------------------------------------------
+
+export type ControlMode = 'off' | 'manual' | 'auto';
+export type ControlDevice = 'sonnen' | 'tesla';
+
+export interface ControlLogEntry {
+  ts: number;
+  device: ControlDevice;
+  lever: string;
+  from: string | number | null;
+  to: string | number | null;
+  reason: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface ControlGuardrails {
+  /** Never discharge a battery below this SoC (%). */
+  socFloorPct: number;
+  /** Tesla backup_reserve_percent floor (%). */
+  teslaReserveMinPct: number;
+  /** Sonnen setpoint ceiling (W). */
+  sonnenMaxW: number;
+  /** Hard grid-import cap (kW). */
+  gridImportCapKw: number;
+}
+
+export interface ControlState {
+  /** Master safety switch — DISARMED by default; nothing is ever written until armed. */
+  armed: boolean;
+  mode: ControlMode;
+  updatedAt: number;
+  lastError: string | null;
+  /** Ring buffer of the last 100 control actions. */
+  log: ControlLogEntry[];
+  guardrails: ControlGuardrails;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -178,6 +216,7 @@ export interface StoreSchema {
   /** alert id -> first-seen epoch ms, for notification dedupe. */
   seenAlerts: Record<string, number>;
   auth: AuthState;
+  control: ControlState;
 }
 
 // ---- Defaults -----------------------------------------------------------
@@ -245,6 +284,23 @@ export const DEFAULT_SCENARIOS: Record<string, ScenarioDef> = {
   },
 };
 
+/** DISARMED, mode 'off' — the safe default. Nothing is written until armed. */
+export function defaultControl(): ControlState {
+  return {
+    armed: false,
+    mode: 'off',
+    updatedAt: Date.now(),
+    lastError: null,
+    log: [],
+    guardrails: {
+      socFloorPct: 10,
+      teslaReserveMinPct: 15,
+      sonnenMaxW: 4600,
+      gridImportCapKw: 14,
+    },
+  };
+}
+
 function defaults(): StoreSchema {
   return {
     channels: {
@@ -261,6 +317,7 @@ function defaults(): StoreSchema {
     teslaRefreshToken: null,
     seenAlerts: {},
     auth: defaultAuth(),
+    control: defaultControl(),
   };
 }
 
@@ -319,6 +376,24 @@ function hydrate(raw: unknown): StoreSchema {
     teslaRefreshToken: p.teslaRefreshToken ?? base.teslaRefreshToken,
     seenAlerts: p.seenAlerts ?? base.seenAlerts,
     auth: hydrateAuth(p.auth, base.auth),
+    control: hydrateControl(p.control, base.control),
+  };
+}
+
+/**
+ * Rehydrate the control section. SAFETY: a fresh process always boots DISARMED in
+ * mode 'off' regardless of what was persisted — the coordinator must never resume
+ * issuing commands without an explicit re-arm. Guardrails + log are preserved.
+ */
+function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState): ControlState {
+  if (!p || typeof p !== 'object') return base;
+  return {
+    armed: false,
+    mode: 'off',
+    updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
+    lastError: typeof p.lastError === 'string' ? p.lastError : null,
+    log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
+    guardrails: { ...base.guardrails, ...(p.guardrails ?? {}) },
   };
 }
 

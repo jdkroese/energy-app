@@ -1,5 +1,7 @@
 import { config } from '../config';
 import * as store from '../store';
+import { applyActiveScenario } from '../control/coordinator';
+import { takeSnapshot } from '../control/snapshot';
 
 // Scenarios are now persisted in the store (definitions + active selection).
 
@@ -41,6 +43,24 @@ export function applyScenario(id: string): unknown {
   store.update((s) => {
     s.activeScenario = id;
   });
+
+  // If control is armed, also push the newly-active scenario to the devices.
+  // Best-effort + fully detached: each issue() logs its own outcome and never
+  // throws, so this can never break the (read-only) scenario-selection response.
+  const ctrl = store.get().control;
+  if (ctrl.armed && ctrl.mode !== 'off') {
+    void (async () => {
+      try {
+        const snap = await takeSnapshot();
+        await applyActiveScenario(snap, `scenario->${id}`);
+      } catch (e) {
+        store.update((s) => {
+          s.control.lastError = `apply-on-select failed: ${(e as Error).message}`;
+        });
+      }
+    })();
+  }
+
   return { ts: new Date().toISOString(), active: id };
 }
 

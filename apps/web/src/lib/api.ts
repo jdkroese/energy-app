@@ -4,6 +4,11 @@ import type {
   BrainPlanResponse,
   Channels,
   ChannelType,
+  ControlCommandValue,
+  ControlDevice,
+  ControlLever,
+  ControlMode,
+  ControlStatus,
   CreateUserResponse,
   HistoryResponse,
   LiveResponse,
@@ -126,6 +131,16 @@ export const api = {
   vapidPublic: () => getJSON<VapidPublicResponse>('/api/push/vapid-public'),
   pushSubscribe: (subscription: PushSubscriptionJSON) =>
     postJSON<{ ok: boolean }>('/api/push/subscribe', { subscription }),
+
+  /* ---- Autopilot / live battery control (arm/command/apply are admin) ---- */
+  control: {
+    status: () => getJSON<ControlStatus>('/api/control/status'),
+    arm: (armed: boolean, mode: ControlMode) =>
+      postJSON<ControlStatus>('/api/control/arm', { armed, mode }),
+    command: (device: ControlDevice, lever: ControlLever, value: ControlCommandValue) =>
+      postJSON<ControlStatus>('/api/control/command', { device, lever, value }),
+    applyScenario: () => postJSON<ControlStatus>('/api/control/apply-scenario', {}),
+  },
 };
 
 /* ---- Auth API -------------------------------------------------------------
