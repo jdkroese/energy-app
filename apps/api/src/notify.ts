@@ -165,7 +165,7 @@ export async function sendEmail(to: string, subject: string, text: string): Prom
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'Power <noreply@energy.hirobo.nl>',
+        from: process.env.EMAIL_FROM ?? 'Power <noreply@hirobo.nl>',
         to: [to],
         subject,
         text,

@@ -52,6 +52,11 @@ async function tick(): Promise<void> {
         const text = `⚡ ${a.title}\n${body}\n(${a.device})`;
         tasks.push(notify.sendWhatsApp(channels.whatsapp.number, text));
       }
+      if (channels.email.enabled && channels.email.address) {
+        tasks.push(
+          notify.sendEmail(channels.email.address, `Power alert: ${a.title}`, `${a.title}\n${body}\n(${a.device})`),
+        );
+      }
 
       // Best-effort; failures inside notify are already swallowed there.
       await Promise.allSettled(tasks);

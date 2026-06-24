@@ -30,6 +30,15 @@ breaks email. Auto-scan imports the A + MX but usually **drops the TXT + CNAMEs*
 (SPF, MS=, the two x-transip-mail-auth, DMARC, autoconfig, autodiscover, 3 DKIM) —
 add those by hand. Verify by querying the assigned Cloudflare NS before NS switch.
 
+## ✅ Status (2026-06-24)
+Cloudflare zone **configured via API + verified**: all **14 records present**, every
+one **DNS-only (un-proxied)**; querying Cloudflare's NS (`celeste`/`trevor`) returns
+identical answers to TransIP for MX, SPF, MS=, DMARC, x-transip-mail-auth×2,
+autodiscover, autoconfig, 3× DKIM, www, energy, root. Zone status: **pending** (NS
+not switched). **Assigned Cloudflare NS: `celeste.ns.cloudflare.com`,
+`trevor.ns.cloudflare.com`.** Next: switch NS at TransIP. (API token still needed to
+add the tunnel CNAME later — revoke after.)
+
 ## Migration steps
 1. **Add hirobo.nl** to the user's Cloudflare account → Cloudflare auto-scans &
    imports records. **Set all records DNS-only (gray cloud)** initially to match
