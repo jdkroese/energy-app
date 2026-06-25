@@ -56,6 +56,10 @@ let path: string | null = null;
 
 function historyPath(): string {
   if (process.env.HISTORY_5M_FILE) return process.env.HISTORY_5M_FILE;
+  // Co-locate with the state file so it lands in the same writable data dir.
+  // (The mini sets STATE_FILE to ~/sites/energy/.data; /opt/energy is VPS-only
+  // and doesn't exist there — writing it failed silently, losing all history.)
+  if (process.env.STATE_FILE) return resolve(dirname(process.env.STATE_FILE), 'history-5m.json');
   if (process.env.NODE_ENV === 'production') return '/opt/energy/history-5m.json';
   // repoRoot = two levels up from apps/api/src.
   const repoRoot = resolve(__dirname, '..', '..', '..');

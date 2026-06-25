@@ -366,6 +366,13 @@ startCoordinator();
 // writes nothing until an admin arms it AND an automation is enabled in 'auto'.
 startClimateCoordinator();
 
+// Background 5-minute sampler for the Live day chart. getLive() records the live
+// snapshot into history5m, so the day fills continuously even when no client is
+// polling /api/live (otherwise the chart only has data while the app is open).
+const SAMPLE_MS = 5 * 60 * 1000;
+setTimeout(() => void getLive().catch(() => {}), 10_000); // one shortly after boot
+setInterval(() => void getLive().catch(() => {}), SAMPLE_MS);
+
 const server = app.listen(config.port, config.host, () => {
   console.log(`[energy-api] http://${config.host}:${config.port}  (env=${config.env})`);
 });
