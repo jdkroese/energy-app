@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { Schedule, SchedulesResponse, DevicesResponse, ClimateMode } from '../lib/types';
@@ -184,12 +185,24 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
   const { data: devData } = usePolling<DevicesResponse>(api.devices.list, 0);
   const [editing, setEditing] = useState<Schedule | 'new' | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
 
   const schedules = data?.schedules ?? [];
   const deviceOptions = (devData?.devices ?? []).map((d) => ({ id: d.id, name: d.name }));
   const deviceNames: Record<string, string> = {};
   for (const d of devData?.devices ?? []) deviceNames[d.id] = d.name;
   const active = schedules.find((s) => s.id === activeId) ?? schedules[0] ?? null;
+
+  // Deep-link from a device page: ?new=1 opens the creator; ?edit=<id> opens that editor.
+  useEffect(() => {
+    if (params.get('new') != null) { setEditing('new'); setParams({}, { replace: true }); return; }
+    const editId = params.get('edit');
+    if (editId && schedules.length) {
+      const s = schedules.find((x) => x.id === editId);
+      if (s) { setActiveId(s.id); setEditing(s); setParams({}, { replace: true }); }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params, schedules.length]);
 
   const saveNew = async (s: Partial<Schedule>) => { await api.schedules.create(s); setEditing(null); refetch(); };
   const saveEdit = async (id: string, s: Partial<Schedule>) => { await api.schedules.update(id, s); setEditing(null); refetch(); };

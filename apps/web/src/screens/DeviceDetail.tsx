@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, Schedule } from '../lib/types';
+import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, Schedule, DevicesStatus, ControlMode } from '../lib/types';
 import { Card, Icon, Button, IconButton, Switch } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -56,6 +56,10 @@ const accentFor = (m: string): string => (m === 'heat' ? 'var(--grid)' : m === '
 
 const eyebrow: CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' };
 
+// Weekday chips: display Mon..Sun; store days are 0=Sun..6=Sat.
+const DAY_ABBR = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+const ROW_TO_STORE = [1, 2, 3, 4, 5, 6, 0];
+
 export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
@@ -63,17 +67,33 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const isAdmin = user?.role === 'admin';
   const wide = ctx.desktop;
   const { data, loading, stale, updatedAt, refetch } = usePolling<DeviceDetailResponse>(() => api.devices.detail(id ?? ''), 15_000, [id]);
+  const { data: dstatus, refetch: refetchStatus } = usePolling<DevicesStatus>(() => api.devices.status(), 15_000);
   const [busy, setBusy] = useState(false);
+  const [arming, setArming] = useState(false);
+  const [cmdErr, setCmdErr] = useState<string | null>(null);
   const [pendingSetpoint, setPendingSetpoint] = useState<number | null>(null);
   const [pendingFan, setPendingFan] = useState<number | null>(null);
 
   const dev = data?.device ?? null;
+  const armed = dstatus?.armed ?? false;
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
-    try { await fn(); } catch { /* keep last-good */ } finally { setBusy(false); setPendingSetpoint(null); refetch(); }
+    try { await fn(); } catch { /* keep last-good */ } finally { setBusy(false); setPendingSetpoint(null); setPendingFan(null); refetch(); }
   };
-  const cmd = (lever: ClimateLever, value: boolean | number | string) => run(() => api.devices.command(id ?? '', lever, value));
+  // A device command replies { result: { ok, reason } } — surface a rejection
+  // (e.g. "not armed", a guardrail clamp) instead of silently reverting.
+  const cmd = (lever: ClimateLever, value: boolean | number | string) =>
+    run(async () => {
+      const res = (await api.devices.command(id ?? '', lever, value)) as { result?: { ok?: boolean; reason?: string } };
+      setCmdErr(res?.result?.ok === false ? res.result.reason ?? 'Command was rejected' : null);
+    });
+  const armDevices = (on: boolean) => {
+    setArming(true);
+    setCmdErr(null);
+    api.devices.arm(on, on ? 'manual' : 'off').catch(() => {}).finally(() => { setArming(false); refetchStatus(); refetch(); });
+  };
+  const toggleSchedule = (sid: string, enabled: boolean) => run(() => api.schedules.update(sid, { enabled }));
 
   if (!dev) {
     return (
@@ -88,7 +108,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   }
 
   const ac = dev as DeviceView & AcExtras;
-  const canWrite = isAdmin;
+  const canConfig = isAdmin;            // schedule / solar / settings toggles (persisted config)
+  const canWrite = isAdmin && armed;    // live device commands require arming
   const accent = accentFor(dev.mode);
   const setpoint = pendingSetpoint ?? dev.setpointC ?? 24;
   const lo = Math.max(16, dev.minSetpointC ?? 16, dev.comfortFloorC ?? 16);
@@ -130,6 +151,17 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       </div>
 
       {stale && <StaleBanner updatedAt={updatedAt} />}
+
+      {/* ARM STATE — live commands only reach the unit when control is armed */}
+      {isAdmin && (
+        <ArmBanner armed={armed} mode={dstatus?.mode} busy={arming} onArm={() => armDevices(true)} onDisarm={() => armDevices(false)} />
+      )}
+      {cmdErr && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.22)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
+          <Icon name="alert-triangle" size={14} color="var(--grid)" />
+          <span>Couldn&apos;t send — {cmdErr}{!armed ? ' · arm control above first' : ''}.</span>
+        </div>
+      )}
 
       {/* SETPOINT + AMBIENT */}
       <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1.1fr' : '1fr', gap: 12 }}>
@@ -230,22 +262,31 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         </Banner>
       )}
 
-      {/* AUTOMATION */}
-      <Banner icon="zap" tone={dev.automationEnabled ? 'solar' : 'surface'} iconColor={dev.automationEnabled ? 'var(--solar)' : 'var(--text-3)'}>
-        <span style={{ fontWeight: 600 }}>Solar-surplus pre-cool</span>
-        <span style={{ color: 'var(--text-2)' }}> {dev.automationEnabled ? 'may drive this unit' : 'is excluded from this unit'}</span>
-        <BannerAction disabled={!canWrite || busy} onClick={() => toggleAutomation(!dev.automationEnabled)}>{dev.automationEnabled ? 'Exclude' : 'Include'}</BannerAction>
-      </Banner>
+      {/* SOLAR-SURPLUS COOLING — per-unit opt-in for surplus-driven pre-cooling */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'rgba(46,230,160,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
+        <Icon name="zap" size={17} color={dev.automationEnabled ? 'var(--solar)' : 'var(--text-3)'} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Solar-surplus cooling</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{dev.automationEnabled ? 'Uses excess solar to pre-cool this unit' : 'This unit is excluded from surplus cooling'}</div>
+        </div>
+        <Switch checked={dev.automationEnabled} disabled={!canConfig || busy} onChange={(e) => toggleAutomation(e.target.checked)} />
+      </div>
 
-      {/* SCHEDULE */}
-      <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {/* SCHEDULE — per-schedule timeline, weekdays, active toggle + edit link */}
+      <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 4 }}>
           <Icon name="calendar-clock" size={16} color="var(--text-2)" />
           <span style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>This unit&apos;s schedule</span>
-          <button type="button" onClick={() => nav('/schedules')} style={{ fontSize: 11.5, color: 'var(--solar)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>+ Add</button>
+          <button type="button" onClick={() => nav('/schedules?new=1')} style={{ fontSize: 11.5, color: 'var(--solar)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>+ Add</button>
         </div>
-        <ScheduleTimeline schedules={unitSchedules} />
-        <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{scheduleCaption(unitSchedules, dev)}</div>
+        {unitSchedules.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '2px 0 6px' }}>{scheduleCaption(unitSchedules, dev)}</div>
+        ) : (
+          unitSchedules.map((s) => (
+            <ScheduleRow key={s.id} s={s} canConfig={canConfig} busy={busy}
+              onToggle={(en) => toggleSchedule(s.id, en)} onEdit={() => nav(`/schedules?edit=${s.id}`)} />
+          ))
+        )}
       </Card>
 
       {/* CONFIG & SERVICE */}
@@ -286,7 +327,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         <MetaTile label="Signal" value={ac.signal ? cap(ac.signal) : (dev.online ? 'Online' : '—')} valueColor={ac.signal === 'weak' ? 'var(--grid)' : dev.online ? 'var(--solar)' : 'var(--text-3)'} />
       </div>
 
-      {!canWrite && <div style={{ fontSize: 11.5, color: 'var(--grid)', textAlign: 'center' }}>Read-only — only an admin can command devices, and control must be armed.</div>}
+      {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--grid)', textAlign: 'center' }}>Read-only — only an admin can command this unit.</div>}
     </div>
   );
 }
@@ -357,18 +398,65 @@ function VaneCard({ title, value, disabled }: { title: string; value?: number | 
   );
 }
 
-function ScheduleTimeline({ schedules }: { schedules: Schedule[] }) {
+function ArmBanner({ armed, mode, busy, onArm, onDisarm }: {
+  armed: boolean; mode?: ControlMode; busy: boolean; onArm: () => void; onDisarm: () => void;
+}) {
+  if (armed) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.2)', borderRadius: 'var(--radius-lg)', padding: '9px 13px' }}>
+        <Icon name="shield-check" size={16} color="var(--solar)" />
+        <div style={{ flex: 1, fontSize: 12, minWidth: 0 }}>
+          <span style={{ fontWeight: 600, color: 'var(--solar)' }}>Live control armed</span>
+          <span style={{ color: 'var(--text-3)' }}> · {mode ?? 'manual'} — controls reach the unit</span>
+        </div>
+        <button type="button" disabled={busy} onClick={onDisarm} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: '5px 11px', cursor: busy ? 'default' : 'pointer', fontWeight: 600 }}>Disarm</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.25)', borderRadius: 'var(--radius-lg)', padding: '9px 13px' }}>
+      <Icon name="shield-off" size={16} color="var(--grid)" />
+      <div style={{ flex: 1, fontSize: 12, minWidth: 0 }}>
+        <span style={{ fontWeight: 600, color: 'var(--grid)' }}>Live control is disarmed</span>
+        <span style={{ color: 'var(--text-2)' }}> — these controls won&apos;t reach the unit yet</span>
+      </div>
+      <Button size="sm" variant="primary" loading={busy} iconLeft={<Icon name="power" size={14} />} onClick={onArm}>Arm</Button>
+    </div>
+  );
+}
+
+function ScheduleRow({ s, canConfig, busy, onToggle, onEdit }: {
+  s: Schedule; canConfig: boolean; busy: boolean; onToggle: (enabled: boolean) => void; onEdit: () => void;
+}) {
   const frac = (hhmm: string): number => {
     const [h, m] = hhmm.split(':').map(Number);
     return Math.min(1, Math.max(0, ((h || 0) + (m || 0) / 60) / 24));
   };
+  const a = frac(s.start); const b = frac(s.end);
+  const left = Math.min(a, b) * 100; const width = Math.max(2, Math.abs(b - a) * 100);
+  const dim = !s.enabled;
   return (
-    <div style={{ position: 'relative', height: 22, borderRadius: 'var(--radius-md)', background: 'var(--surface-1)', border: '1px solid var(--border-1)', overflow: 'hidden' }}>
-      {schedules.filter((s) => s.enabled).map((s, i) => {
-        const a = frac(s.start); const b = frac(s.end);
-        const left = Math.min(a, b) * 100; const width = Math.max(2, Math.abs(b - a) * 100);
-        return <div key={s.id ?? i} title={`${s.name} ${s.start}–${s.end}`} style={{ position: 'absolute', top: 4, bottom: 4, left: `${left}%`, width: `${width}%`, borderRadius: 4, background: 'var(--solar)', opacity: 0.55 }} />;
-      })}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 0', borderTop: '1px solid var(--border-1)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+          <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.start}–{s.end} · {cap(s.mode)} {s.setpointC}°</div>
+        </div>
+        <button type="button" aria-label="Edit schedule" onClick={onEdit} style={{ display: 'grid', placeItems: 'center', width: 30, height: 30, flex: 'none', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: 'var(--text-2)', cursor: 'pointer' }}>
+          <Icon name="pencil" size={14} />
+        </button>
+        <Switch checked={s.enabled} disabled={!canConfig || busy} onChange={(e) => onToggle(e.target.checked)} />
+      </div>
+      <div style={{ display: 'flex', gap: 5, opacity: dim ? 0.55 : 1 }}>
+        {DAY_ABBR.map((l, row) => {
+          const on = s.days.includes(ROW_TO_STORE[row]);
+          return <span key={row} style={{ width: 24, height: 22, flex: 'none', borderRadius: 6, display: 'grid', placeItems: 'center', fontSize: 10.5, fontWeight: 600, background: on ? 'var(--solar-wash)' : 'var(--surface-1)', color: on ? 'var(--solar)' : 'var(--text-3)', border: `1px solid ${on ? 'transparent' : 'var(--border-1)'}` }}>{l}</span>;
+        })}
+      </div>
+      <div style={{ position: 'relative', height: 16, borderRadius: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', overflow: 'hidden', opacity: dim ? 0.4 : 1 }}>
+        {[25, 50, 75].map((p) => <div key={p} style={{ position: 'absolute', top: 0, bottom: 0, left: `${p}%`, width: 1, background: 'var(--border-1)' }} />)}
+        <div title={`${s.start}–${s.end}`} style={{ position: 'absolute', top: 3, bottom: 3, left: `${left}%`, width: `${width}%`, borderRadius: 3, background: 'var(--solar)', opacity: 0.6 }} />
+      </div>
     </div>
   );
 }
