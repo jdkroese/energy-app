@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationStatus, OtpChannel, SettingsResponse, SessionsResponse, UserRole, AuthUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, UserRole, AuthUser } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
@@ -145,7 +145,7 @@ const CONN_INFO: Record<string, { desc: string; setup: string }> = {
 };
 
 /** Read-only info panel for a server-managed connection. */
-function ConnectionInfo({ conn, ok }: { conn: SettingsResponse['connections'][number]; ok: boolean }) {
+function ConnectionInfo({ conn, ok, note = 'Managed automatically — nothing to configure here.' }: { conn: SettingsResponse['connections'][number]; ok: boolean; note?: string }) {
   const info = CONN_INFO[conn.name];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -155,9 +155,140 @@ function ConnectionInfo({ conn, ok }: { conn: SettingsResponse['connections'][nu
         {conn.detail && <DetailLine label="Detail" value={conn.detail} />}
         {info?.setup && <DetailLine label="Setup" value={info.setup} />}
       </div>
-      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Managed automatically — nothing to configure here.</div>
+      {note && <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{note}</div>}
     </div>
   );
+}
+
+// ---- Editable connection config panels (admin) --------------------------
+
+function errMsg(e: unknown): string {
+  return e instanceof ApiError ? e.message : 'Something went wrong — try again';
+}
+
+/** Inline test/save result line. */
+function ResultLine({ r, err }: { r?: ProbeResult | null; err?: string | null }) {
+  if (err) return <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>;
+  if (!r) return null;
+  return <div style={{ fontSize: 11.5, color: r.ok ? 'var(--solar)' : 'var(--danger)' }}>{r.ok ? '✓ ' : ''}{r.detail}</div>;
+}
+
+const cfgDesc: CSSProperties = { fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 };
+
+function SonnenConfig({ conn, ok, cfg, reload }: { conn: SettingsResponse['connections'][number]; ok: boolean; cfg: IntegrationsConfig; reload: () => void }) {
+  const [host, setHost] = useState(cfg.sonnen.host);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState<'test' | 'save' | null>(null);
+  const [res, setRes] = useState<ProbeResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async (kind: 'test' | 'save') => {
+    setBusy(kind); setErr(null); setRes(null);
+    try {
+      if (kind === 'test') setRes(await api.integrations.testSonnen(host.trim(), token || undefined));
+      else { const r = await api.integrations.setSonnen(host.trim(), token || undefined); setRes({ ok: r.ok, detail: r.detail }); setToken(''); reload(); }
+    } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={cfgDesc}>sonnenBatterie local JSON API on the home network.</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <DetailLine label="Status" value={conn.status} tone={ok ? 'solar' : 'grid'} />
+        {conn.detail && <DetailLine label="Detail" value={conn.detail} />}
+      </div>
+      <Input label="Host / IP" value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.197" />
+      <Input label="Auth token" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={cfg.sonnen.hasToken ? '•••••• (leave blank to keep)' : 'Auth-Token'} />
+      <ResultLine r={res} err={err} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button size="sm" variant="secondary" loading={busy === 'test'} onClick={() => void run('test')}>Test</Button>
+        <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void run('save')}>Save</Button>
+      </div>
+    </div>
+  );
+}
+
+function WeatherConfig({ cfg, reload }: { cfg: IntegrationsConfig; reload: () => void }) {
+  const [lat, setLat] = useState(String(cfg.weather.lat));
+  const [lon, setLon] = useState(String(cfg.weather.lon));
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<ProbeResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true); setErr(null); setRes(null);
+    try { const r = await api.integrations.setWeather(Number(lat), Number(lon)); setRes({ ok: r.ok, detail: r.detail }); reload(); }
+    catch (e) { setErr(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={cfgDesc}>Open-Meteo forecast location — drives solar &amp; load planning.</div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Input label="Latitude" inputMode="decimal" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="38.79" />
+        <Input label="Longitude" inputMode="decimal" value={lon} onChange={(e) => setLon(e.target.value)} placeholder="0.17" />
+      </div>
+      <ResultLine r={res} err={err} />
+      <div><Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save location</Button></div>
+    </div>
+  );
+}
+
+function TeslaConfig({ conn, ok, cfg, reload }: { conn: SettingsResponse['connections'][number]; ok: boolean; cfg: IntegrationsConfig; reload: () => void }) {
+  const [siteId, setSiteId] = useState(cfg.tesla.siteId);
+  const [busy, setBusy] = useState<'test' | 'save' | 'reauth' | null>(null);
+  const [res, setRes] = useState<ProbeResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [showReauth, setShowReauth] = useState(false);
+  const [token, setToken] = useState('');
+
+  const test = async () => { setBusy('test'); setErr(null); setRes(null); try { setRes(await api.integrations.testTesla()); } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); } };
+  const saveSite = async () => { setBusy('save'); setErr(null); setRes(null); try { await api.integrations.setTeslaSite(siteId.trim()); setRes({ ok: true, detail: 'Site id saved' }); reload(); } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); } };
+  const reauth = async () => { setBusy('reauth'); setErr(null); setRes(null); try { const r = await api.integrations.reauthTesla(token.trim()); setRes(r); setToken(''); setShowReauth(false); reload(); } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); } };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={cfgDesc}>Tesla Fleet API — Powerwall live status &amp; history (cloud).</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <DetailLine label="Status" value={conn.status} tone={ok ? 'solar' : 'grid'} />
+        {conn.detail && <DetailLine label="Detail" value={conn.detail} />}
+      </div>
+      <Input label="Energy site id" inputMode="numeric" value={siteId} onChange={(e) => setSiteId(e.target.value)} placeholder="1689529157873570" />
+      <ResultLine r={res} err={err} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button size="sm" variant="secondary" loading={busy === 'test'} onClick={() => void test()}>Test connection</Button>
+        <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void saveSite()}>Save site</Button>
+      </div>
+      {!showReauth ? (
+        <button onClick={() => { setShowReauth(true); setErr(null); setRes(null); }} style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, color: 'var(--text-2)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
+          Re-authenticate…
+        </button>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--border-1)' }}>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.5 }}>
+            Pasting a new refresh token replaces the live one. It's validated against Tesla before saving — a bad token is rejected and the current one is kept.
+          </div>
+          <Input label="Refresh token" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="eyJ…" />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant="primary" loading={busy === 'reauth'} onClick={() => void reauth()}>Re-authenticate</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setShowReauth(false); setToken(''); }}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Dispatch to the right panel per connection; non-admins see read-only info. */
+function ConnectionPanel({ conn, ok, cfg, reload }: { conn: SettingsResponse['connections'][number]; ok: boolean; cfg: IntegrationsConfig | null; reload: () => void }) {
+  const { user } = useAuth();
+  if (user?.role !== 'admin') return <ConnectionInfo conn={conn} ok={ok} note="Only an admin can change this." />;
+  if (cfg) {
+    if (conn.name === 'Sonnen LAN') return <SonnenConfig conn={conn} ok={ok} cfg={cfg} reload={reload} />;
+    if (conn.name === 'Weather') return <WeatherConfig cfg={cfg} reload={reload} />;
+    if (conn.name === 'Tesla cloud') return <TeslaConfig conn={conn} ok={ok} cfg={cfg} reload={reload} />;
+  }
+  return <ConnectionInfo conn={conn} ok={ok} />;
 }
 
 const pushLabel: Record<PushStatus, string> = {
@@ -841,6 +972,15 @@ function AcCloudConnection({ first, open, onToggle }: { first?: boolean; open: b
 /** Connections card — single-open accordion across all integrations. */
 function ConnectionsCard({ connections }: { connections: SettingsResponse['connections'] }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [cfg, setCfg] = useState<IntegrationsConfig | null>(null);
+  const loadCfg = () => {
+    api.integrations.config().then(setCfg).catch(() => {
+      /* leave null — panels fall back to read-only info */
+    });
+  };
+  useEffect(() => {
+    loadCfg();
+  }, []);
   const toggle = (id: string) => setOpenId((cur) => (cur === id ? null : id));
   return (
     <Card title="Connections" style={{ padding: 0 }}>
@@ -858,7 +998,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
             open={openId === c.name}
             onToggle={() => toggle(c.name)}
           >
-            <ConnectionInfo conn={c} ok={ok} />
+            <ConnectionPanel conn={c} ok={ok} cfg={cfg} reload={loadCfg} />
           </ConnectionRow>
         );
       })}

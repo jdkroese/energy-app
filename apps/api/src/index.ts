@@ -53,6 +53,15 @@ import {
   updateAutomation,
   deleteAutomation,
 } from './routes/devices';
+import {
+  getIntegrationsConfig,
+  testSonnen,
+  setSonnen,
+  setWeather,
+  testTesla,
+  setTeslaSite,
+  reauthTesla,
+} from './routes/integrations-config';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
 import { authRouter } from './routes/auth';
@@ -251,6 +260,50 @@ app.post(
   }),
 );
 app.delete('/api/integrations/intesis', requireAdmin, wrap(() => disconnectIntegration()));
+
+// ---- Configurable connections (Sonnen / Weather / Tesla) ----
+app.get('/api/integrations/config', wrap(() => getIntegrationsConfig()));
+app.post(
+  '/api/integrations/sonnen/test',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { host?: string; token?: string };
+    return testSonnen(b.host, b.token);
+  }),
+);
+app.put(
+  '/api/integrations/sonnen',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { host?: string; token?: string };
+    return setSonnen(b.host, b.token);
+  }),
+);
+app.put(
+  '/api/integrations/weather',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { lat?: number; lon?: number };
+    return setWeather(b.lat, b.lon);
+  }),
+);
+app.post('/api/integrations/tesla/test', requireAdmin, wrap(() => testTesla()));
+app.put(
+  '/api/integrations/tesla',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { siteId?: string };
+    return setTeslaSite(b.siteId);
+  }),
+);
+app.post(
+  '/api/integrations/tesla/reauth',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { refreshToken?: string };
+    return reauthTesla(b.refreshToken);
+  }),
+);
 
 // ---- Schedules CRUD (admin for writes) ----
 app.get('/api/schedules', wrap(() => listSchedules()));

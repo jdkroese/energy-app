@@ -19,8 +19,10 @@ import type {
   DevicesStatus,
   HistoryDayResponse,
   HistoryResponse,
+  IntegrationsConfig,
   IntegrationStatus,
   LiveResponse,
+  ProbeResult,
   LoginResponse,
   MeResponse,
   OtpChannel,
@@ -180,6 +182,20 @@ export const api = {
     intesisConnect: (username: string, password: string) =>
       postJSON<IntegrationStatus>('/api/integrations/intesis', { username, password }),
     intesisDisconnect: () => delJSON<{ ok: boolean }>('/api/integrations/intesis'),
+
+    // Configurable connections (Sonnen / Weather / Tesla).
+    config: () => getJSON<IntegrationsConfig>('/api/integrations/config'),
+    testSonnen: (host?: string, token?: string) =>
+      postJSON<ProbeResult>('/api/integrations/sonnen/test', { host, token }),
+    setSonnen: (host: string, token?: string) =>
+      putJSON<ProbeResult & { config: IntegrationsConfig }>('/api/integrations/sonnen', { host, token }),
+    setWeather: (lat: number, lon: number) =>
+      putJSON<ProbeResult & { config: IntegrationsConfig }>('/api/integrations/weather', { lat, lon }),
+    testTesla: () => postJSON<ProbeResult>('/api/integrations/tesla/test'),
+    setTeslaSite: (siteId: string) =>
+      putJSON<{ ok: boolean; config: IntegrationsConfig }>('/api/integrations/tesla', { siteId }),
+    reauthTesla: (refreshToken: string) =>
+      postJSON<ProbeResult>('/api/integrations/tesla/reauth', { refreshToken }),
   },
 
   schedules: {

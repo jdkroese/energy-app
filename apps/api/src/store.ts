@@ -211,9 +211,15 @@ export interface ControlState {
 // climate guardrails, a master arm flag, and a ring-buffer command log. Like the
 // battery control, devices BOOT DISARMED — nothing is ever written until armed.
 
-/** Third-party integration credentials (set in Settings; env is a fallback). */
+/** Third-party integration credentials/config (set in Settings; env is a fallback). */
 export interface IntegrationsState {
   intesis: { username: string; password: string } | null;
+  /** Sonnen local API override (host/IP + auth token). */
+  sonnen?: { host?: string; token?: string };
+  /** Tesla Fleet API override (energy site id). Token lives in teslaRefreshToken. */
+  tesla?: { siteId?: string };
+  /** Weather forecast location override. */
+  weather?: { lat?: number; lon?: number };
 }
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */

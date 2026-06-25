@@ -566,3 +566,17 @@ export interface IntegrationStatus {
   username: string | null;
   error: string | null;
 }
+
+/** Effective config of the server-managed connections (token never included). */
+export interface IntegrationsConfig {
+  ts: string;
+  sonnen: { host: string; hasToken: boolean; overridden: boolean };
+  tesla: { siteId: string; overridden: boolean };
+  weather: { lat: number; lon: number; overridden: boolean };
+}
+
+/** Result of a connection test / save. */
+export interface ProbeResult {
+  ok: boolean;
+  detail: string;
+}

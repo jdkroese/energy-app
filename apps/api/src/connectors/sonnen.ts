@@ -1,13 +1,14 @@
-import { config } from '../config';
 import { cached } from '../cache';
+import { sonnenHost, sonnenToken } from '../runtime-config';
 
 // Sonnen local REST API v2 (reachable from the VPS over the WireGuard tunnel).
 // Read endpoints are open; configuration/control endpoints need the Auth-Token.
-const base = () => `http://${config.sonnen.host}/api/v2`;
+// Host + token are runtime-overridable (Settings → Connections); env is the fallback.
+const base = () => `http://${sonnenHost()}/api/v2`;
 
 async function get(path: string, auth = false): Promise<unknown> {
   const headers: Record<string, string> = {};
-  if (auth) headers['Auth-Token'] = config.sonnen.token;
+  if (auth) headers['Auth-Token'] = sonnenToken();
   const res = await fetch(`${base()}${path}`, {
     headers,
     signal: AbortSignal.timeout(8000),
@@ -43,7 +44,7 @@ export function getPowermeter(): Promise<unknown> {
 async function put(path: string, body: unknown): Promise<unknown> {
   const res = await fetch(`${base()}${path}`, {
     method: 'PUT',
-    headers: { 'Auth-Token': config.sonnen.token, 'content-type': 'application/json' },
+    headers: { 'Auth-Token': sonnenToken(), 'content-type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(8000),
   });
@@ -54,7 +55,7 @@ async function put(path: string, body: unknown): Promise<unknown> {
 async function post(path: string): Promise<unknown> {
   const res = await fetch(`${base()}${path}`, {
     method: 'POST',
-    headers: { 'Auth-Token': config.sonnen.token },
+    headers: { 'Auth-Token': sonnenToken() },
     signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new Error(`Sonnen POST ${path} -> HTTP ${res.status}`);
