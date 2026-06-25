@@ -76,15 +76,11 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
                   : range === 'Day'
                     ? 'Today'
                     : `This ${range.toLowerCase()}`
-                : location.pathname === '/settings'
-                  ? activeSettingsTab
-                  : meta.title
+                : meta.title
             }
             actions={
               location.pathname === '/reports' ? (
                 <SegmentedControl options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={range} onChange={setRange} size="sm" />
-              ) : location.pathname === '/settings' ? (
-                <SegmentedControl options={settingsTabs} value={activeSettingsTab} onChange={setSettingsTab} size="sm" />
               ) : null
             }
           />

@@ -66,39 +66,96 @@ function LinkRow({
   );
 }
 
-/** Lightweight centered modal (mirrors the InstallSheet pattern). */
-function Modal({ title, subtitle, onClose, children }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
-  }, [onClose]);
+/* ============================================================================
+ * Connections accordion — each row expands inline to reveal its panel.
+ * ==========================================================================*/
+
+/** A collapsible connection row: clickable header + smoothly-expanding panel. */
+function ConnectionRow({
+  first,
+  icon,
+  tone,
+  name,
+  statusText,
+  statusTone,
+  showDot = true,
+  open,
+  onToggle,
+  children,
+}: {
+  first?: boolean;
+  icon: string;
+  tone?: string;
+  name: string;
+  statusText: string;
+  statusTone: string;
+  showDot?: boolean;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
   return (
-    <div
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.62)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 14, animation: 'fadeIn .16s ease' }}
-    >
-      <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}`}</style>
+    <div style={{ borderTop: first ? 'none' : '1px solid var(--border-1)' }}>
       <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 460, background: 'var(--surface-1, #14181d)', border: '1px solid var(--border-2)', borderRadius: 16, boxShadow: '0 12px 48px rgba(0,0,0,.5)', maxHeight: '88vh', overflowY: 'auto' }}
+        onClick={onToggle}
+        role="button"
+        aria-expanded={open}
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        style={{ ...row, cursor: 'pointer' }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 18px 12px', borderBottom: '1px solid var(--border-1)' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 2 }}>{subtitle}</div>}
-          </div>
-          <button onClick={onClose} aria-label="Close" style={{ display: 'grid', placeItems: 'center', width: 32, height: 32, flex: 'none', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: 'var(--text-2)', cursor: 'pointer' }}>
-            <Icon name="x" size={17} />
-          </button>
+        <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: tone ? `var(--${tone})` : 'var(--text-2)' }}>
+          <Icon name={icon} size={17} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0, fontSize: 14 }}>{name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          {showDot && <Dot tone={statusTone} />}
+          <span style={{ fontSize: 12, color: `var(--${statusTone})` }}>{statusText}</span>
+          <span style={{ display: 'inline-flex', transition: 'transform .2s ease', transform: open ? 'rotate(90deg)' : 'none' }}>
+            <Chev />
+          </span>
         </div>
-        <div style={{ padding: '16px 18px 18px' }}>{children}</div>
       </div>
+      {/* grid-rows 0fr→1fr animates height without measuring content */}
+      <div style={{ display: 'grid', gridTemplateRows: open ? '1fr' : '0fr', transition: 'grid-template-rows .22s ease' }}>
+        <div style={{ overflow: 'hidden', minHeight: 0 }}>
+          <div style={{ padding: '0 16px 16px 62px' }}>{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** One label/value line inside an expanded connection panel. */
+function DetailLine({ label, value, tone = 'text-2' }: { label: string; value: ReactNode; tone?: string }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, fontSize: 12.5, lineHeight: 1.5 }}>
+      <span style={{ color: 'var(--text-3)', width: 58, flex: 'none' }}>{label}</span>
+      <span style={{ color: `var(--${tone})`, fontFamily: 'var(--font-mono)', minWidth: 0, wordBreak: 'break-word' }}>{value}</span>
+    </div>
+  );
+}
+
+// Static descriptions of the server-managed integrations (live status comes from the API).
+const CONN_INFO: Record<string, { desc: string; setup: string }> = {
+  'Tesla cloud': { desc: 'Tesla Fleet API — Powerwall live status & history over the cloud.', setup: 'Authenticated server-side via the Fleet API token.' },
+  'Sonnen LAN': { desc: 'sonnenBatterie local JSON API on the home network.', setup: 'Reached over the LAN / VPN; configured server-side.' },
+  Weather: { desc: 'Open-Meteo forecast for Jávea — drives solar & load planning.', setup: 'Public API — no credentials required.' },
+  Sungrow: { desc: 'Sungrow inverter direct read (Array A).', setup: 'Not yet wired — pending integration.' },
+};
+
+/** Read-only info panel for a server-managed connection. */
+function ConnectionInfo({ conn, ok }: { conn: SettingsResponse['connections'][number]; ok: boolean }) {
+  const info = CONN_INFO[conn.name];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {info?.desc && <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>{info.desc}</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <DetailLine label="Status" value={conn.status} tone={ok ? 'solar' : 'grid'} />
+        {conn.detail && <DetailLine label="Detail" value={conn.detail} />}
+        {info?.setup && <DetailLine label="Setup" value={info.setup} />}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Managed automatically — nothing to configure here.</div>
     </div>
   );
 }
@@ -671,7 +728,7 @@ function SecurityCard() {
  * the password. Once connected, the Devices screen shows the fleet.
  * ==========================================================================*/
 
-function AcCloudConnection() {
+function AcCloudConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
@@ -680,7 +737,6 @@ function AcCloudConnection() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [open, setOpen] = useState(false);
 
   const load = async () => {
     try {
@@ -726,70 +782,88 @@ function AcCloudConnection() {
   };
 
   const connected = status?.connected ?? false;
-  // Status text in the row, matching the other connections (dot + word + chevron).
   const statusText = status === null ? 'loading…' : connected ? `connected · ${status.deviceCount ?? 0} units` : 'not connected';
   const statusTone = status === null ? 'text-3' : connected ? 'solar' : 'grid';
 
   return (
-    <>
-      <LinkRow
-        icon="thermometer"
-        tone={connected ? 'solar' : undefined}
-        name="AC Cloud"
-        onClick={() => setOpen(true)}
-        right={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            {status !== null && <Dot tone={connected ? 'solar' : 'grid'} />}
-            <span style={{ fontSize: 12, color: `var(--${statusTone})` }}>{statusText}</span>
-            <Chev />
-          </div>
-        }
-      />
-
-      {open && (
-        <Modal title="AC Cloud" subtitle="Panasonic Etherea climate (Intesis)" onClose={() => setOpen(false)}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ width: 38, height: 38, borderRadius: 11, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: connected ? 'var(--solar)' : 'var(--text-3)' }}>
-              <Icon name="thermometer" size={19} />
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {connected ? (
-                  <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>Connected · {status?.deviceCount ?? 0} units</Badge>
-                ) : (
-                  <Badge tone="neutral" variant="soft">Not connected</Badge>
-                )}
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
-                {connected ? status?.username : 'Sign in with your AC Cloud (Intesis) account'}
-              </div>
-            </div>
-          </div>
-
-          {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 12 }}>{status.error}</div>}
-
-          {isAdmin && (!connected || editing) && (
-            <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <Input label="Email / username" type="text" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="you@example.com" />
-              <Input label="Password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
-              {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button size="sm" variant="primary" loading={busy} onClick={() => void connect()}>{connected ? 'Re-connect' : 'Connect'}</Button>
-                {connected && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setErr(null); }}>Cancel</Button>}
-              </div>
-            </div>
+    <ConnectionRow
+      first={first}
+      icon="thermometer"
+      tone={connected ? 'solar' : undefined}
+      name="AC Cloud"
+      statusText={statusText}
+      statusTone={statusTone}
+      showDot={status !== null}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Panasonic Etherea climate via your AC Cloud (Intesis) account.
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {connected ? (
+            <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>Connected · {status?.deviceCount ?? 0} units</Badge>
+          ) : (
+            <Badge tone="neutral" variant="soft">Not connected</Badge>
           )}
-
-          {isAdmin && connected && !editing && (
-            <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-              <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setErr(null); }}>Change account</Button>
-              <Button size="sm" variant="ghost" loading={busy} onClick={() => void disconnect()}>Disconnect</Button>
-            </div>
+          {connected && status?.username && (
+            <span style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{status.username}</span>
           )}
-          {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 12 }}>Only an admin can connect AC Cloud.</div>}
-        </Modal>
-      )}
-    </>
+        </div>
+
+        {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{status.error}</div>}
+
+        {isAdmin && (!connected || editing) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 360 }}>
+            <Input label="Email / username" type="text" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="you@example.com" />
+            <Input label="Password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+            {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="primary" loading={busy} onClick={() => void connect()}>{connected ? 'Re-connect' : 'Connect'}</Button>
+              {connected && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setErr(null); }}>Cancel</Button>}
+            </div>
+          </div>
+        )}
+
+        {isAdmin && connected && !editing && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setErr(null); }}>Change account</Button>
+            <Button size="sm" variant="ghost" loading={busy} onClick={() => void disconnect()}>Disconnect</Button>
+          </div>
+        )}
+        {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can connect AC Cloud.</div>}
+      </div>
+    </ConnectionRow>
+  );
+}
+
+/** Connections card — single-open accordion across all integrations. */
+function ConnectionsCard({ connections }: { connections: SettingsResponse['connections'] }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const toggle = (id: string) => setOpenId((cur) => (cur === id ? null : id));
+  return (
+    <Card title="Connections" style={{ padding: 0 }}>
+      {connections.map((c, i) => {
+        const ok = !/pending|offline/i.test(c.status);
+        return (
+          <ConnectionRow
+            key={c.name}
+            first={i === 0}
+            icon={c.icon}
+            tone={c.tone}
+            name={c.name}
+            statusText={c.status}
+            statusTone={ok ? 'solar' : 'grid'}
+            open={openId === c.name}
+            onToggle={() => toggle(c.name)}
+          >
+            <ConnectionInfo conn={c} ok={ok} />
+          </ConnectionRow>
+        );
+      })}
+      <AcCloudConnection first={false} open={openId === 'accloud'} onToggle={() => toggle('accloud')} />
+    </Card>
   );
 }
 
@@ -822,31 +896,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
 
   const sections = (
     <>
-      {active === 'Connections' && (
-        <Card title="Connections" style={{ padding: 0 }}>
-          {s.connections.map((c, i) => {
-            const ok = !/pending/i.test(c.status);
-            return (
-              <LinkRow
-                key={c.name}
-                first={i === 0}
-                icon={c.icon}
-                tone={c.tone}
-                name={c.name}
-                right={
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                    <Dot tone={ok ? 'solar' : 'grid'} />
-                    <span style={{ fontSize: 12, color: ok ? 'var(--solar)' : 'var(--grid)' }}>{c.status}</span>
-                    <Chev />
-                  </div>
-                }
-              />
-            );
-          })}
-          {/* AC Cloud (Intesis) — config opens in a modal on click */}
-          <AcCloudConnection />
-        </Card>
-      )}
+      {active === 'Connections' && <ConnectionsCard connections={s.connections} />}
 
       {active === 'Notifications' && <NotificationsCard channels={ch} onChannels={setChannels} />}
 
@@ -912,33 +962,21 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
     </>
   );
 
-  // Desktop: the shell TopBar supplies the eyebrow, active-tab title, and tab strip
-  // (Reports pattern) — the page renders content only.
-  if (ctx.desktop) {
-    return (
-      <>
-        {stale && <StaleBanner updatedAt={updatedAt} />}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 820, margin: '0 auto', width: '100%' }}>
-          {sections}
-        </div>
-        {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
-      </>
-    );
-  }
-
-  // Mobile: no TopBar — render the header + tab strip in-page.
+  // Autopilot-style layout: a full-width SegmentedControl tab bar in the page body,
+  // content beneath. The desktop TopBar supplies the eyebrow + "System" title (so no
+  // page header on desktop); mobile (no TopBar) renders its own header.
   return (
-    <>
-      <div style={{ padding: '12px 18px 12px' }}>
-        <Eyebrow>Settings</Eyebrow>
-        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>{active}</h1>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 820, margin: '0 auto', width: '100%', padding: ctx.desktop ? 0 : '8px 14px 22px' }}>
+      {!ctx.desktop && (
+        <div style={{ padding: '4px 2px 0' }}>
+          <Eyebrow>Settings</Eyebrow>
+          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>System</h1>
+        </div>
+      )}
       {stale && <StaleBanner updatedAt={updatedAt} />}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
-        <SegmentedControl block options={tabs} value={active} onChange={ctx.setSettingsTab} />
-        {sections}
-      </div>
+      <SegmentedControl block options={tabs} value={active} onChange={ctx.setSettingsTab} />
+      {sections}
       {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
-    </>
+    </div>
   );
 }
