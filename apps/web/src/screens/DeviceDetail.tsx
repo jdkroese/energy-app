@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
@@ -69,23 +69,83 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { data: schedData, refetch: refetchSchedules } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const [busy, setBusy] = useState(false);
   const [cmdErr, setCmdErr] = useState<string | null>(null);
-  const [pendingSetpoint, setPendingSetpoint] = useState<number | null>(null);
-  const [pendingFan, setPendingFan] = useState<number | null>(null);
   const [editingRule, setEditingRule] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
+
+  // ---- Optimistic command pipeline -------------------------------------------
+  // Every lever updates its shown value instantly (no round-trip block). Writes
+  // are coalesced per lever via a short debounce so rapid taps send only the FINAL
+  // value (the backend rate-limits ~1 write/30s/lever — see bug: setpoint stepping).
+  // A pending value clears when the device poll reads back the requested value
+  // (confirm), or snaps back to truth + surfaces the reason on a rejected write.
+  type PendingValue = number | boolean | string;
+  const [pending, setPending] = useState<Partial<Record<ClimateLever, PendingValue>>>({});
+  const timers = useRef<Partial<Record<ClimateLever, ReturnType<typeof setTimeout>>>>({});
+  const settle = useRef<Partial<Record<ClimateLever, ReturnType<typeof setTimeout>>>>({});
 
   const dev = data?.device ?? null;
 
+  const clearPending = (lever: ClimateLever) =>
+    setPending((p) => { const n = { ...p }; delete n[lever]; return n; });
+
+  /** Optimistically set + debounce-send one lever. value already in device units. */
+  const sendLever = (lever: ClimateLever, value: PendingValue, debounceMs = 0) => {
+    setPending((p) => ({ ...p, [lever]: value }));
+    if (timers.current[lever]) clearTimeout(timers.current[lever]);
+    timers.current[lever] = setTimeout(() => {
+      delete timers.current[lever];
+      void api.devices.command(id ?? '', lever, value)
+        .then((res) => {
+          const r = (res as { result?: { ok?: boolean; reason?: string } }).result;
+          if (r?.ok === false) {
+            setCmdErr(r.reason ?? 'Command was rejected');
+            clearPending(lever); // rejected — snap back to the real value
+          } else {
+            setCmdErr(null);
+          }
+        })
+        .catch(() => { /* transient — keep optimistic; the poll reconciles */ })
+        .finally(() => {
+          refetch();
+          // Safety net: if the device never reads back the requested value (clamp,
+          // connector cache, silent drop), settle to truth so it can't stick wrong.
+          if (settle.current[lever]) clearTimeout(settle.current[lever]);
+          settle.current[lever] = setTimeout(() => clearPending(lever), 45_000);
+        });
+    }, debounceMs);
+  };
+
+  // Confirm-poll: drop a pending value once the device reports the requested one.
+  useEffect(() => {
+    if (!dev) return;
+    setPending((p) => {
+      if (Object.keys(p).length === 0) return p;
+      const n = { ...p };
+      let changed = false;
+      const matches: Partial<Record<ClimateLever, boolean>> = {
+        power: p.power !== undefined && dev.power === p.power,
+        mode: p.mode !== undefined && dev.mode === p.mode,
+        setpoint: p.setpoint !== undefined && dev.setpointC === p.setpoint,
+        fan: p.fan !== undefined && (dev.fanLevel ?? 0) === p.fan,
+        vaneUpDown: p.vaneUpDown !== undefined && (dev.vaneUpDown ?? 0) === p.vaneUpDown,
+        vaneLeftRight: p.vaneLeftRight !== undefined && (dev.vaneLeftRight ?? 0) === p.vaneLeftRight,
+      };
+      for (const k of Object.keys(matches) as ClimateLever[]) {
+        if (matches[k]) { delete n[k]; changed = true; }
+      }
+      return changed ? n : p;
+    });
+  }, [dev]);
+
+  // Tear down any in-flight debounce / settle timers on unmount.
+  useEffect(() => () => {
+    for (const t of Object.values(timers.current)) if (t) clearTimeout(t);
+    for (const t of Object.values(settle.current)) if (t) clearTimeout(t);
+  }, []);
+
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
-    try { await fn(); } catch { /* keep last-good */ } finally { setBusy(false); setPendingSetpoint(null); setPendingFan(null); refetch(); }
+    try { await fn(); } catch { /* keep last-good */ } finally { setBusy(false); refetch(); }
   };
-  // A device command replies { result: { ok, reason } } — surface a rejection
-  // (e.g. "not armed", a guardrail clamp) instead of silently reverting.
-  const cmd = (lever: ClimateLever, value: boolean | number | string) =>
-    run(async () => {
-      const res = (await api.devices.command(id ?? '', lever, value)) as { result?: { ok?: boolean; reason?: string } };
-      setCmdErr(res?.result?.ok === false ? res.result.reason ?? 'Command was rejected' : null);
-    });
 
   // ---- Rule (schedule) editing — same overlay as the Schedules page ----
   const refetchAll = () => { refetch(); refetchSchedules(); };
@@ -123,28 +183,42 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const ac = dev as DeviceView & AcExtras;
   const canConfig = isAdmin;   // schedule / solar / settings toggles
   const canWrite = isAdmin;    // live device commands
-  const accent = accentFor(dev.mode);
-  const setpoint = pendingSetpoint ?? dev.setpointC ?? 24;
+
+  // Optimistic display values — a pending lever overrides the last polled state.
+  const pSet = pending.setpoint as number | undefined;
+  const pPow = pending.power as boolean | undefined;
+  const pMode = pending.mode as string | undefined;
+  const pFan = pending.fan as number | undefined;
+  const pVUD = pending.vaneUpDown as number | undefined;
+  const pVLR = pending.vaneLeftRight as number | undefined;
+  const syncing = (lever: ClimateLever): boolean => pending[lever] !== undefined;
+
+  const curMode = pMode ?? dev.mode;
+  const stateOn = pPow ?? dev.power;
+  const accent = accentFor(curMode);
   const lo = Math.max(16, dev.minSetpointC ?? 16, dev.comfortFloorC ?? 16);
   const hi = Math.min(30, dev.maxSetpointC ?? 30, dev.comfortCeilingC ?? 30);
-  const commitSetpoint = (v: number) => {
-    const next = Math.min(hi, Math.max(lo, Math.round(v * 2) / 2));
-    setPendingSetpoint(next);
-    void cmd('setpoint', next);
-  };
+  const setpoint = pSet ?? dev.setpointC ?? 24;
+  const clampSet = (v: number) => Math.min(hi, Math.max(lo, Math.round(v * 2) / 2));
+  // Setpoint + fan are coalesced (debounced) — rapid steps send only the final value.
+  const commitSetpoint = (v: number) => sendLever('setpoint', clampSet(v), 500);
+  const previewSetpoint = (v: number) => setPending((p) => ({ ...p, setpoint: clampSet(v) }));
   const step = (delta: number) => commitSetpoint(setpoint + delta);
 
   const fanSteps = ac.fanSteps ?? 5;
-  const fanLevel = pendingFan ?? dev.fanLevel ?? null; // null ⇒ unknown / auto
-  const setFan = (n: number) => { setPendingFan(n); void cmd('fan', n); };
-  const setVane = (lever: 'vaneUpDown' | 'vaneLeftRight', n: number) => void cmd(lever, n);
+  const fanLevel = pFan ?? dev.fanLevel ?? null; // null ⇒ unknown / auto
+  const setFan = (n: number) => sendLever('fan', n, 400);
+  const setMode = (m: string) => sendLever('mode', m, 0);
+  const togglePower = () => sendLever('power', !stateOn, 0);
+  const setVane = (lever: 'vaneUpDown' | 'vaneLeftRight', n: number) => sendLever(lever, n, 300);
+  const vUD = pVUD ?? dev.vaneUpDown ?? null;
+  const vLR = pVLR ?? dev.vaneLeftRight ?? null;
 
   const toggleAutomation = (on: boolean) => run(() => api.devices.setSettings(id ?? '', { automationEnabled: on }));
   const releaseHold = () => run(() => api.devices.release(id ?? ''));
   const holdMins = dev.manualOverrideUntil ? Math.max(0, Math.round((dev.manualOverrideUntil - Date.now()) / 60_000)) : 0;
 
-  const stateOn = dev.power;
-  const stateLabel = !stateOn ? 'OFF' : dev.mode === 'cool' ? 'COOLING' : dev.mode === 'heat' ? 'HEATING' : dev.mode.toUpperCase();
+  const stateLabel = !stateOn ? 'OFF' : curMode === 'cool' ? 'COOLING' : curMode === 'heat' ? 'HEATING' : curMode.toUpperCase();
   const delta = dev.currentTempC != null ? Math.round((dev.currentTempC - setpoint) * 10) / 10 : null;
 
   const allRules = schedData?.schedules ?? data?.schedules ?? [];
@@ -162,10 +236,10 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>{dev.name}</h1>
           <div style={{ fontSize: 11.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            Panasonic Etherea{dev.installation ? ` · ${dev.installation}` : ''} · {modeWord(dev.mode, stateOn)}
+            Panasonic Etherea{dev.installation ? ` · ${dev.installation}` : ''} · {modeWord(curMode, stateOn)}
           </div>
         </div>
-        <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (dev.mode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateOn ? accent : 'var(--text-3)' }}>{stateLabel}</span>
+        <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (curMode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateOn ? accent : 'var(--text-3)' }}>{stateLabel}</span>
         <IconButton variant="ghost" aria-label="Refresh" disabled={busy} onClick={() => refetch()}><Icon name="refresh-cw" size={16} /></IconButton>
       </div>
 
@@ -182,13 +256,13 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1.1fr' : '1fr', gap: 12 }}>
         {/* setpoint */}
         <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ ...eyebrow, textAlign: 'center' }}>Setpoint</div>
+          <div style={{ ...eyebrow, textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>Setpoint{syncing('setpoint') && <SyncDot />}</div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
-            <IconButton variant="solid" aria-label="Lower setpoint" disabled={!canWrite || busy || setpoint <= lo} onClick={() => step(-0.5)}><Icon name="minus" size={18} /></IconButton>
+            <IconButton variant="solid" aria-label="Lower setpoint" disabled={!canWrite || setpoint <= lo} onClick={() => step(-0.5)}><Icon name="minus" size={18} /></IconButton>
             <div className="pwr-mono" style={{ fontSize: 46, fontWeight: 600, lineHeight: 1, color: accent, minWidth: 132, textAlign: 'center' }}>{setpoint.toFixed(1)}°</div>
-            <IconButton variant="solid" aria-label="Raise setpoint" disabled={!canWrite || busy || setpoint >= hi} onClick={() => step(0.5)}><Icon name="plus" size={18} /></IconButton>
+            <IconButton variant="solid" aria-label="Raise setpoint" disabled={!canWrite || setpoint >= hi} onClick={() => step(0.5)}><Icon name="plus" size={18} /></IconButton>
           </div>
-          <SetpointSlider value={setpoint} lo={lo} hi={hi} accent={accent} disabled={!canWrite || busy} onInput={setPendingSetpoint} onCommit={commitSetpoint} />
+          <SetpointSlider value={setpoint} lo={lo} hi={hi} accent={accent} disabled={!canWrite} onInput={previewSetpoint} onCommit={commitSetpoint} />
           <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)', textAlign: 'center' }}>range {lo}–{hi}°</div>
         </Card>
 
@@ -212,27 +286,28 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <button
               type="button"
-              disabled={!canWrite || busy}
-              onClick={() => cmd('power', !stateOn)}
+              disabled={!canWrite}
+              onClick={togglePower}
               style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 42, borderRadius: 'var(--radius-md)', border: `1px solid ${stateOn ? 'var(--border-2)' : 'var(--border-1)'}`, background: stateOn ? 'var(--surface-2)' : 'var(--surface-1)', color: stateOn ? 'var(--text-1)' : 'var(--text-3)', fontSize: 13, fontWeight: 600, cursor: canWrite ? 'pointer' : 'default' }}
             >
               <Icon name="power" size={15} color={stateOn ? accent : 'var(--text-3)'} />
               {stateOn ? 'On' : 'Off'}
+              {syncing('power') && <SyncDot />}
             </button>
             <div className="pwr-mono" style={{ flex: 1, textAlign: 'center', fontSize: 11.5, color: 'var(--text-3)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '11px 8px' }}>
-              {stateOn ? `on · ${modeWord(dev.mode, true)}` : 'standby'}
+              {stateOn ? `on · ${modeWord(curMode, true)}` : 'standby'}
             </div>
           </div>
         </Card>
       </div>
 
       {/* MODE */}
-      <Section title="Mode">
+      <Section title="Mode" right={syncing('mode') ? <SyncDot /> : undefined}>
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${MODES.length}, 1fr)`, gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 6 }}>
           {MODES.map((m) => {
-            const on = dev.mode === m.value;
+            const on = curMode === m.value;
             return (
-              <button key={m.value} type="button" disabled={!canWrite || busy} onClick={() => cmd('mode', m.value)}
+              <button key={m.value} type="button" disabled={!canWrite} onClick={() => setMode(m.value)}
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '10px 4px', borderRadius: 'var(--radius-md)', border: 'none', cursor: canWrite ? 'pointer' : 'default', background: on ? 'var(--surface-3)' : 'transparent', color: on ? accentFor(m.value) : 'var(--text-3)' }}>
                 <ModeIcon icon={m.icon} />
                 <span style={{ fontSize: 11.5, fontWeight: on ? 600 : 500, color: on ? 'var(--text-1)' : 'var(--text-3)' }}>{m.label}</span>
@@ -243,18 +318,18 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       </Section>
 
       {/* FAN SPEED */}
-      <Section title="Fan speed" right={<span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{fanLevel == null ? 'auto' : fanLevel === 0 ? 'auto' : `manual · ${fanLevel}/${fanSteps}`}</span>}>
+      <Section title="Fan speed" right={<span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{syncing('fan') && <SyncDot />}<span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{fanLevel == null ? 'auto' : fanLevel === 0 ? 'auto' : `manual · ${fanLevel}/${fanSteps}`}</span></span>}>
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1, display: 'flex', gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 8 }}>
             {Array.from({ length: fanSteps }, (_, i) => i + 1).map((n) => {
               const filled = fanLevel != null && fanLevel >= n;
               return (
-                <button key={n} type="button" aria-label={`Fan ${n}`} disabled={!canWrite || busy} onClick={() => setFan(n)}
+                <button key={n} type="button" aria-label={`Fan ${n}`} disabled={!canWrite} onClick={() => setFan(n)}
                   style={{ flex: 1, height: 30 + n * 4, alignSelf: 'flex-end', borderRadius: 6, border: 'none', cursor: canWrite ? 'pointer' : 'default', background: filled ? 'var(--solar)' : 'var(--surface-3)', transition: 'background .12s' }} />
               );
             })}
           </div>
-          <button type="button" disabled={!canWrite || busy} onClick={() => setFan(0)}
+          <button type="button" disabled={!canWrite} onClick={() => setFan(0)}
             style={{ width: 88, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 'var(--radius-lg)', border: `1px solid ${fanLevel === 0 || fanLevel == null ? 'var(--solar)' : 'var(--border-2)'}`, background: fanLevel === 0 ? 'var(--solar-wash)' : 'var(--surface-1)', color: fanLevel === 0 ? 'var(--solar)' : 'var(--text-2)', cursor: canWrite ? 'pointer' : 'default' }}>
             <CircleA color={fanLevel === 0 ? 'var(--solar)' : 'var(--text-2)'} />
             <span style={{ fontSize: 11.5, fontWeight: 500 }}>Auto</span>
@@ -264,8 +339,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
 
       {/* VANES */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <VaneCard title="Up / down vanes" value={dev.vaneUpDown} disabled={!canWrite || busy} onSelect={(n) => setVane('vaneUpDown', n)} />
-        <VaneCard title="Left / right vanes" value={dev.vaneLeftRight} disabled={!canWrite || busy} onSelect={(n) => setVane('vaneLeftRight', n)} />
+        <VaneCard title="Up / down vanes" value={vUD} syncing={syncing('vaneUpDown')} disabled={!canWrite} onSelect={(n) => setVane('vaneUpDown', n)} />
+        <VaneCard title="Left / right vanes" value={vLR} syncing={syncing('vaneLeftRight')} disabled={!canWrite} onSelect={(n) => setVane('vaneLeftRight', n)} />
       </div>
 
       {/* MANUAL HOLD */}
@@ -395,7 +470,7 @@ function SetpointSlider({ value, lo, hi, accent, disabled, onInput, onCommit }: 
   );
 }
 
-function VaneCard({ title, value, disabled, onSelect }: { title: string; value?: number | null; disabled?: boolean; onSelect: (n: number) => void }) {
+function VaneCard({ title, value, disabled, syncing, onSelect }: { title: string; value?: number | null; disabled?: boolean; syncing?: boolean; onSelect: (n: number) => void }) {
   // 0 = auto (A), 1..5 = fixed, 10 = swing. null ⇒ unknown.
   const pos = value ?? 0;
   const opts: { v: number; label: string }[] = [
@@ -406,6 +481,7 @@ function VaneCard({ title, value, disabled, onSelect }: { title: string; value?:
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <Icon name="git-commit-vertical" size={14} color="var(--text-3)" />
         <span style={{ ...eyebrow, lineHeight: 1.2 }}>{title}</span>
+        {syncing && <SyncDot />}
       </div>
       <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: 4 }}>
         {opts.map((o) => {
@@ -453,6 +529,15 @@ function ModeIcon({ icon }: { icon: string }) {
 function CircleA({ color }: { color: string }) {
   return (
     <span style={{ width: 20, height: 20, borderRadius: '50%', border: `1.5px solid ${color}`, display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, color }}>A</span>
+  );
+}
+
+/** Pulsing solar dot shown while a lever's command is in flight / unconfirmed. */
+function SyncDot() {
+  return (
+    <span aria-label="syncing" title="Syncing — confirming with the unit" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--solar)', flex: 'none', animation: 'pwrSyncPulse 1s ease-in-out infinite' }}>
+      <style>{`@keyframes pwrSyncPulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }`}</style>
+    </span>
   );
 }
 
