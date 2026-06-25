@@ -1,40 +1,60 @@
-import { useState } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceDetailResponse, ClimateLever, DeviceWarmth } from '../lib/types';
-import { Card, Icon, Button, IconButton, SegmentedControl } from '../components/ui';
+import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, Schedule } from '../lib/types';
+import { Card, Icon, Button, IconButton, Switch } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * DeviceDetail (/devices/:id) — per-unit control, to the approved design:
- *   • header (name · model · state pill)
- *   • two cards: big SETPOINT stepper + ROOM-NOW (temp, target, delta)
- *   • mode + fan segmented controls
- *   • governing-automation banner
- *   • advanced grid (temp limit / range / comfort bounds)
- * All writes are admin + arm gated server-side.
+ * DeviceDetail (/devices/:id) — per-unit AC control, to the approved design:
+ *   • header (name · model · installation · state pill)
+ *   • SETPOINT (stepper + slider) + AMBIENT (temp, Δ-target, on/off)
+ *   • MODE strip (icons) · FAN-SPEED bar · UP-DOWN + LEFT-RIGHT vanes
+ *   • solar-surplus automation banner · this unit's schedule (timeline)
+ *   • config & service (filter, maintenance, limits, comfort, signal)
+ *
+ * Vanes / multi-step-fan read-back / filter / maintenance / signal arrive from
+ * the Intesis connector as it lands those fields (see AcExtras) — until then the
+ * sections render with honest "—" / awaiting states. All writes are admin- and
+ * arm-gated server-side.
  * ==========================================================================*/
 
-const MODES = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'heat', label: 'Heat' },
-  { value: 'dry', label: 'Dry' },
-  { value: 'fan', label: 'Fan' },
-  { value: 'cool', label: 'Cool' },
+/** Optional fields the design surfaces; populated by the connector as they land. */
+interface AcExtras {
+  fanLevel?: number; // current fan step (0 = auto)
+  fanSteps?: number; // number of manual steps (default 5)
+  vaneUpDown?: number | 'swing' | 'auto'; // 1..5 | swing | auto
+  vaneLeftRight?: number | 'swing' | 'auto';
+  filterLifePct?: number; // 0..100
+  filterDays?: number; // est. days remaining
+  maintenanceAlert?: string | null;
+  maintenanceEveryMonths?: number;
+  maintenanceEnabled?: boolean;
+  signal?: string; // 'strong' | 'good' | 'weak'
+}
+
+const MODES: { value: string; label: string; icon: string }[] = [
+  { value: 'auto', label: 'Auto', icon: '_a' },
+  { value: 'cool', label: 'Cool', icon: 'snowflake' },
+  { value: 'heat', label: 'Heat', icon: 'flame' },
+  { value: 'dry', label: 'Dry', icon: 'droplet' },
+  { value: 'fan', label: 'Fan', icon: 'fan' },
 ];
-const FANS = [
-  { value: '0', label: 'Auto' },
-  { value: '1', label: 'Low' },
-  { value: '2', label: 'Med' },
-  { value: '3', label: 'High' },
-];
+
 const WARMTH_COLOR: Record<DeviceWarmth, string> = {
   cold: 'var(--battery)', cool: 'var(--battery)', comfortable: 'var(--text-1)',
   warm: 'var(--grid)', hot: 'var(--danger)', unknown: 'var(--text-3)',
 };
+
+const modeWord = (m: string, on: boolean): string =>
+  !on ? 'off' : m === 'cool' ? 'cooling' : m === 'heat' ? 'heating' : m === 'dry' ? 'drying' : m;
+
+const accentFor = (m: string): string => (m === 'heat' ? 'var(--grid)' : m === 'dry' ? 'var(--battery)' : 'var(--solar)');
+
+const eyebrow: CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' };
 
 export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { id } = useParams<{ id: string }>();
@@ -45,6 +65,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { data, loading, stale, updatedAt, refetch } = usePolling<DeviceDetailResponse>(() => api.devices.detail(id ?? ''), 15_000, [id]);
   const [busy, setBusy] = useState(false);
   const [pendingSetpoint, setPendingSetpoint] = useState<number | null>(null);
+  const [pendingFan, setPendingFan] = useState<number | null>(null);
 
   const dev = data?.device ?? null;
 
@@ -66,23 +87,32 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
     );
   }
 
+  const ac = dev as DeviceView & AcExtras;
   const canWrite = isAdmin;
+  const accent = accentFor(dev.mode);
   const setpoint = pendingSetpoint ?? dev.setpointC ?? 24;
   const lo = Math.max(16, dev.minSetpointC ?? 16, dev.comfortFloorC ?? 16);
   const hi = Math.min(30, dev.maxSetpointC ?? 30, dev.comfortCeilingC ?? 30);
-  const step = (delta: number) => {
-    const next = Math.min(hi, Math.max(lo, Math.round((setpoint + delta) * 2) / 2));
+  const commitSetpoint = (v: number) => {
+    const next = Math.min(hi, Math.max(lo, Math.round(v * 2) / 2));
     setPendingSetpoint(next);
     void cmd('setpoint', next);
   };
+  const step = (delta: number) => commitSetpoint(setpoint + delta);
+
+  const fanSteps = ac.fanSteps ?? 5;
+  const fanLevel = pendingFan ?? ac.fanLevel ?? null; // null ⇒ unknown / auto
+  const setFan = (n: number) => { setPendingFan(n); void cmd('fan', n); };
+
   const toggleAutomation = (on: boolean) => run(() => api.devices.setSettings(id ?? '', { automationEnabled: on }));
   const releaseHold = () => run(() => api.devices.release(id ?? ''));
   const holdMins = dev.manualOverrideUntil ? Math.max(0, Math.round((dev.manualOverrideUntil - Date.now()) / 60_000)) : 0;
 
   const stateOn = dev.power;
   const stateLabel = !stateOn ? 'OFF' : dev.mode === 'cool' ? 'COOLING' : dev.mode === 'heat' ? 'HEATING' : dev.mode.toUpperCase();
-  const stateColor = !stateOn ? 'var(--text-3)' : dev.mode === 'heat' ? 'var(--grid)' : 'var(--solar)';
   const delta = dev.currentTempC != null ? Math.round((dev.currentTempC - setpoint) * 10) / 10 : null;
+
+  const unitSchedules = (data?.schedules ?? []).filter((s) => s.scope.deviceIds.length === 0 || s.scope.deviceIds.includes(dev.id));
 
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -91,92 +121,169 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         <IconButton variant="solid" aria-label="Back" onClick={() => nav('/devices')}><Icon name="chevron-left" size={18} /></IconButton>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>{dev.name}</h1>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Panasonic Etherea{dev.installation ? ` · ${dev.installation}` : ''}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Panasonic Etherea{dev.installation ? ` · ${dev.installation}` : ''} · {modeWord(dev.mode, stateOn)}
+          </div>
         </div>
-        <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (dev.mode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateColor }}>{stateLabel}</span>
+        <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (dev.mode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateOn ? accent : 'var(--text-3)' }}>{stateLabel}</span>
+        <IconButton variant="ghost" aria-label="Refresh" disabled={busy} onClick={() => refetch()}><Icon name="refresh-cw" size={16} /></IconButton>
       </div>
 
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
-      {/* SETPOINT + ROOM-NOW */}
+      {/* SETPOINT + AMBIENT */}
       <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1.1fr' : '1fr', gap: 12 }}>
-        <Card padded style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8 }}>
-          <div className="pwr-eyebrow">Setpoint</div>
-          <div className="pwr-mono" style={{ fontSize: 44, fontWeight: 600, lineHeight: 1.1, color: 'var(--solar)' }}>{setpoint.toFixed(1)}°</div>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+        {/* setpoint */}
+        <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ ...eyebrow, textAlign: 'center' }}>Setpoint</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
             <IconButton variant="solid" aria-label="Lower setpoint" disabled={!canWrite || busy || setpoint <= lo} onClick={() => step(-0.5)}><Icon name="minus" size={18} /></IconButton>
+            <div className="pwr-mono" style={{ fontSize: 46, fontWeight: 600, lineHeight: 1, color: accent, minWidth: 132, textAlign: 'center' }}>{setpoint.toFixed(1)}°</div>
             <IconButton variant="solid" aria-label="Raise setpoint" disabled={!canWrite || busy || setpoint >= hi} onClick={() => step(0.5)}><Icon name="plus" size={18} /></IconButton>
           </div>
+          <SetpointSlider value={setpoint} lo={lo} hi={hi} accent={accent} disabled={!canWrite || busy} onInput={setPendingSetpoint} onCommit={commitSetpoint} />
+          <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)', textAlign: 'center' }}>range {lo}–{hi}°</div>
         </Card>
-        <Card padded style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 10 }}>
+
+        {/* ambient */}
+        <Card padded style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <div className="pwr-eyebrow">Room now</div>
-              <div className="pwr-mono" style={{ fontSize: 26, fontWeight: 600, color: WARMTH_COLOR[dev.warmth] }}>{dev.currentTempC != null ? `${dev.currentTempC.toFixed(1)}°` : '—'}</div>
+              <div style={eyebrow}>Ambient</div>
+              <div className="pwr-mono" style={{ fontSize: 30, fontWeight: 600, color: WARMTH_COLOR[dev.warmth], lineHeight: 1.1 }}>{dev.currentTempC != null ? `${dev.currentTempC.toFixed(1)}°` : '—'}</div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div className="pwr-eyebrow">Δ to target</div>
-              <div className="pwr-mono" style={{ fontSize: 15, marginTop: 6, color: delta != null && delta > 0 ? 'var(--grid)' : 'var(--solar)' }}>{delta != null ? `${delta > 0 ? '+' : ''}${delta}°` : '—'}</div>
+              <div style={eyebrow}>Δ target</div>
+              <div className="pwr-mono" style={{ fontSize: 17, marginTop: 6, color: delta == null ? 'var(--text-3)' : delta > 0 ? 'var(--grid)' : delta < 0 ? 'var(--battery)' : 'var(--solar)' }}>{delta != null ? `${delta > 0 ? '+' : ''}${delta.toFixed(1)}°` : '—'}</div>
             </div>
           </div>
           {dev.currentTempC != null && (
             <div style={{ height: 6, borderRadius: 999, background: 'var(--surface-3)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.min(100, Math.max(0, ((dev.currentTempC - lo) / (hi - lo)) * 100))}%`, background: WARMTH_COLOR[dev.warmth] }} />
+              <div style={{ position: 'absolute', inset: 0, width: `${Math.min(100, Math.max(0, ((dev.currentTempC - lo) / (hi - lo)) * 100))}%`, background: WARMTH_COLOR[dev.warmth] }} />
             </div>
           )}
-          <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>cooling to {setpoint.toFixed(1)}° · range {lo}–{hi}°</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              type="button"
+              disabled={!canWrite || busy}
+              onClick={() => cmd('power', !stateOn)}
+              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, height: 42, borderRadius: 'var(--radius-md)', border: `1px solid ${stateOn ? 'var(--border-2)' : 'var(--border-1)'}`, background: stateOn ? 'var(--surface-2)' : 'var(--surface-1)', color: stateOn ? 'var(--text-1)' : 'var(--text-3)', fontSize: 13, fontWeight: 600, cursor: canWrite ? 'pointer' : 'default' }}
+            >
+              <Icon name="power" size={15} color={stateOn ? accent : 'var(--text-3)'} />
+              {stateOn ? 'On' : 'Off'}
+            </button>
+            <div className="pwr-mono" style={{ flex: 1, textAlign: 'center', fontSize: 11.5, color: 'var(--text-3)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '11px 8px' }}>
+              {stateOn ? `on · ${modeWord(dev.mode, true)}` : 'standby'}
+            </div>
+          </div>
         </Card>
       </div>
 
-      {/* POWER */}
-      <Button variant={stateOn ? 'secondary' : 'primary'} disabled={!canWrite || busy} iconLeft={<Icon name={stateOn ? 'power-off' : 'power'} size={16} />} onClick={() => cmd('power', !stateOn)}>
-        {stateOn ? 'Turn off' : 'Turn on'}
-      </Button>
-
       {/* MODE */}
-      <div>
-        <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Mode</div>
-        <SegmentedControl size="sm" block options={MODES} value={dev.mode} onChange={(m) => canWrite && cmd('mode', m)} />
-      </div>
-      {/* FAN */}
-      <div>
-        <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Fan</div>
-        <SegmentedControl size="sm" block options={FANS} onChange={(f) => canWrite && cmd('fan', Number(f))} />
-      </div>
+      <Section title="Mode">
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${MODES.length}, 1fr)`, gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 6 }}>
+          {MODES.map((m) => {
+            const on = dev.mode === m.value;
+            return (
+              <button key={m.value} type="button" disabled={!canWrite || busy} onClick={() => cmd('mode', m.value)}
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, padding: '10px 4px', borderRadius: 'var(--radius-md)', border: 'none', cursor: canWrite ? 'pointer' : 'default', background: on ? 'var(--surface-3)' : 'transparent', color: on ? accentFor(m.value) : 'var(--text-3)' }}>
+                <ModeIcon icon={m.icon} />
+                <span style={{ fontSize: 11.5, fontWeight: on ? 600 : 500, color: on ? 'var(--text-1)' : 'var(--text-3)' }}>{m.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Section>
 
-      {/* MANUAL HOLD BANNER — manual control overrides automation for a window. */}
-      {holdMins > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
-          <Icon name="hand" size={17} color="var(--text-1)" />
-          <div style={{ flex: 1, fontSize: 12 }}>
-            <span style={{ fontWeight: 600 }}>Manual hold</span>
-            <span style={{ color: 'var(--text-2)' }}> — automation won’t touch this unit for ~{holdMins} min</span>
+      {/* FAN SPEED */}
+      <Section title="Fan speed" right={<span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{fanLevel == null ? 'auto' : fanLevel === 0 ? 'auto' : `manual · ${fanLevel}/${fanSteps}`}</span>}>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1, display: 'flex', gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 8 }}>
+            {Array.from({ length: fanSteps }, (_, i) => i + 1).map((n) => {
+              const filled = fanLevel != null && fanLevel >= n;
+              return (
+                <button key={n} type="button" aria-label={`Fan ${n}`} disabled={!canWrite || busy} onClick={() => setFan(n)}
+                  style={{ flex: 1, height: 30 + n * 4, alignSelf: 'flex-end', borderRadius: 6, border: 'none', cursor: canWrite ? 'pointer' : 'default', background: filled ? 'var(--solar)' : 'var(--surface-3)', transition: 'background .12s' }} />
+              );
+            })}
           </div>
-          <button type="button" disabled={!canWrite || busy} onClick={releaseHold} style={{ fontSize: 11, color: 'var(--solar)', background: 'none', border: 'none', cursor: canWrite ? 'pointer' : 'default', fontWeight: 600 }}>
-            Release
+          <button type="button" disabled={!canWrite || busy} onClick={() => setFan(0)}
+            style={{ width: 88, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, borderRadius: 'var(--radius-lg)', border: `1px solid ${fanLevel === 0 || fanLevel == null ? 'var(--solar)' : 'var(--border-2)'}`, background: fanLevel === 0 ? 'var(--solar-wash)' : 'var(--surface-1)', color: fanLevel === 0 ? 'var(--solar)' : 'var(--text-2)', cursor: canWrite ? 'pointer' : 'default' }}>
+            <CircleA color={fanLevel === 0 ? 'var(--solar)' : 'var(--text-2)'} />
+            <span style={{ fontSize: 11.5, fontWeight: 500 }}>Auto</span>
           </button>
         </div>
-      )}
+      </Section>
 
-      {/* AUTOMATION BANNER */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'rgba(46,230,160,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
-        <Icon name="zap" size={17} color={dev.automationEnabled ? 'var(--solar)' : 'var(--text-3)'} />
-        <div style={{ flex: 1, fontSize: 12 }}>
-          <span style={{ fontWeight: 600 }}>Solar-surplus pre-cool</span>
-          <span style={{ color: 'var(--text-2)' }}> {dev.automationEnabled ? 'may drive this unit on surplus' : 'is excluded from this unit'}</span>
-        </div>
-        <button type="button" disabled={!canWrite || busy} onClick={() => toggleAutomation(!dev.automationEnabled)} style={{ fontSize: 11, color: 'var(--solar)', background: 'none', border: 'none', cursor: canWrite ? 'pointer' : 'default', fontWeight: 600 }}>
-          {dev.automationEnabled ? 'Exclude' : 'Include'}
-        </button>
+      {/* VANES */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <VaneCard title="Up / down vanes" value={ac.vaneUpDown} disabled />
+        <VaneCard title="Left / right vanes" value={ac.vaneLeftRight} disabled />
       </div>
 
-      {/* ADVANCED */}
-      <div className="pwr-eyebrow">Advanced (Intesis)</div>
+      {/* MANUAL HOLD */}
+      {holdMins > 0 && (
+        <Banner icon="hand" tone="surface">
+          <span style={{ fontWeight: 600 }}>Manual hold</span>
+          <span style={{ color: 'var(--text-2)' }}> — automation won’t touch this unit for ~{holdMins} min</span>
+          <BannerAction disabled={!canWrite || busy} onClick={releaseHold}>Release</BannerAction>
+        </Banner>
+      )}
+
+      {/* AUTOMATION */}
+      <Banner icon="zap" tone={dev.automationEnabled ? 'solar' : 'surface'} iconColor={dev.automationEnabled ? 'var(--solar)' : 'var(--text-3)'}>
+        <span style={{ fontWeight: 600 }}>Solar-surplus pre-cool</span>
+        <span style={{ color: 'var(--text-2)' }}> {dev.automationEnabled ? 'may drive this unit' : 'is excluded from this unit'}</span>
+        <BannerAction disabled={!canWrite || busy} onClick={() => toggleAutomation(!dev.automationEnabled)}>{dev.automationEnabled ? 'Exclude' : 'Include'}</BannerAction>
+      </Banner>
+
+      {/* SCHEDULE */}
+      <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="calendar-clock" size={16} color="var(--text-2)" />
+          <span style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>This unit&apos;s schedule</span>
+          <button type="button" onClick={() => nav('/schedules')} style={{ fontSize: 11.5, color: 'var(--solar)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>+ Add</button>
+        </div>
+        <ScheduleTimeline schedules={unitSchedules} />
+        <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{scheduleCaption(unitSchedules, dev)}</div>
+      </Card>
+
+      {/* CONFIG & SERVICE */}
+      <div style={{ ...eyebrow, marginTop: 4 }}>Config &amp; service</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <AdvTile label="Temp limit" value={`${dev.minSetpointC ?? 16}–${dev.maxSetpointC ?? 30}°`} />
-        <AdvTile label="Comfort band" value={`${dev.comfortFloorC ?? 16}–${dev.comfortCeilingC ?? 30}°`} />
-        <AdvTile label="Mode" value={dev.mode} />
-        <AdvTile label="Installation" value={dev.installation ?? '—'} />
+        {/* filter */}
+        <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="air-vent" size={15} color="var(--text-2)" />
+            <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1 }}>Filter cleaning</span>
+            {ac.filterLifePct != null && <button type="button" disabled={!canWrite} style={{ fontSize: 11, color: 'var(--solar)', background: 'none', border: 'none', cursor: canWrite ? 'pointer' : 'default', fontWeight: 600 }}>Reset</button>}
+          </div>
+          {ac.filterLifePct != null ? (
+            <>
+              <div style={{ height: 6, borderRadius: 999, background: 'var(--surface-3)', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${Math.max(0, Math.min(100, ac.filterLifePct))}%`, background: ac.filterLifePct < 20 ? 'var(--grid)' : 'var(--battery)' }} />
+              </div>
+              <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{ac.filterLifePct}% life{ac.filterDays != null ? ` · ~${ac.filterDays} days` : ''}</div>
+            </>
+          ) : (
+            <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>— awaiting unit data</div>
+          )}
+        </Card>
+        {/* maintenance */}
+        <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="wrench" size={15} color="var(--text-2)" />
+            <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1 }}>Maintenance</span>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: ac.maintenanceAlert ? 'var(--grid)' : 'var(--solar)' }}>{ac.maintenanceAlert || 'No alerts'}</div>
+          <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{ac.maintenanceEveryMonths != null ? `Reminder every ${ac.maintenanceEveryMonths} mo · ${ac.maintenanceEnabled ? 'on' : 'disabled'}` : 'No reminder set'}</div>
+        </Card>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <MetaTile label="Temp limit" value={`${dev.minSetpointC ?? 16}–${dev.maxSetpointC ?? 30}°`} />
+        <MetaTile label="Comfort band" value={`${dev.comfortFloorC ?? 16}–${dev.comfortCeilingC ?? 30}°`} />
+        <MetaTile label="Installation" value={dev.installation ?? 'Intesis'} />
+        <MetaTile label="Signal" value={ac.signal ? cap(ac.signal) : (dev.online ? 'Online' : '—')} valueColor={ac.signal === 'weak' ? 'var(--grid)' : dev.online ? 'var(--solar)' : 'var(--text-3)'} />
       </div>
 
       {!canWrite && <div style={{ fontSize: 11.5, color: 'var(--grid)', textAlign: 'center' }}>Read-only — only an admin can command devices, and control must be armed.</div>}
@@ -184,11 +291,132 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   );
 }
 
-function AdvTile({ label, value }: { label: string; value: string }) {
+/* ----------------------------------------------------------------------------
+ * Pieces
+ * --------------------------------------------------------------------------*/
+
+function Section({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '9px 12px' }}>
-      <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{label}</span>
-      <span className="pwr-mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{value}</span>
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <div style={eyebrow}>{title}</div>
+        {right}
+      </div>
+      {children}
     </div>
   );
 }
+
+function SetpointSlider({ value, lo, hi, accent, disabled, onInput, onCommit }: {
+  value: number; lo: number; hi: number; accent: string; disabled: boolean;
+  onInput: (v: number) => void; onCommit: (v: number) => void;
+}) {
+  const pct = Math.min(100, Math.max(0, ((value - lo) / (hi - lo)) * 100));
+  return (
+    <div style={{ position: 'relative', height: 18, display: 'flex', alignItems: 'center' }}>
+      <div style={{ position: 'absolute', left: 0, right: 0, height: 6, borderRadius: 999, background: 'var(--surface-3)' }} />
+      <div style={{ position: 'absolute', left: 0, height: 6, width: `${pct}%`, borderRadius: 999, background: disabled ? 'var(--text-3)' : accent }} />
+      <input
+        type="range" min={lo} max={hi} step={0.5} value={value} disabled={disabled}
+        onChange={(e) => onInput(Number(e.target.value))}
+        onMouseUp={(e) => onCommit(Number((e.target as HTMLInputElement).value))}
+        onTouchEnd={(e) => onCommit(Number((e.target as HTMLInputElement).value))}
+        onKeyUp={(e) => onCommit(Number((e.target as HTMLInputElement).value))}
+        aria-label="Setpoint"
+        style={{ position: 'absolute', left: 0, right: 0, width: '100%', margin: 0, opacity: 0, height: 18, cursor: disabled ? 'default' : 'pointer' }}
+      />
+    </div>
+  );
+}
+
+function VaneCard({ title, value, disabled }: { title: string; value?: number | 'swing' | 'auto'; disabled?: boolean }) {
+  const mode: 'auto' | 'swing' | 'pos' = value === 'swing' ? 'swing' : typeof value === 'number' ? 'pos' : 'auto';
+  const pos = typeof value === 'number' ? value : 0;
+  const muted = disabled;
+  const pill = (active: boolean): CSSProperties => ({
+    fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 'var(--radius-md)',
+    border: `1px solid ${active ? 'var(--solar)' : 'var(--border-2)'}`,
+    background: active ? 'var(--solar-wash)' : 'transparent', color: active ? 'var(--solar)' : 'var(--text-3)',
+  });
+  return (
+    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: muted ? 0.6 : 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <Icon name="git-commit-vertical" size={14} color="var(--text-3)" />
+        <span style={{ ...eyebrow, lineHeight: 1.2 }}>{title}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <span style={pill(mode === 'auto')}>Auto</span>
+        <span style={pill(mode === 'swing')}>≋ Swing</span>
+      </div>
+      <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: 4 }}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <div key={n} style={{ flex: 1, textAlign: 'center', fontSize: 12, padding: '6px 0', borderRadius: 6, fontWeight: mode === 'pos' && pos === n ? 700 : 500, background: mode === 'pos' && pos === n ? 'var(--solar)' : 'transparent', color: mode === 'pos' && pos === n ? '#04140d' : 'var(--text-3)' }}>{n}</div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function ScheduleTimeline({ schedules }: { schedules: Schedule[] }) {
+  const frac = (hhmm: string): number => {
+    const [h, m] = hhmm.split(':').map(Number);
+    return Math.min(1, Math.max(0, ((h || 0) + (m || 0) / 60) / 24));
+  };
+  return (
+    <div style={{ position: 'relative', height: 22, borderRadius: 'var(--radius-md)', background: 'var(--surface-1)', border: '1px solid var(--border-1)', overflow: 'hidden' }}>
+      {schedules.filter((s) => s.enabled).map((s, i) => {
+        const a = frac(s.start); const b = frac(s.end);
+        const left = Math.min(a, b) * 100; const width = Math.max(2, Math.abs(b - a) * 100);
+        return <div key={s.id ?? i} title={`${s.name} ${s.start}–${s.end}`} style={{ position: 'absolute', top: 4, bottom: 4, left: `${left}%`, width: `${width}%`, borderRadius: 4, background: 'var(--solar)', opacity: 0.55 }} />;
+      })}
+    </div>
+  );
+}
+
+function scheduleCaption(schedules: Schedule[], dev: DeviceView): string {
+  const active = schedules.filter((s) => s.enabled);
+  if (active.length) {
+    const parts = active.map((s) => `${s.name} ${parseInt(s.start, 10)}–${parseInt(s.end, 10)}`);
+    return parts.join(' · ');
+  }
+  if (dev.governedBy.schedules.length) return `Inherits ${dev.governedBy.schedules.join(', ')}`;
+  return 'No unit schedule · inherits group defaults';
+}
+
+function Banner({ icon, tone, iconColor, children }: { icon: string; tone: 'solar' | 'surface'; iconColor?: string; children: ReactNode }) {
+  const solar = tone === 'solar';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: solar ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${solar ? 'rgba(46,230,160,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
+      <Icon name={icon} size={17} color={iconColor ?? 'var(--text-1)'} />
+      <div style={{ flex: 1, fontSize: 12 }}>{children}</div>
+    </div>
+  );
+}
+
+function BannerAction({ disabled, onClick, children }: { disabled?: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick} style={{ fontSize: 11, color: 'var(--solar)', background: 'none', border: 'none', cursor: disabled ? 'default' : 'pointer', fontWeight: 600, marginLeft: 8 }}>{children}</button>
+  );
+}
+
+function MetaTile({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '11px 13px' }}>
+      <span style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{label}</span>
+      <span className="pwr-mono" style={{ fontSize: 12.5, fontWeight: 600, color: valueColor ?? 'var(--text-1)' }}>{value}</span>
+    </div>
+  );
+}
+
+function ModeIcon({ icon }: { icon: string }) {
+  if (icon === '_a') return <CircleA color="currentColor" />;
+  return <Icon name={icon} size={18} />;
+}
+
+function CircleA({ color }: { color: string }) {
+  return (
+    <span style={{ width: 20, height: 20, borderRadius: '50%', border: `1.5px solid ${color}`, display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, color }}>A</span>
+  );
+}
+
+const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
