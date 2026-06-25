@@ -30,7 +30,24 @@ export interface LiveResponse {
     selfSufficiencyPct: number;
     savedEur: number;
   };
-  day: { solarKw: number[]; homeKw: number[] };
+  /**
+   * Rolling today curves, 24 hourly buckets (Madrid time). Power series in kW,
+   * SoC series in %. Buckets past `nowHour` are 0 (the day hasn't happened yet) —
+   * the chart truncates there. Best-effort in-process buffer; resets on restart.
+   */
+  day: {
+    solarKw: number[]; // production
+    homeKw: number[]; // consumption
+    chargeKw: number[]; // batteries charging (Sonnen + Tesla, combined)
+    dischargeKw: number[]; // batteries discharging (combined)
+    gridImportKw: number[]; // bought from grid
+    gridExportKw: number[]; // fed into grid
+    sonnenSoc: number[]; // %
+    teslaSoc: number[]; // %
+    combinedSoc: number[]; // % of combined usable capacity
+    /** Fractional Madrid hour right now (0–24) for the "now" marker. */
+    nowHour: number;
+  };
 }
 
 export interface HistoryByBand {
