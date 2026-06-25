@@ -241,10 +241,6 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   if (wide) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 880, margin: '0 auto', width: '100%' }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>Devices</h1>
-          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{d?.devices[0]?.installation ?? 'First installation'}</div>
-        </div>
         {body}
       </div>
     );

@@ -13,6 +13,7 @@ const META: Record<string, { eyebrow: string; title: string }> = {
   '/': { eyebrow: 'Live overview', title: 'Your home, right now' },
   '/reports': { eyebrow: 'Reports', title: 'Reports' },
   '/batteries': { eyebrow: 'Batteries', title: 'Sonnen + Tesla' },
+  '/devices': { eyebrow: 'Home', title: 'Devices' },
   '/alerts': { eyebrow: 'Alerts', title: 'Notifications' },
   '/settings': { eyebrow: 'Settings', title: 'System' },
   '/scenarios': { eyebrow: 'Scenarios', title: 'Strategy profiles' },
