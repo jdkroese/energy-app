@@ -145,6 +145,63 @@ export async function evaluateSolarSurplusPrecool(
   });
 }
 
+function hhmmToMin(s: string): number {
+  const [h, m] = s.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/** Is the schedule's window active right now (local time)? Handles overnight wrap. */
+function scheduleActiveNow(s: store.Schedule, now: Date): boolean {
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const a = hhmmToMin(s.start);
+  const b = hhmmToMin(s.end);
+  const dow = now.getDay(); // 0=Sun..6=Sat (local)
+  if (a <= b) return cur >= a && cur < b && s.days.includes(dow);
+  // overnight window (e.g. 22:00→07:00): the active "day" is when it STARTED.
+  if (cur >= a) return s.days.includes(dow); // evening part — started today
+  if (cur < b) return s.days.includes((dow + 6) % 7); // morning part — started yesterday
+  return false;
+}
+
+/**
+ * Apply enabled schedules whose window is active now. For each in-scope device,
+ * if the schedule carries a `roomTempAboveC` condition, only apply when the room
+ * is ABOVE it — so scheduled cooling doesn't run on an already-cool room.
+ * Conservative: sets mode/setpoint/power-on during the window; never forces a unit
+ * OFF (occupants may want it). Guardrailed + compressor-staggered via issueClimate.
+ */
+export async function evaluateSchedules(fleet: ClimateUnit[], snap: RichClimateSnapshot): Promise<void> {
+  const schedules = store.get().schedules.filter((s) => s.enabled);
+  if (schedules.length === 0) return;
+  const byId = new Map(fleet.map((u) => [u.id, u]));
+  const now = new Date();
+  let pendingImportKw = 0;
+
+  for (const s of schedules) {
+    if (!scheduleActiveNow(s, now)) continue;
+    for (const id of s.scope.deviceIds) {
+      const u = byId.get(id);
+      if (!u) continue;
+      // CONDITION: only apply when the room is above the threshold (if one is set).
+      if (s.roomTempAboveC != null && (u.currentTempC === null || u.currentTempC <= s.roomTempAboveC)) {
+        logDecision(u.id, `schedule ${s.name}: skip`, `room ${u.currentTempC ?? '—'}°C not above ${s.roomTempAboveC}°C`);
+        continue;
+      }
+      const reason = `schedule ${s.name}: ${s.mode}@${s.setpointC}°C`;
+      const startingCompressor = !u.power;
+      const projected = snap.gridImportKw + pendingImportKw + (startingCompressor ? COMPRESSOR_START_KW : 0);
+      if (startingCompressor && projected > store.get().devices.guardrails.gridImportCapKw) {
+        logDecision(u.id, `schedule ${s.name}: defer start`, `staggering — projected ${projected.toFixed(1)}kW > cap`);
+        continue;
+      }
+      await issueClimate(u, 'mode', s.mode, reason, { ...snap, pendingImportKw });
+      await issueClimate(u, 'setpoint', s.setpointC, reason, { ...snap, pendingImportKw });
+      const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
+      if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
+    }
+  }
+}
+
 async function tick(): Promise<void> {
   try {
     const dev = store.get().devices;
@@ -152,7 +209,8 @@ async function tick(): Promise<void> {
     if (!intesis.isConfigured()) return;
 
     const automations = store.get().automations.filter((a) => a.enabled);
-    if (automations.length === 0) return;
+    const schedules = store.get().schedules.filter((s) => s.enabled);
+    if (automations.length === 0 && schedules.length === 0) return;
 
     const fleet = await intesis.getFleet();
     if (fleet.length === 0) return;
@@ -164,6 +222,10 @@ async function tick(): Promise<void> {
       });
       return;
     }
+
+    // Schedules are the floor; automations (surplus pre-cool) run after and may
+    // pre-cool earlier or push colder when free solar is available.
+    await evaluateSchedules(fleet, snap);
 
     for (const a of automations) {
       if (a.type === 'solar_surplus_precool') {

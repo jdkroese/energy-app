@@ -242,6 +242,13 @@ export interface Schedule {
   mode: ClimateMode;
   setpointC: number;
   fan?: number;
+  /**
+   * Optional condition: only apply this schedule to a device when its room
+   * temperature is ABOVE this (°C). null/undefined = no condition (always apply
+   * during the window). So "cool 24° 18:00–23:00, only if room > 26°" won't run
+   * the AC on a cool evening.
+   */
+  roomTempAboveC?: number | null;
 }
 
 export type AutomationType = 'solar_surplus_precool';

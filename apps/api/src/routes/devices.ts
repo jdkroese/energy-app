@@ -281,6 +281,7 @@ export function createSchedule(body: Partial<Schedule>): unknown {
     mode: body.mode ?? 'cool',
     setpointC: typeof body.setpointC === 'number' ? body.setpointC : 24,
     fan: body.fan,
+    roomTempAboveC: typeof body.roomTempAboveC === 'number' ? body.roomTempAboveC : null,
   };
   store.update((st) => {
     st.schedules.push(s);
@@ -304,6 +305,7 @@ export function updateSchedule(id: string, body: Partial<Schedule>): unknown {
       mode: body.mode ?? cur.mode,
       setpointC: typeof body.setpointC === 'number' ? body.setpointC : cur.setpointC,
       fan: body.fan ?? cur.fan,
+      roomTempAboveC: body.roomTempAboveC !== undefined ? body.roomTempAboveC : cur.roomTempAboveC,
     };
     st.schedules[idx] = merged;
     return merged;

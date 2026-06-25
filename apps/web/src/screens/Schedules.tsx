@@ -80,7 +80,10 @@ function ScheduleCard({ s, deviceNames, canWrite, onToggle, onEdit, onDelete }: 
       <Icon name={ICON_FOR(s.name)} size={18} color={color} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</div>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{names.length ? names.join(' · ') : 'No devices'}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {names.length ? names.join(' · ') : 'No devices'}
+          {s.roomTempAboveC != null && <span style={{ color: 'var(--grid)' }}> · only if &gt; {s.roomTempAboveC}°</span>}
+        </div>
       </div>
       <div className="pwr-mono" style={{ fontSize: 12, color: 'var(--text-2)', textAlign: 'right', whiteSpace: 'nowrap' }}>
         {s.start}–{s.end}<br /><span style={{ color }}>{s.mode} {s.setpointC.toFixed(1)}°</span>
@@ -107,11 +110,13 @@ function ScheduleEditor({ initial, deviceOptions, onSave, onCancel }: {
   const [mode, setMode] = useState<ClimateMode>((initial.mode as ClimateMode) ?? 'cool');
   const [setpointC, setSetpointC] = useState(initial.setpointC ?? 24);
   const [deviceIds, setDeviceIds] = useState<string[]>(initial.scope?.deviceIds ?? []);
+  const [condOn, setCondOn] = useState(initial.roomTempAboveC != null);
+  const [condC, setCondC] = useState(initial.roomTempAboveC ?? 26);
   const [busy, setBusy] = useState(false);
 
   const toggleDay = (store: number) => setDays((p) => (p.includes(store) ? p.filter((x) => x !== store) : [...p, store].sort()));
   const toggleDevice = (id: string) => setDeviceIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
-  const save = async () => { setBusy(true); try { await onSave({ name, days, start, end, mode, setpointC, scope: { deviceIds } }); } finally { setBusy(false); } };
+  const save = async () => { setBusy(true); try { await onSave({ name, days, start, end, mode, setpointC, scope: { deviceIds }, roomTempAboveC: condOn ? condC : null }); } finally { setBusy(false); } };
 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -133,6 +138,25 @@ function ScheduleEditor({ initial, deviceOptions, onSave, onCancel }: {
       <div style={{ display: 'flex', gap: 10 }}>
         <Select label="Mode" value={mode} options={MODE_OPTS} onChange={(e) => setMode(e.target.value as ClimateMode)} />
         <Input label="Setpoint °C" type="number" step={0.5} min={16} max={30} value={setpointC} onChange={(e) => setSetpointC(Number(e.target.value))} />
+      </div>
+      {/* CONDITION — only run when the room is warm enough */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '11px 13px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Icon name="thermometer" size={16} color="var(--grid)" />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 500 }}>Only if room is warm</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Skip cooling rooms that aren't above a temperature</div>
+          </div>
+          <Switch checked={condOn} onChange={(e) => setCondOn(e.target.checked)} />
+        </div>
+        {condOn && (
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+            <div style={{ width: 140 }}>
+              <Input label="Room above °C" type="number" step={0.5} min={16} max={32} value={condC} onChange={(e) => setCondC(Number(e.target.value))} />
+            </div>
+            <span style={{ fontSize: 11, color: 'var(--text-3)', paddingBottom: 9 }}>only cools a room when it's hotter than this</span>
+          </div>
+        )}
       </div>
       <div>
         <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Devices</div>

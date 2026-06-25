@@ -462,6 +462,8 @@ export interface Schedule {
   mode: ClimateMode;
   setpointC: number;
   fan?: number;
+  /** Optional condition: only apply when a device's room temp is above this (°C). */
+  roomTempAboveC?: number | null;
 }
 
 export interface SchedulesResponse {
