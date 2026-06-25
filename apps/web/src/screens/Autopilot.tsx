@@ -77,28 +77,6 @@ function armTone(s: ControlStatus | null): { c: string; wash: string; label: str
   return { c: 'var(--solar)', wash: 'var(--solar-wash)', label: 'AUTO', icon: 'sparkles', live: true };
 }
 
-function StatusBanner({ s }: { s: ControlStatus }) {
-  const t = armTone(s);
-  return (
-    <div style={{ borderRadius: 'var(--radius-card)', border: `1px solid ${t.c}`, background: t.wash, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8, boxShadow: t.live ? `0 0 24px -8px ${t.c}` : undefined }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span style={{ position: 'relative', width: 12, height: 12, flex: 'none' }}>
-          <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: t.c, boxShadow: t.live ? `0 0 10px ${t.c}` : 'none' }} />
-          {t.live && <span style={{ position: 'absolute', inset: -4, borderRadius: '50%', background: t.c, opacity: 0.5, animation: 'pwr-pulse 1.8s var(--ease-out) infinite' }} />}
-        </span>
-        <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '.03em', color: t.c, fontFamily: 'var(--font-mono)' }}>{t.label === 'OFF' ? 'DISARMED' : `${t.label} — running`}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--text-3)', textAlign: 'right' }}>{t.live ? 'Power is commanding your batteries' : 'No commands reach your batteries'}</span>
-      </div>
-      {s.lastError && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 11px', borderRadius: 'var(--radius-md)', background: 'var(--danger-wash)', color: 'var(--danger)', fontSize: 12.5 }}>
-          <Icon name="alert-octagon" size={15} />
-          <span><strong>Last error:</strong> {s.lastError}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ---- a single "system" status row (Summary) ------------------------------ */
 function SystemRow({ icon, name, detail, label, tone, dot, first }: { icon: string; name: string; detail: string; label: string; tone: string; dot: boolean; first?: boolean }) {
   return (
@@ -355,24 +333,6 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
       )}
       {planStale && <StaleBanner updatedAt={planAt} />}
 
-      {/* persistent armed header — visible on every tab */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--danger-wash)', color: 'var(--danger)' }}>
-          <Icon name="radio-tower" size={18} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14.5, fontWeight: 600 }}>Real device control</div>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Sonnen + Tesla · guardrails always on</div>
-        </div>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)', background: at.wash, color: at.c }}>
-          <span style={{ width: 7, height: 7, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 7px ${at.c}` : 'none' }} />
-          {at.label}
-        </span>
-        {isAdmin && armed && (
-          <Button size="sm" variant="danger" iconLeft={<Icon name="power-off" />} onClick={onKill}>Disarm</Button>
-        )}
-      </div>
-
       {/* tab bar */}
       <SegmentedControl
         block
@@ -386,52 +346,63 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
         onChange={(v) => setTab(v as TabKey)}
       />
 
+      {/* consolidated control block — armed state (every tab) + systems & next move (Summary) */}
+      <div style={{ borderRadius: 'var(--radius-card)', border: `1px solid ${at.live ? at.c : 'var(--border-1)'}`, background: 'var(--surface-1)', boxShadow: at.live ? `0 0 24px -10px ${at.c}` : undefined, padding: 16 }}>
+        {/* armed strip */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ position: 'relative', width: 12, height: 12, flex: 'none' }}>
+            <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 10px ${at.c}` : 'none' }} />
+            {at.live && <span style={{ position: 'absolute', inset: -4, borderRadius: '50%', background: at.c, opacity: 0.5, animation: 'pwr-pulse 1.8s var(--ease-out) infinite' }} />}
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 14.5, letterSpacing: '.03em', color: at.c }}>
+              {!status ? 'CONNECTING…' : at.label === 'OFF' ? 'DISARMED' : `${at.label} — running`}
+            </span>
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 1 }}>
+              Real device control · {armed ? 'commanding your batteries live' : 'no commands reaching your batteries'}
+            </div>
+          </div>
+          {isAdmin && armed && (
+            <Button size="sm" variant="danger" iconLeft={<Icon name="power-off" />} onClick={onKill}>Disarm</Button>
+          )}
+        </div>
+
+        {status?.lastError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '8px 11px', borderRadius: 'var(--radius-md)', background: 'var(--danger-wash)', color: 'var(--danger)', fontSize: 12.5 }}>
+            <Icon name="alert-octagon" size={15} />
+            <span><strong>Last error:</strong> {status.lastError}</span>
+          </div>
+        )}
+
+        {/* systems + next move — Summary only */}
+        {tab === 'summary' && (
+          <>
+            <div style={{ marginTop: 12, paddingTop: 4, borderTop: '1px solid var(--border-1)' }}>
+              <SystemRow first icon="cpu" name="Battery autopilot" detail="Sonnen + Tesla command authority" label={sysLabel} tone={at.label === 'OFF' ? 'text-3' : at.label === 'MANUAL' ? 'battery' : 'solar'} dot={at.live} />
+              <SystemRow icon="sun" name="Solar self-consumption" detail={`cloud-adjusted · ~${solarNow.toFixed(1)} kW now · ${plan.weather.cloudAvgPct}% cloud`} label={armed ? sysLabel : 'Producing'} tone="solar" dot />
+            </div>
+            {nextAction && (
+              <div style={{ display: 'flex', gap: 11, alignItems: 'center', marginTop: 4, paddingTop: 12, borderTop: '1px solid var(--border-1)' }}>
+                <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--battery-wash)', color: 'var(--battery)' }}>
+                  <Icon name={nextAction.icon} size={17} />
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--text-3)' }}>Next move</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--battery)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>{hhmm(nextAction.h)} · {nextRel}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 600 }}>{nextAction.title}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2, lineHeight: 1.4 }}>{nextAction.why}</div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {/* ============================= SUMMARY ============================= */}
       {tab === 'summary' && (
         <>
-          {status ? <StatusBanner s={status} /> : connecting}
-
-          {/* systems — what's armed and in which mode */}
-          <div style={panelCard}>
-            <Eyebrow>Systems</Eyebrow>
-            <div style={{ marginTop: 6 }}>
-              <SystemRow
-                first
-                icon="cpu"
-                name="Battery autopilot"
-                detail="Sonnen + Tesla command authority"
-                label={sysLabel}
-                tone={at.label === 'OFF' ? 'text-3' : at.label === 'MANUAL' ? 'battery' : 'solar'}
-                dot={at.live}
-              />
-              <SystemRow
-                icon="sun"
-                name="Solar self-consumption"
-                detail={`cloud-adjusted · ~${solarNow.toFixed(1)} kW now · ${plan.weather.cloudAvgPct}% cloud`}
-                label={armed ? sysLabel : 'Producing'}
-                tone="solar"
-                dot
-              />
-            </div>
-          </div>
-
-          {/* next move */}
-          {nextAction && (
-            <div style={{ ...panelCard, border: '1px solid color-mix(in srgb, var(--battery) 30%, transparent)', display: 'flex', gap: 12, alignItems: 'center' }}>
-              <span style={{ width: 38, height: 38, borderRadius: 11, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--battery-wash)', color: 'var(--battery)' }}>
-                <Icon name={nextAction.icon} size={20} />
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Eyebrow>Next move</Eyebrow>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--battery)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>{hhmm(nextAction.h)} · {nextRel}</span>
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3 }}>{nextAction.title}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2, lineHeight: 1.45 }}>{nextAction.why}</div>
-              </div>
-            </div>
-          )}
-
           {/* the plan — hero */}
           <Card
             title="The plan · next 24 h"
