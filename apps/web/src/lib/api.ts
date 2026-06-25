@@ -17,6 +17,7 @@ import type {
   DeviceDetailResponse,
   DevicesResponse,
   DevicesStatus,
+  HistoryDayResponse,
   HistoryResponse,
   IntegrationStatus,
   LiveResponse,
@@ -117,6 +118,8 @@ export const api = {
   live: () => getJSON<LiveResponse>('/api/live'),
   batteries: () => getJSON<BatteriesResponse>('/api/batteries'),
   history: (range: string) => getJSON<HistoryResponse>(`/api/history?range=${enc(range)}`),
+  historyDay: (offset: number) =>
+    getJSON<HistoryDayResponse>(`/api/history/day?offset=${enc(String(offset))}`),
   alerts: () => getJSON<AlertsResponse>('/api/alerts'),
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   brainPlan: () => getJSON<BrainPlanResponse>('/api/brain/plan'),

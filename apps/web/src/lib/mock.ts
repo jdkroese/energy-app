@@ -7,6 +7,9 @@ import type {
   AlertsResponse,
   BatteriesResponse,
   BrainPlanResponse,
+  DayChartForecast,
+  DayChartSeries,
+  HistoryDayResponse,
   HistoryResponse,
   LiveResponse,
   ScenariosResponse,
@@ -68,6 +71,86 @@ export const MOCK_LIVE: LiveResponse = {
     combinedSoc: combinedSocDay,
     nowHour: nowHourLocal,
   },
+};
+
+/* ---- Live day chart (5-min, 288 buckets) ---------------------------------
+ * Expand the 24-hour mock day arrays to 288 buckets by linear interpolation so
+ * the new DayChart has a faithful fallback when the API isn't reachable. */
+function to288(hourly: number[]): number[] {
+  const out = new Array<number>(288).fill(0);
+  for (let i = 0; i < 288; i++) {
+    const h = i / 12;
+    const h0 = Math.floor(h);
+    const h1 = Math.min(23, h0 + 1);
+    const frac = h - h0;
+    const a = hourly[h0] ?? 0;
+    const b = hourly[h1] ?? a;
+    out[i] = Math.round((a + (b - a) * frac) * 100) / 100;
+  }
+  return out;
+}
+
+const mockNowIndex = (() => {
+  const n = new Date();
+  return Math.min(287, n.getHours() * 12 + Math.floor(n.getMinutes() / 5));
+})();
+
+const mockDaySeries: DayChartSeries = {
+  solarKw: to288(solarDay),
+  homeKw: to288(homeDay),
+  chargeKw: to288(chargeDay),
+  dischargeKw: to288(dischargeDay),
+  gridImportKw: to288(gridImportDay),
+  gridExportKw: to288(gridExportDay),
+  sonnenSoc: to288(sonnenSoc).map((v) => Math.round(v)),
+  teslaSoc: to288(teslaSoc).map((v) => Math.round(v)),
+  combinedSoc: to288(combinedSocDay).map((v) => Math.round(v)),
+};
+
+// Measured = up to now; forecast = from now onward (null before).
+const mockMeasured: DayChartSeries = {
+  solarKw: mockDaySeries.solarKw.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  homeKw: mockDaySeries.homeKw.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  chargeKw: mockDaySeries.chargeKw.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  dischargeKw: mockDaySeries.dischargeKw.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  gridImportKw: mockDaySeries.gridImportKw.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  gridExportKw: mockDaySeries.gridExportKw.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  sonnenSoc: mockDaySeries.sonnenSoc.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  teslaSoc: mockDaySeries.teslaSoc.map((v, i) => (i <= mockNowIndex ? v : 0)),
+  combinedSoc: mockDaySeries.combinedSoc.map((v, i) => (i <= mockNowIndex ? v : 0)),
+};
+
+const fcOnward = (arr: number[]): (number | null)[] =>
+  arr.map((v, i) => (i >= mockNowIndex ? v : null));
+
+const mockForecast: DayChartForecast = {
+  solarKw: fcOnward(mockDaySeries.solarKw),
+  homeKw: fcOnward(mockDaySeries.homeKw),
+  chargeKw: mockDaySeries.chargeKw.map(() => null),
+  dischargeKw: mockDaySeries.dischargeKw.map(() => null),
+  gridImportKw: mockDaySeries.gridImportKw.map(() => null),
+  gridExportKw: mockDaySeries.gridExportKw.map(() => null),
+  sonnenSoc: mockDaySeries.sonnenSoc.map(() => null),
+  teslaSoc: mockDaySeries.teslaSoc.map(() => null),
+  combinedSoc: fcOnward(mockDaySeries.combinedSoc),
+};
+
+export const MOCK_HISTORY_DAY: HistoryDayResponse = {
+  date: nowHourLocal >= 0 ? new Date().toISOString().slice(0, 10) : '',
+  offset: 0,
+  nowIndex: mockNowIndex,
+  series: mockMeasured,
+  forecast: mockForecast,
+  tariffBands: [
+    { startH: 0, endH: 8, band: 'P3' },
+    { startH: 8, endH: 10, band: 'P2' },
+    { startH: 10, endH: 14, band: 'P1' },
+    { startH: 14, endH: 18, band: 'P2' },
+    { startH: 18, endH: 22, band: 'P1' },
+    { startH: 22, endH: 24, band: 'P2' },
+  ],
+  hasPrev: true,
+  hasNext: false,
 };
 
 export const MOCK_BATTERIES: BatteriesResponse = {

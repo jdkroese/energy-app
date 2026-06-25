@@ -5,6 +5,7 @@ import * as tesla from './connectors/tesla';
 import { getLive } from './routes/live';
 import { getBatteries } from './routes/batteries';
 import { getHistory } from './routes/history';
+import { getHistoryDay } from './routes/history-day';
 import {
   getAlerts,
   setChannel,
@@ -99,6 +100,15 @@ app.get(
     const valid = ['hour', 'day', 'week', 'month', 'year'] as const;
     const r = (valid as readonly string[]).includes(range) ? (range as (typeof valid)[number]) : 'day';
     return getHistory(r);
+  }),
+);
+
+// Live day chart: 5-min measured + forecast for a day (offset 0=today, -1=…).
+app.get(
+  '/api/history/day',
+  wrap((req) => {
+    const offset = Number(req.query.offset ?? 0);
+    return getHistoryDay(Number.isFinite(offset) ? offset : 0);
   }),
 );
 

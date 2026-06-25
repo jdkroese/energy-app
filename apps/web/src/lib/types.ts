@@ -50,6 +50,65 @@ export interface LiveResponse {
   };
 }
 
+/* ============================================================================
+ * Live day chart — 5-minute measured + forecast (GET /api/history/day).
+ * 288 buckets/day (5-min, Madrid). Today = measured + forecast; past days =
+ * measured only (forecast null, nowIndex null, no now-line).
+ * ==========================================================================*/
+
+/** The nine series the day chart can draw. Power in kW, SoC in %. */
+export interface DayChartSeries {
+  solarKw: number[]; // production
+  homeKw: number[]; // consumption
+  chargeKw: number[]; // batteries charging (combined)
+  dischargeKw: number[]; // batteries discharging (combined)
+  gridImportKw: number[]; // bought from grid
+  gridExportKw: number[]; // fed into grid
+  sonnenSoc: number[]; // %
+  teslaSoc: number[]; // %
+  combinedSoc: number[]; // % of combined usable capacity
+}
+
+/**
+ * Forecast series: same nine keys, each length 288 with values only from
+ * nowIndex..287 (null/0 before "now"). Only present for today.
+ */
+export interface DayChartForecast {
+  solarKw: (number | null)[];
+  homeKw: (number | null)[];
+  chargeKw: (number | null)[];
+  dischargeKw: (number | null)[];
+  gridImportKw: (number | null)[];
+  gridExportKw: (number | null)[];
+  sonnenSoc: (number | null)[];
+  teslaSoc: (number | null)[];
+  combinedSoc: (number | null)[];
+}
+
+export interface TariffBandSegment {
+  startH: number;
+  endH: number;
+  band: Band;
+}
+
+export interface HistoryDayResponse {
+  /** Madrid calendar day (YYYY-MM-DD). */
+  date: string;
+  /** 0 = today, -1 = yesterday, … (clamped server-side to available range). */
+  offset: number;
+  /** 5-min bucket index of "now" (0..287), or null for past days. */
+  nowIndex: number | null;
+  /** Measured 5-min series, each length 288. */
+  series: DayChartSeries;
+  /** Forecast series (today only), each length 288 with values only ≥ nowIndex. */
+  forecast: DayChartForecast | null;
+  /** Day's tariff segments for the bottom strip. */
+  tariffBands: TariffBandSegment[];
+  /** Whether an older / newer day is available to page to. */
+  hasPrev: boolean;
+  hasNext: boolean;
+}
+
 export interface HistoryByBand {
   band: Band;
   kwh: number;

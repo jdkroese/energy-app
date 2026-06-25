@@ -1,11 +1,11 @@
-import type { ReactNode } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import { MOCK_LIVE } from '../lib/mock';
-import type { LiveResponse } from '../lib/types';
+import { MOCK_LIVE, MOCK_HISTORY_DAY } from '../lib/mock';
+import type { HistoryDayResponse, LiveResponse } from '../lib/types';
 import { Card, StatTile, RadialGauge, ProgressBar, Badge, Eyebrow, Icon } from '../components/ui';
 import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
-import { DayChart, liveDaySeries } from '../components/energy/DayChart';
+import { DayChart } from '../components/energy/DayChart';
 import { TariffBand, DEFAULT_TARIFF_24 } from '../components/energy/TariffBand';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -131,6 +131,33 @@ function deriveInsight(d: LiveResponse): Insight {
   };
 }
 
+/**
+ * Day-chart card: owns the day-offset state, fetches /api/history/day for the
+ * current offset, and paginates with the prev/next arrows. Falls back to mock
+ * data when the API isn't reachable so the chart always renders.
+ */
+function DayChartCard({ height, subtitle }: { height: number; subtitle: string }) {
+  const [offset, setOffset] = useState(0);
+  const fetcher = useCallback(() => api.historyDay(offset), [offset]);
+  const { data, loading } = usePolling<HistoryDayResponse>(
+    fetcher,
+    offset === 0 ? 60_000 : 0,
+    [offset],
+  );
+  const day = data ?? MOCK_HISTORY_DAY;
+  return (
+    <Card title="Production & consumption" subtitle={subtitle} icon={<Icon name="activity" />}>
+      <DayChart
+        day={day}
+        height={height}
+        loading={loading}
+        onPrev={() => day.hasPrev && setOffset((o) => o - 1)}
+        onNext={() => day.hasNext && setOffset((o) => o + 1)}
+      />
+    </Card>
+  );
+}
+
 export function Live({ ctx }: { ctx: ShellContext }) {
   const { data, loading, stale, updatedAt } = usePolling<LiveResponse>(api.live, 10_000);
   const d = data || (loading ? null : MOCK_LIVE);
@@ -253,9 +280,7 @@ export function Live({ ctx }: { ctx: ShellContext }) {
         })()}
 
         {/* day chart */}
-        <Card title="Production & consumption" subtitle="Today" style={{ padding: 16 }}>
-          <DayChart height={170} nowHour={live.day.nowHour} series={liveDaySeries(live.day)} />
-        </Card>
+        <DayChartCard height={190} subtitle="5-min · kW left · SoC % right" />
       </div>
     </>
   );
@@ -362,9 +387,7 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         <InsightCard live={live} />
       </div>
 
-      <Card title="Production & consumption" subtitle="Today · kW left · SoC % right" icon={<Icon name="activity" />}>
-        <DayChart height={240} nowHour={live.day.nowHour} series={liveDaySeries(live.day)} />
-      </Card>
+      <DayChartCard height={240} subtitle="5-min · kW left · SoC % right" />
     </div>
   );
 }

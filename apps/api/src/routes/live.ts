@@ -2,6 +2,7 @@ import * as sonnen from '../connectors/sonnen';
 import * as tesla from '../connectors/tesla';
 import { bandInfo } from '../tariff';
 import { config } from '../config';
+import * as history5m from '../history5m';
 
 const COMBINED_USABLE_KWH = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
 
@@ -206,7 +207,7 @@ export async function getLive(): Promise<unknown> {
     0,
   );
 
-  recordSample({
+  const sample = {
     solarKw,
     homeKw: round(homeKw),
     chargeKw,
@@ -216,7 +217,10 @@ export async function getLive(): Promise<unknown> {
     sonnenSoc,
     teslaSoc,
     combinedSoc,
-  });
+  };
+  recordSample(sample);
+  // Persistent 5-minute history (its own file) — fills as /api/live is polled.
+  history5m.record(sample);
 
   const tb = bandInfo(new Date());
 
