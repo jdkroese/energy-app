@@ -226,6 +226,9 @@ export interface IntegrationsState {
   weather?: { lat?: number; lon?: number };
   /** Airzone Local API override (webserver host/IP; port is fixed at 3000). */
   airzone?: { host?: string } | null;
+  /** Tuya Cloud project (datacenter region + Access ID/Secret). Unlocks the
+   *  whole linked device fleet — lights first, more categories to come. */
+  tuya?: { region?: string; accessId?: string; accessSecret?: string };
 }
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */
@@ -718,6 +721,7 @@ function hydrate(raw: unknown): StoreSchema {
       ...(p.integrations?.tesla ? { tesla: p.integrations.tesla } : {}),
       ...(p.integrations?.weather ? { weather: p.integrations.weather } : {}),
       ...(p.integrations?.airzone ? { airzone: p.integrations.airzone } : {}),
+      ...(p.integrations?.tuya ? { tuya: p.integrations.tuya } : {}),
     },
     deviceSettings:
       p.deviceSettings && typeof p.deviceSettings === 'object'

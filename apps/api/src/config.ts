@@ -39,6 +39,13 @@ export const config = {
     username: process.env.INTESIS_USERNAME ?? '',
     password: process.env.INTESIS_PASSWORD ?? '',
   },
+  tuya: {
+    // Tuya Cloud project — normally set in-app (Settings → Connect Tuya); env is
+    // a fallback. Region is the datacenter (eu for Spain).
+    region: process.env.TUYA_REGION ?? 'eu',
+    accessId: process.env.TUYA_ACCESS_ID ?? '',
+    accessSecret: process.env.TUYA_ACCESS_SECRET ?? '',
+  },
   site: {
     // Jávea (Xàbia), Costa Blanca.
     lat: Number(process.env.SITE_LAT ?? 38.79),

@@ -11,6 +11,7 @@ export const NAV: NavItem[] = [
   { to: '/reports', label: 'Reports', icon: 'bar-chart-3' },
   { to: '/batteries', label: 'Batteries', icon: 'battery-charging' },
   { to: '/devices', label: 'Devices', icon: 'thermometer' },
+  { to: '/lights', label: 'Lights', icon: 'lightbulb' },
   { to: '/alerts', label: 'Alerts', icon: 'bell' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
