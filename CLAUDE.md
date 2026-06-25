@@ -1,0 +1,43 @@
+# Energy app — working agreement
+
+## Web AND mobile, always (standing rule)
+
+Every design or development request is delivered for **both web (desktop) and mobile** by
+default — never one without the other. Do not ask which platform; do both unless the user
+explicitly scopes it to one.
+
+This is a single responsive React app, not separate codebases:
+
+- Layout branches on `ctx.desktop` from `AppShell` — `useMediaQuery('(min-width: 768px)')`.
+  Desktop (≥768px) uses the collapsing **Rail**; mobile (<768px) uses the **TabBar**.
+- Screens receive `ctx` and read `ctx.desktop` (commonly aliased `const wide = ctx.desktop`).
+- So "do it for web and mobile" means: handle **both** the `wide` and the narrow branch —
+  layout, spacing, nav, touch targets, and any new component — not just the one you're looking at.
+
+When verifying a UI change, check **both** viewports (e.g. `preview_resize` to a desktop
+width ≥768px and a mobile width <768px) before calling it done. Follow the "Power" design
+system (dark control-room aesthetic) for both.
+
+## Git & multi-agent rules (standing rule — ALL agents)
+
+Multiple agents/sessions run on this repo at once. To avoid stale trees, clobbered
+work, and broken deploys, every session MUST follow these. Detail: `docs/18-multi-agent-workflow.md`.
+
+1. **One agent = one worktree = one branch.** Never run two sessions in the same checkout.
+   Start an isolated worktree with `bash scripts/new-worktree.sh <name>` (creates
+   `../energy-app-<name>` off the latest `origin/main`). Do NOT do parallel work in the
+   primary checkout — treat it as a clean launch pad.
+2. **Coordinate only through `origin`, never the filesystem.** Branch off the latest
+   `origin/main`; `git fetch && git rebase origin/main` before every push so you land on
+   others' work instead of diverging.
+3. **Never push a checkout that is behind `origin/main`**, and never `git commit` another
+   session's uncommitted changes. If you find a stale/mixed tree, stop and reconcile
+   (`git fetch && git rebase origin/main`) — do not commit-the-whole-tree.
+4. **`main` is the only branch that deploys** (CI → self-hosted runner on the mini).
+   Push feature branches freely; merge to `main` (PR or fast-forward) to ship. **Never**
+   `ssh`/`scp` a build to the mini by hand — the deploy-guard hook blocks stale pushes/SSH.
+5. **A real deploy restarts the API and boots control DISARMED.** After a deploy you care
+   about, re-arm battery L2 Auto (+ Devices for AC/Airzone automation). Doc/CI/script-only
+   changes are `paths-ignore`d in `deploy.yml` and do not deploy.
+6. **Activate the shared git guard once per clone:** `git config core.hooksPath scripts/githooks`
+   (the helper-made worktrees inherit it automatically). It blocks force/stale pushes to `main`.
