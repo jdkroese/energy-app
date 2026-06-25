@@ -26,6 +26,11 @@ function bandLabel(b: string) {
   return b === 'P1' ? 'peak' : b === 'P2' ? 'shoulder' : 'off-peak';
 }
 
+/** Live battery status word from its flow direction (was hardcoded "idle"). */
+function dirLabel(dir: string) {
+  return dir === 'charging' ? 'charging' : dir === 'discharging' ? 'discharging' : 'idle';
+}
+
 interface Insight {
   tone: 'solar' | 'battery' | 'grid';
   icon: string;
@@ -144,20 +149,20 @@ export function Live({ ctx }: { ctx: ShellContext }) {
         {/* today totals */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} delta={9} />
+            <StatTile size="sm" label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} />
           </Card>
           <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Consumed" value={live.today.consumedKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="plug" />} delta={-4} />
+            <StatTile size="sm" label="Consumed" value={live.today.consumedKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="plug" />} />
           </Card>
           <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Grid feed-in" value={live.today.gridFeedInKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="upload" />} delta={14} />
+            <StatTile size="sm" label="Grid feed-in" value={live.today.gridFeedInKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="upload" />} />
           </Card>
           <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Self-sufficiency" value={String(live.today.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} delta={5} />
+            <StatTile size="sm" label="Self-sufficiency" value={String(live.today.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} />
           </Card>
           <div style={{ gridColumn: 'span 2' }}>
             <Card glow accent="solar" style={{ padding: 14 }}>
-              <StatTile size="sm" label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} delta={7} footnote="vs grid-only" />
+              <StatTile size="sm" label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
             </Card>
           </div>
         </div>
@@ -207,12 +212,12 @@ export function Live({ ctx }: { ctx: ShellContext }) {
         <Card title="Batteries" style={{ padding: 16 }}>
           <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
             {[
-              { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh },
-              { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh },
+              { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh, dir: live.sonnen.dir },
+              { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh, dir: live.tesla.dir },
             ].map((b) => (
               <div key={b.name} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                 <RadialGauge value={b.soc} tone="battery" label={b.name} size={92} />
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{b.kwh} kWh · idle</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{b.kwh} kWh · {dirLabel(b.dir)}</div>
               </div>
             ))}
           </div>
@@ -270,19 +275,19 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
       {stale && <StaleBanner updatedAt={null} />}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 14 }}>
         <Card>
-          <StatTile label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} delta={9} footnote="vs yesterday" />
+          <StatTile label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote="today" />
         </Card>
         <Card>
-          <StatTile label="Consumed today" value={live.today.consumedKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="plug" />} delta={-4} footnote="vs yesterday" />
+          <StatTile label="Consumed today" value={live.today.consumedKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="plug" />} footnote="today" />
         </Card>
         <Card>
-          <StatTile label="Grid feed-in" value={live.today.gridFeedInKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="upload" />} delta={14} footnote="exported today" />
+          <StatTile label="Grid feed-in" value={live.today.gridFeedInKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="upload" />} footnote="exported today" />
         </Card>
         <Card>
-          <StatTile label="Self-sufficiency" value={String(live.today.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} delta={5} footnote="vs avg" />
+          <StatTile label="Self-sufficiency" value={String(live.today.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} footnote="solar + stored" />
         </Card>
         <Card>
-          <StatTile label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} delta={7} footnote="vs grid-only" />
+          <StatTile label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
         </Card>
       </div>
 
@@ -332,15 +337,15 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         <Card title="Batteries" subtitle="Sonnen + Tesla · combined 36 kWh" icon={<Icon name="battery-charging" />}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {[
-              { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh },
-              { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh },
+              { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh, dir: live.sonnen.dir },
+              { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh, dir: live.tesla.dir },
             ].map((b, i) => (
               <div key={b.name} style={{ display: 'contents' }}>
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 16 }}>
                   <RadialGauge value={b.soc} tone="battery" label={b.name} size={104} />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 500 }}>{b.kwh} kWh</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-2)' }}>idle</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{dirLabel(b.dir)}</div>
                   </div>
                 </div>
                 {i === 0 && <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-1)' }} />}

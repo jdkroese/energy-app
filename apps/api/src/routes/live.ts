@@ -126,8 +126,12 @@ export async function getLive(): Promise<unknown> {
   const teslaSolar = t?.solarKw ?? 0;
   const sonnenSolar = s ? round(s.productionW / 1000) : 0;
   const solarKw = round(teslaSolar + sonnenSolar);
-  const arrays =
-    sonnenSolar > 0 || teslaSolar > 0 ? { a: sonnenSolar, b: teslaSolar } : undefined;
+  // Two physical arrays: A (Sonnen/Sungrow-side) + B (Tesla PW3-metered). Returned
+  // as the {name,kw}[] the web contract (LiveResponse.solar.arrays) expects.
+  const arrays = [
+    { name: 'A', kw: sonnenSolar },
+    { name: 'B', kw: teslaSolar },
+  ];
 
   // Home load: prefer Tesla load_power; else Sonnen consumption.
   const homeKw = t ? t.loadKw : s ? round(s.consumptionW / 1000) : 0;
@@ -164,7 +168,7 @@ export async function getLive(): Promise<unknown> {
 
   return {
     ts: new Date().toISOString(),
-    solar: { kw: solarKw, ...(arrays ? { arrays } : {}) },
+    solar: { kw: solarKw, arrays },
     home: { kw: round(homeKw) },
     grid: { kw: gridKw, dir: gridDir },
     sonnen: s

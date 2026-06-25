@@ -78,7 +78,7 @@ export function Brain({ ctx }: { ctx: ShellContext }) {
         {/* status tiles */}
         <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(4,1fr)' : '1fr 1fr', gap: wide ? 16 : 10 }}>
           <Card style={wide ? undefined : { padding: 14 }}>
-            <StatTile size={wide ? 'md' : 'sm'} label="Projected saved today" value={`€${plan.projected.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} delta={13} footnote="vs vendor default" />
+            <StatTile size={wide ? 'md' : 'sm'} label="Projected saved today" value={`€${plan.projected.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs vendor default" />
           </Card>
           <Card style={wide ? undefined : { padding: 14 }}>
             <StatTile size={wide ? 'md' : 'sm'} label="Self-sufficiency (plan)" value={String(plan.projected.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} footnote="solar + stored" />

@@ -36,6 +36,25 @@ function StatusPill({ s }: { s: AlertStatus }) {
 
 const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px' };
 
+/**
+ * Render an alert timestamp. The live API sends ISO strings; format those as a
+ * short relative time ("12m ago"). Anything that doesn't parse as a date (e.g.
+ * the offline mock's pre-baked "2h ago") is shown verbatim.
+ */
+function fmtAlertTime(ts: string): string {
+  const t = new Date(ts).getTime();
+  if (Number.isNaN(t)) return ts;
+  const diff = Date.now() - t;
+  if (diff < 0) return 'just now';
+  const m = Math.round(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'yesterday' : `${d}d ago`;
+}
+
 /** Map the channel's display label to the contract channel type. */
 function channelType(type: string): ChannelType | null {
   const t = type.toLowerCase();
@@ -135,7 +154,7 @@ export function Alerts() {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
                     <StatusPill s={al.status} />
-                    <span style={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{al.ts}</span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{fmtAlertTime(al.ts)}</span>
                   </div>
                 </div>
                 {actionable && open && (
