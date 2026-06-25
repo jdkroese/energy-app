@@ -24,6 +24,20 @@ export const NAV_MORE: NavItem[] = [
 ];
 
 /**
+ * Mobile navigation. The bottom bar shows these four primary tabs plus a "More"
+ * button; everything else lives in the More menu. Both lists derive from
+ * NAV + NAV_MORE so the mobile nav can never silently drop a page the desktop
+ * rail exposes — add a destination once and it shows up in both.
+ */
+const MOBILE_PRIMARY_PATHS = ['/', '/reports', '/batteries', '/alerts'];
+export const MOBILE_TABS: NavItem[] = MOBILE_PRIMARY_PATHS.map(
+  (p) => NAV.find((n) => n.to === p)!,
+).filter(Boolean);
+export const MOBILE_MORE: NavItem[] = [...NAV, ...NAV_MORE].filter(
+  (n) => !MOBILE_PRIMARY_PATHS.includes(n.to),
+);
+
+/**
  * Settings sub-tabs — rendered Reports-style in the desktop TopBar (active tab is
  * the title; the tab strip is the TopBar action), and as a SegmentedControl on
  * mobile. Shared by AppShell + the Settings screen so both agree on the set.
