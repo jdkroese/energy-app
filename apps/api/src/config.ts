@@ -25,6 +25,13 @@ export const config = {
     refreshToken: process.env.TESLA_REFRESH_TOKEN ?? '',
     siteId: process.env.TESLA_ENERGY_SITE_ID ?? '',
   },
+  intesis: {
+    // "AC Cloud Control" (Intesis) — Panasonic Etherea WiFi modules. Creds are
+    // normally set in-app (Settings → Connect AC Cloud); env is a fallback.
+    apiBase: process.env.INTESIS_API_BASE ?? '',
+    username: process.env.INTESIS_USERNAME ?? '',
+    password: process.env.INTESIS_PASSWORD ?? '',
+  },
   site: {
     // Jávea (Xàbia), Costa Blanca.
     lat: Number(process.env.SITE_LAT ?? 38.79),
