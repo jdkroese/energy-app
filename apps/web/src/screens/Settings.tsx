@@ -63,6 +63,43 @@ function LinkRow({
   );
 }
 
+/** Lightweight centered modal (mirrors the InstallSheet pattern). */
+function Modal({ title, subtitle, onClose, children }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
+  }, [onClose]);
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.62)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 14, animation: 'fadeIn .16s ease' }}
+    >
+      <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}`}</style>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: '100%', maxWidth: 460, background: 'var(--surface-1, #14181d)', border: '1px solid var(--border-2)', borderRadius: 16, boxShadow: '0 12px 48px rgba(0,0,0,.5)', maxHeight: '88vh', overflowY: 'auto' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 18px 12px', borderBottom: '1px solid var(--border-1)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 2 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{ display: 'grid', placeItems: 'center', width: 32, height: 32, flex: 'none', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: 'var(--text-2)', cursor: 'pointer' }}>
+            <Icon name="x" size={17} />
+          </button>
+        </div>
+        <div style={{ padding: '16px 18px 18px' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 const pushLabel: Record<PushStatus, string> = {
   unsupported: 'Not supported on this browser',
   'needs-install': 'Add to Home Screen to enable',
@@ -613,27 +650,25 @@ function SecurityCard() {
   }, []);
 
   return (
-    <>
-      <Card title="Security" subtitle={user ? `${user.name} · ${user.email}` : undefined} style={{ padding: 0 }}>
-        <TwoFactorRow />
-        <div style={{ borderTop: '1px solid var(--border-1)' }}>
-          {loadErr && <div style={{ ...row, color: 'var(--danger)', fontSize: 13 }}>Could not load sessions.</div>}
-          {!loadErr && !sessions && <div style={{ ...row, color: 'var(--text-3)', fontSize: 13 }}>Loading sessions…</div>}
-          {sessions && <DeviceList data={sessions} reload={() => void load()} currentLabel="Active now" />}
-        </div>
-      </Card>
-      {user?.role === 'admin' && <UsersSection />}
-    </>
+    <Card title="Security" subtitle={user ? `${user.name} · ${user.email}` : undefined} style={{ padding: 0 }}>
+      <TwoFactorRow />
+      <div style={{ borderTop: '1px solid var(--border-1)' }}>
+        {loadErr && <div style={{ ...row, color: 'var(--danger)', fontSize: 13 }}>Could not load sessions.</div>}
+        {!loadErr && !sessions && <div style={{ ...row, color: 'var(--text-3)', fontSize: 13 }}>Loading sessions…</div>}
+        {sessions && <DeviceList data={sessions} reload={() => void load()} currentLabel="Active now" />}
+      </div>
+    </Card>
   );
 }
 
 /* ============================================================================
- * Connect AC Cloud — Intesis (Panasonic Etherea) integration. Admin enters the
- * AC Cloud account; the backend validates by logging in BEFORE persisting and
- * never logs the password. Once connected, the Devices screen shows the fleet.
+ * AC Cloud — Intesis (Panasonic Etherea) integration. Shown as a row in the
+ * Connections list; clicking opens the config modal. Admin enters the AC Cloud
+ * account; the backend validates by logging in BEFORE persisting and never logs
+ * the password. Once connected, the Devices screen shows the fleet.
  * ==========================================================================*/
 
-function AcCloudCard() {
+function AcCloudConnection() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
@@ -642,6 +677,7 @@ function AcCloudCard() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [open, setOpen] = useState(false);
 
   const load = async () => {
     try {
@@ -687,30 +723,50 @@ function AcCloudCard() {
   };
 
   const connected = status?.connected ?? false;
+  // Status text in the row, matching the other connections (dot + word + chevron).
+  const statusText = status === null ? 'loading…' : connected ? `connected · ${status.deviceCount ?? 0} units` : 'not connected';
+  const statusTone = status === null ? 'text-3' : connected ? 'solar' : 'grid';
 
   return (
-    <Card title="Connect AC Cloud" subtitle="Panasonic Etherea climate (Intesis)" style={{ padding: 0 }}>
-      <div style={{ ...row, borderTop: 'none', alignItems: 'flex-start' }}>
-        <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: connected ? 'var(--solar)' : 'var(--text-3)' }}>
-          <Icon name="thermometer" size={17} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-            AC Cloud
-            {connected ? (
-              <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>Connected · {status?.deviceCount ?? 0} units</Badge>
-            ) : (
-              <Badge tone="neutral" variant="soft">Not connected</Badge>
-            )}
+    <>
+      <LinkRow
+        icon="thermometer"
+        tone={connected ? 'solar' : undefined}
+        name="AC Cloud"
+        onClick={() => setOpen(true)}
+        right={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            {status !== null && <Dot tone={connected ? 'solar' : 'grid'} />}
+            <span style={{ fontSize: 12, color: `var(--${statusTone})` }}>{statusText}</span>
+            <Chev />
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
-            {connected ? status?.username : 'Sign in with your AC Cloud (Intesis) account'}
+        }
+      />
+
+      {open && (
+        <Modal title="AC Cloud" subtitle="Panasonic Etherea climate (Intesis)" onClose={() => setOpen(false)}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ width: 38, height: 38, borderRadius: 11, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: connected ? 'var(--solar)' : 'var(--text-3)' }}>
+              <Icon name="thermometer" size={19} />
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {connected ? (
+                  <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>Connected · {status?.deviceCount ?? 0} units</Badge>
+                ) : (
+                  <Badge tone="neutral" variant="soft">Not connected</Badge>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+                {connected ? status?.username : 'Sign in with your AC Cloud (Intesis) account'}
+              </div>
+            </div>
           </div>
 
-          {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 4 }}>{status.error}</div>}
+          {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 12 }}>{status.error}</div>}
 
           {isAdmin && (!connected || editing) && (
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+            <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
               <Input label="Email / username" type="text" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="you@example.com" />
               <Input label="Password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
               {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
@@ -722,15 +778,15 @@ function AcCloudCard() {
           )}
 
           {isAdmin && connected && !editing && (
-            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+            <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
               <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setErr(null); }}>Change account</Button>
               <Button size="sm" variant="ghost" loading={busy} onClick={() => void disconnect()}>Disconnect</Button>
             </div>
           )}
-          {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 6 }}>Only an admin can connect AC Cloud.</div>}
-        </div>
-      </div>
-    </Card>
+          {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 12 }}>Only an admin can connect AC Cloud.</div>}
+        </Modal>
+      )}
+    </>
   );
 }
 
@@ -784,10 +840,9 @@ export function Settings() {
               />
             );
           })}
+          {/* AC Cloud (Intesis) — config opens in a modal on click */}
+          <AcCloudConnection />
         </Card>
-
-        {/* AC Cloud integration */}
-        <AcCloudCard />
 
         {/* notifications */}
         <NotificationsCard channels={ch} onChannels={setChannels} />
