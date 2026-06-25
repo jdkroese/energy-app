@@ -15,7 +15,7 @@ import type { ClimateUnit } from '../connectors/intesis';
 import type { Automation, SolarSurplusPrecoolParams } from '../store';
 import { issueClimate, _resetClimateRateLimits } from './climate-execute';
 import { takeClimateSnapshot, type RichClimateSnapshot } from './climate-snapshot';
-import { COMPRESSOR_START_KW, isBedroomZone } from './climate-guardrails';
+import { COMPRESSOR_START_KW } from './climate-guardrails';
 
 const TICK_MS = 45_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -58,8 +58,11 @@ export async function evaluateSolarSurplusPrecool(
   const isAuto = automation.authority === 'auto';
   const settings = store.get().deviceSettings;
 
-  // Stand down entirely in the exit band (P1 peak) — never start cooling then.
-  const inExitBand = snap.band === p.exitBand;
+  // Optional tariff-band stand-down: when enabled, never start cooling in the exit
+  // band (P1 peak) and stop any unit running in it. Off ⇒ band is ignored entirely.
+  // Undefined (legacy persisted rules) defaults to ON to preserve prior behavior.
+  const bandRestrictionOn = p.bandRestrictionEnabled ?? true;
+  const inExitBand = bandRestrictionOn && snap.band === p.exitBand;
 
   // Candidate devices: automation-enabled rooms. Evaluate WARMEST-FIRST so the
   // hottest room wins the first compressor start under the 14 kW cap.
@@ -109,10 +112,6 @@ export async function evaluateSolarSurplusPrecool(
     }
 
     if (!wantCool) continue;
-    if (isBedroomZone(u.name, settings[u.id]?.room ?? u.zone)) {
-      // Bedrooms: only the power guardrail's quiet-hours check ultimately decides,
-      // but we still avoid noisy starts here by deferring to issueClimate's guard.
-    }
 
     // ----- START / maintain cooling -----
     const startingCompressor = !u.power;

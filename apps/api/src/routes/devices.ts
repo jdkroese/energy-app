@@ -332,6 +332,8 @@ function sanitizeParams(p: Partial<SolarSurplusPrecoolParams> | undefined, base:
     roomTempLimitC: typeof p?.roomTempLimitC === 'number' ? p.roomTempLimitC : base.roomTempLimitC,
     targetSetpointC: typeof p?.targetSetpointC === 'number' ? p.targetSetpointC : base.targetSetpointC,
     surplusClearSec: typeof p?.surplusClearSec === 'number' ? p.surplusClearSec : base.surplusClearSec,
+    bandRestrictionEnabled:
+      typeof p?.bandRestrictionEnabled === 'boolean' ? p.bandRestrictionEnabled : base.bandRestrictionEnabled,
     exitBand: p?.exitBand ?? base.exitBand,
     startThresholdW: typeof p?.startThresholdW === 'number' ? p.startThresholdW : base.startThresholdW,
   };
@@ -342,6 +344,7 @@ export function createAutomation(body: Partial<Automation>): unknown {
     roomTempLimitC: 25,
     targetSetpointC: 23,
     surplusClearSec: 120,
+    bandRestrictionEnabled: true,
     exitBand: 'P1',
     startThresholdW: 800,
   };

@@ -13,7 +13,6 @@ import {
   checkPower,
   checkSetpoint,
   freshnessOk,
-  isBedroomZone,
   type ClimateLever,
   type ClimateSnapshot,
 } from './climate-guardrails';
@@ -106,8 +105,7 @@ export async function issueClimate(
 
     if (lever === 'power') {
       const want = Boolean(value);
-      const isBed = isBedroomZone(unit.name, settings?.room ?? unit.zone);
-      const guard = checkPower(want, isBed, new Date());
+      const guard = checkPower(want);
       if (!guard.ok && want) return reject(unit.id, lever, unit.power ? 'on' : 'off', guard.reason);
       const to = guard.value;
       // Powering a compressor ON consumes import headroom — respect the cap.

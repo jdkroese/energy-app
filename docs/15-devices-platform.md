@@ -20,8 +20,8 @@ the battery **guardrail / authority (Off→Manual→Auto)** model.
 - `integrations.intesis: { username, password }` — set via Settings; connector reads store → env fallback.
 - `deviceSettings: Record<deviceId, { room?: string; automationEnabled: boolean; comfortCeilingC?: number; comfortFloorC?: number }>`.
 - `schedules: Schedule[]` — `{ id, name, enabled, scope: { deviceIds: string[] }, days: number[0-6], start:"HH:MM", end:"HH:MM", mode, setpointC, fan? }`.
-- `automations: Automation[]` — generic: `{ id, name, enabled, type, authority:'shadow'|'auto', params, lastEval }`. First type `solar_surplus_precool` params `{ roomTempLimitC, targetSetpointC, surplusClearSec:120, exitBand:'P1' }`.
-- `climateGuardrails: { setpointMinC:16, setpointMaxC:30, gridImportCapKw:14, quietHours:{start,end}, minCycleMin:8 }`.
+- `automations: Automation[]` — generic: `{ id, name, enabled, type, authority:'shadow'|'auto', params, lastEval }`. First type `solar_surplus_precool` params `{ roomTempLimitC, targetSetpointC, surplusClearSec:120, bandRestrictionEnabled:true, exitBand:'P1' }`. `bandRestrictionEnabled:false` ⇒ pre-cool in any tariff band (no P1 stand-down).
+- `climateGuardrails: { setpointMinC:16, setpointMaxC:30, gridImportCapKw:14, minCycleMin:8 }` — quiet-hours hard limit removed; time-of-day stand-down is now per-rule via the tariff-band restriction.
 - App **boots devices DISARMED** like batteries; climate writes are admin+arm gated.
 
 ## 3. API (`apps/api/src/routes/devices.ts` etc., mount in index.ts)

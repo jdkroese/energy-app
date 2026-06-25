@@ -261,7 +261,9 @@ export interface SolarSurplusPrecoolParams {
   targetSetpointC: number;
   /** Stop only after surplus has cleared for this long (s). */
   surplusClearSec: number;
-  /** Band at which automation stands down (P1 peak). */
+  /** Whether the tariff-band stand-down applies at all. Default true (undefined ⇒ on). */
+  bandRestrictionEnabled?: boolean;
+  /** Band at which automation stands down when bandRestrictionEnabled (P1 peak). */
   exitBand: Band;
   /** Surplus (W) above which a compressor start is permitted. */
   startThresholdW?: number;
@@ -282,7 +284,6 @@ export interface ClimateGuardrails {
   setpointMinC: number;
   setpointMaxC: number;
   gridImportCapKw: number;
-  quietHours: { start: string; end: string };
   minCycleMin: number;
 }
 
@@ -423,7 +424,6 @@ export function defaultDevices(): DevicesState {
       setpointMinC: 16,
       setpointMaxC: 30,
       gridImportCapKw: 14,
-      quietHours: { start: '23:00', end: '07:00' },
       minCycleMin: 8,
     },
   };
@@ -442,6 +442,7 @@ export function defaultAutomations(): Automation[] {
         roomTempLimitC: 25,
         targetSetpointC: 23,
         surplusClearSec: 120,
+        bandRestrictionEnabled: true,
         exitBand: 'P1',
         startThresholdW: 800,
       },
@@ -566,7 +567,6 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
     guardrails: {
       ...base.guardrails,
       ...(p.guardrails ?? {}),
-      quietHours: { ...base.guardrails.quietHours, ...(p.guardrails?.quietHours ?? {}) },
     },
   };
 }

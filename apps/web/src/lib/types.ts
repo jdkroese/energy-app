@@ -407,7 +407,6 @@ export interface ClimateGuardrails {
   setpointMinC: number;
   setpointMaxC: number;
   gridImportCapKw: number;
-  quietHours: { start: string; end: string };
   minCycleMin: number;
 }
 
@@ -477,6 +476,8 @@ export interface SolarSurplusPrecoolParams {
   roomTempLimitC: number;
   targetSetpointC: number;
   surplusClearSec: number;
+  /** Whether the tariff-band stand-down applies at all. Default true (undefined ⇒ on). */
+  bandRestrictionEnabled?: boolean;
   exitBand: Band;
   startThresholdW?: number;
 }

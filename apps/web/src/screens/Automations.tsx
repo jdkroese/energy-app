@@ -86,6 +86,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
   const aboveLimit = (devData?.devices ?? []).filter((d) => d.currentTempC != null && d.currentTempC > p.roomTempLimitC);
   const qualifying = aboveLimit.filter((d) => d.automationEnabled);
   const excluded = aboveLimit.filter((d) => !d.automationEnabled);
+  const bandOn = p.bandRestrictionEnabled ?? true;
 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
@@ -112,12 +113,13 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
         run <Tok>cool</Tok> in <Tok>matching rooms</Tok> at <Tok color="var(--solar)">{p.targetSetpointC.toFixed(1)}°</Tok>, <Tok>staggered ≤ 14 kW</Tok>
       </Block>
       <Block label="Until" color="var(--home)" wash="var(--home-wash)">
-        surplus clears <span style={{ color: 'var(--text-3)' }}>for</span> <Tok>{p.surplusClearSec}s</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> room reaches target <span style={{ color: 'var(--text-3)' }}>·or·</span> band <Tok color="var(--grid)">{p.exitBand}</Tok>
+        surplus clears <span style={{ color: 'var(--text-3)' }}>for</span> <Tok>{p.surplusClearSec}s</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> room reaches target
+        {bandOn && (<><span style={{ color: 'var(--text-3)' }}>·or·</span> band <Tok color="var(--grid)">{p.exitBand}</Tok></>)}
       </Block>
       <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: '10px 14px' }}>
         <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Limits (always enforced)</div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          <Tok color="var(--text-2)">grid import ≤ 14 kW</Tok><Tok color="var(--text-2)">quiet hours 22:00–07:00</Tok><Tok color="var(--text-2)">comfort ceiling</Tok><Tok color="var(--text-2)">min cycle 8 min</Tok>
+          <Tok color="var(--text-2)">grid import ≤ 14 kW</Tok><Tok color="var(--text-2)">comfort ceiling</Tok><Tok color="var(--text-2)">min cycle 8 min</Tok>
         </div>
       </div>
 
@@ -167,7 +169,16 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
           <Slider label="Room above" unit="°C" min={20} max={30} step={0.5} value={p.roomTempLimitC} onChange={(v) => set({ roomTempLimitC: v })} />
           <Slider label="Cool to target" unit="°C" min={16} max={26} step={0.5} value={p.targetSetpointC} onChange={(v) => set({ targetSetpointC: v })} />
           <Slider label="Surplus must clear for" unit=" s" min={30} max={600} step={30} value={p.surplusClearSec} onChange={(v) => set({ surplusClearSec: v })} />
-          <div><div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Exit band</div><SegmentedControl size="sm" options={['P1', 'P2', 'P3']} value={p.exitBand} onChange={(b) => set({ exitBand: b as SolarSurplusPrecoolParams['exitBand'] })} /></div>
+          <div>
+            <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Price-band stand-down</div>
+            <SegmentedControl
+              size="sm"
+              options={['Off', 'P1', 'P2', 'P3']}
+              value={bandOn ? p.exitBand : 'Off'}
+              onChange={(b) => (b === 'Off' ? set({ bandRestrictionEnabled: false }) : set({ bandRestrictionEnabled: true, exitBand: b as SolarSurplusPrecoolParams['exitBand'] }))}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 5 }}>{bandOn ? `Stands down (and won't start) while the tariff is in ${p.exitBand}.` : 'Pre-cools in any tariff band, including P1 peak.'}</div>
+          </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save</Button>
             <Button size="sm" variant="ghost" onClick={onDelete}>Delete</Button>

@@ -83,45 +83,12 @@ export function checkMode(mode: string): GuardResult<ClimateMode> {
 }
 
 // ---- Power ------------------------------------------------------------------
-// Powering ON in a bedroom zone during quiet hours is blocked. Powering OFF is
-// always allowed.
-export function checkPower(
-  on: boolean,
-  isBedroom: boolean,
-  now: Date,
-): GuardResult<boolean> {
+// Powering OFF is always safe; powering ON is permitted here (the import cap is
+// enforced separately by checkImportHeadroom). Quiet-hours blocking was removed —
+// time-of-day stand-down is now expressed per-rule via the tariff-band restriction.
+export function checkPower(on: boolean): GuardResult<boolean> {
   if (!on) return { ok: true, value: false, reason: 'power off (always safe)' };
-  if (isBedroom && inQuietHours(now)) {
-    return { ok: false, value: false, reason: 'quiet hours — no bedroom power-on' };
-  }
   return { ok: true, value: true, reason: 'ok' };
-}
-
-/** Is `now` within the configured quiet-hours window (wraps past midnight)? */
-export function inQuietHours(now: Date = new Date()): boolean {
-  const gr = g();
-  const cur = madridMinutes(now);
-  const start = hhmmToMin(gr.quietHours.start);
-  const end = hhmmToMin(gr.quietHours.end);
-  if (start === end) return false;
-  if (start < end) return cur >= start && cur < end;
-  // wraps midnight (e.g. 23:00 → 07:00)
-  return cur >= start || cur < end;
-}
-
-function hhmmToMin(s: string): number {
-  const [h, m] = s.split(':').map((x) => Number(x));
-  return (h || 0) * 60 + (m || 0);
-}
-
-function madridMinutes(d: Date): number {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Madrid',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(d);
-  return hhmmToMin(parts.replace(/[^\d:]/g, ''));
 }
 
 // ---- 14 kW import cap (compressor staggering) ------------------------------
@@ -138,12 +105,6 @@ export function checkImportHeadroom(snap: ClimateSnapshot): GuardResult<boolean>
     };
   }
   return { ok: true, value: true, reason: 'within import cap' };
-}
-
-/** Heuristic: does this device sit in a bedroom zone (quiet-hours sensitive)? */
-export function isBedroomZone(name: string, room?: string): boolean {
-  const hay = `${room ?? ''} ${name}`.toLowerCase();
-  return /\b(bed|bedroom|mbr|master|guest|bo)\b/.test(hay);
 }
 
 export type { Band };
