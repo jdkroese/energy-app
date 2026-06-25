@@ -106,8 +106,11 @@ stay the hard floor at every level; the kill switch is always one tap away.
 ## 5. Open items / tech debt
 - Coordinator is **rule-based** (MPC is the upgrade); Sonnen autonomous setpoints currently disabled.
 - Tesla reserve guardrail is **one-way (raise only)** — relax to two-way within the floor.
-- **WhatsApp *sending*** still needs a provider key (CallMeBot/Meta); email works via Resend; OTPs are
-  also logged server-side as a fallback.
+- **WhatsApp *sending* is LIVE** (2026-06-25) via **CallMeBot** (`CALLMEBOT_KEY` in `/opt/energy/.env`)
+  to `+31624277919` — verified end-to-end (login OTP / reset links deliver). Caveat: CallMeBot is a
+  free, best-effort, **single-recipient** service; for robust multi-recipient alerting the upgrade is
+  the **Meta Cloud API** (`WHATSAPP_TOKEN`+`WHATSAPP_PHONE_ID`, already supported in `notify.ts`).
+  Email works via Resend; every OTP/reset link is also logged server-side as a fallback.
 - Reports production bars + Brain "projected saved" figures want **tuning** against real history.
 - VPS is small (1 GB) — watch memory if workloads grow; Mac-mini migration may supersede this.
 - Two-fork coordination — the deploy hook helps, but keep work committed+pushed.
