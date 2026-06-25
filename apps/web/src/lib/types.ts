@@ -433,14 +433,18 @@ export interface CreateUserResponse {
  * ==========================================================================*/
 
 export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
-export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan';
+export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan' | 'vaneUpDown' | 'vaneLeftRight';
 export type DeviceWarmth = 'cold' | 'cool' | 'comfortable' | 'warm' | 'hot' | 'unknown';
+
+/** Device categories a rule can target. Extensible (lighting/circuit land later). */
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit';
 
 export interface DeviceView {
   id: string;
   name: string;
   zone?: string;
   installation?: string;
+  type: DeviceType;
   power: boolean;
   mode: string;
   setpointC: number | null;
@@ -448,6 +452,11 @@ export interface DeviceView {
   minSetpointC: number | null;
   maxSetpointC: number | null;
   online: boolean;
+  /** Current fan step: 0 = auto, 1..5 = manual. null if not reported. */
+  fanLevel?: number | null;
+  /** Vane positions: 0 = auto (A), 1..5 = fixed, 10 = swing. null if not reported. */
+  vaneUpDown?: number | null;
+  vaneLeftRight?: number | null;
   room: string;
   automationEnabled: boolean;
   /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
@@ -512,19 +521,51 @@ export interface DeviceDetailResponse {
   automations?: Automation[];
 }
 
+/** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
+export type FanSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
+export type VaneSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
+
+/** The device action a rule applies during its windows. Type-adaptive; cooling shown. */
+export interface Action {
+  power: boolean;
+  mode: ClimateMode;
+  setpointC: number;
+  fan: FanSetting;
+  vaneUpDown: VaneSetting;
+  vaneLeftRight: VaneSetting;
+}
+
+export interface ScheduleWindow {
+  /** Local "HH:MM". `end <= start` ⇒ the window wraps past midnight. */
+  start: string;
+  end: string;
+  /** Optional per-window override; inherits the rule's `action`. */
+  action?: Partial<Action>;
+}
+
+export type RunCondition =
+  | { kind: 'always' }
+  | { kind: 'warmerThan'; thresholdC: number }
+  | { kind: 'coolerThan'; thresholdC: number };
+
+export type ScheduleScope =
+  | { kind: 'unit'; deviceId: string }
+  | { kind: 'group'; groupId: string };
+
+/** A scheduling RULE — belongs to a single unit (or named group) of one device type. */
 export interface Schedule {
   id: string;
   name: string;
   enabled: boolean;
-  scope: { deviceIds: string[] };
+  type: DeviceType;
+  scope: ScheduleScope;
+  /** Days of week the rule runs on (0=Sun..6=Sat). */
   days: number[];
-  start: string;
-  end: string;
-  mode: ClimateMode;
-  setpointC: number;
-  fan?: number;
-  /** Optional condition: only apply when a device's room temp is above this (°C). */
-  roomTempAboveC?: number | null;
+  /** ≥1 window; multiple allowed (morning/afternoon/evening). */
+  windows: ScheduleWindow[];
+  /** Default action for all windows (a window may override parts of it). */
+  action: Action;
+  condition: RunCondition;
 }
 
 export interface SchedulesResponse {

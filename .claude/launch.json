@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "4173", "--directory", "E:/Claude/Energy_app/sites/hirobo-www"],
       "port": 4173
+    },
+    {
+      "name": "energy-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev"],
+      "port": 5173
     }
   ]
 }

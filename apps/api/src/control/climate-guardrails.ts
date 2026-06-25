@@ -7,7 +7,7 @@ import * as store from '../store';
 import type { Band } from '../tariff';
 import type { ClimateMode, ClimateGuardrails, DeviceSettings } from '../store';
 
-export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan';
+export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan' | 'vaneUpDown' | 'vaneLeftRight';
 
 export interface GuardResult<T = string | number | boolean> {
   ok: boolean;
@@ -105,6 +105,15 @@ export function checkImportHeadroom(snap: ClimateSnapshot): GuardResult<boolean>
     };
   }
   return { ok: true, value: true, reason: 'within import cap' };
+}
+
+// ---- Vanes ------------------------------------------------------------------
+// A vane position is 0 (auto/A) or a fixed 1..5. Swing (10) is accepted as-is.
+// Anything else is rejected so a bad value never reaches the unit.
+export function checkVane(value: number): GuardResult<number> {
+  const v = Math.round(value);
+  if (v === 0 || v === 10 || (v >= 1 && v <= 5)) return { ok: true, value: v, reason: 'ok' };
+  return { ok: false, value: 0, reason: `invalid vane position '${value}'` };
 }
 
 export type { Band };

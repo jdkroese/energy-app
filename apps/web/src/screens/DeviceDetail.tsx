@@ -2,11 +2,14 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, Schedule } from '../lib/types';
+import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, DevicesResponse, Schedule, SchedulesResponse } from '../lib/types';
 import { Card, Icon, Button, IconButton, Switch } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
+import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
+import { EditRuleOverlay, type RulePeer } from '../components/schedules/EditRuleOverlay';
+import { newRuleDraft } from '../lib/scheduleRules';
 
 /* ============================================================================
  * DeviceDetail (/devices/:id) — per-unit AC control, to the approved design:
@@ -22,12 +25,10 @@ import type { ShellContext } from '../components/shell/AppShell';
  * arm-gated server-side.
  * ==========================================================================*/
 
-/** Optional fields the design surfaces; populated by the connector as they land. */
+/** Optional service fields the design surfaces; populated by the connector as they land.
+ *  (fanLevel / vaneUpDown / vaneLeftRight now live on DeviceView itself.) */
 interface AcExtras {
-  fanLevel?: number; // current fan step (0 = auto)
   fanSteps?: number; // number of manual steps (default 5)
-  vaneUpDown?: number | 'swing' | 'auto'; // 1..5 | swing | auto
-  vaneLeftRight?: number | 'swing' | 'auto';
   filterLifePct?: number; // 0..100
   filterDays?: number; // est. days remaining
   maintenanceAlert?: string | null;
@@ -56,10 +57,6 @@ const accentFor = (m: string): string => (m === 'heat' ? 'var(--grid)' : m === '
 
 const eyebrow: CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' };
 
-// Weekday chips: display Mon..Sun; store days are 0=Sun..6=Sat.
-const DAY_ABBR = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-const ROW_TO_STORE = [1, 2, 3, 4, 5, 6, 0];
-
 export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
@@ -67,10 +64,14 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const isAdmin = user?.role === 'admin';
   const wide = ctx.desktop;
   const { data, loading, stale, updatedAt, refetch } = usePolling<DeviceDetailResponse>(() => api.devices.detail(id ?? ''), 15_000, [id]);
+  // Fleet + all rules feed the rule overlay's "copy to units" + cross-unit overlap checks.
+  const { data: fleetData } = usePolling<DevicesResponse>(api.devices.list, 0);
+  const { data: schedData, refetch: refetchSchedules } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const [busy, setBusy] = useState(false);
   const [cmdErr, setCmdErr] = useState<string | null>(null);
   const [pendingSetpoint, setPendingSetpoint] = useState<number | null>(null);
   const [pendingFan, setPendingFan] = useState<number | null>(null);
+  const [editingRule, setEditingRule] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
 
   const dev = data?.device ?? null;
 
@@ -85,7 +86,27 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       const res = (await api.devices.command(id ?? '', lever, value)) as { result?: { ok?: boolean; reason?: string } };
       setCmdErr(res?.result?.ok === false ? res.result.reason ?? 'Command was rejected' : null);
     });
-  const toggleSchedule = (sid: string, enabled: boolean) => run(() => api.schedules.update(sid, { enabled }));
+
+  // ---- Rule (schedule) editing — same overlay as the Schedules page ----
+  const refetchAll = () => { refetch(); refetchSchedules(); };
+  const runRule = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try { await fn(); } catch { /* surfaced via refetch */ } finally { setBusy(false); refetchAll(); }
+  };
+  const toggleRuleEnabled = (s: Schedule, enabled: boolean) => runRule(() => api.schedules.update(s.id, { enabled }));
+  const toggleRuleDay = (s: Schedule, day: number) => {
+    const days = s.days.includes(day) ? s.days.filter((x) => x !== day) : [...s.days, day].sort();
+    return runRule(() => api.schedules.update(s.id, { days }));
+  };
+  const saveRule = async (rule: Schedule, copyTo: string[]) => {
+    const { id: _rid, ...payload } = rule;
+    if (rule.id) await api.schedules.update(rule.id, payload);
+    else await api.schedules.create(payload);
+    for (const deviceId of copyTo) await api.schedules.create({ ...payload, scope: { kind: 'unit', deviceId } });
+    setEditingRule(null);
+    refetchAll();
+  };
+  const deleteRule = (s: Schedule) => { setEditingRule(null); void runRule(() => api.schedules.remove(s.id)); };
 
   if (!dev) {
     return (
@@ -114,8 +135,9 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const step = (delta: number) => commitSetpoint(setpoint + delta);
 
   const fanSteps = ac.fanSteps ?? 5;
-  const fanLevel = pendingFan ?? ac.fanLevel ?? null; // null ⇒ unknown / auto
+  const fanLevel = pendingFan ?? dev.fanLevel ?? null; // null ⇒ unknown / auto
   const setFan = (n: number) => { setPendingFan(n); void cmd('fan', n); };
+  const setVane = (lever: 'vaneUpDown' | 'vaneLeftRight', n: number) => void cmd(lever, n);
 
   const toggleAutomation = (on: boolean) => run(() => api.devices.setSettings(id ?? '', { automationEnabled: on }));
   const releaseHold = () => run(() => api.devices.release(id ?? ''));
@@ -125,7 +147,12 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const stateLabel = !stateOn ? 'OFF' : dev.mode === 'cool' ? 'COOLING' : dev.mode === 'heat' ? 'HEATING' : dev.mode.toUpperCase();
   const delta = dev.currentTempC != null ? Math.round((dev.currentTempC - setpoint) * 10) / 10 : null;
 
-  const unitSchedules = (data?.schedules ?? []).filter((s) => s.scope.deviceIds.length === 0 || s.scope.deviceIds.includes(dev.id));
+  const allRules = schedData?.schedules ?? data?.schedules ?? [];
+  const unitRules = allRules.filter((s) => s.scope.kind === 'unit' && s.scope.deviceId === dev.id);
+  const peers: RulePeer[] = (fleetData?.devices ?? [])
+    .filter((d) => d.type === dev.type && d.id !== dev.id)
+    .map((d) => ({ id: d.id, name: d.room || d.name }));
+  const openAddRule = () => setEditingRule({ rule: newRuleDraft({ type: dev.type, deviceId: dev.id, name: dev.room || dev.name }), isNew: true });
 
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -237,8 +264,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
 
       {/* VANES */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <VaneCard title="Up / down vanes" value={ac.vaneUpDown} disabled />
-        <VaneCard title="Left / right vanes" value={ac.vaneLeftRight} disabled />
+        <VaneCard title="Up / down vanes" value={dev.vaneUpDown} disabled={!canWrite || busy} onSelect={(n) => setVane('vaneUpDown', n)} />
+        <VaneCard title="Left / right vanes" value={dev.vaneLeftRight} disabled={!canWrite || busy} onSelect={(n) => setVane('vaneLeftRight', n)} />
       </div>
 
       {/* MANUAL HOLD */}
@@ -260,22 +287,18 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         <Switch checked={dev.automationEnabled} disabled={!canConfig || busy} onChange={(e) => toggleAutomation(e.target.checked)} />
       </div>
 
-      {/* SCHEDULE — per-schedule timeline, weekdays, active toggle + edit link */}
-      <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 4 }}>
-          <Icon name="calendar-clock" size={16} color="var(--text-2)" />
-          <span style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>This unit&apos;s schedule</span>
-          <button type="button" onClick={() => nav('/schedules?new=1')} style={{ fontSize: 11.5, color: 'var(--solar)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>+ Add</button>
-        </div>
-        {unitSchedules.length === 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '2px 0 6px' }}>{scheduleCaption(unitSchedules, dev)}</div>
-        ) : (
-          unitSchedules.map((s) => (
-            <ScheduleRow key={s.id} s={s} canConfig={canConfig} busy={busy}
-              onToggle={(en) => toggleSchedule(s.id, en)} onEdit={() => nav(`/schedules?edit=${s.id}`)} />
-          ))
-        )}
-      </Card>
+      {/* SCHEDULE — this unit's rules, via the shared UnitScheduleBox + overlay */}
+      <UnitScheduleBox
+        name={dev.room || dev.name}
+        type={dev.type}
+        rules={unitRules}
+        canConfig={canConfig}
+        busy={busy}
+        onAddRule={openAddRule}
+        onEditRule={(s) => setEditingRule({ rule: s, isNew: false })}
+        onToggleEnabled={toggleRuleEnabled}
+        onToggleDay={toggleRuleDay}
+      />
 
       {/* CONFIG & SERVICE */}
       <div style={{ ...eyebrow, marginTop: 4 }}>Config &amp; service</div>
@@ -316,6 +339,20 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       </div>
 
       {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--grid)', textAlign: 'center' }}>Read-only — only an admin can command this unit.</div>}
+
+      {editingRule && (
+        <EditRuleOverlay
+          rule={editingRule.rule}
+          unitName={dev.room || dev.name}
+          wide={wide}
+          peers={peers}
+          allRules={allRules}
+          canDelete={canConfig && !editingRule.isNew}
+          onCancel={() => setEditingRule(null)}
+          onSave={saveRule}
+          onDelete={() => deleteRule(editingRule.rule)}
+        />
+      )}
     </div>
   );
 }
@@ -358,78 +395,29 @@ function SetpointSlider({ value, lo, hi, accent, disabled, onInput, onCommit }: 
   );
 }
 
-function VaneCard({ title, value, disabled }: { title: string; value?: number | 'swing' | 'auto'; disabled?: boolean }) {
-  const mode: 'auto' | 'swing' | 'pos' = value === 'swing' ? 'swing' : typeof value === 'number' ? 'pos' : 'auto';
-  const pos = typeof value === 'number' ? value : 0;
-  const muted = disabled;
-  const pill = (active: boolean): CSSProperties => ({
-    fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 'var(--radius-md)',
-    border: `1px solid ${active ? 'var(--solar)' : 'var(--border-2)'}`,
-    background: active ? 'var(--solar-wash)' : 'transparent', color: active ? 'var(--solar)' : 'var(--text-3)',
-  });
+function VaneCard({ title, value, disabled, onSelect }: { title: string; value?: number | null; disabled?: boolean; onSelect: (n: number) => void }) {
+  // 0 = auto (A), 1..5 = fixed, 10 = swing. null ⇒ unknown.
+  const pos = value ?? 0;
+  const opts: { v: number; label: string }[] = [
+    { v: 0, label: 'A' }, { v: 1, label: '1' }, { v: 2, label: '2' }, { v: 3, label: '3' }, { v: 4, label: '4' }, { v: 5, label: '5' },
+  ];
   return (
-    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 10, opacity: muted ? 0.6 : 1 }}>
+    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <Icon name="git-commit-vertical" size={14} color="var(--text-3)" />
         <span style={{ ...eyebrow, lineHeight: 1.2 }}>{title}</span>
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <span style={pill(mode === 'auto')}>Auto</span>
-        <span style={pill(mode === 'swing')}>≋ Swing</span>
-      </div>
       <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: 4 }}>
-        {[1, 2, 3, 4, 5].map((n) => (
-          <div key={n} style={{ flex: 1, textAlign: 'center', fontSize: 12, padding: '6px 0', borderRadius: 6, fontWeight: mode === 'pos' && pos === n ? 700 : 500, background: mode === 'pos' && pos === n ? 'var(--solar)' : 'transparent', color: mode === 'pos' && pos === n ? '#04140d' : 'var(--text-3)' }}>{n}</div>
-        ))}
+        {opts.map((o) => {
+          const on = pos === o.v;
+          return (
+            <button key={o.v} type="button" disabled={disabled} aria-label={`${title} ${o.label}`} onClick={() => onSelect(o.v)}
+              style={{ flex: 1, textAlign: 'center', fontSize: 12, padding: '7px 0', borderRadius: 6, border: 'none', cursor: disabled ? 'default' : 'pointer', fontWeight: on ? 700 : 500, background: on ? 'var(--solar)' : 'transparent', color: on ? '#04140d' : 'var(--text-3)' }}>{o.label}</button>
+          );
+        })}
       </div>
     </Card>
   );
-}
-
-function ScheduleRow({ s, canConfig, busy, onToggle, onEdit }: {
-  s: Schedule; canConfig: boolean; busy: boolean; onToggle: (enabled: boolean) => void; onEdit: () => void;
-}) {
-  const frac = (hhmm: string): number => {
-    const [h, m] = hhmm.split(':').map(Number);
-    return Math.min(1, Math.max(0, ((h || 0) + (m || 0) / 60) / 24));
-  };
-  const a = frac(s.start); const b = frac(s.end);
-  const left = Math.min(a, b) * 100; const width = Math.max(2, Math.abs(b - a) * 100);
-  const dim = !s.enabled;
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 0', borderTop: '1px solid var(--border-1)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
-          <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.start}–{s.end} · {cap(s.mode)} {s.setpointC}°</div>
-        </div>
-        <button type="button" aria-label="Edit schedule" onClick={onEdit} style={{ display: 'grid', placeItems: 'center', width: 30, height: 30, flex: 'none', borderRadius: 8, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: 'var(--text-2)', cursor: 'pointer' }}>
-          <Icon name="pencil" size={14} />
-        </button>
-        <Switch checked={s.enabled} disabled={!canConfig || busy} onChange={(e) => onToggle(e.target.checked)} />
-      </div>
-      <div style={{ display: 'flex', gap: 5, opacity: dim ? 0.55 : 1 }}>
-        {DAY_ABBR.map((l, row) => {
-          const on = s.days.includes(ROW_TO_STORE[row]);
-          return <span key={row} style={{ width: 24, height: 22, flex: 'none', borderRadius: 6, display: 'grid', placeItems: 'center', fontSize: 10.5, fontWeight: 600, background: on ? 'var(--solar-wash)' : 'var(--surface-1)', color: on ? 'var(--solar)' : 'var(--text-3)', border: `1px solid ${on ? 'transparent' : 'var(--border-1)'}` }}>{l}</span>;
-        })}
-      </div>
-      <div style={{ position: 'relative', height: 16, borderRadius: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', overflow: 'hidden', opacity: dim ? 0.4 : 1 }}>
-        {[25, 50, 75].map((p) => <div key={p} style={{ position: 'absolute', top: 0, bottom: 0, left: `${p}%`, width: 1, background: 'var(--border-1)' }} />)}
-        <div title={`${s.start}–${s.end}`} style={{ position: 'absolute', top: 3, bottom: 3, left: `${left}%`, width: `${width}%`, borderRadius: 3, background: 'var(--solar)', opacity: 0.6 }} />
-      </div>
-    </div>
-  );
-}
-
-function scheduleCaption(schedules: Schedule[], dev: DeviceView): string {
-  const active = schedules.filter((s) => s.enabled);
-  if (active.length) {
-    const parts = active.map((s) => `${s.name} ${parseInt(s.start, 10)}–${parseInt(s.end, 10)}`);
-    return parts.join(' · ');
-  }
-  if (dev.governedBy.schedules.length) return `Inherits ${dev.governedBy.schedules.join(', ')}`;
-  return 'No unit schedule · inherits group defaults';
 }
 
 function Banner({ icon, tone, iconColor, children }: { icon: string; tone: 'solar' | 'surface'; iconColor?: string; children: ReactNode }) {

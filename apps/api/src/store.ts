@@ -237,26 +237,59 @@ export interface DeviceSettings {
 
 export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
 
+/** Device categories a rule can target. Extensible (lighting/circuit land later). */
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit';
+
+/** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
+export type FanSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
+export type VaneSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
+
+/** The device action a rule applies during its windows. Type-adaptive; cooling shown. */
+export interface Action {
+  power: boolean;
+  mode: ClimateMode;
+  setpointC: number;
+  fan: FanSetting;
+  vaneUpDown: VaneSetting;
+  vaneLeftRight: VaneSetting;
+}
+
+export interface ScheduleWindow {
+  /** Local "HH:MM". `end <= start` ⇒ the window wraps past midnight. */
+  start: string;
+  end: string;
+  /** Optional per-window override; inherits the rule's `action`. */
+  action?: Partial<Action>;
+}
+
+export type RunCondition =
+  | { kind: 'always' }
+  | { kind: 'warmerThan'; thresholdC: number } // run only if room temp > threshold (cooling)
+  | { kind: 'coolerThan'; thresholdC: number }; // run only if room temp < threshold (heating)
+
+/** A rule targets ONE unit (or a single named group), never an array of devices. */
+export type ScheduleScope =
+  | { kind: 'unit'; deviceId: string }
+  | { kind: 'group'; groupId: string };
+
+/**
+ * A scheduling RULE (called a "rule" in the UI). Belongs to a single unit/group
+ * of one device type. Windows may overlap midnight; per the no-overlap rule, two
+ * enabled rules on a unit may not cover the same minute on the same weekday.
+ */
 export interface Schedule {
   id: string;
   name: string;
   enabled: boolean;
-  scope: { deviceIds: string[] };
-  /** Days of week the schedule runs on (0=Sun..6=Sat). */
+  type: DeviceType;
+  scope: ScheduleScope;
+  /** Days of week the rule runs on (0=Sun..6=Sat). */
   days: number[];
-  /** Local "HH:MM" start/end. */
-  start: string;
-  end: string;
-  mode: ClimateMode;
-  setpointC: number;
-  fan?: number;
-  /**
-   * Optional condition: only apply this schedule to a device when its room
-   * temperature is ABOVE this (°C). null/undefined = no condition (always apply
-   * during the window). So "cool 24° 18:00–23:00, only if room > 26°" won't run
-   * the AC on a cool evening.
-   */
-  roomTempAboveC?: number | null;
+  /** ≥1 window; multiple allowed (morning/afternoon/evening). */
+  windows: ScheduleWindow[];
+  /** Default action for all windows (a window may override parts of it). */
+  action: Action;
+  condition: RunCondition;
 }
 
 export type AutomationType = 'solar_surplus_precool';
@@ -522,6 +555,129 @@ function file(): string {
   return path;
 }
 
+// ---- Schedule normalization / legacy migration -------------------------
+// Persisted state may hold legacy schedules (flat start/end/mode/setpointC +
+// scope.deviceIds[]). On load we migrate them to the unit-scoped rule shape:
+// one rule per device, start/end → windows[], mode/setpoint → action,
+// roomTempAboveC → warmerThan. Already-migrated rules pass through coerced.
+
+function genId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function coerceFan(v: unknown): FanSetting {
+  return v === 1 || v === 2 || v === 3 || v === 4 || v === 5 ? v : 'auto';
+}
+function coerceVane(v: unknown): VaneSetting {
+  return v === 1 || v === 2 || v === 3 || v === 4 || v === 5 ? v : 'auto';
+}
+function coerceMode(v: unknown): ClimateMode {
+  return v === 'auto' || v === 'heat' || v === 'dry' || v === 'fan' || v === 'cool' ? v : 'cool';
+}
+function coerceAction(raw: unknown): Action {
+  const a = (raw ?? {}) as Partial<Action>;
+  return {
+    power: typeof a.power === 'boolean' ? a.power : true,
+    mode: coerceMode(a.mode),
+    setpointC: typeof a.setpointC === 'number' ? a.setpointC : 24,
+    fan: coerceFan(a.fan),
+    vaneUpDown: coerceVane(a.vaneUpDown),
+    vaneLeftRight: coerceVane(a.vaneLeftRight),
+  };
+}
+function coerceCondition(raw: unknown): RunCondition {
+  const c = raw as { kind?: string; thresholdC?: number } | undefined;
+  if (c?.kind === 'warmerThan' && typeof c.thresholdC === 'number') return { kind: 'warmerThan', thresholdC: c.thresholdC };
+  if (c?.kind === 'coolerThan' && typeof c.thresholdC === 'number') return { kind: 'coolerThan', thresholdC: c.thresholdC };
+  return { kind: 'always' };
+}
+function coerceDays(v: unknown): number[] {
+  return Array.isArray(v) ? v.filter((d) => typeof d === 'number' && d >= 0 && d <= 6) : [1, 2, 3, 4, 5];
+}
+function coerceWindows(v: unknown): ScheduleWindow[] {
+  const list = Array.isArray(v) ? v : [];
+  const out: ScheduleWindow[] = [];
+  for (const w of list) {
+    if (w && typeof w.start === 'string' && typeof w.end === 'string') {
+      out.push({ start: w.start, end: w.end, ...(w.action ? { action: w.action as Partial<Action> } : {}) });
+    }
+  }
+  return out.length ? out : [{ start: '08:00', end: '22:00' }];
+}
+
+/** True for a legacy (pre-rule) schedule shape that must be migrated. */
+function isLegacySchedule(s: Record<string, unknown>): boolean {
+  return !Array.isArray(s.windows) && (typeof s.start === 'string' || Array.isArray((s.scope as { deviceIds?: unknown })?.deviceIds));
+}
+
+/** Migrate one legacy schedule into 0..N unit-scoped rules (one per device). */
+function migrateLegacySchedule(s: Record<string, unknown>): Schedule[] {
+  const scope = s.scope as { deviceIds?: unknown } | undefined;
+  const ids = Array.isArray(scope?.deviceIds) ? (scope!.deviceIds as string[]) : [];
+  if (ids.length === 0) return []; // bound to no unit — it did nothing; drop on migrate.
+  const action: Action = {
+    power: true,
+    mode: coerceMode(s.mode),
+    setpointC: typeof s.setpointC === 'number' ? s.setpointC : 24,
+    fan: coerceFan(s.fan),
+    vaneUpDown: 'auto',
+    vaneLeftRight: 'auto',
+  };
+  const condition: RunCondition =
+    typeof s.roomTempAboveC === 'number' ? { kind: 'warmerThan', thresholdC: s.roomTempAboveC } : { kind: 'always' };
+  const windows: ScheduleWindow[] = [
+    { start: typeof s.start === 'string' ? s.start : '08:00', end: typeof s.end === 'string' ? s.end : '22:00' },
+  ];
+  const baseId = typeof s.id === 'string' ? s.id : genId('sched');
+  return ids.map((deviceId, i) => ({
+    id: ids.length > 1 ? `${baseId}-${i}` : baseId,
+    name: typeof s.name === 'string' ? s.name : 'Schedule',
+    enabled: typeof s.enabled === 'boolean' ? s.enabled : true,
+    type: 'cooling' as DeviceType,
+    scope: { kind: 'unit', deviceId },
+    days: coerceDays(s.days),
+    windows,
+    action,
+    condition,
+  }));
+}
+
+/** Coerce one already-migrated rule, defaulting any missing fields. */
+function coerceSchedule(s: Record<string, unknown>): Schedule | null {
+  const rawScope = s.scope as { kind?: string; deviceId?: string; groupId?: string } | undefined;
+  let scope: ScheduleScope;
+  if (rawScope?.kind === 'group' && typeof rawScope.groupId === 'string') scope = { kind: 'group', groupId: rawScope.groupId };
+  else if (rawScope?.kind === 'unit' && typeof rawScope.deviceId === 'string') scope = { kind: 'unit', deviceId: rawScope.deviceId };
+  else return null;
+  const type = s.type === 'heating' || s.type === 'lighting' || s.type === 'circuit' ? s.type : 'cooling';
+  return {
+    id: typeof s.id === 'string' ? s.id : genId('sched'),
+    name: typeof s.name === 'string' ? s.name : 'Rule',
+    enabled: typeof s.enabled === 'boolean' ? s.enabled : true,
+    type: type as DeviceType,
+    scope,
+    days: coerceDays(s.days),
+    windows: coerceWindows(s.windows),
+    action: coerceAction(s.action),
+    condition: coerceCondition(s.condition),
+  };
+}
+
+function migrateSchedules(raw: unknown): Schedule[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Schedule[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const s = item as Record<string, unknown>;
+    if (isLegacySchedule(s)) out.push(...migrateLegacySchedule(s));
+    else {
+      const c = coerceSchedule(s);
+      if (c) out.push(c);
+    }
+  }
+  return out;
+}
+
 /** Merge persisted JSON onto defaults so new fields appear with sane values. */
 function hydrate(raw: unknown): StoreSchema {
   const base = defaults();
@@ -563,7 +719,7 @@ function hydrate(raw: unknown): StoreSchema {
       p.deviceSettings && typeof p.deviceSettings === 'object'
         ? p.deviceSettings
         : base.deviceSettings,
-    schedules: Array.isArray(p.schedules) ? p.schedules : base.schedules,
+    schedules: migrateSchedules(p.schedules),
     automations:
       Array.isArray(p.automations) && p.automations.length ? p.automations : base.automations,
     devices: hydrateDevices(p.devices, base.devices),

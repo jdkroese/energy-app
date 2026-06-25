@@ -13,6 +13,7 @@ import {
   checkMode,
   checkPower,
   checkSetpoint,
+  checkVane,
   freshnessOk,
   type ClimateLever,
   type ClimateSnapshot,
@@ -161,11 +162,26 @@ export async function issueClimate(
     if (lever === 'fan') {
       const fan = Math.max(0, Math.round(Number(value)));
       if (isAirzone(unit.id)) return noop(unit.id, lever, fan, 'underfloor has no fan');
-      if (rateLimited(unit.id, lever)) return reject(unit.id, lever, null, 'rate-limited (<30s)');
+      if (unit.fanLevel != null && unit.fanLevel === fan) return noop(unit.id, lever, fan);
+      if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.fanLevel ?? null, 'rate-limited (<30s)');
       await intesis.setDatapoint(unit.id, UID.fan, fan);
       markWritten(unit.id, lever);
-      logEntry(unit.id, lever, null, fan, reason, true, `fan ${fan} issued`);
-      return { ok: true, skipped: false, reason, from: null, to: fan };
+      logEntry(unit.id, lever, unit.fanLevel ?? null, fan, reason, true, `fan ${fan} issued`);
+      return { ok: true, skipped: false, reason, from: unit.fanLevel ?? null, to: fan };
+    }
+
+    if (lever === 'vaneUpDown' || lever === 'vaneLeftRight') {
+      if (isAirzone(unit.id)) return noop(unit.id, lever, Math.round(Number(value)), 'underfloor has no vanes');
+      const guard = checkVane(Number(value));
+      if (!guard.ok) return reject(unit.id, lever, null, guard.reason);
+      const to = guard.value;
+      const cur = lever === 'vaneUpDown' ? unit.vaneUpDown : unit.vaneLeftRight;
+      if (cur != null && cur === to) return noop(unit.id, lever, to);
+      if (rateLimited(unit.id, lever)) return reject(unit.id, lever, cur ?? null, 'rate-limited (<30s)');
+      await intesis.setDatapoint(unit.id, lever === 'vaneUpDown' ? UID.vaneV : UID.vaneH, to);
+      markWritten(unit.id, lever);
+      logEntry(unit.id, lever, cur ?? null, to, reason, true, `${lever} ${to} issued`);
+      return { ok: true, skipped: false, reason, from: cur ?? null, to };
     }
 
     return reject(unit.id, lever, null, `unknown lever '${lever}'`);

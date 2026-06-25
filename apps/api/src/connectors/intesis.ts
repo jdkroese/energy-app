@@ -189,6 +189,11 @@ export interface ClimateUnit {
   minSetpointC: number | null;
   maxSetpointC: number | null;
   online: boolean;
+  /** Current fan step: 0 = auto, 1..5 = manual. null if not reported. */
+  fanLevel?: number | null;
+  /** Vane positions: 0 = auto (A), 1..5 = fixed, 10 = swing. null if not reported. */
+  vaneUpDown?: number | null;
+  vaneLeftRight?: number | null;
 }
 
 /** Tenths-of-°C -> °C, tolerating units that already report whole degrees. */
@@ -213,6 +218,9 @@ export function normalizeDevices(login: IntesisLoginResult): ClimateUnit[] {
       minSetpointC: toCelsius(dp[UID.setpointMin]),
       maxSetpointC: toCelsius(dp[UID.setpointMax]),
       online: true,
+      fanLevel: dp[UID.fan] === undefined ? null : dp[UID.fan],
+      vaneUpDown: dp[UID.vaneV] === undefined ? null : dp[UID.vaneV],
+      vaneLeftRight: dp[UID.vaneH] === undefined ? null : dp[UID.vaneH],
     };
   });
 }

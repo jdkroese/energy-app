@@ -200,53 +200,83 @@ function hhmmToMin(s: string): number {
   return (h || 0) * 60 + (m || 0);
 }
 
-/** Is the schedule's window active right now (local time)? Handles overnight wrap. */
-function scheduleActiveNow(s: store.Schedule, now: Date): boolean {
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const a = hhmmToMin(s.start);
-  const b = hhmmToMin(s.end);
-  const dow = now.getDay(); // 0=Sun..6=Sat (local)
-  if (a <= b) return cur >= a && cur < b && s.days.includes(dow);
-  // overnight window (e.g. 22:00→07:00): the active "day" is when it STARTED.
-  if (cur >= a) return s.days.includes(dow); // evening part — started today
-  if (cur < b) return s.days.includes((dow + 6) % 7); // morning part — started yesterday
-  return false;
+/** 'auto' → 0 (auto/A); a 1..5 position → itself. For fan/vane datapoints. */
+function levelOf(v: store.FanSetting | store.VaneSetting): number {
+  return v === 'auto' ? 0 : v;
 }
 
 /**
- * Apply enabled schedules whose window is active now. For each in-scope device,
- * if the schedule carries a `roomTempAboveC` condition, only apply when the room
- * is ABOVE it — so scheduled cooling doesn't run on an already-cool room.
- * Conservative: sets mode/setpoint/power-on during the window; never forces a unit
- * OFF (occupants may want it). Guardrailed + compressor-staggered via issueClimate.
+ * Is ONE window active right now (local time)? Handles overnight wrap. `days` are
+ * the RULE's weekdays; the active "day" of a wrapped window is when it started.
+ */
+function windowActiveNow(w: store.ScheduleWindow, days: number[], now: Date): boolean {
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const a = hhmmToMin(w.start);
+  const b = hhmmToMin(w.end);
+  const dow = now.getDay(); // 0=Sun..6=Sat (local)
+  if (a < b) return cur >= a && cur < b && days.includes(dow);
+  // wraps past midnight (e.g. 22:00→07:00, or end===start meaning all-day):
+  if (cur >= a) return days.includes(dow); // evening part — started today
+  if (cur < b) return days.includes((dow + 6) % 7); // morning part — started yesterday
+  return false;
+}
+
+/** The first active window of a rule, or null if none is active now. */
+function activeWindow(s: store.Schedule, now: Date): store.ScheduleWindow | null {
+  for (const w of s.windows) if (windowActiveNow(w, s.days, now)) return w;
+  return null;
+}
+
+/** Effective action for a window = rule.action with the window's overrides merged on top. */
+function effectiveAction(s: store.Schedule, w: store.ScheduleWindow): store.Action {
+  return { ...s.action, ...(w.action ?? {}) };
+}
+
+/** Does the rule's run-condition allow it to act given the current room temp? */
+function conditionMet(c: store.RunCondition, roomTempC: number | null): boolean {
+  if (c.kind === 'always') return true;
+  if (roomTempC === null) return false; // a temp-gated rule can't act without a reading
+  if (c.kind === 'warmerThan') return roomTempC > c.thresholdC;
+  return roomTempC < c.thresholdC; // coolerThan
+}
+
+/**
+ * Apply enabled rules whose window is active now. Each rule targets a single unit;
+ * the effective action (rule.action + window override) sets mode/setpoint/fan/vanes
+ * and powers the unit on. A run-condition (warmer/cooler than) gates whether it acts
+ * at all. Conservative: never forces a unit OFF. Guardrailed + compressor-staggered.
  */
 export async function evaluateSchedules(fleet: ClimateUnit[], snap: RichClimateSnapshot): Promise<void> {
-  const schedules = store.get().schedules.filter((s) => s.enabled);
+  const schedules = store.get().schedules.filter((s) => s.enabled && s.scope.kind === 'unit');
   if (schedules.length === 0) return;
   const byId = new Map(fleet.map((u) => [u.id, u]));
   const now = new Date();
   let pendingImportKw = 0;
 
   for (const s of schedules) {
-    if (!scheduleActiveNow(s, now)) continue;
-    for (const id of s.scope.deviceIds) {
-      const u = byId.get(id);
-      if (!u) continue;
-      if (isManualOverrideActive(u.id)) continue; // manual control wins — hands off
-      // CONDITION: only apply when the room is above the threshold (if one is set).
-      if (s.roomTempAboveC != null && (u.currentTempC === null || u.currentTempC <= s.roomTempAboveC)) {
-        logDecision(u.id, `schedule ${s.name}: skip`, `room ${u.currentTempC ?? '—'}°C not above ${s.roomTempAboveC}°C`);
-        continue;
-      }
-      const reason = `schedule ${s.name}: ${s.mode}@${s.setpointC}°C`;
-      const startingCompressor = !u.power;
-      const projected = snap.gridImportKw + pendingImportKw + (startingCompressor ? COMPRESSOR_START_KW : 0);
-      if (startingCompressor && projected > store.get().devices.guardrails.gridImportCapKw) {
-        logDecision(u.id, `schedule ${s.name}: defer start`, `staggering — projected ${projected.toFixed(1)}kW > cap`);
-        continue;
-      }
-      await issueClimate(u, 'mode', s.mode, reason, { ...snap, pendingImportKw });
-      await issueClimate(u, 'setpoint', s.setpointC, reason, { ...snap, pendingImportKw });
+    const w = activeWindow(s, now);
+    if (!w) continue;
+    const u = byId.get((s.scope as { kind: 'unit'; deviceId: string }).deviceId);
+    if (!u) continue;
+    if (isManualOverrideActive(u.id)) continue; // manual control wins — hands off
+    if (!conditionMet(s.condition, u.currentTempC)) {
+      logDecision(u.id, `rule ${s.name}: skip`, `condition ${s.condition.kind} not met (room ${u.currentTempC ?? '—'}°C)`);
+      continue;
+    }
+    const act = effectiveAction(s, w);
+    const reason = `rule ${s.name}: ${act.mode}@${act.setpointC}°C`;
+    const startingCompressor = !u.power && act.power;
+    const projected = snap.gridImportKw + pendingImportKw + (startingCompressor ? COMPRESSOR_START_KW : 0);
+    if (startingCompressor && projected > store.get().devices.guardrails.gridImportCapKw) {
+      logDecision(u.id, `rule ${s.name}: defer start`, `staggering — projected ${projected.toFixed(1)}kW > cap`);
+      continue;
+    }
+    await issueClimate(u, 'mode', act.mode, reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'setpoint', act.setpointC, reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'fan', levelOf(act.fan), reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'vaneUpDown', levelOf(act.vaneUpDown), reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'vaneLeftRight', levelOf(act.vaneLeftRight), reason, { ...snap, pendingImportKw });
+    if (act.power) {
       const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
       if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
     }

@@ -7,10 +7,15 @@ import type { ClimateUnit } from '../connectors/intesis';
 import * as airzone from '../connectors/airzone';
 import * as store from '../store';
 import type {
+  Action,
   Automation,
   ControlMode,
   DeviceSettings,
+  DeviceType,
+  RunCondition,
   Schedule,
+  ScheduleScope,
+  ScheduleWindow,
   SolarSurplusPrecoolParams,
 } from '../store';
 import { issueClimate, type ClimateLever } from '../control/climate-execute';
@@ -23,6 +28,7 @@ import {
   manualOverrideUntil,
 } from '../control/climate-coordinator';
 import { bandFor } from '../tariff';
+import { checkRuleOverlap } from '../schedule-rules';
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -33,6 +39,8 @@ function badInput(msg: string): Error & { code: string } {
 // ---- Normalized device view (connector + deviceSettings merge) --------------
 
 export interface DeviceView extends ClimateUnit {
+  /** Device category — drives which controls/rules apply (Airzone = heating). */
+  type: DeviceType;
   room: string;
   automationEnabled: boolean;
   /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
@@ -43,6 +51,16 @@ export interface DeviceView extends ClimateUnit {
   warmth: 'cold' | 'cool' | 'comfortable' | 'warm' | 'hot' | 'unknown';
   /** Whether an enabled schedule/automation currently governs this device. */
   governedBy: { schedules: string[]; automations: string[] };
+}
+
+/** Airzone underfloor zones are heating; everything else (Intesis AC) is cooling. */
+function deviceTypeOf(id: string): DeviceType {
+  return id.startsWith('air-') ? 'heating' : 'cooling';
+}
+
+/** Does an enabled rule target this unit? Group scope is not yet a member-resolved store. */
+function ruleTargetsUnit(s: Schedule, unitId: string): boolean {
+  return s.scope.kind === 'unit' && s.scope.deviceId === unitId;
 }
 
 function warmthOf(t: number | null): DeviceView['warmth'] {
@@ -60,6 +78,7 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
   const schedules = store.get().schedules;
   return {
     ...u,
+    type: deviceTypeOf(u.id),
     room: ds?.room ?? u.zone ?? u.name,
     automationEnabled: ds?.automationEnabled ?? false,
     manualOverrideUntil: manualOverrideUntil(u.id),
@@ -67,7 +86,7 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
     comfortFloorC: ds?.comfortFloorC ?? null,
     warmth: warmthOf(u.currentTempC),
     governedBy: {
-      schedules: schedules.filter((s) => s.enabled && s.scope.deviceIds.includes(u.id)).map((s) => s.id),
+      schedules: schedules.filter((s) => s.enabled && ruleTargetsUnit(s, u.id)).map((s) => s.id),
       automations:
         ds?.automationEnabled && automations.some((a) => a.enabled)
           ? automations.filter((a) => a.enabled).map((a) => a.id)
@@ -142,14 +161,14 @@ export async function getDevice(id: string): Promise<unknown> {
   if (!u) return { ts: new Date().toISOString(), connected: true, device: null };
   const settings = store.get().deviceSettings;
   const device = mergeView(u, settings);
-  const schedules = store.get().schedules.filter((s) => s.scope.deviceIds.includes(id));
+  const schedules = store.get().schedules.filter((s) => ruleTargetsUnit(s, id));
   const automations = device.automationEnabled ? store.get().automations : [];
   return { ts: new Date().toISOString(), connected: true, device, schedules, automations };
 }
 
 // ---- Commands (admin + arm) -------------------------------------------------
 
-const LEVERS: ClimateLever[] = ['power', 'mode', 'setpoint', 'fan'];
+const LEVERS: ClimateLever[] = ['power', 'mode', 'setpoint', 'fan', 'vaneUpDown', 'vaneLeftRight'];
 
 function parseValue(lever: ClimateLever, raw: unknown): boolean | number | string {
   if (lever === 'power') return Boolean(raw);
@@ -310,20 +329,71 @@ export function listSchedules(): unknown {
   return { ts: new Date().toISOString(), schedules: store.get().schedules };
 }
 
+// ---- Rule (schedule) sanitization -------------------------------------------
+
+const FAN_VANE = (v: unknown): 'auto' | 1 | 2 | 3 | 4 | 5 =>
+  v === 1 || v === 2 || v === 3 || v === 4 || v === 5 ? v : 'auto';
+
+function buildAction(raw: Partial<Action> | undefined, base?: Action): Action {
+  const b: Action = base ?? { power: true, mode: 'cool', setpointC: 24, fan: 'auto', vaneUpDown: 'auto', vaneLeftRight: 'auto' };
+  const a = raw ?? {};
+  return {
+    power: typeof a.power === 'boolean' ? a.power : b.power,
+    mode: a.mode && ['auto', 'heat', 'dry', 'fan', 'cool'].includes(a.mode) ? a.mode : b.mode,
+    setpointC: typeof a.setpointC === 'number' ? a.setpointC : b.setpointC,
+    fan: a.fan !== undefined ? FAN_VANE(a.fan) : b.fan,
+    vaneUpDown: a.vaneUpDown !== undefined ? FAN_VANE(a.vaneUpDown) : b.vaneUpDown,
+    vaneLeftRight: a.vaneLeftRight !== undefined ? FAN_VANE(a.vaneLeftRight) : b.vaneLeftRight,
+  };
+}
+
+function buildWindows(raw: unknown): ScheduleWindow[] {
+  const list = Array.isArray(raw) ? raw : [];
+  const out: ScheduleWindow[] = [];
+  for (const w of list) {
+    if (w && typeof w.start === 'string' && typeof w.end === 'string') {
+      out.push({ start: w.start, end: w.end, ...(w.action ? { action: buildAction(w.action) } : {}) });
+    }
+  }
+  return out.length ? out : [{ start: '08:00', end: '22:00' }];
+}
+
+function buildScope(raw: unknown): ScheduleScope {
+  const s = raw as { kind?: string; deviceId?: string; groupId?: string } | undefined;
+  if (s?.kind === 'group' && typeof s.groupId === 'string') return { kind: 'group', groupId: s.groupId };
+  return { kind: 'unit', deviceId: typeof s?.deviceId === 'string' ? s.deviceId : '' };
+}
+
+function buildCondition(raw: unknown): RunCondition {
+  const c = raw as { kind?: string; thresholdC?: number } | undefined;
+  if (c?.kind === 'warmerThan' && typeof c.thresholdC === 'number') return { kind: 'warmerThan', thresholdC: c.thresholdC };
+  if (c?.kind === 'coolerThan' && typeof c.thresholdC === 'number') return { kind: 'coolerThan', thresholdC: c.thresholdC };
+  return { kind: 'always' };
+}
+
+const RULE_TYPE = (v: unknown): DeviceType =>
+  v === 'heating' || v === 'lighting' || v === 'circuit' ? v : 'cooling';
+
+/** Reject a write that would overlap another enabled rule on the same unit. */
+function assertNoOverlap(candidate: Schedule): void {
+  const others = store.get().schedules.filter((x) => x.id !== candidate.id);
+  const res = checkRuleOverlap(candidate, others);
+  if (!res.ok) throw badInput(res.reason);
+}
+
 export function createSchedule(body: Partial<Schedule>): unknown {
   const s: Schedule = {
     id: newId('sched'),
-    name: body.name?.trim() || 'New schedule',
+    name: body.name?.trim() || 'New rule',
     enabled: body.enabled ?? true,
-    scope: { deviceIds: Array.isArray(body.scope?.deviceIds) ? body.scope!.deviceIds : [] },
+    type: RULE_TYPE(body.type),
+    scope: buildScope(body.scope),
     days: Array.isArray(body.days) ? body.days.filter((d) => d >= 0 && d <= 6) : [1, 2, 3, 4, 5],
-    start: body.start ?? '08:00',
-    end: body.end ?? '22:00',
-    mode: body.mode ?? 'cool',
-    setpointC: typeof body.setpointC === 'number' ? body.setpointC : 24,
-    fan: body.fan,
-    roomTempAboveC: typeof body.roomTempAboveC === 'number' ? body.roomTempAboveC : null,
+    windows: buildWindows(body.windows),
+    action: buildAction(body.action),
+    condition: buildCondition(body.condition),
   };
+  assertNoOverlap(s);
   store.update((st) => {
     st.schedules.push(s);
   });
@@ -331,28 +401,25 @@ export function createSchedule(body: Partial<Schedule>): unknown {
 }
 
 export function updateSchedule(id: string, body: Partial<Schedule>): unknown {
-  const saved = store.update((st) => {
+  const cur = store.get().schedules.find((x) => x.id === id);
+  if (!cur) throw badInput(`schedule ${id} not found`);
+  const merged: Schedule = {
+    ...cur,
+    name: body.name?.trim() || cur.name,
+    enabled: body.enabled ?? cur.enabled,
+    type: body.type !== undefined ? RULE_TYPE(body.type) : cur.type,
+    scope: body.scope !== undefined ? buildScope(body.scope) : cur.scope,
+    days: Array.isArray(body.days) ? body.days.filter((d) => d >= 0 && d <= 6) : cur.days,
+    windows: body.windows !== undefined ? buildWindows(body.windows) : cur.windows,
+    action: body.action !== undefined ? buildAction(body.action, cur.action) : cur.action,
+    condition: body.condition !== undefined ? buildCondition(body.condition) : cur.condition,
+  };
+  assertNoOverlap(merged);
+  store.update((st) => {
     const idx = st.schedules.findIndex((x) => x.id === id);
-    if (idx < 0) return null;
-    const cur = st.schedules[idx];
-    const merged: Schedule = {
-      ...cur,
-      name: body.name ?? cur.name,
-      enabled: body.enabled ?? cur.enabled,
-      scope: { deviceIds: body.scope?.deviceIds ?? cur.scope.deviceIds },
-      days: Array.isArray(body.days) ? body.days : cur.days,
-      start: body.start ?? cur.start,
-      end: body.end ?? cur.end,
-      mode: body.mode ?? cur.mode,
-      setpointC: typeof body.setpointC === 'number' ? body.setpointC : cur.setpointC,
-      fan: body.fan ?? cur.fan,
-      roomTempAboveC: body.roomTempAboveC !== undefined ? body.roomTempAboveC : cur.roomTempAboveC,
-    };
-    st.schedules[idx] = merged;
-    return merged;
+    if (idx >= 0) st.schedules[idx] = merged;
   });
-  if (!saved) throw badInput(`schedule ${id} not found`);
-  return { ts: new Date().toISOString(), schedule: saved };
+  return { ts: new Date().toISOString(), schedule: merged };
 }
 
 export function deleteSchedule(id: string): unknown {
