@@ -19,7 +19,7 @@ export function BarChart({ data, height = 150, size = 'sm' }: Props) {
   const barW = lg ? 20 : 14;
   const innerGap = lg ? 7 : 4;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: lg ? 10 : 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: lg ? 10 : 8 }} role="img" aria-label="Production versus consumption by period (kWh)">
       <div
         style={{
           display: 'flex',

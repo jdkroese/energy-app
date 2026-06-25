@@ -34,7 +34,7 @@ export function Sparkline({
   className = '',
 }: Props) {
   const id = useMemo(() => 'pwr-spark-' + uid++, []);
-  if (!data.length) return <svg width={width} height={height} className={className} />;
+  if (!data.length) return <svg width={width} height={height} className={className} aria-hidden="true" />;
   const min = Math.min(...data);
   const max = Math.max(...data);
   const span = max - min || 1;
@@ -50,7 +50,7 @@ export function Sparkline({
   const color = TONE[tone] || TONE.solar;
   const last = pts[pts.length - 1];
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={className} preserveAspectRatio="none">
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={className} preserveAspectRatio="none" aria-hidden="true">
       <defs>
         <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.32" />

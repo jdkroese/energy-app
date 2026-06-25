@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useId } from 'react';
 
 export interface AreaSeries {
   data: number[];
@@ -22,9 +22,14 @@ export function AreaChart({ series, height = 150, labels, axis = false }: Props)
   const w = 1000;
   const h = height;
   const padY = axis ? 16 : 14;
-  const id = useMemo(() => 'c' + Math.floor(Math.random() * 1e6), []);
+  // Stable, collision-free gradient id — two charts on one page (e.g. BatteryDetail)
+  // must not share a random id and cross-wire each other's fills.
+  const id = 'c' + useId().replace(/:/g, '');
   const niceMax = Math.ceil(Math.max(...series.flatMap((s) => s.data), 1));
-  const stepX = w / (series[0].data.length - 1);
+  // Guard empty / single-point series so a degenerate input can't divide by zero
+  // (w/(len-1) → Infinity → NaN path coordinates → a broken/invisible chart).
+  const firstLen = series[0]?.data.length ?? 0;
+  const stepX = firstLen > 1 ? w / (firstLen - 1) : 0;
   const grids = axis ? [0, 0.25, 0.5, 0.75, 1] : [0, 0.5, 1];
 
   return (

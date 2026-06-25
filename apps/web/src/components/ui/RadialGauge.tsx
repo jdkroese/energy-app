@@ -47,7 +47,12 @@ export function RadialGauge({
   const color = TONE[tone] || TONE.battery;
   const fs = Math.round(size * 0.26);
   return (
-    <div className={['pwr-gauge', className].filter(Boolean).join(' ')} style={{ width: size, height: size }}>
+    <div
+      className={['pwr-gauge', className].filter(Boolean).join(' ')}
+      style={{ width: size, height: size }}
+      role="img"
+      aria-label={`${label ? `${label}: ` : ''}${valueText != null ? valueText : Math.round(value)}${unit}`}
+    >
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle
           cx={size / 2}
