@@ -1,6 +1,7 @@
 import { config } from '../config';
 import * as store from '../store';
 import { cached as memo } from '../cache';
+import { teslaSiteId } from '../runtime-config';
 
 // Tesla Fleet API (cloud, EU host). Uses the stored refresh token to mint
 // short-lived access tokens; energy endpoints are plain Bearer REST (no signing).
@@ -44,10 +45,45 @@ async function accessToken(): Promise<string> {
   return cached.token;
 }
 
-async function apiGet(path: string): Promise<unknown> {
-  if (!config.tesla.siteId) throw new Error('TESLA_ENERGY_SITE_ID not set');
+/**
+ * Validate a candidate refresh token via an isolated token refresh and ONLY
+ * persist it (rotated form, if Tesla returns one) on success — so a bad token
+ * can never replace a working one. Primes the access-token cache on success.
+ */
+export async function reauth(refreshToken: string): Promise<void> {
+  const tok = refreshToken.trim();
+  if (!tok) throw new Error('refresh token required');
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: config.tesla.clientId,
+    refresh_token: tok,
+  });
+  if (config.tesla.clientSecret) body.set('client_secret', config.tesla.clientSecret);
+  const res = await fetch(config.tesla.tokenUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`token refresh rejected — HTTP ${res.status}`);
+  const json = (await res.json()) as { access_token: string; expires_in?: number; refresh_token?: string };
+  const persisted = json.refresh_token || tok;
+  store.update((s) => {
+    s.teslaRefreshToken = persisted;
+  });
+  cached = { token: json.access_token, exp: Date.now() + (json.expires_in ?? 28_800) * 1000 };
+  console.log('[tesla] re-authenticated via Settings — refresh token persisted');
+}
+
+/** UNCACHED live_status probe for a site (defaults to the configured one). Throws on failure. */
+export async function probeLive(siteId?: string): Promise<void> {
+  await apiGet('/live_status', siteId ?? teslaSiteId());
+}
+
+async function apiGet(path: string, siteId = teslaSiteId()): Promise<unknown> {
+  if (!siteId) throw new Error('TESLA_ENERGY_SITE_ID not set');
   const token = await accessToken();
-  const url = `${config.tesla.audience}/api/1/energy_sites/${config.tesla.siteId}${path}`;
+  const url = `${config.tesla.audience}/api/1/energy_sites/${siteId}${path}`;
   const res = await fetch(url, {
     headers: { authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),
@@ -58,9 +94,10 @@ async function apiGet(path: string): Promise<unknown> {
 }
 
 async function apiPost(path: string, body: unknown): Promise<unknown> {
-  if (!config.tesla.siteId) throw new Error('TESLA_ENERGY_SITE_ID not set');
+  const siteId = teslaSiteId();
+  if (!siteId) throw new Error('TESLA_ENERGY_SITE_ID not set');
   const token = await accessToken();
-  const url = `${config.tesla.audience}/api/1/energy_sites/${config.tesla.siteId}${path}`;
+  const url = `${config.tesla.audience}/api/1/energy_sites/${siteId}${path}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },

@@ -2,7 +2,7 @@
 // Used by /api/brain/plan to drive the solar + thermal forecast.
 // Best-effort: callers must tolerate a null result (never 502 the whole request).
 
-import { config } from '../config';
+import { weatherCoords } from '../runtime-config';
 
 export interface WeatherForecast {
   /** ISO timestamp this forecast was fetched. */
@@ -13,17 +13,15 @@ export interface WeatherForecast {
   cloudCover: number[]; // % total cloud cover, hourly
 }
 
-const LAT = config.site.lat;
-const LON = config.site.lon;
-
 /**
  * Fetch today's hourly shortwave_radiation + temperature_2m for the site.
  * Returns null on any failure so the planner can fall back to a synthetic curve.
  */
 export async function getForecast(): Promise<WeatherForecast | null> {
   try {
+    const { lat, lon } = weatherCoords();
     const url =
-      `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}` +
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
       `&hourly=shortwave_radiation,temperature_2m,cloudcover&timezone=Europe%2FMadrid&forecast_days=1`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
