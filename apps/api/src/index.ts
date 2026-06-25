@@ -68,6 +68,16 @@ import {
   setTeslaSite,
   reauthTesla,
 } from './routes/integrations-config';
+import {
+  getLights,
+  getLight,
+  commandLight,
+  bulkCommandLights,
+  getTuyaIntegration,
+  setTuyaIntegration,
+  disconnectTuyaIntegration,
+} from './routes/lights';
+import type { LightLever } from './connectors/tuya-lights';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
 import { authRouter } from './routes/auth';
@@ -266,6 +276,38 @@ app.post(
   }),
 );
 app.delete('/api/integrations/intesis', requireAdmin, wrap(() => disconnectIntegration()));
+
+// ---- Lights (Tuya) — reads any-authed; commands admin-gated ----
+app.get('/api/lights', wrap(() => getLights()));
+app.get('/api/lights/:id', wrap((req) => getLight(String(req.params.id))));
+app.post(
+  '/api/lights/bulk-command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { ids?: string[]; lever?: string; value?: unknown };
+    return bulkCommandLights(body.ids ?? [], body.lever as LightLever, body.value);
+  }),
+);
+app.post(
+  '/api/lights/:id/command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { lever?: string; value?: unknown };
+    return commandLight(String(req.params.id), body.lever as LightLever, body.value);
+  }),
+);
+
+// ---- Tuya Cloud integration ----
+app.get('/api/integrations/tuya', wrap(() => getTuyaIntegration()));
+app.post(
+  '/api/integrations/tuya',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { region?: string; accessId?: string; accessSecret?: string };
+    return setTuyaIntegration(b.region, b.accessId, b.accessSecret);
+  }),
+);
+app.delete('/api/integrations/tuya', requireAdmin, wrap(() => disconnectTuyaIntegration()));
 
 // ---- Configurable connections (Sonnen / Weather / Tesla) ----
 app.get('/api/integrations/config', wrap(() => getIntegrationsConfig()));
