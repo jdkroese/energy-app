@@ -10,6 +10,9 @@ import { InstallSheet } from '../components/InstallSheet';
 import { isStandalone } from '../lib/install';
 import { useAuth } from '../auth/AuthProvider';
 import { useNavigate } from 'react-router-dom';
+import { SegmentedControl } from '../components/ui';
+import type { ShellContext } from '../components/shell/AppShell';
+import { settingsTabsFor, type SettingsTabLabel } from '../components/shell/nav';
 
 const Chev = () => <Icon name="chevron-right" size={18} color="var(--text-3)" />;
 const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px' };
@@ -790,17 +793,7 @@ function AcCloudConnection() {
   );
 }
 
-type SettingsTab = 'connections' | 'notifications' | 'security' | 'users' | 'system';
-
-const SETTINGS_TABS: { id: SettingsTab; label: string; adminOnly?: boolean }[] = [
-  { id: 'connections', label: 'Connections' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'security', label: 'Security' },
-  { id: 'users', label: 'Users', adminOnly: true },
-  { id: 'system', label: 'System' },
-];
-
-export function Settings() {
+export function Settings({ ctx }: { ctx: ShellContext }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [installOpen, setInstallOpen] = useState(false);
@@ -822,124 +815,128 @@ export function Settings() {
   const s = fetched;
 
   const isAdmin = user?.role === 'admin';
-  const tabs = SETTINGS_TABS.filter((t) => !t.adminOnly || isAdmin);
-  const [tab, setTab] = useState<SettingsTab>('connections');
-  const activeTab = tabs.some((t) => t.id === tab) ? tab : 'connections';
+  const tabs = settingsTabsFor(isAdmin);
+  const active: SettingsTabLabel = (tabs as readonly string[]).includes(ctx.settingsTab)
+    ? (ctx.settingsTab as SettingsTabLabel)
+    : 'Connections';
 
+  const sections = (
+    <>
+      {active === 'Connections' && (
+        <Card title="Connections" style={{ padding: 0 }}>
+          {s.connections.map((c, i) => {
+            const ok = !/pending/i.test(c.status);
+            return (
+              <LinkRow
+                key={c.name}
+                first={i === 0}
+                icon={c.icon}
+                tone={c.tone}
+                name={c.name}
+                right={
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <Dot tone={ok ? 'solar' : 'grid'} />
+                    <span style={{ fontSize: 12, color: ok ? 'var(--solar)' : 'var(--grid)' }}>{c.status}</span>
+                    <Chev />
+                  </div>
+                }
+              />
+            );
+          })}
+          {/* AC Cloud (Intesis) — config opens in a modal on click */}
+          <AcCloudConnection />
+        </Card>
+      )}
+
+      {active === 'Notifications' && <NotificationsCard channels={ch} onChannels={setChannels} />}
+
+      {active === 'Security' && <SecurityCard />}
+
+      {active === 'Users' && isAdmin && <UsersSection />}
+
+      {active === 'System' && (
+        <>
+          <Card title="Tariff · Spain 2.0TD" style={{ padding: 0 }}>
+            <div style={{ padding: '4px 16px 14px' }}>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                {s.tariff.bands.map((b) => {
+                  const color = b.band === 'P1' ? 'var(--grid)' : b.band === 'P2' ? 'var(--grid-dim)' : 'var(--solar)';
+                  return (
+                    <div key={b.band} style={{ flex: 1, padding: 10, borderRadius: 10, background: 'var(--surface-2)', textAlign: 'center' }}>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color }}>{b.band}</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', marginTop: 3 }}>€{b.rate.toFixed(3)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, fontSize: 12, color: 'var(--text-2)' }}>
+                <span>Power term</span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{s.tariff.powerTermEur.toFixed(2)}/mo · 14 kW</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 12, color: 'var(--text-2)' }}>
+                <span>Export (excedentes)</span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{s.tariff.exportRange}</span>
+              </div>
+            </div>
+            <LinkRow icon="pencil" tone="text-2" name="Edit tariff & rates" right={<Chev />} />
+          </Card>
+
+          <Card title="My system" style={{ padding: 0 }}>
+            {s.assets.map((a, i) => (
+              <LinkRow key={a.name} first={i === 0} icon={a.icon} tone={a.tone} name={a.name} detail={a.detail} right={<Chev />} />
+            ))}
+          </Card>
+
+          <Card title="App" style={{ padding: 0 }}>
+            <LinkRow
+              first
+              icon="smartphone-nfc"
+              tone="solar"
+              name={installed ? 'Installed on this device' : 'Add to home screen'}
+              detail={installed ? 'Running as a full-screen app' : 'Install Power as a full-screen app'}
+              onClick={() => setInstallOpen(true)}
+              right={installed ? <Icon name="check" size={18} color="var(--solar)" /> : <Chev />}
+            />
+            <LinkRow
+              icon="user"
+              tone="home"
+              name={user?.name || 'Account'}
+              detail={user?.email || 'Signed in'}
+              right={<Button size="sm" variant="ghost" iconLeft={<Icon name="log-out" />} onClick={() => void signOut()}>Sign out</Button>}
+            />
+            <LinkRow icon="moon" tone="battery" name="Theme" detail="Dark (control-room)" right={<Chev />} />
+            <LinkRow icon="info" tone="text-2" name="Version" detail="0.1.0 · energy.hirobo.nl" />
+          </Card>
+        </>
+      )}
+    </>
+  );
+
+  // Desktop: the shell TopBar supplies the eyebrow, active-tab title, and tab strip
+  // (Reports pattern) — the page renders content only.
+  if (ctx.desktop) {
+    return (
+      <>
+        {stale && <StaleBanner updatedAt={updatedAt} />}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 820, margin: '0 auto', width: '100%' }}>
+          {sections}
+        </div>
+        {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
+      </>
+    );
+  }
+
+  // Mobile: no TopBar — render the header + tab strip in-page.
   return (
     <>
       <div style={{ padding: '12px 18px 12px' }}>
         <Eyebrow>Settings</Eyebrow>
-        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>System</h1>
+        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>{active}</h1>
       </div>
       {stale && <StaleBanner updatedAt={updatedAt} />}
-      {/* Tab bar */}
-      <div style={{ maxWidth: 760, margin: '0 auto', width: '100%' }}>
-        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '4px 14px 2px', scrollbarWidth: 'none' }}>
-          {tabs.map((t) => {
-            const on = t.id === activeTab;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                style={{ flex: 'none', padding: '8px 15px', borderRadius: 999, border: on ? '1px solid transparent' : '1px solid var(--border-2)', background: on ? 'var(--solar-wash)' : 'transparent', color: on ? 'var(--solar)' : 'var(--text-2)', fontSize: 13, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '10px 14px 22px', maxWidth: 760, margin: '0 auto', width: '100%' }}>
-        {activeTab === 'connections' && (
-          <Card title="Connections" style={{ padding: 0 }}>
-            {s.connections.map((c, i) => {
-              const ok = !/pending/i.test(c.status);
-              return (
-                <LinkRow
-                  key={c.name}
-                  first={i === 0}
-                  icon={c.icon}
-                  tone={c.tone}
-                  name={c.name}
-                  right={
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                      <Dot tone={ok ? 'solar' : 'grid'} />
-                      <span style={{ fontSize: 12, color: ok ? 'var(--solar)' : 'var(--grid)' }}>{c.status}</span>
-                      <Chev />
-                    </div>
-                  }
-                />
-              );
-            })}
-            {/* AC Cloud (Intesis) — config opens in a modal on click */}
-            <AcCloudConnection />
-          </Card>
-        )}
-
-        {activeTab === 'notifications' && <NotificationsCard channels={ch} onChannels={setChannels} />}
-
-        {activeTab === 'security' && <SecurityCard />}
-
-        {activeTab === 'users' && isAdmin && <UsersSection />}
-
-        {activeTab === 'system' && (
-          <>
-            <Card title="Tariff · Spain 2.0TD" style={{ padding: 0 }}>
-              <div style={{ padding: '4px 16px 14px' }}>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                  {s.tariff.bands.map((b) => {
-                    const color = b.band === 'P1' ? 'var(--grid)' : b.band === 'P2' ? 'var(--grid-dim)' : 'var(--solar)';
-                    return (
-                      <div key={b.band} style={{ flex: 1, padding: 10, borderRadius: 10, background: 'var(--surface-2)', textAlign: 'center' }}>
-                        <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color }}>{b.band}</div>
-                        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', marginTop: 3 }}>€{b.rate.toFixed(3)}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, fontSize: 12, color: 'var(--text-2)' }}>
-                  <span>Power term</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{s.tariff.powerTermEur.toFixed(2)}/mo · 14 kW</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 12, color: 'var(--text-2)' }}>
-                  <span>Export (excedentes)</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{s.tariff.exportRange}</span>
-                </div>
-              </div>
-              <LinkRow icon="pencil" tone="text-2" name="Edit tariff & rates" right={<Chev />} />
-            </Card>
-
-            <Card title="My system" style={{ padding: 0 }}>
-              {s.assets.map((a, i) => (
-                <LinkRow key={a.name} first={i === 0} icon={a.icon} tone={a.tone} name={a.name} detail={a.detail} right={<Chev />} />
-              ))}
-            </Card>
-
-            <Card title="App" style={{ padding: 0 }}>
-              <LinkRow
-                first
-                icon="smartphone-nfc"
-                tone="solar"
-                name={installed ? 'Installed on this device' : 'Add to home screen'}
-                detail={installed ? 'Running as a full-screen app' : 'Install Power as a full-screen app'}
-                onClick={() => setInstallOpen(true)}
-                right={installed ? <Icon name="check" size={18} color="var(--solar)" /> : <Chev />}
-              />
-              <LinkRow
-                icon="user"
-                tone="home"
-                name={user?.name || 'Account'}
-                detail={user?.email || 'Signed in'}
-                right={<Button size="sm" variant="ghost" iconLeft={<Icon name="log-out" />} onClick={() => void signOut()}>Sign out</Button>}
-              />
-              <LinkRow icon="moon" tone="battery" name="Theme" detail="Dark (control-room)" right={<Chev />} />
-              <LinkRow icon="info" tone="text-2" name="Version" detail="0.1.0 · energy.hirobo.nl" />
-            </Card>
-          </>
-        )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
+        <SegmentedControl block options={tabs} value={active} onChange={ctx.setSettingsTab} />
+        {sections}
       </div>
       {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
     </>

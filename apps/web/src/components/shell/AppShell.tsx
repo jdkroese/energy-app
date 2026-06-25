@@ -5,6 +5,8 @@ import { TabBar } from './TabBar';
 import { TopBar } from './TopBar';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
+import { settingsTabsFor } from './nav';
+import { useAuth } from '../../auth/AuthProvider';
 
 /** Per-route desktop TopBar metadata. */
 const META: Record<string, { eyebrow: string; title: string }> = {
@@ -25,6 +27,9 @@ export interface ShellContext {
   /** reports range, shared so the TopBar control drives the screen */
   range: string;
   setRange: (r: string) => void;
+  /** active Settings sub-tab, shared so the TopBar tab strip drives the screen */
+  settingsTab: string;
+  setSettingsTab: (t: string) => void;
 }
 
 /** AppShell — responsive frame: TabBar on mobile, collapsing Rail on desktop. */
@@ -39,6 +44,10 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
     }
   });
   const [range, setRange] = useState('Month');
+  const { user } = useAuth();
+  const settingsTabs = settingsTabsFor(user?.role === 'admin');
+  const [settingsTab, setSettingsTab] = useState<string>('Connections');
+  const activeSettingsTab = (settingsTabs as readonly string[]).includes(settingsTab) ? settingsTab : 'Connections';
 
   useEffect(() => {
     try {
@@ -51,7 +60,7 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
   const meta =
     META[location.pathname] ||
     (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Batteries', title: 'Battery detail' } : { eyebrow: 'Power', title: '' });
-  const ctx: ShellContext = { desktop, range, setRange };
+  const ctx: ShellContext = { desktop, range, setRange, settingsTab: activeSettingsTab, setSettingsTab };
 
   if (desktop) {
     return (
@@ -67,11 +76,15 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
                   : range === 'Day'
                     ? 'Today'
                     : `This ${range.toLowerCase()}`
-                : meta.title
+                : location.pathname === '/settings'
+                  ? activeSettingsTab
+                  : meta.title
             }
             actions={
               location.pathname === '/reports' ? (
                 <SegmentedControl options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={range} onChange={setRange} size="sm" />
+              ) : location.pathname === '/settings' ? (
+                <SegmentedControl options={settingsTabs} value={activeSettingsTab} onChange={setSettingsTab} size="sm" />
               ) : null
             }
           />

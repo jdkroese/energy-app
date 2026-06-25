@@ -41,7 +41,7 @@ function AppRoutes() {
           <Route path="/" element={<Live ctx={ctx} />} />
           <Route path="/reports" element={<Reports ctx={ctx} />} />
           <Route path="/alerts" element={<Alerts />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings" element={<Settings ctx={ctx} />} />
           <Route path="/scenarios" element={<Scenarios />} />
           <Route path="/brain" element={<Brain ctx={ctx} />} />
           <Route path="/batteries" element={<Batteries ctx={ctx} />} />
