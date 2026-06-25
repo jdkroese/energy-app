@@ -13,11 +13,34 @@ const INTERVAL_MS = 60_000;
 // Re-notify only if an alert recurs after it has been gone for this long.
 const RENOTIFY_AFTER_MS = 6 * 3600_000;
 
+// Connectivity/probe-based alerts can briefly false-trip on a single failed poll
+// — e.g. the Sonnen's weak embedded HTTP server choking on the cold burst of
+// concurrent requests right after the daemon starts. Require this many consecutive
+// observations before notifying those, so a real outage still fires (~2 ticks ≈
+// 75s) while a one-off blip is ignored.
+const DEBOUNCE_RULES = new Set(['rule-offline', 'rule-outage']);
+const DEBOUNCE_MIN_STREAK = 2;
+
 let timer: ReturnType<typeof setInterval> | null = null;
+// Consecutive ticks each debounced alert id has been observed firing.
+const offlineStreak = new Map<string, number>();
 
 async function tick(): Promise<void> {
   try {
     const firing = await evaluateLiveAlerts();
+
+    // Maintain debounce streaks BEFORE any early return, so a recovered alert
+    // (no longer firing) resets even on an otherwise-quiet tick.
+    const firingDebounced = new Set(
+      firing.filter((a) => a.rule && DEBOUNCE_RULES.has(a.rule)).map((a) => a.id),
+    );
+    for (const id of [...offlineStreak.keys()]) {
+      if (!firingDebounced.has(id)) offlineStreak.delete(id);
+    }
+    for (const id of firingDebounced) {
+      offlineStreak.set(id, (offlineStreak.get(id) ?? 0) + 1);
+    }
+
     if (firing.length === 0) return;
 
     const state = store.get();
@@ -29,6 +52,15 @@ async function tick(): Promise<void> {
       // Skip alerts the user already acknowledged/resolved.
       const override = state.alertOverrides[a.id];
       if (override && override.status !== 'new') continue;
+
+      // Debounce transient-prone connectivity alerts until seen N ticks running.
+      if (
+        a.rule &&
+        DEBOUNCE_RULES.has(a.rule) &&
+        (offlineStreak.get(a.id) ?? 0) < DEBOUNCE_MIN_STREAK
+      ) {
+        continue;
+      }
 
       const lastSeen = seen[a.id];
       const isNew = lastSeen === undefined || now - lastSeen > RENOTIFY_AFTER_MS;
