@@ -196,6 +196,10 @@ export const api = {
       putJSON<{ ok: boolean; config: IntegrationsConfig }>('/api/integrations/tesla', { siteId }),
     reauthTesla: (refreshToken: string) =>
       postJSON<ProbeResult>('/api/integrations/tesla/reauth', { refreshToken }),
+    testAirzone: (host?: string) =>
+      postJSON<ProbeResult>('/api/integrations/airzone/test', { host }),
+    setAirzone: (host: string) =>
+      putJSON<ProbeResult & { config: IntegrationsConfig }>('/api/integrations/airzone', { host }),
   },
 
   schedules: {

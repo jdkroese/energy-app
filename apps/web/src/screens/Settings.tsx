@@ -969,6 +969,83 @@ function AcCloudConnection({ first, open, onToggle }: { first?: boolean; open: b
   );
 }
 
+/* ============================================================================
+ * Airzone — underfloor heating via the Local API (LAN, no auth). Shown as a row
+ * in the Connections list; expands to edit the webserver host/IP. Status is a
+ * live read-only probe (any user); saving the host is admin-only and validated.
+ * ==========================================================================*/
+
+function AirzoneConnection({ first, open, onToggle, cfg, reload }: { first?: boolean; open: boolean; onToggle: () => void; cfg: IntegrationsConfig | null; reload: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState<ProbeResult | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [host, setHost] = useState('');
+  const [busy, setBusy] = useState<'test' | 'save' | null>(null);
+  const [res, setRes] = useState<ProbeResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Seed the host field once config arrives.
+  useEffect(() => {
+    if (cfg?.airzone.host) setHost(cfg.airzone.host);
+  }, [cfg?.airzone.host]);
+
+  // Live status for the row (read-only probe of the configured host).
+  useEffect(() => {
+    api.integrations.testAirzone().then(setStatus).catch(() => {}).finally(() => setChecked(true));
+  }, []);
+
+  const run = async (kind: 'test' | 'save') => {
+    setBusy(kind); setErr(null); setRes(null);
+    try {
+      if (kind === 'test') setRes(await api.integrations.testAirzone(host.trim()));
+      else {
+        const r = await api.integrations.setAirzone(host.trim());
+        setRes({ ok: r.ok, detail: r.detail });
+        setStatus({ ok: r.ok, detail: r.detail }); // refresh the row
+        reload();
+      }
+    } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); }
+  };
+
+  const statusText = !checked ? 'loading…' : status ? (status.ok ? status.detail : 'unreachable') : 'underfloor heating';
+  const statusTone = !checked ? 'text-3' : status?.ok ? 'solar' : status ? 'grid' : 'text-2';
+
+  return (
+    <ConnectionRow
+      first={first}
+      icon="thermometer-sun"
+      tone={status?.ok ? 'solar' : undefined}
+      name="Airzone"
+      statusText={statusText}
+      statusTone={statusTone}
+      showDot={status !== null}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={cfgDesc}>Airzone underfloor heating — per-room control over the Local API on the home network.</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <DetailLine label="Status" value={status ? status.detail : '—'} tone={status?.ok ? 'solar' : 'grid'} />
+          {cfg && <DetailLine label="Webserver" value={`${cfg.airzone.host}:3000`} />}
+        </div>
+        {isAdmin ? (
+          <>
+            <Input label="Webserver host / IP" value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.165" />
+            <ResultLine r={res} err={err} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="secondary" loading={busy === 'test'} onClick={() => void run('test')}>Test</Button>
+              <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void run('save')}>Save</Button>
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can change the Airzone host.</div>
+        )}
+      </div>
+    </ConnectionRow>
+  );
+}
+
 /** Connections card — single-open accordion across all integrations. */
 function ConnectionsCard({ connections }: { connections: SettingsResponse['connections'] }) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -1003,6 +1080,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
         );
       })}
       <AcCloudConnection first={false} open={openId === 'accloud'} onToggle={() => toggle('accloud')} />
+      <AirzoneConnection first={false} open={openId === 'airzone'} onToggle={() => toggle('airzone')} cfg={cfg} reload={loadCfg} />
     </Card>
   );
 }

@@ -24,3 +24,8 @@ export function weatherCoords(): { lat: number; lon: number } {
     lon: typeof w?.lon === 'number' ? w.lon : config.site.lon,
   };
 }
+
+/** Airzone webserver host — same precedence the connector uses (store → env → default). */
+export function airzoneHost(): string {
+  return store.get().integrations?.airzone?.host?.trim() || process.env.AIRZONE_HOST || '192.168.1.165';
+}

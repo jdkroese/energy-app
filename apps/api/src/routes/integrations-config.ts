@@ -4,7 +4,7 @@
 
 import * as store from '../store';
 import * as tesla from '../connectors/tesla';
-import { sonnenHost, sonnenToken, teslaSiteId, weatherCoords } from '../runtime-config';
+import { sonnenHost, sonnenToken, teslaSiteId, weatherCoords, airzoneHost } from '../runtime-config';
 
 function badInput(msg: string): never {
   const e = new Error(msg) as Error & { code?: string };
@@ -26,6 +26,7 @@ export function getIntegrationsConfig(): unknown {
     sonnen: { host: sonnenHost(), hasToken: Boolean(sonnenToken()), overridden: Boolean(i?.sonnen?.host || i?.sonnen?.token) },
     tesla: { siteId: teslaSiteId(), overridden: Boolean(i?.tesla?.siteId) },
     weather: { lat: coords.lat, lon: coords.lon, overridden: Boolean(i?.weather) },
+    airzone: { host: airzoneHost(), overridden: Boolean(i?.airzone?.host) },
   };
 }
 
@@ -143,4 +144,45 @@ export async function reauthTesla(tokenRaw?: unknown): Promise<unknown> {
   // Confirm the new token actually reads the site.
   const probe = await testTesla();
   return { ts: new Date().toISOString(), ok: probe.ok, detail: probe.detail };
+}
+
+// ---- Airzone ------------------------------------------------------------
+
+/** Probe a candidate Airzone webserver (Local API, port 3000) without persisting. */
+async function probeAirzone(host: string): Promise<ProbeResult> {
+  try {
+    const res = await fetch(`http://${host}:3000/api/v1/hvac`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ systemID: 0, zoneID: 0 }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return { ok: false, detail: `Local API HTTP ${res.status}` };
+    const j = (await res.json()) as { systems?: { data?: unknown[] }[]; data?: unknown[] };
+    const zones = Array.isArray(j.systems)
+      ? j.systems.reduce((n, s) => n + (s.data?.length ?? 0), 0)
+      : j.data?.length ?? 0;
+    if (!zones) return { ok: false, detail: 'reachable but no zones reported' };
+    return { ok: true, detail: `reachable · ${zones} zone${zones === 1 ? '' : 's'}` };
+  } catch (e) {
+    return { ok: false, detail: (e as Error).message || 'unreachable' };
+  }
+}
+
+export async function testAirzone(hostRaw?: unknown): Promise<ProbeResult> {
+  const host = String(hostRaw ?? airzoneHost()).trim();
+  if (!host) badInput('host required');
+  return probeAirzone(host);
+}
+
+export async function setAirzone(hostRaw?: unknown): Promise<unknown> {
+  const host = String(hostRaw ?? '').trim();
+  if (!host || !HOST_RE.test(host)) badInput('Enter a valid host/IP (e.g. 192.168.1.165)');
+  const probe = await probeAirzone(host);
+  if (!probe.ok) badInput(`Could not reach Airzone at ${host} — ${probe.detail}`);
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.airzone = { host };
+  });
+  return { ts: new Date().toISOString(), ...probe, config: getIntegrationsConfig() };
 }
