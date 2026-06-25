@@ -573,6 +573,7 @@ export interface IntegrationsConfig {
   sonnen: { host: string; hasToken: boolean; overridden: boolean };
   tesla: { siteId: string; overridden: boolean };
   weather: { lat: number; lon: number; overridden: boolean };
+  airzone: { host: string; overridden: boolean };
 }
 
 /** Result of a connection test / save. */

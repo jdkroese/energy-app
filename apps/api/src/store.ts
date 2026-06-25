@@ -220,6 +220,8 @@ export interface IntegrationsState {
   tesla?: { siteId?: string };
   /** Weather forecast location override. */
   weather?: { lat?: number; lon?: number };
+  /** Airzone Local API override (webserver host/IP; port is fixed at 3000). */
+  airzone?: { host?: string } | null;
 }
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */
@@ -551,6 +553,11 @@ function hydrate(raw: unknown): StoreSchema {
         typeof p.integrations.intesis.password === 'string'
           ? p.integrations.intesis
           : base.integrations.intesis,
+      // Carry over Settings-configured overrides so they survive a restart.
+      ...(p.integrations?.sonnen ? { sonnen: p.integrations.sonnen } : {}),
+      ...(p.integrations?.tesla ? { tesla: p.integrations.tesla } : {}),
+      ...(p.integrations?.weather ? { weather: p.integrations.weather } : {}),
+      ...(p.integrations?.airzone ? { airzone: p.integrations.airzone } : {}),
     },
     deviceSettings:
       p.deviceSettings && typeof p.deviceSettings === 'object'

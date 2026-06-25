@@ -58,6 +58,8 @@ import {
   testSonnen,
   setSonnen,
   setWeather,
+  testAirzone,
+  setAirzone,
   testTesla,
   setTeslaSite,
   reauthTesla,
@@ -302,6 +304,22 @@ app.post(
   wrap((req) => {
     const b = (req.body ?? {}) as { refreshToken?: string };
     return reauthTesla(b.refreshToken);
+  }),
+);
+// Read-only probe (any signed-in user) so the row shows live status like the others.
+app.post(
+  '/api/integrations/airzone/test',
+  wrap((req) => {
+    const b = (req.body ?? {}) as { host?: string };
+    return testAirzone(b.host);
+  }),
+);
+app.put(
+  '/api/integrations/airzone',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { host?: string };
+    return setAirzone(b.host);
   }),
 );
 
