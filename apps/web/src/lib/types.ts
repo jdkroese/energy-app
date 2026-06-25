@@ -345,3 +345,138 @@ export interface CreateUserResponse {
   /** one-time URL the new user opens to set their password */
   setupUrl: string;
 }
+
+/* ============================================================================
+ * Devices / Climate (GET /api/devices). AC is the first device type. Reads are
+ * any-authed; command/arm/CRUD writes are admin-gated server-side. Boots DISARMED.
+ * ==========================================================================*/
+
+export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
+export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan';
+export type DeviceWarmth = 'cold' | 'cool' | 'comfortable' | 'warm' | 'hot' | 'unknown';
+
+export interface DeviceView {
+  id: string;
+  name: string;
+  zone?: string;
+  installation?: string;
+  power: boolean;
+  mode: string;
+  setpointC: number | null;
+  currentTempC: number | null;
+  minSetpointC: number | null;
+  maxSetpointC: number | null;
+  online: boolean;
+  room: string;
+  automationEnabled: boolean;
+  comfortCeilingC: number | null;
+  comfortFloorC: number | null;
+  warmth: DeviceWarmth;
+  governedBy: { schedules: string[]; automations: string[] };
+}
+
+export interface DevicesContext {
+  indoorAvgC: number | null;
+  band: Band;
+  deviceCount: number;
+  onCount: number;
+}
+
+export interface ClimateGuardrails {
+  setpointMinC: number;
+  setpointMaxC: number;
+  gridImportCapKw: number;
+  quietHours: { start: string; end: string };
+  minCycleMin: number;
+}
+
+export interface DevicesResponse {
+  ts: string;
+  connected: boolean;
+  fleetError: string | null;
+  armed: boolean;
+  mode: ControlMode;
+  lastError: string | null;
+  guardrails: ClimateGuardrails;
+  context: DevicesContext;
+  devices: DeviceView[];
+}
+
+export interface ClimateLogEntry {
+  ts: number;
+  deviceId: string;
+  lever: string;
+  from: string | number | null;
+  to: string | number | null;
+  reason: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface DevicesStatus {
+  ts: string;
+  armed: boolean;
+  mode: ControlMode;
+  lastError: string | null;
+  guardrails: ClimateGuardrails;
+  log: ClimateLogEntry[];
+}
+
+export interface DeviceDetailResponse {
+  ts: string;
+  connected: boolean;
+  device: DeviceView | null;
+  schedules?: Schedule[];
+  automations?: Automation[];
+}
+
+export interface Schedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  scope: { deviceIds: string[] };
+  days: number[];
+  start: string;
+  end: string;
+  mode: ClimateMode;
+  setpointC: number;
+  fan?: number;
+}
+
+export interface SchedulesResponse {
+  ts: string;
+  schedules: Schedule[];
+}
+
+export type AutomationAuthority = 'shadow' | 'auto';
+
+export interface SolarSurplusPrecoolParams {
+  roomTempLimitC: number;
+  targetSetpointC: number;
+  surplusClearSec: number;
+  exitBand: Band;
+  startThresholdW?: number;
+}
+
+export interface Automation {
+  id: string;
+  name: string;
+  enabled: boolean;
+  type: 'solar_surplus_precool';
+  authority: AutomationAuthority;
+  params: SolarSurplusPrecoolParams;
+  lastEval: number | null;
+}
+
+export interface AutomationsResponse {
+  ts: string;
+  automations: Automation[];
+}
+
+export interface IntegrationStatus {
+  ts: string;
+  connected: boolean;
+  deviceCount: number;
+  username: string | null;
+  error: string | null;
+}

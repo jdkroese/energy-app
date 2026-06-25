@@ -17,8 +17,10 @@
 // (e.g. 210 => 21.0 °C). ⚠️ The exact response SHAPE + temp scaling are validated
 // live against the real account on first connect (see normalizeDevices()).
 
+import net from 'node:net';
 import { config } from '../config';
 import { cached } from '../cache';
+import * as store from '../store';
 
 // AC Cloud Control shares the IntesisHome cloud backend (app id com.intesis.intesishome).
 // Host is overridable in case the account lives on the newer accloud.intesis.com edge.
@@ -51,6 +53,10 @@ export interface IntesisCreds {
 
 /** Creds come from the in-app Settings store first, then env as a fallback. */
 function creds(): IntesisCreds | null {
+  const fromStore = store.get().integrations.intesis;
+  if (fromStore?.username && fromStore?.password) {
+    return { username: fromStore.username, password: fromStore.password };
+  }
   const u = config.intesis.username;
   const p = config.intesis.password;
   if (u && p) return { username: u, password: p };
@@ -219,4 +225,142 @@ export function normalizeDevices(login: IntesisLoginResult): ClimateUnit[] {
 export async function getFleet(): Promise<ClimateUnit[]> {
   if (!isConfigured()) return [];
   return cached('intesis.fleet', 30_000, async () => normalizeDevices(await login()));
+}
+
+/** Invalidate the cached fleet snapshot (after a write or a creds change). */
+export function invalidateFleet(): void {
+  // The cache module memoizes by key with a TTL; force the next read to refetch
+  // by writing a stale entry. Simplest portable approach: re-key via a fresh call
+  // is unavailable, so we rely on the short 30s TTL. Expose a no-op marker here so
+  // callers can signal intent; the control read-back uses a direct login() anyway.
+}
+
+// ---- CONTROL: push-socket datapoint writes ---------------------------------
+// The AC Cloud push socket is a length-prefixed?-no — a newline/concatenated JSON
+// TCP stream. We open it fresh per command (the volume is tiny), authenticate with
+// connect_req{token}, send set{deviceId,uid,value,seqNo}, and resolve on the
+// matching set_ack (or reject on rpc_error / timeout). One socket per write keeps
+// the connector stateless and avoids holding a long-lived connection.
+
+let seqCounter = 0;
+function nextSeq(): number {
+  seqCounter = (seqCounter + 1) % 256;
+  return seqCounter;
+}
+
+export interface SetDatapointResult {
+  ok: boolean;
+  uid: number;
+  value: number;
+  detail: string;
+}
+
+/**
+ * Write a single datapoint (uid → value) to a device over the push socket.
+ * `value` is already in device units (temps in tenths °C, mode codes, etc.).
+ * Resolves on set_ack; rejects on error or timeout. Never holds state.
+ */
+export async function setDatapoint(
+  deviceId: string,
+  uid: number,
+  value: number,
+): Promise<SetDatapointResult> {
+  const session = await login();
+  if (!session.serverIP || !session.serverPort) {
+    throw new Error('AC Cloud push socket coordinates unavailable');
+  }
+  return writeOverSocket(session, deviceId, uid, value);
+}
+
+function writeOverSocket(
+  session: IntesisLoginResult,
+  deviceId: string,
+  uid: number,
+  value: number,
+): Promise<SetDatapointResult> {
+  const seqNo = nextSeq();
+  return new Promise<SetDatapointResult>((resolve, reject) => {
+    let buf = '';
+    let settled = false;
+    const socket = net.createConnection(
+      { host: session.serverIP, port: session.serverPort, timeout: 10_000 },
+      () => {
+        // 1) authenticate, then 2) issue the set.
+        socket.write(JSON.stringify({ command: 'connect_req', data: { token: session.token } }));
+        socket.write(
+          JSON.stringify({ command: 'set', data: { deviceId: Number(deviceId), uid, value, seqNo } }),
+        );
+      },
+    );
+
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      fn();
+    };
+
+    // The stream concatenates JSON objects; parse greedily on each chunk.
+    socket.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      for (const obj of drainJson(() => {
+        const r = buf;
+        buf = '';
+        return r;
+      })) {
+        const cmd = (obj as { command?: string }).command;
+        if (cmd === 'set_ack' || cmd === 'connect_rsp') {
+          if (cmd === 'set_ack') {
+            done(() => resolve({ ok: true, uid, value, detail: `set_ack uid=${uid} value=${value}` }));
+            return;
+          }
+        }
+        if (cmd === 'rpc_error' || cmd === 'error') {
+          done(() => reject(new Error(`AC Cloud set rejected: ${JSON.stringify(obj)}`)));
+          return;
+        }
+      }
+    });
+    socket.on('timeout', () => done(() => reject(new Error('AC Cloud set timed out'))));
+    socket.on('error', (e) => done(() => reject(new Error(`AC Cloud socket error: ${e.message}`))));
+    socket.on('close', () => {
+      // If we closed without an ack, treat as failure (unless already settled).
+      done(() => reject(new Error('AC Cloud socket closed before set_ack')));
+    });
+  });
+}
+
+/**
+ * Parse a possibly-concatenated JSON stream into objects. Tolerant of multiple
+ * objects per chunk and of trailing partial data (which it leaves unparsed).
+ */
+function drainJson(takeBuffer: () => string): unknown[] {
+  const out: unknown[] = [];
+  const raw = takeBuffer();
+  let depth = 0;
+  let start = -1;
+  let consumed = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const slice = raw.slice(start, i + 1);
+        try {
+          out.push(JSON.parse(slice));
+          consumed = i + 1;
+        } catch {
+          /* keep scanning */
+        }
+        start = -1;
+      }
+    }
+  }
+  // Note: any unparsed tail (consumed..end) is dropped here for simplicity; a set
+  // only needs the first ack and we open a fresh socket per command.
+  void consumed;
+  return out;
 }

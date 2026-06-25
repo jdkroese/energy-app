@@ -2,8 +2,8 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, auth } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, OtpChannel, SettingsResponse, SessionsResponse, UserRole, AuthUser } from '../lib/types';
-import { Card, Icon, Eyebrow, Switch, Input, Button, Select } from '../components/ui';
+import type { Channels, ChannelType, IntegrationStatus, OtpChannel, SettingsResponse, SessionsResponse, UserRole, AuthUser } from '../lib/types';
+import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
 import { InstallSheet } from '../components/InstallSheet';
@@ -591,6 +591,113 @@ function SecurityCard() {
   );
 }
 
+/* ============================================================================
+ * Connect AC Cloud — Intesis (Panasonic Etherea) integration. Admin enters the
+ * AC Cloud account; the backend validates by logging in BEFORE persisting and
+ * never logs the password. Once connected, the Devices screen shows the fleet.
+ * ==========================================================================*/
+
+function AcCloudCard() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState<IntegrationStatus | null>(null);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+
+  const load = async () => {
+    try {
+      const s = await api.integrations.intesisStatus();
+      setStatus(s);
+      if (s.username) setUsername(s.username);
+    } catch {
+      /* ignore — shows as not-connected */
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const connect = async () => {
+    if (!username.trim() || !password) {
+      setErr('Enter your AC Cloud email and password');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const s = await api.integrations.intesisConnect(username.trim(), password);
+      setStatus(s);
+      setPassword('');
+      setEditing(false);
+    } catch (e) {
+      setErr((e as Error).message || 'Could not connect — check your credentials');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    try {
+      await api.integrations.intesisDisconnect();
+      await load();
+      setPassword('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connected = status?.connected ?? false;
+
+  return (
+    <Card title="Connect AC Cloud" subtitle="Panasonic Etherea climate (Intesis)" style={{ padding: 0 }}>
+      <div style={{ ...row, borderTop: 'none', alignItems: 'flex-start' }}>
+        <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: connected ? 'var(--solar)' : 'var(--text-3)' }}>
+          <Icon name="thermometer" size={17} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+            AC Cloud
+            {connected ? (
+              <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>Connected · {status?.deviceCount ?? 0} units</Badge>
+            ) : (
+              <Badge tone="neutral" variant="soft">Not connected</Badge>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+            {connected ? status?.username : 'Sign in with your AC Cloud (Intesis) account'}
+          </div>
+
+          {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 4 }}>{status.error}</div>}
+
+          {isAdmin && (!connected || editing) && (
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+              <Input label="Email / username" type="text" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="you@example.com" />
+              <Input label="Password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button size="sm" variant="primary" loading={busy} onClick={() => void connect()}>{connected ? 'Re-connect' : 'Connect'}</Button>
+                {connected && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setErr(null); }}>Cancel</Button>}
+              </div>
+            </div>
+          )}
+
+          {isAdmin && connected && !editing && (
+            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setErr(null); }}>Change account</Button>
+              <Button size="sm" variant="ghost" loading={busy} onClick={() => void disconnect()}>Disconnect</Button>
+            </div>
+          )}
+          {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 6 }}>Only an admin can connect AC Cloud.</div>}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export function Settings() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -642,6 +749,9 @@ export function Settings() {
             );
           })}
         </Card>
+
+        {/* AC Cloud integration */}
+        <AcCloudCard />
 
         {/* notifications */}
         <NotificationsCard channels={ch} onChannels={setChannels} />

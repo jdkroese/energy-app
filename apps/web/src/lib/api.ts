@@ -1,17 +1,24 @@
 import type {
   AlertsResponse,
   AuthUser,
+  Automation,
+  AutomationsResponse,
   BatteriesResponse,
   BrainPlanResponse,
   Channels,
   ChannelType,
+  ClimateLever,
   ControlCommandValue,
   ControlDevice,
   ControlLever,
   ControlMode,
   ControlStatus,
   CreateUserResponse,
+  DeviceDetailResponse,
+  DevicesResponse,
+  DevicesStatus,
   HistoryResponse,
+  IntegrationStatus,
   LiveResponse,
   LoginResponse,
   MeResponse,
@@ -19,6 +26,8 @@ import type {
   ScenarioDef,
   ScenarioPreview,
   ScenariosResponse,
+  Schedule,
+  SchedulesResponse,
   SessionsResponse,
   SettingsResponse,
   UserRole,
@@ -142,6 +151,44 @@ export const api = {
     command: (device: ControlDevice, lever: ControlLever, value: ControlCommandValue) =>
       postJSON<ControlStatus>('/api/control/command', { device, lever, value }),
     applyScenario: () => postJSON<ControlStatus>('/api/control/apply-scenario', {}),
+  },
+
+  /* ---- Devices / Climate (command/arm/CRUD are admin) ---- */
+  devices: {
+    list: () => getJSON<DevicesResponse>('/api/devices'),
+    status: () => getJSON<DevicesStatus>('/api/devices/status'),
+    detail: (id: string) => getJSON<DeviceDetailResponse>(`/api/devices/${enc(id)}`),
+    arm: (armed: boolean, mode: ControlMode) =>
+      postJSON<DevicesStatus>('/api/devices/arm', { armed, mode }),
+    command: (id: string, lever: ClimateLever, value: boolean | number | string) =>
+      postJSON<{ ts: string; result: unknown }>(`/api/devices/${enc(id)}/command`, { lever, value }),
+    bulkCommand: (ids: string[], lever: ClimateLever, value: boolean | number | string) =>
+      postJSON<{ ts: string; results: unknown[] }>('/api/devices/bulk-command', { ids, lever, value }),
+    setSettings: (
+      id: string,
+      patch: { room?: string; automationEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number },
+    ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
+  },
+
+  integrations: {
+    intesisStatus: () => getJSON<IntegrationStatus>('/api/integrations/intesis'),
+    intesisConnect: (username: string, password: string) =>
+      postJSON<IntegrationStatus>('/api/integrations/intesis', { username, password }),
+    intesisDisconnect: () => delJSON<{ ok: boolean }>('/api/integrations/intesis'),
+  },
+
+  schedules: {
+    list: () => getJSON<SchedulesResponse>('/api/schedules'),
+    create: (s: Partial<Schedule>) => postJSON<{ schedule: Schedule }>('/api/schedules', s),
+    update: (id: string, s: Partial<Schedule>) => putJSON<{ schedule: Schedule }>(`/api/schedules/${enc(id)}`, s),
+    remove: (id: string) => delJSON<{ ok: boolean }>(`/api/schedules/${enc(id)}`),
+  },
+
+  automations: {
+    list: () => getJSON<AutomationsResponse>('/api/automations'),
+    create: (a: Partial<Automation>) => postJSON<{ automation: Automation }>('/api/automations', a),
+    update: (id: string, a: Partial<Automation>) => putJSON<{ automation: Automation }>(`/api/automations/${enc(id)}`, a),
+    remove: (id: string) => delJSON<{ ok: boolean }>(`/api/automations/${enc(id)}`),
   },
 };
 

@@ -28,7 +28,29 @@ import {
   applyScenarioToDevices,
 } from './routes/control';
 import { startCoordinator } from './control/coordinator';
+import { startClimateCoordinator } from './control/climate-coordinator';
 import type { Lever } from './control/guardrails';
+import type { ClimateLever } from './control/climate-execute';
+import {
+  getDevices,
+  getDevice,
+  commandDevice,
+  bulkCommand,
+  getDevicesStatus,
+  setDevicesArm,
+  setDeviceSettings,
+  getIntegration,
+  setIntegration,
+  disconnectIntegration,
+  listSchedules,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+  listAutomations,
+  createAutomation,
+  updateAutomation,
+  deleteAutomation,
+} from './routes/devices';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
 import { authRouter } from './routes/auth';
@@ -163,6 +185,69 @@ app.post(
 );
 app.post('/api/control/apply-scenario', requireAdmin, wrap(() => applyScenarioToDevices()));
 
+// ---- Devices / Climate (REAL device writes; reads are any-authed) ----
+app.get('/api/devices', wrap(() => getDevices()));
+app.get('/api/devices/status', wrap(() => getDevicesStatus()));
+app.get('/api/devices/:id', wrap((req) => getDevice(String(req.params.id))));
+app.post(
+  '/api/devices/arm',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { armed?: boolean; mode?: string };
+    if (typeof body.armed !== 'boolean') {
+      const e = new Error('armed (boolean) required') as Error & { code?: string };
+      e.code = 'BAD_INPUT';
+      throw e;
+    }
+    return setDevicesArm(body.armed, body.mode as ControlMode | undefined);
+  }),
+);
+app.post(
+  '/api/devices/bulk-command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { ids?: string[]; lever?: string; value?: unknown };
+    return bulkCommand(body.ids ?? [], body.lever as ClimateLever, body.value);
+  }),
+);
+app.post(
+  '/api/devices/:id/command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { lever?: string; value?: unknown };
+    return commandDevice(String(req.params.id), body.lever as ClimateLever, body.value);
+  }),
+);
+app.put(
+  '/api/devices/:id/settings',
+  requireAdmin,
+  wrap((req) => setDeviceSettings(String(req.params.id), (req.body ?? {}) as never)),
+);
+
+// ---- AC Cloud integration ----
+app.get('/api/integrations/intesis', wrap(() => getIntegration()));
+app.post(
+  '/api/integrations/intesis',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { username?: string; password?: string };
+    return setIntegration(body.username, body.password);
+  }),
+);
+app.delete('/api/integrations/intesis', requireAdmin, wrap(() => disconnectIntegration()));
+
+// ---- Schedules CRUD (admin for writes) ----
+app.get('/api/schedules', wrap(() => listSchedules()));
+app.post('/api/schedules', requireAdmin, wrap((req) => createSchedule((req.body ?? {}) as never)));
+app.put('/api/schedules/:id', requireAdmin, wrap((req) => updateSchedule(String(req.params.id), (req.body ?? {}) as never)));
+app.delete('/api/schedules/:id', requireAdmin, wrap((req) => deleteSchedule(String(req.params.id))));
+
+// ---- Automations CRUD (admin for writes) ----
+app.get('/api/automations', wrap(() => listAutomations()));
+app.post('/api/automations', requireAdmin, wrap((req) => createAutomation((req.body ?? {}) as never)));
+app.put('/api/automations/:id', requireAdmin, wrap((req) => updateAutomation(String(req.params.id), (req.body ?? {}) as never)));
+app.delete('/api/automations/:id', requireAdmin, wrap((req) => deleteAutomation(String(req.params.id))));
+
 // Ensure VAPID keys exist on boot (generate + persist if missing).
 try {
   notify.ensureVapid();
@@ -184,6 +269,11 @@ startAlertLoop();
 // INERT on boot (defaults are DISARMED / mode 'off') and commands nothing until
 // an admin explicitly arms it in 'auto'.
 startCoordinator();
+
+// Start the climate coordinator. Like the battery coordinator it self-gates on
+// devices.armed + mode==='auto', so it is INERT on boot (DISARMED / 'off') and
+// writes nothing until an admin arms it AND an automation is enabled in 'auto'.
+startClimateCoordinator();
 
 app.listen(config.port, config.host, () => {
   console.log(`[energy-api] http://${config.host}:${config.port}  (env=${config.env})`);

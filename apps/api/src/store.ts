@@ -10,6 +10,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import type { Band } from './tariff';
 
 // ---- Types --------------------------------------------------------------
 
@@ -204,6 +205,102 @@ export interface ControlState {
   guardrails: ControlGuardrails;
 }
 
+// ---- Devices / Climate ------------------------------------------------------
+// A generic devices layer; AC (Intesis/Panasonic Etherea) is the first type. The
+// store holds: integration creds, per-device user settings, schedules, automations,
+// climate guardrails, a master arm flag, and a ring-buffer command log. Like the
+// battery control, devices BOOT DISARMED — nothing is ever written until armed.
+
+/** Third-party integration credentials (set in Settings; env is a fallback). */
+export interface IntegrationsState {
+  intesis: { username: string; password: string } | null;
+}
+
+/** Per-device user-facing settings, merged onto the connector's normalized view. */
+export interface DeviceSettings {
+  /** Friendly room override (falls back to the device's reported zone/name). */
+  room?: string;
+  /** Whether automations may command this device. */
+  automationEnabled: boolean;
+  /** Hard comfort bounds for automations (°C). */
+  comfortCeilingC?: number;
+  comfortFloorC?: number;
+}
+
+export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
+
+export interface Schedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  scope: { deviceIds: string[] };
+  /** Days of week the schedule runs on (0=Sun..6=Sat). */
+  days: number[];
+  /** Local "HH:MM" start/end. */
+  start: string;
+  end: string;
+  mode: ClimateMode;
+  setpointC: number;
+  fan?: number;
+}
+
+export type AutomationType = 'solar_surplus_precool';
+export type AutomationAuthority = 'shadow' | 'auto';
+
+export interface SolarSurplusPrecoolParams {
+  /** Run cooling when a room is above this (°C). */
+  roomTempLimitC: number;
+  /** Target setpoint to drive the room toward (°C). */
+  targetSetpointC: number;
+  /** Stop only after surplus has cleared for this long (s). */
+  surplusClearSec: number;
+  /** Band at which automation stands down (P1 peak). */
+  exitBand: Band;
+  /** Surplus (W) above which a compressor start is permitted. */
+  startThresholdW?: number;
+}
+
+export interface Automation {
+  id: string;
+  name: string;
+  enabled: boolean;
+  type: AutomationType;
+  authority: AutomationAuthority;
+  params: SolarSurplusPrecoolParams;
+  /** Epoch ms of the last coordinator evaluation. */
+  lastEval: number | null;
+}
+
+export interface ClimateGuardrails {
+  setpointMinC: number;
+  setpointMaxC: number;
+  gridImportCapKw: number;
+  quietHours: { start: string; end: string };
+  minCycleMin: number;
+}
+
+export interface ClimateLogEntry {
+  ts: number;
+  deviceId: string;
+  lever: string;
+  from: string | number | null;
+  to: string | number | null;
+  reason: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface DevicesState {
+  /** Master safety switch — DISARMED by default; nothing is ever written until armed. */
+  armed: boolean;
+  mode: ControlMode;
+  updatedAt: number;
+  lastError: string | null;
+  /** Ring buffer of the last 100 climate command actions. */
+  log: ClimateLogEntry[];
+  guardrails: ClimateGuardrails;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -217,6 +314,12 @@ export interface StoreSchema {
   seenAlerts: Record<string, number>;
   auth: AuthState;
   control: ControlState;
+  // ---- Devices / Climate ----
+  integrations: IntegrationsState;
+  deviceSettings: Record<string, DeviceSettings>;
+  schedules: Schedule[];
+  automations: Automation[];
+  devices: DevicesState;
 }
 
 // ---- Defaults -----------------------------------------------------------
@@ -301,6 +404,45 @@ export function defaultControl(): ControlState {
   };
 }
 
+/** DISARMED, mode 'off' — the safe default for the devices/climate layer. */
+export function defaultDevices(): DevicesState {
+  return {
+    armed: false,
+    mode: 'off',
+    updatedAt: Date.now(),
+    lastError: null,
+    log: [],
+    guardrails: {
+      setpointMinC: 16,
+      setpointMaxC: 30,
+      gridImportCapKw: 14,
+      quietHours: { start: '23:00', end: '07:00' },
+      minCycleMin: 8,
+    },
+  };
+}
+
+/** The flagship automation, seeded disabled + shadow so it never acts until armed. */
+export function defaultAutomations(): Automation[] {
+  return [
+    {
+      id: 'solar-surplus-precool',
+      name: 'Solar-surplus pre-cool',
+      enabled: false,
+      type: 'solar_surplus_precool',
+      authority: 'shadow',
+      params: {
+        roomTempLimitC: 25,
+        targetSetpointC: 23,
+        surplusClearSec: 120,
+        exitBand: 'P1',
+        startThresholdW: 800,
+      },
+      lastEval: null,
+    },
+  ];
+}
+
 function defaults(): StoreSchema {
   return {
     channels: {
@@ -318,6 +460,11 @@ function defaults(): StoreSchema {
     seenAlerts: {},
     auth: defaultAuth(),
     control: defaultControl(),
+    integrations: { intesis: null },
+    deviceSettings: {},
+    schedules: [],
+    automations: defaultAutomations(),
+    devices: defaultDevices(),
   };
 }
 
@@ -377,6 +524,43 @@ function hydrate(raw: unknown): StoreSchema {
     seenAlerts: p.seenAlerts ?? base.seenAlerts,
     auth: hydrateAuth(p.auth, base.auth),
     control: hydrateControl(p.control, base.control),
+    integrations: {
+      intesis:
+        p.integrations?.intesis &&
+        typeof p.integrations.intesis.username === 'string' &&
+        typeof p.integrations.intesis.password === 'string'
+          ? p.integrations.intesis
+          : base.integrations.intesis,
+    },
+    deviceSettings:
+      p.deviceSettings && typeof p.deviceSettings === 'object'
+        ? p.deviceSettings
+        : base.deviceSettings,
+    schedules: Array.isArray(p.schedules) ? p.schedules : base.schedules,
+    automations:
+      Array.isArray(p.automations) && p.automations.length ? p.automations : base.automations,
+    devices: hydrateDevices(p.devices, base.devices),
+  };
+}
+
+/**
+ * Rehydrate the devices/climate section. SAFETY: a fresh process always boots
+ * DISARMED in mode 'off' regardless of what was persisted — the climate
+ * coordinator must never resume issuing commands without an explicit re-arm.
+ */
+function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState): DevicesState {
+  if (!p || typeof p !== 'object') return base;
+  return {
+    armed: false,
+    mode: 'off',
+    updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
+    lastError: typeof p.lastError === 'string' ? p.lastError : null,
+    log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
+    guardrails: {
+      ...base.guardrails,
+      ...(p.guardrails ?? {}),
+      quietHours: { ...base.guardrails.quietHours, ...(p.guardrails?.quietHours ?? {}) },
+    },
   };
 }
 
