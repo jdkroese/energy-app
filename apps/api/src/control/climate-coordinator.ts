@@ -23,6 +23,12 @@ let timer: ReturnType<typeof setInterval> | null = null;
 // Per-device "surplus first dropped at" timestamp, for the sustained-clear debounce.
 const surplusClearedSince = new Map<string, number>();
 
+// Above this much GRID IMPORT (kW) we treat the moment as a DEFICIT regardless of
+// the computed surplusW — a safety net so surplus cooling can never silently turn
+// into a grid-import load (e.g. when the battery-headroom term keeps surplusW > 0
+// while the house is actually pulling from the grid). 0.4 kW clears measurement noise.
+const DEFICIT_IMPORT_KW = 0.4;
+
 // ---- Manual override ("hold") ----------------------------------------------
 // A manual command (Devices screen / API) takes precedence over automation: for
 // a window after it, the coordinator (schedules AND surplus pre-cool) leaves that
@@ -116,7 +122,11 @@ export async function evaluateSolarSurplusPrecool(
 
     // ----- STOP conditions (debounced) -----
     const roomAtTarget = room !== null && room <= p.targetSetpointC;
-    const surplusGone = snap.surplusW <= 0;
+    // "No longer free solar" — the computed surplus is gone OR we're actually
+    // importing from the grid (a deficit). Either way, after the sustained-clear
+    // window the unit is stopped so cooling never becomes a grid-import load.
+    const importingFromGrid = snap.gridImportKw > DEFICIT_IMPORT_KW;
+    const surplusGone = snap.surplusW <= 0 || importingFromGrid;
     if (surplusGone) {
       if (!surplusClearedSince.has(u.id)) surplusClearedSince.set(u.id, Date.now());
     } else {
@@ -134,7 +144,7 @@ export async function evaluateSolarSurplusPrecool(
         ? `band ${snap.band} (exit)`
         : roomAtTarget
           ? `room ${room}°C ≤ target ${p.targetSetpointC}°C`
-          : `surplus cleared ${Math.round(clearedFor / 1000)}s ≥ ${p.surplusClearSec}s`;
+          : `${importingFromGrid ? `grid import ${snap.gridImportKw.toFixed(1)}kW` : 'no surplus'} ${Math.round(clearedFor / 1000)}s ≥ ${p.surplusClearSec}s`;
       const reason = `${automation.name}: stop — ${why}`;
       if (isAuto) {
         await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
