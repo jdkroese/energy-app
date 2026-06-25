@@ -168,7 +168,7 @@ export async function commandDevice(id: string, lever: ClimateLever, rawValue: u
 
   const value = parseValue(lever, rawValue);
   const snap = await takeClimateSnapshot();
-  const result = await issueClimate(u, lever, value, 'manual command', snap);
+  const result = await issueClimate(u, lever, value, 'manual command', snap, { manual: true });
   // Manual control wins: hold automation off this unit for a while.
   if (result.ok) markManualOverride(id);
   return { ts: new Date().toISOString(), result };
@@ -191,7 +191,7 @@ export async function bulkCommand(ids: string[], lever: ClimateLever, rawValue: 
       results.push({ id, ok: false, reason: 'not found' });
       continue;
     }
-    const r = await issueClimate(u, lever, value, 'bulk command', { ...snap, pendingImportKw });
+    const r = await issueClimate(u, lever, value, 'bulk command', { ...snap, pendingImportKw }, { manual: true });
     results.push({ id, ok: r.ok, reason: r.reason });
     if (r.ok) markManualOverride(id); // manual control wins — hold automation off
     if (lever === 'power' && value === true && r.ok && !u.power) pendingImportKw += 1.2;

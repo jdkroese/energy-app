@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, Schedule, DevicesStatus, ControlMode } from '../lib/types';
+import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, Schedule } from '../lib/types';
 import { Card, Icon, Button, IconButton, Switch } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -67,15 +67,12 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const isAdmin = user?.role === 'admin';
   const wide = ctx.desktop;
   const { data, loading, stale, updatedAt, refetch } = usePolling<DeviceDetailResponse>(() => api.devices.detail(id ?? ''), 15_000, [id]);
-  const { data: dstatus, refetch: refetchStatus } = usePolling<DevicesStatus>(() => api.devices.status(), 15_000);
   const [busy, setBusy] = useState(false);
-  const [arming, setArming] = useState(false);
   const [cmdErr, setCmdErr] = useState<string | null>(null);
   const [pendingSetpoint, setPendingSetpoint] = useState<number | null>(null);
   const [pendingFan, setPendingFan] = useState<number | null>(null);
 
   const dev = data?.device ?? null;
-  const armed = dstatus?.armed ?? false;
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -88,11 +85,6 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       const res = (await api.devices.command(id ?? '', lever, value)) as { result?: { ok?: boolean; reason?: string } };
       setCmdErr(res?.result?.ok === false ? res.result.reason ?? 'Command was rejected' : null);
     });
-  const armDevices = (on: boolean) => {
-    setArming(true);
-    setCmdErr(null);
-    api.devices.arm(on, on ? 'manual' : 'off').catch(() => {}).finally(() => { setArming(false); refetchStatus(); refetch(); });
-  };
   const toggleSchedule = (sid: string, enabled: boolean) => run(() => api.schedules.update(sid, { enabled }));
 
   if (!dev) {
@@ -108,8 +100,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   }
 
   const ac = dev as DeviceView & AcExtras;
-  const canConfig = isAdmin;            // schedule / solar / settings toggles (persisted config)
-  const canWrite = isAdmin && armed;    // live device commands require arming
+  const canConfig = isAdmin;   // schedule / solar / settings toggles
+  const canWrite = isAdmin;    // live device commands
   const accent = accentFor(dev.mode);
   const setpoint = pendingSetpoint ?? dev.setpointC ?? 24;
   const lo = Math.max(16, dev.minSetpointC ?? 16, dev.comfortFloorC ?? 16);
@@ -152,14 +144,10 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
 
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
-      {/* ARM STATE — live commands only reach the unit when control is armed */}
-      {isAdmin && (
-        <ArmBanner armed={armed} mode={dstatus?.mode} busy={arming} onArm={() => armDevices(true)} onDisarm={() => armDevices(false)} />
-      )}
       {cmdErr && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.22)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
           <Icon name="alert-triangle" size={14} color="var(--grid)" />
-          <span>Couldn&apos;t send — {cmdErr}{!armed ? ' · arm control above first' : ''}.</span>
+          <span>Couldn&apos;t send — {cmdErr}.</span>
         </div>
       )}
 
@@ -395,33 +383,6 @@ function VaneCard({ title, value, disabled }: { title: string; value?: number | 
         ))}
       </div>
     </Card>
-  );
-}
-
-function ArmBanner({ armed, mode, busy, onArm, onDisarm }: {
-  armed: boolean; mode?: ControlMode; busy: boolean; onArm: () => void; onDisarm: () => void;
-}) {
-  if (armed) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.2)', borderRadius: 'var(--radius-lg)', padding: '9px 13px' }}>
-        <Icon name="shield-check" size={16} color="var(--solar)" />
-        <div style={{ flex: 1, fontSize: 12, minWidth: 0 }}>
-          <span style={{ fontWeight: 600, color: 'var(--solar)' }}>Live control armed</span>
-          <span style={{ color: 'var(--text-3)' }}> · {mode ?? 'manual'} — controls reach the unit</span>
-        </div>
-        <button type="button" disabled={busy} onClick={onDisarm} style={{ fontSize: 11, color: 'var(--text-2)', background: 'none', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-md)', padding: '5px 11px', cursor: busy ? 'default' : 'pointer', fontWeight: 600 }}>Disarm</button>
-      </div>
-    );
-  }
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.25)', borderRadius: 'var(--radius-lg)', padding: '9px 13px' }}>
-      <Icon name="shield-off" size={16} color="var(--grid)" />
-      <div style={{ flex: 1, fontSize: 12, minWidth: 0 }}>
-        <span style={{ fontWeight: 600, color: 'var(--grid)' }}>Live control is disarmed</span>
-        <span style={{ color: 'var(--text-2)' }}> — these controls won&apos;t reach the unit yet</span>
-      </div>
-      <Button size="sm" variant="primary" loading={busy} iconLeft={<Icon name="power" size={14} />} onClick={onArm}>Arm</Button>
-    </div>
   );
 }
 

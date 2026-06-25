@@ -98,11 +98,16 @@ export async function issueClimate(
   value: ClimateValue,
   reason: string,
   snap: ClimateSnapshot,
+  opts: { manual?: boolean } = {},
 ): Promise<ClimateIssueResult> {
   try {
     const dev = store.get().devices;
-    if (!dev.armed || dev.mode === 'off') {
-      return reject(unit.id, lever, null, `not armed (armed=${dev.armed}, mode=${dev.mode})`);
+    // Only the AUTOMATION loop is arm-gated; explicit manual commands from the
+    // device page always go through (guardrails below still apply). This keeps
+    // the brain from auto-driving a unit until devices control is armed, while
+    // letting an admin operate the unit by hand at any time.
+    if (!opts.manual && (!dev.armed || dev.mode === 'off')) {
+      return reject(unit.id, lever, null, `automation not armed (armed=${dev.armed}, mode=${dev.mode})`);
     }
     const fresh = freshnessOk(snap);
     if (!fresh.ok) return reject(unit.id, lever, null, fresh.reason);
