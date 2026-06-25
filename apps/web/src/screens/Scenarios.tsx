@@ -139,8 +139,8 @@ export function Scenarios() {
       </div>
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
-      {/* selector */}
-      <div style={{ display: 'flex', gap: 10, overflowX: 'auto', padding: '2px 14px 4px', scrollbarWidth: 'none' }}>
+      {/* selector — spread across the full width, sized like the Reports/Live cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, padding: '2px 14px 6px' }}>
         {list.map((s) => {
           const on = sel === s.id;
           return (
@@ -148,32 +148,37 @@ export function Scenarios() {
               key={s.id}
               onClick={() => setSel(s.id)}
               style={{
-                flex: 'none',
-                width: 150,
                 borderRadius: 14,
-                padding: 13,
+                padding: 16,
                 cursor: 'pointer',
+                minHeight: 108,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
                 border: `1px solid ${on ? 'var(--solar)' : 'var(--border-2)'}`,
                 background: on ? 'var(--solar-wash)' : 'var(--surface-1)',
                 transition: 'border-color .15s,background .15s',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: on ? 'transparent' : 'var(--surface-3)', color: on ? 'var(--solar)' : 'var(--text-2)' }}>
-                  <Icon name={s.icon} size={17} />
+                <span style={{ width: 38, height: 38, borderRadius: 10, display: 'grid', placeItems: 'center', background: on ? 'transparent' : 'var(--surface-3)', color: on ? 'var(--solar)' : 'var(--text-2)' }}>
+                  <Icon name={s.icon} size={20} />
                 </span>
                 {activeId === s.id && (
-                  <span style={{ fontSize: 9, fontWeight: 600, color: 'var(--solar)', background: 'var(--solar-wash)', padding: '3px 7px', borderRadius: 999 }}>ACTIVE</span>
+                  <span style={{ fontSize: 9.5, fontWeight: 600, color: 'var(--solar)', background: 'var(--solar-wash)', padding: '3px 8px', borderRadius: 999 }}>ACTIVE</span>
                 )}
               </div>
-              <div style={{ fontSize: 13.5, fontWeight: 500, marginTop: 9, lineHeight: 1.25 }}>{s.name}</div>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.2 }}>{s.name}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 3, fontFamily: 'var(--font-mono)' }}>{s.reserve}% reserve · {s.exportRule}</div>
+              </div>
             </div>
           );
         })}
-        <div style={{ flex: 'none', width: 150, borderRadius: 14, padding: 13, border: '1px solid var(--border-2)', display: 'grid', placeItems: 'center', color: 'var(--text-3)' }}>
+        <div style={{ borderRadius: 14, padding: 16, minHeight: 108, border: '1px dashed var(--border-2)', display: 'grid', placeItems: 'center', color: 'var(--text-3)', cursor: 'pointer' }}>
           <div style={{ textAlign: 'center' }}>
-            <Icon name="plus" size={20} />
-            <div style={{ fontSize: 12, marginTop: 6 }}>New</div>
+            <Icon name="plus" size={22} />
+            <div style={{ fontSize: 12.5, marginTop: 6 }}>New profile</div>
           </div>
         </div>
       </div>
