@@ -4,6 +4,7 @@
 
 import * as intesis from '../connectors/intesis';
 import type { ClimateUnit } from '../connectors/intesis';
+import * as airzone from '../connectors/airzone';
 import * as store from '../store';
 import type {
   Automation,
@@ -74,19 +75,38 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
   };
 }
 
+/** Whether ANY climate connector is connected (AC Cloud or Airzone underfloor). */
+function anyConnected(): boolean {
+  return intesis.isConfigured() || airzone.isConfigured();
+}
+
+/** Combined, normalized climate fleet across all connectors. Soft-fails per
+ *  connector so one being unreachable doesn't blank the whole list. */
+async function getAllUnits(): Promise<{ fleet: ClimateUnit[]; error: string | null }> {
+  const fleet: ClimateUnit[] = [];
+  let error: string | null = null;
+  if (intesis.isConfigured()) {
+    try {
+      fleet.push(...(await intesis.getFleet()));
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+  if (airzone.isConfigured()) {
+    try {
+      fleet.push(...(await airzone.getFleet()));
+    } catch (e) {
+      error = error ?? `Airzone: ${(e as Error).message}`;
+    }
+  }
+  return { fleet, error };
+}
+
 /** GET /api/devices — normalized fleet + a context strip. */
 export async function getDevices(): Promise<unknown> {
   const dev = store.get().devices;
-  const connected = intesis.isConfigured();
-  let fleet: ClimateUnit[] = [];
-  let fleetError: string | null = null;
-  if (connected) {
-    try {
-      fleet = await intesis.getFleet();
-    } catch (e) {
-      fleetError = (e as Error).message;
-    }
-  }
+  const connected = anyConnected();
+  const { fleet, error: fleetError } = await getAllUnits();
   const settings = store.get().deviceSettings;
   const devices = fleet.map((u) => mergeView(u, settings));
 
@@ -113,10 +133,10 @@ export async function getDevices(): Promise<unknown> {
 
 /** GET /api/devices/:id — detail + governing schedules/automations. */
 export async function getDevice(id: string): Promise<unknown> {
-  if (!intesis.isConfigured()) {
+  if (!anyConnected()) {
     return { ts: new Date().toISOString(), connected: false, device: null };
   }
-  const fleet = await intesis.getFleet();
+  const { fleet } = await getAllUnits();
   const u = fleet.find((x) => x.id === id);
   if (!u) return { ts: new Date().toISOString(), connected: true, device: null };
   const settings = store.get().deviceSettings;
@@ -140,8 +160,8 @@ function parseValue(lever: ClimateLever, raw: unknown): boolean | number | strin
 
 export async function commandDevice(id: string, lever: ClimateLever, rawValue: unknown): Promise<unknown> {
   if (!LEVERS.includes(lever)) throw badInput(`lever must be one of ${LEVERS.join('|')}`);
-  if (!intesis.isConfigured()) throw badInput('AC Cloud not connected');
-  const fleet = await intesis.getFleet();
+  if (!anyConnected()) throw badInput('no climate integration connected');
+  const { fleet } = await getAllUnits();
   const u = fleet.find((x) => x.id === id);
   if (!u) throw badInput(`device ${id} not found`);
 
@@ -156,8 +176,8 @@ export async function commandDevice(id: string, lever: ClimateLever, rawValue: u
 export async function bulkCommand(ids: string[], lever: ClimateLever, rawValue: unknown): Promise<unknown> {
   if (!Array.isArray(ids) || ids.length === 0) throw badInput('ids[] required');
   if (!LEVERS.includes(lever)) throw badInput(`lever must be one of ${LEVERS.join('|')}`);
-  if (!intesis.isConfigured()) throw badInput('AC Cloud not connected');
-  const fleet = await intesis.getFleet();
+  if (!anyConnected()) throw badInput('no climate integration connected');
+  const { fleet } = await getAllUnits();
   const value = parseValue(lever, rawValue);
   const snap = await takeClimateSnapshot();
 

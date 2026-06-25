@@ -5,6 +5,7 @@
 
 import * as intesis from '../connectors/intesis';
 import { UID, MODE_VALUE } from '../connectors/intesis';
+import * as airzone from '../connectors/airzone';
 import * as store from '../store';
 import type { ClimateUnit } from '../connectors/intesis';
 import {
@@ -35,6 +36,11 @@ export type ClimateValue = boolean | number | string;
 
 function key(deviceId: string, lever: ClimateLever): string {
   return `${deviceId}:${lever}`;
+}
+
+/** Airzone underfloor zones use a separate connector + native (non-UID) write API. */
+function isAirzone(id: string): boolean {
+  return id.startsWith('air-');
 }
 
 function logEntry(
@@ -115,7 +121,8 @@ export async function issueClimate(
       }
       if (unit.power === to) return noop(unit.id, lever, to ? 'on' : 'off');
       if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.power ? 'on' : 'off', 'rate-limited (<30s)');
-      await intesis.setDatapoint(unit.id, UID.power, to ? 1 : 0);
+      if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'power', to);
+      else await intesis.setDatapoint(unit.id, UID.power, to ? 1 : 0);
       markWritten(unit.id, lever);
       return confirmPower(unit.id, unit.power, to, reason);
     }
@@ -126,7 +133,8 @@ export async function issueClimate(
       const to = guard.value;
       if (unit.mode === to) return noop(unit.id, lever, to);
       if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.mode, 'rate-limited (<30s)');
-      await intesis.setDatapoint(unit.id, UID.mode, MODE_VALUE[to]);
+      if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'mode', to);
+      else await intesis.setDatapoint(unit.id, UID.mode, MODE_VALUE[to]);
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, unit.mode, to, reason, true, `mode ${to} issued`);
       return { ok: true, skipped: false, reason, from: unit.mode, to };
@@ -137,8 +145,9 @@ export async function issueClimate(
       const to = guard.value;
       if (unit.setpointC === to) return noop(unit.id, lever, to);
       if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.setpointC, 'rate-limited (<30s)');
-      // Device wants tenths of °C.
-      await intesis.setDatapoint(unit.id, UID.setpoint, Math.round(to * 10));
+      // Airzone takes whole °C (0.5° steps); Intesis wants tenths of °C.
+      if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'setpoint', to);
+      else await intesis.setDatapoint(unit.id, UID.setpoint, Math.round(to * 10));
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, unit.setpointC, to, `${reason}${guard.reason !== 'ok' ? ` (${guard.reason})` : ''}`, true, `setpoint ${to}°C issued`);
       return { ok: true, skipped: false, reason, from: unit.setpointC, to };
@@ -146,6 +155,7 @@ export async function issueClimate(
 
     if (lever === 'fan') {
       const fan = Math.max(0, Math.round(Number(value)));
+      if (isAirzone(unit.id)) return noop(unit.id, lever, fan, 'underfloor has no fan');
       if (rateLimited(unit.id, lever)) return reject(unit.id, lever, null, 'rate-limited (<30s)');
       await intesis.setDatapoint(unit.id, UID.fan, fan);
       markWritten(unit.id, lever);
