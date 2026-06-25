@@ -29,6 +29,11 @@ const surplusClearedSince = new Map<string, number>();
 // while the house is actually pulling from the grid). 0.4 kW clears measurement noise.
 const DEFICIT_IMPORT_KW = 0.4;
 
+// Provenance: unit ids the surplus rule itself switched ON. Lets disarm/shutdown
+// switch off ONLY rule-started cooling — never occupant/manual units. In-memory
+// (per process); a manual command or a successful rule stop removes a unit from it.
+const surplusStartedIds = new Set<string>();
+
 // ---- Manual override ("hold") ----------------------------------------------
 // A manual command (Devices screen / API) takes precedence over automation: for
 // a window after it, the coordinator (schedules AND surplus pre-cool) leaves that
@@ -41,6 +46,7 @@ export function markManualOverride(deviceId: string): void {
   store.update((s) => {
     s.devices.manualOverrides[deviceId] = Date.now() + mins * 60_000;
   });
+  surplusStartedIds.delete(deviceId); // user took control — rule no longer owns it
 }
 
 /** Epoch ms the hold expires, or null if no active hold. */
@@ -148,6 +154,7 @@ export async function evaluateSolarSurplusPrecool(
       const reason = `${automation.name}: stop — ${why}`;
       if (isAuto) {
         await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
+        surplusStartedIds.delete(u.id);
       } else {
         logDecision(u.id, reason, 'SHADOW — would power OFF');
       }
@@ -174,6 +181,7 @@ export async function evaluateSolarSurplusPrecool(
       await issueClimate(u, 'mode', 'cool', reason, { ...snap, pendingImportKw });
       await issueClimate(u, 'setpoint', p.targetSetpointC, reason, { ...snap, pendingImportKw });
       const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
+      if (res.ok) surplusStartedIds.add(u.id); // rule owns this unit now
       if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
     } else {
       logDecision(u.id, reason, `SHADOW — would cool@${p.targetSetpointC}°C`);
@@ -284,9 +292,58 @@ async function tick(): Promise<void> {
 }
 
 /**
+ * Switch OFF only the units the surplus rule itself started (provenance-tracked)
+ * that are still on and not under a manual hold. Best-effort and never throws.
+ * Caller MUST invoke this while still armed (mode !== 'off') — issueClimate refuses
+ * once disarmed. Used on explicit disarm and on graceful shutdown so rule-started
+ * cooling is never stranded importing from the grid. Returns the count switched off.
+ */
+export async function stopSurplusStartedUnits(reason: string): Promise<number> {
+  if (surplusStartedIds.size === 0) return 0;
+  if (!intesis.isConfigured()) {
+    surplusStartedIds.clear();
+    return 0;
+  }
+  let fleet: ClimateUnit[];
+  let snap: RichClimateSnapshot;
+  try {
+    fleet = await intesis.getFleet();
+    snap = await takeClimateSnapshot();
+  } catch {
+    return 0; // can't reach the data — leave the set for a later attempt
+  }
+  _resetClimateRateLimits(); // safety action — bypass the inter-write debounce
+  // Power-OFF only REDUCES load, so the 14 kW cap is irrelevant — run them in
+  // parallel to bound wall-clock (matters on the shutdown grace window).
+  const targets = fleet.filter(
+    (u) => surplusStartedIds.has(u.id) && u.power && !isManualOverrideActive(u.id),
+  );
+  // Drop any tracked id we won't act on (already off / now manual / gone) from the set.
+  for (const id of [...surplusStartedIds]) {
+    if (!targets.some((u) => u.id === id)) surplusStartedIds.delete(id);
+  }
+  const results = await Promise.all(
+    targets.map((u) =>
+      issueClimate(u, 'power', false, reason, snap)
+        .then((r) => ({ id: u.id, ok: r.ok }))
+        .catch(() => ({ id: u.id, ok: false })),
+    ),
+  );
+  let stopped = 0;
+  for (const r of results) {
+    if (r.ok) {
+      surplusStartedIds.delete(r.id);
+      stopped++;
+    }
+  }
+  return stopped;
+}
+
+/**
  * REVERT-TO-SAFE for climate — issued on disarm / mode->'off'. Conservative: we do
- * NOT forcibly power units off (occupants may be using them); we simply clear the
- * coordinator's debounce memory and land DISARMED so no further writes occur.
+ * NOT forcibly power occupant/manual units off; rule-started units are switched off
+ * separately by stopSurplusStartedUnits() (called while still armed, just before
+ * this). Here we only clear the coordinator's debounce memory and land DISARMED.
  */
 export function revertClimateToSafe(): void {
   _resetClimateRateLimits();

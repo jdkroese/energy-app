@@ -17,6 +17,7 @@ import { issueClimate, type ClimateLever } from '../control/climate-execute';
 import { takeClimateSnapshot } from '../control/climate-snapshot';
 import {
   revertClimateToSafe,
+  stopSurplusStartedUnits,
   markManualOverride,
   clearManualOverride,
   manualOverrideUntil,
@@ -218,10 +219,13 @@ export function getDevicesStatus(): unknown {
   };
 }
 
-export function setDevicesArm(armed: boolean, mode?: ControlMode): unknown {
+export async function setDevicesArm(armed: boolean, mode?: ControlMode): Promise<unknown> {
   const valid: ControlMode[] = ['off', 'manual', 'auto'];
   const nextMode: ControlMode = mode && valid.includes(mode) ? mode : armed ? 'manual' : 'off';
   if (!armed || nextMode === 'off') {
+    // Switch off ONLY units the surplus rule started — while still armed, before
+    // we disarm — so a disarm never strands rule-started cooling on the grid.
+    await stopSurplusStartedUnits('disarm — stop rule-started cooling');
     revertClimateToSafe();
   } else {
     store.update((st) => {

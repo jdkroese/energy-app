@@ -109,6 +109,12 @@ jobs:
       - name: Restart API and verify health
         run: |
           set -uo pipefail
+          # Graceful stop FIRST: SIGTERM lets the API switch off any units the
+          # solar-surplus rule started before it exits (its SIGTERM handler), so a
+          # deploy never strands rule-started cooling on the grid. Give it a short
+          # grace window to finish those cloud writes, then hard-restart regardless.
+          sudo launchctl kill TERM system/nl.hirobo.energy-api 2>/dev/null || true
+          sleep 10
           # Code-only restart (does NOT reload env — that's intentional; the plist
           # holds the Tesla/Sonnen creds and must not be touched by a deploy).
           sudo launchctl kickstart -k system/nl.hirobo.energy-api

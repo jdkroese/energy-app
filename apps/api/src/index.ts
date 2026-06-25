@@ -29,7 +29,11 @@ import {
   applyScenarioToDevices,
 } from './routes/control';
 import { startCoordinator } from './control/coordinator';
-import { startClimateCoordinator } from './control/climate-coordinator';
+import {
+  startClimateCoordinator,
+  stopClimateCoordinator,
+  stopSurplusStartedUnits,
+} from './control/climate-coordinator';
 import type { Lever } from './control/guardrails';
 import type { ClimateLever } from './control/climate-execute';
 import {
@@ -362,6 +366,29 @@ startCoordinator();
 // writes nothing until an admin arms it AND an automation is enabled in 'auto'.
 startClimateCoordinator();
 
-app.listen(config.port, config.host, () => {
+const server = app.listen(config.port, config.host, () => {
   console.log(`[energy-api] http://${config.host}:${config.port}  (env=${config.env})`);
 });
+
+// Graceful shutdown: on SIGTERM/SIGINT, switch off any units the surplus rule
+// started BEFORE we exit (while still armed, so issueClimate is permitted) — so a
+// restart/deploy never strands rule-started cooling importing from the grid. The
+// deploy sends SIGTERM (then a grace window) ahead of `launchctl kickstart -k`.
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[energy-api] ${signal} — switching off rule-started cooling before exit`);
+  try {
+    const n = await stopSurplusStartedUnits('shutdown — stop rule-started cooling');
+    if (n > 0) console.log(`[energy-api] switched off ${n} rule-started AC unit(s)`);
+  } catch (e) {
+    console.error('[energy-api] shutdown cleanup failed:', (e as Error).message);
+  }
+  stopClimateCoordinator();
+  server.close(() => process.exit(0));
+  // Hard backstop if the socket close hangs past the daemon's grace window.
+  setTimeout(() => process.exit(0), 8_000).unref();
+}
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
