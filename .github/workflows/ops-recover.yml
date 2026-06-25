@@ -1,0 +1,49 @@
+name: Ops - Account Recovery
+
+# One-off, manually-triggered maintenance job. Mints a fresh password-reset link
+# on the VPS (reading it from the service journal, so it works even when email/
+# WhatsApp delivery is down) and prints quick auth/email diagnostics.
+# NOTE: the reset link appears in this run's logs (single-use, 1h expiry).
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Account email to mint a reset link for"
+        required: true
+        default: "j.kroese@levante.nl"
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Mint reset link + diagnose
+        env:
+          ACCT_EMAIL: ${{ github.event.inputs.email }}
+        run: |
+          ssh "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" 'bash -s' "$ACCT_EMAIL" <<'REMOTE'
+          set -uo pipefail
+          EMAIL="${1:-}"
+          STATE=/opt/energy/state.json
+          echo "=== user record ==="
+          jq --arg e "$EMAIL" '.auth.users[] | select((.email|ascii_downcase)==($e|ascii_downcase)) | {email, role, hasPassword:(.passwordHash!=null), twoFactor}' "$STATE" || echo "(jq failed / user not found)"
+          echo "=== lockout record ==="
+          jq --arg e "$EMAIL" '.auth.loginAttempts[($e|ascii_downcase)] // "none"' "$STATE"
+          echo "=== resend / email config ==="
+          if grep -qE '^RESEND_API_KEY=.+' /opt/energy/.env; then echo "RESEND_API_KEY: present"; else echo "RESEND_API_KEY: MISSING/empty"; fi
+          grep -E '^EMAIL_FROM=' /opt/energy/.env || echo "EMAIL_FROM: (using default)"
+          echo "=== triggering request-reset (localhost) ==="
+          curl -fsS -X POST http://127.0.0.1:3002/api/auth/request-reset -H 'content-type: application/json' -d "{\"email\":\"$EMAIL\"}" && echo " -> request-reset 200"
+          sleep 3
+          echo "=== RESET LINK (from journal) ==="
+          sudo journalctl -u energy-api --since "40 seconds ago" --no-pager | grep "password reset link for" | tail -1 || echo "(no reset link logged — email may not match a user)"
+          echo "=== recent notify/email log lines ==="
+          sudo journalctl -u energy-api --since "40 seconds ago" --no-pager | grep -iE "notify|email|resend|whatsapp" | tail -15 || echo "(no notify lines)"
+          REMOTE
