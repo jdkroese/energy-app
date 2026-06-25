@@ -5,11 +5,14 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Build in CI (the 1 GB VPS OOMs on builds), then rsync artifacts to the VPS.
+# The Mac mini hosts the app but is LAN-only behind CGNAT, so GitHub's cloud
+# runners can't reach it. Instead a self-hosted runner ON the mini (label "mini")
+# dials out to GitHub, builds locally (the M4 has plenty of RAM, unlike the old
+# 1 GB VPS), and deploys into the launchd-served site dirs.
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -26,25 +29,41 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Set up SSH
+      - name: Deploy into the mini's site dirs
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+          set -euo pipefail
+          SITE=/Users/joris/sites/energy
 
-      - name: Deploy API artifact
-        run: |
-          rsync -az --delete \
-            apps/api/dist/ \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/var/energy/apps/api/dist/
+          # Snapshot current dist for a quick manual rollback.
+          rm -rf "$SITE/.deploy-bak" && mkdir -p "$SITE/.deploy-bak"
+          [ -d "$SITE/apps/api/dist" ] && cp -R "$SITE/apps/api/dist" "$SITE/.deploy-bak/api-dist" || true
+          [ -d "$SITE/apps/web/dist" ] && cp -R "$SITE/apps/web/dist" "$SITE/.deploy-bak/web-dist" || true
 
-      - name: Deploy web artifact (keep .well-known)
-        run: |
-          rsync -az --delete --exclude='.well-known' \
-            apps/web/dist/ \
-            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/var/www/energy/
+          # API bundle (full replace).
+          rm -rf "$SITE/apps/api/dist" && mkdir -p "$SITE/apps/api/dist"
+          cp -R apps/api/dist/. "$SITE/apps/api/dist/"
 
-      - name: Restart service
+          # Web bundle (full replace) — but preserve the Tesla Fleet .well-known
+          # key, which lives only on the mini and is served at energy.hirobo.nl.
+          TMP="$(mktemp -d)"
+          [ -d "$SITE/apps/web/dist/.well-known" ] && cp -R "$SITE/apps/web/dist/.well-known" "$TMP/wk" || true
+          rm -rf "$SITE/apps/web/dist" && mkdir -p "$SITE/apps/web/dist"
+          cp -R apps/web/dist/. "$SITE/apps/web/dist/"
+          [ -d "$TMP/wk" ] && cp -R "$TMP/wk" "$SITE/apps/web/dist/.well-known" || true
+          rm -rf "$TMP"
+
+      - name: Restart API and verify health
         run: |
-          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "sudo systemctl restart energy-api"
+          set -uo pipefail
+          # Code-only restart (does NOT reload env — that's intentional; the plist
+          # holds the Tesla/Sonnen creds and must not be touched by a deploy).
+          sudo launchctl kickstart -k system/nl.hirobo.energy-api
+          for i in $(seq 1 15); do
+            sleep 2
+            if curl -fsS --max-time 5 http://localhost:8080/api/health | grep -q '"ok":true'; then
+              echo "energy-api healthy after deploy"
+              exit 0
+            fi
+          done
+          echo "::error::energy-api did not become healthy after deploy — dist backup is at /Users/joris/sites/energy/.deploy-bak"
+          exit 1

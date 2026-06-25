@@ -1,9 +1,9 @@
 name: Ops - Account Recovery
 
-# One-off, manually-triggered maintenance job. Mints a fresh password-reset link
-# on the VPS (reading it from the service journal, so it works even when email/
-# WhatsApp delivery is down) and prints quick auth/email diagnostics.
-# NOTE: the reset link appears in this run's logs (single-use, 1h expiry).
+# Manually-triggered recovery. Runs ON the mini (self-hosted runner) and mints a
+# fresh password-reset link by reading it from the energy-api log — this works
+# even when email/WhatsApp delivery isn't configured. The link appears in this
+# run's logs (single-use, ~1h expiry).
 on:
   workflow_dispatch:
     inputs:
@@ -14,36 +14,37 @@ on:
 
 jobs:
   recover:
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 6
     steps:
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-
       - name: Mint reset link + diagnose
         env:
           ACCT_EMAIL: ${{ github.event.inputs.email }}
         run: |
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=25 \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" 'bash -s' "$ACCT_EMAIL" <<'REMOTE'
           set -uo pipefail
-          EMAIL="${1:-}"
-          STATE=/opt/energy/state.json
+          STATE=/Users/joris/sites/energy/.data/state.json
+          LOG=/Users/joris/sites/energy/api.log
+
           echo "=== user record ==="
-          jq --arg e "$EMAIL" '.auth.users[] | select((.email|ascii_downcase)==($e|ascii_downcase)) | {email, role, hasPassword:(.passwordHash!=null), twoFactor}' "$STATE" || echo "(jq failed / user not found)"
-          echo "=== lockout record ==="
-          jq --arg e "$EMAIL" '.auth.loginAttempts[($e|ascii_downcase)] // "none"' "$STATE"
-          echo "=== resend / email config ==="
-          if grep -qE '^RESEND_API_KEY=.+' /opt/energy/.env; then echo "RESEND_API_KEY: present"; else echo "RESEND_API_KEY: MISSING/empty"; fi
-          grep -E '^EMAIL_FROM=' /opt/energy/.env || echo "EMAIL_FROM: (using default)"
-          echo "=== triggering request-reset (localhost) ==="
-          curl -fsS -X POST http://127.0.0.1:3002/api/auth/request-reset -H 'content-type: application/json' -d "{\"email\":\"$EMAIL\"}" && echo " -> request-reset 200"
+          node -e '
+            const fs = require("fs");
+            const e = (process.env.ACCT_EMAIL || "").toLowerCase();
+            const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const users = (d.auth && d.auth.users) || [];
+            const u = users.find(x => ((x.email || "").toLowerCase()) === e);
+            const locked = ((d.auth && d.auth.loginAttempts) || {})[e] || "none";
+            console.log(u
+              ? JSON.stringify({ email: u.email, hasPassword: !!u.passwordHash, twoFactor: !!(u.twoFactor || u.totpEnabled), locked }, null, 2)
+              : "(user not found)");
+          ' "$STATE" || echo "(state read failed)"
+
+          echo "=== trigger request-reset (localhost) ==="
+          curl -fsS -X POST http://127.0.0.1:3002/api/auth/request-reset \
+            -H 'content-type: application/json' -d "{\"email\":\"$ACCT_EMAIL\"}" \
+            && echo " -> request-reset 200" || echo " -> request-reset FAILED"
           sleep 3
-          echo "=== RESET LINK (from journal) ==="
-          sudo journalctl -u energy-api --since "40 seconds ago" --no-pager | grep "password reset link for" | tail -1 || echo "(no reset link logged — email may not match a user)"
-          echo "=== recent notify/email log lines ==="
-          sudo journalctl -u energy-api --since "40 seconds ago" --no-pager | grep -iE "notify|email|resend|whatsapp" | tail -15 || echo "(no notify lines)"
-          REMOTE
+
+          echo "=== RESET LINK (from api.log) ==="
+          grep -iE "password reset link" "$LOG" | tail -1 \
+            || echo "(no reset link logged — email may not match a user)"
+          echo "NOTE: if the logged link host is localhost, use https://energy.hirobo.nl instead."
