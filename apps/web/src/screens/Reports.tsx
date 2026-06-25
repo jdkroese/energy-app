@@ -25,6 +25,16 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   const sv = h.solarValue;
   const left = sv.worthIfSelfUsedEur - sv.exportEur;
 
+  // Period label tracks the Day/Week/Month/Year selector (was hardcoded "This month").
+  const periodTitle = ctx.range === 'Day' ? 'Today' : `This ${ctx.range.toLowerCase()}`;
+  const periodSub = ctx.range === 'Day' ? 'today' : `this ${ctx.range.toLowerCase()}`;
+
+  // Real average grid price = what each self-consumed kWh is worth (avoided import).
+  // Derived from the by-band import cost (Σeur / Σkwh) — replaces a hardcoded €0.21.
+  const importKwh = h.byBand.reduce((s, b) => s + b.kwh, 0);
+  const importEur = h.byBand.reduce((s, b) => s + b.eur, 0);
+  const selfUsedRate = importKwh > 0 ? importEur / importKwh : null;
+
   const captured = (
     <Card accent="grid" style={ctx.desktop ? undefined : { padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: ctx.desktop ? 12 : 10 }}>
@@ -43,7 +53,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
         <div style={{ flex: 1, padding: '10px 12px', borderRadius: 10, background: 'var(--solar-wash)' }}>
           <div style={{ fontSize: 11, color: 'var(--text-2)' }}>Self-consumed worth</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600, color: 'var(--solar)', marginTop: 3 }}>
-            €0.21<small style={{ fontSize: 9, color: 'var(--text-3)' }}>/kWh</small>
+            {selfUsedRate != null ? `€${selfUsedRate.toFixed(2)}` : '—'}<small style={{ fontSize: 9, color: 'var(--text-3)' }}>/kWh</small>
           </div>
         </div>
         <div style={{ flex: 1, padding: '10px 12px', borderRadius: 10, background: 'var(--grid-wash)' }}>
@@ -87,7 +97,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   const prodCons = (
     <Card
       title="Production vs consumption"
-      subtitle={ctx.desktop ? 'This month · kWh' : undefined}
+      subtitle={ctx.desktop ? `${periodTitle} · kWh` : undefined}
       icon={ctx.desktop ? <Icon name="bar-chart-3" /> : undefined}
       style={ctx.desktop ? undefined : { padding: 16 }}
       actions={
@@ -158,21 +168,21 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   const kpis = (
     <>
       <Card style={ctx.desktop ? undefined : { padding: 14 }}>
-        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="Produced" value={h.totals.producedKwh.toLocaleString()} unit="kWh" tone="solar" icon={<Icon name="sun" />} delta={8} footnote={ctx.desktop ? 'this month' : undefined} />
+        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="Produced" value={h.totals.producedKwh.toLocaleString()} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote={ctx.desktop ? periodSub : undefined} />
       </Card>
       <Card style={ctx.desktop ? undefined : { padding: 14 }}>
-        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="Consumed" value={h.totals.consumedKwh.toLocaleString()} unit="kWh" tone="home" icon={<Icon name="plug" />} delta={-3} footnote={ctx.desktop ? 'this month' : undefined} />
+        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="Consumed" value={h.totals.consumedKwh.toLocaleString()} unit="kWh" tone="home" icon={<Icon name="plug" />} footnote={ctx.desktop ? periodSub : undefined} />
       </Card>
       {ctx.desktop && (
         <Card>
-          <StatTile label="Exported" value={h.totals.exportedKwh.toLocaleString()} unit="kWh" tone="grid" icon={<Icon name="upload" />} delta={14} footnote="to grid" />
+          <StatTile label="Exported" value={h.totals.exportedKwh.toLocaleString()} unit="kWh" tone="grid" icon={<Icon name="upload" />} footnote="to grid" />
         </Card>
       )}
       <Card style={ctx.desktop ? undefined : { padding: 14 }}>
-        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="Self-sufficiency" value={String(h.totals.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} delta={5} footnote={ctx.desktop ? 'vs avg' : undefined} />
+        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="Self-sufficiency" value={String(h.totals.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} footnote={ctx.desktop ? 'solar + stored' : undefined} />
       </Card>
       <Card style={ctx.desktop ? undefined : { padding: 14 }}>
-        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="CO₂ avoided" value={String(h.totals.co2Kg)} unit="kg" tone="solar" icon={<Icon name="sprout" />} delta={8} footnote={ctx.desktop ? 'this month' : undefined} />
+        <StatTile size={ctx.desktop ? 'md' : 'sm'} label="CO₂ avoided" value={String(h.totals.co2Kg)} unit="kg" tone="solar" icon={<Icon name="sprout" />} footnote={ctx.desktop ? periodSub : undefined} />
       </Card>
     </>
   );
@@ -198,7 +208,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
     <>
       <div style={{ padding: '12px 18px 12px' }}>
         <Eyebrow>Reports</Eyebrow>
-        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>This month</h1>
+        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>{periodTitle}</h1>
       </div>
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>

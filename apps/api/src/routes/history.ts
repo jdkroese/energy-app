@@ -15,7 +15,7 @@ function round(n: number, dp = 1): number {
 }
 
 interface EnergyRow {
-  timestamp?: string;
+  timestamp?: string | number;
   total_solar_generation?: number;
   solar_energy_exported?: number;
   grid_energy_imported?: number;
@@ -106,7 +106,7 @@ export async function getHistory(range: Range): Promise<unknown> {
     imported += rowImport(r);
     prod.push(round(s / 1000, 2));
     cons.push(round(h / 1000, 2));
-    labels.push(formatLabel(r.timestamp, range, labels.length));
+    labels.push(formatLabel(r.timestamp, range, labels.length, rows.length));
   }
 
   const producedKwh = round(solar / 1000);
@@ -174,19 +174,51 @@ export async function getHistory(range: Range): Promise<unknown> {
   };
 }
 
-function formatLabel(ts: string | undefined, range: Range, idx: number): string {
-  if (!ts) return String(idx);
+/**
+ * Parse a Tesla bucket timestamp. Usually an ISO string, but numeric epochs also
+ * appear — and a 10-digit value is epoch *seconds*: handing that to `new Date()`
+ * (which expects ms) collapses every bucket to Jan 1970, which is exactly what
+ * made the Year axis read "Jan, Jan, Jan…". Scale seconds → ms before parsing.
+ */
+function toDate(ts: string | number | undefined): Date | null {
+  if (ts == null || ts === '') return null;
+  if (typeof ts === 'number' || /^\d+$/.test(String(ts).trim())) {
+    const n = Number(ts);
+    return new Date(n < 1e12 ? n * 1000 : n);
+  }
   const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return String(idx);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+const monthShort = (d: Date) =>
+  new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', month: 'short' }).format(d);
+
+function formatLabel(
+  ts: string | number | undefined,
+  range: Range,
+  idx: number,
+  count: number,
+): string {
+  const d = toDate(ts);
+
+  if (range === 'year') {
+    // A year view is the trailing `count` months ending this month. Use the real
+    // bucket date when it's plausible; otherwise derive the month from the bucket
+    // position so the axis stays correct even when Tesla's timestamps don't.
+    if (d && d.getFullYear() > 2000) return monthShort(d);
+    const m = new Date();
+    m.setDate(1);
+    m.setMonth(m.getMonth() - (count - 1 - idx));
+    return monthShort(m);
+  }
+
+  if (!d) return String(idx);
   if (range === 'day') {
     return new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Europe/Madrid',
       hour: '2-digit',
       hour12: false,
     }).format(d);
-  }
-  if (range === 'year') {
-    return new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', month: 'short' }).format(d);
   }
   return new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Madrid',

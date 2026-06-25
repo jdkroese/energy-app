@@ -9,7 +9,7 @@ import { useMediaQuery } from './useMediaQuery';
 /** Per-route desktop TopBar metadata. */
 const META: Record<string, { eyebrow: string; title: string }> = {
   '/': { eyebrow: 'Live overview', title: 'Your home, right now' },
-  '/reports': { eyebrow: 'Reports', title: 'This month' },
+  '/reports': { eyebrow: 'Reports', title: 'Reports' },
   '/batteries': { eyebrow: 'Batteries', title: 'Sonnen + Tesla' },
   '/alerts': { eyebrow: 'Alerts', title: 'Notifications' },
   '/settings': { eyebrow: 'Settings', title: 'System' },
@@ -60,7 +60,13 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
           <TopBar
             eyebrow={meta.eyebrow}
-            title={meta.title}
+            title={
+              location.pathname === '/reports'
+                ? range === 'Day'
+                  ? 'Today'
+                  : `This ${range.toLowerCase()}`
+                : meta.title
+            }
             actions={
               location.pathname === '/reports' ? (
                 <SegmentedControl options={['Day', 'Week', 'Month', 'Year']} value={range} onChange={setRange} size="sm" />
