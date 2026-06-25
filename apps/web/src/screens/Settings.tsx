@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, UserRole, AuthUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, UserRole, AuthUser } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
@@ -1046,139 +1046,6 @@ function AirzoneConnection({ first, open, onToggle, cfg, reload }: { first?: boo
   );
 }
 
-/* ============================================================================
- * Tuya — Cloud project (lights first; covers/switches/breakers/fans to follow).
- * Admin enters the datacenter region + Access ID/Secret from their iot.tuya.com
- * project (with the Smart-Life app account linked). The backend validates by
- * fetching a token + discovering devices BEFORE persisting, and never logs the
- * secret. Once connected, the Lights screen shows the fleet.
- * ==========================================================================*/
-
-const TUYA_REGIONS = [
-  { value: 'eu', label: 'Central Europe (eu)' },
-  { value: 'weu', label: 'Western Europe (weu)' },
-  { value: 'us', label: 'Western America (us)' },
-  { value: 'eus', label: 'Eastern America (eus)' },
-  { value: 'cn', label: 'China (cn)' },
-  { value: 'in', label: 'India (in)' },
-];
-
-function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
-  const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
-  const [status, setStatus] = useState<TuyaIntegrationStatus | null>(null);
-  const [region, setRegion] = useState('eu');
-  const [accessId, setAccessId] = useState('');
-  const [accessSecret, setAccessSecret] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-
-  const load = async () => {
-    try {
-      const s = await api.integrations.tuyaStatus();
-      setStatus(s);
-      if (s.region) setRegion(s.region);
-    } catch {
-      /* ignore — shows as not-connected */
-    }
-  };
-  useEffect(() => {
-    void load();
-  }, []);
-
-  const connect = async () => {
-    if (!accessId.trim() || !accessSecret.trim()) {
-      setErr('Enter your Tuya Access ID and Access Secret');
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const s = await api.integrations.tuyaConnect(region, accessId.trim(), accessSecret.trim());
-      setStatus(s);
-      setAccessSecret('');
-      setEditing(false);
-    } catch (e) {
-      setErr((e as Error).message || 'Could not connect — check your credentials and region');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const disconnect = async () => {
-    setBusy(true);
-    try {
-      await api.integrations.tuyaDisconnect();
-      await load();
-      setAccessSecret('');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const connected = status?.connected ?? false;
-  const statusText =
-    status === null ? 'loading…' : connected ? `connected · ${status.lightCount} lights` : 'not connected';
-  const statusTone = status === null ? 'text-3' : connected ? 'solar' : 'grid';
-
-  return (
-    <ConnectionRow
-      first={first}
-      icon="lightbulb"
-      tone={connected ? 'solar' : undefined}
-      name="Tuya"
-      statusText={statusText}
-      statusTone={statusTone}
-      showDot={status !== null}
-      open={open}
-      onToggle={onToggle}
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          Smart-Life / Tuya devices via a Tuya IoT Cloud project. One project unlocks the whole linked fleet — lights are supported now; more categories to come.
-        </div>
-
-        {connected && status && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>
-              {status.deviceCount} devices · {status.lightCount} lights
-            </Badge>
-            {status.categories.map((c) => (
-              <span key={c.label} style={{ fontSize: 11.5, color: 'var(--text-2)', background: 'var(--surface-2)', borderRadius: 'var(--radius-pill)', padding: '2px 9px' }}>
-                {c.label} · {c.count}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{status.error}</div>}
-
-        {isAdmin && (!connected || editing) && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 360 }}>
-            <Select label="Datacenter region" options={TUYA_REGIONS} value={region} onChange={(e) => setRegion(e.target.value)} />
-            <Input label="Access ID" type="text" autoComplete="off" value={accessId} onChange={(e) => setAccessId(e.target.value)} placeholder="Tuya Cloud project Access ID" />
-            <Input label="Access Secret" type="password" autoComplete="off" value={accessSecret} onChange={(e) => setAccessSecret(e.target.value)} placeholder="••••••••" />
-            {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button size="sm" variant="primary" loading={busy} onClick={() => void connect()}>{connected ? 'Re-connect' : 'Connect'}</Button>
-              {connected && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setErr(null); }}>Cancel</Button>}
-            </div>
-          </div>
-        )}
-
-        {isAdmin && connected && !editing && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setErr(null); }}>Change project</Button>
-            <Button size="sm" variant="ghost" loading={busy} onClick={() => void disconnect()}>Disconnect</Button>
-          </div>
-        )}
-        {!isAdmin && <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can connect Tuya.</div>}
-      </div>
-    </ConnectionRow>
-  );
-}
-
 /** Connections card — single-open accordion across all integrations. */
 function ConnectionsCard({ connections }: { connections: SettingsResponse['connections'] }) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -1214,7 +1081,6 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
       })}
       <AcCloudConnection first={false} open={openId === 'accloud'} onToggle={() => toggle('accloud')} />
       <AirzoneConnection first={false} open={openId === 'airzone'} onToggle={() => toggle('airzone')} cfg={cfg} reload={loadCfg} />
-      <TuyaConnection first={false} open={openId === 'tuya'} onToggle={() => toggle('tuya')} />
     </Card>
   );
 }

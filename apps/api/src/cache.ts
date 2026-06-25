@@ -22,9 +22,3 @@ export function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>): Pro
   inflight.set(key, p);
   return p;
 }
-
-/** Drop a cached entry so the next cached() call for this key refetches. Used
- *  after a write so a control action is reflected immediately, not after the TTL. */
-export function invalidate(key: string): void {
-  hits.delete(key);
-}

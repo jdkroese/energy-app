@@ -22,16 +22,12 @@ import crypto from 'node:crypto';
 import { cached, invalidate } from '../cache';
 import { tuyaConfig } from '../runtime-config';
 
-// Datacenter → OpenAPI host. The region MUST match the data center your Tuya app
-// account is registered in (not just where you live). Spain is usually Central
-// Europe (eu), but accounts can sit in the Azure-based Western Europe DC (weu).
+// Datacenter → OpenAPI host. Spain lives on the EU datacenter (default).
 const REGION_HOSTS: Record<string, string> = {
-  eu: 'https://openapi.tuyaeu.com', // Central Europe
-  weu: 'https://openapi-weaz.tuyaeu.com', // Western Europe (Azure)
-  us: 'https://openapi.tuyaus.com', // Western America
-  eus: 'https://openapi-ueaz.tuyaus.com', // Eastern America (Azure)
-  cn: 'https://openapi.tuyacn.com', // China
-  in: 'https://openapi.tuyain.com', // India
+  eu: 'https://openapi.tuyaeu.com',
+  us: 'https://openapi.tuyaus.com',
+  cn: 'https://openapi.tuyacn.com',
+  in: 'https://openapi.tuyain.com',
 };
 export const REGIONS = Object.keys(REGION_HOSTS);
 

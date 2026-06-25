@@ -21,11 +21,6 @@ import type {
   HistoryResponse,
   IntegrationsConfig,
   IntegrationStatus,
-  LightLever,
-  LightsResponse,
-  LightDetailResponse,
-  LightHsv,
-  TuyaIntegrationStatus,
   LiveResponse,
   ProbeResult,
   LoginResponse,
@@ -182,27 +177,11 @@ export const api = {
       postJSON<{ ts: string; id: string; released: boolean }>(`/api/devices/${enc(id)}/release`, {}),
   },
 
-  /* ---- Lights (Tuya); command/bulk are admin ---- */
-  lights: {
-    list: () => getJSON<LightsResponse>('/api/lights'),
-    detail: (id: string) => getJSON<LightDetailResponse>(`/api/lights/${enc(id)}`),
-    command: (id: string, lever: LightLever, value: boolean | number | LightHsv) =>
-      postJSON<{ ts: string; ok: boolean }>(`/api/lights/${enc(id)}/command`, { lever, value }),
-    bulkCommand: (ids: string[], lever: LightLever, value: boolean | number | LightHsv) =>
-      postJSON<{ ts: string; results: unknown[] }>('/api/lights/bulk-command', { ids, lever, value }),
-  },
-
   integrations: {
     intesisStatus: () => getJSON<IntegrationStatus>('/api/integrations/intesis'),
     intesisConnect: (username: string, password: string) =>
       postJSON<IntegrationStatus>('/api/integrations/intesis', { username, password }),
     intesisDisconnect: () => delJSON<{ ok: boolean }>('/api/integrations/intesis'),
-
-    // Tuya Cloud (lights + future categories).
-    tuyaStatus: () => getJSON<TuyaIntegrationStatus>('/api/integrations/tuya'),
-    tuyaConnect: (region: string, accessId: string, accessSecret: string) =>
-      postJSON<TuyaIntegrationStatus>('/api/integrations/tuya', { region, accessId, accessSecret }),
-    tuyaDisconnect: () => delJSON<{ ok: boolean }>('/api/integrations/tuya'),
 
     // Configurable connections (Sonnen / Weather / Tesla).
     config: () => getJSON<IntegrationsConfig>('/api/integrations/config'),

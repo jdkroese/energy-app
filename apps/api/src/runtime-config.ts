@@ -29,12 +29,3 @@ export function weatherCoords(): { lat: number; lon: number } {
 export function airzoneHost(): string {
   return store.get().integrations?.airzone?.host?.trim() || process.env.AIRZONE_HOST || '192.168.1.165';
 }
-
-export function tuyaConfig(): { region: string; accessId: string; accessSecret: string } {
-  const t = store.get().integrations?.tuya;
-  return {
-    region: t?.region?.trim() || config.tuya.region,
-    accessId: t?.accessId?.trim() || config.tuya.accessId,
-    accessSecret: t?.accessSecret || config.tuya.accessSecret,
-  };
-}

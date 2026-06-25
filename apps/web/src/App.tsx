@@ -10,7 +10,6 @@ import { Batteries } from './screens/Batteries';
 import { BatteryDetail } from './screens/BatteryDetail';
 import { Devices } from './screens/Devices';
 import { DeviceDetail } from './screens/DeviceDetail';
-import { Lights } from './screens/Lights';
 import { Schedules } from './screens/Schedules';
 import { Automations } from './screens/Automations';
 import { Login } from './screens/auth/Login';
@@ -49,7 +48,6 @@ function AppRoutes() {
           <Route path="/batteries/:id" element={<BatteryDetail ctx={ctx} />} />
           <Route path="/devices" element={<Devices ctx={ctx} />} />
           <Route path="/devices/:id" element={<DeviceDetail ctx={ctx} />} />
-          <Route path="/lights" element={<Lights ctx={ctx} />} />
           <Route path="/schedules" element={<Schedules ctx={ctx} />} />
           <Route path="/automations" element={<Automations ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}
