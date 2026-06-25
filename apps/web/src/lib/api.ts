@@ -4,6 +4,8 @@ import type {
   Automation,
   AutomationsResponse,
   BatteriesResponse,
+  BatteryPriorityKey,
+  BatteryPriorityRule,
   BrainPlanResponse,
   Channels,
   ChannelType,
@@ -161,6 +163,8 @@ export const api = {
     command: (device: ControlDevice, lever: ControlLever, value: ControlCommandValue) =>
       postJSON<ControlStatus>('/api/control/command', { device, lever, value }),
     applyScenario: () => postJSON<ControlStatus>('/api/control/apply-scenario', {}),
+    batteryPriority: (rule: BatteryPriorityKey, patch: Partial<BatteryPriorityRule>) =>
+      putJSON<ControlStatus>(`/api/control/battery-priority/${enc(rule)}`, patch),
   },
 
   /* ---- Devices / Climate (command/arm/CRUD are admin) ---- */

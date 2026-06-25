@@ -27,6 +27,7 @@ import {
   setArm,
   command as controlCommand,
   applyScenarioToDevices,
+  setBatteryPriority,
 } from './routes/control';
 import { startCoordinator } from './control/coordinator';
 import {
@@ -220,6 +221,14 @@ app.post(
   }),
 );
 app.post('/api/control/apply-scenario', requireAdmin, wrap(() => applyScenarioToDevices()));
+app.put(
+  '/api/control/battery-priority/:rule',
+  requireAdmin,
+  wrap((req) => {
+    const rule = String(req.params.rule) as 'dischargeSonnenFirst' | 'chargeTeslaFirst';
+    return setBatteryPriority(rule, (req.body ?? {}) as never);
+  }),
+);
 
 // ---- Devices / Climate (REAL device writes; reads are any-authed) ----
 app.get('/api/devices', wrap(() => getDevices()));
