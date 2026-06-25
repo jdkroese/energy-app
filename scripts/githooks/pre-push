@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# Shared pre-push guard — refuse to push `main` from a checkout that is BEHIND
+# origin/main (the stale-clobber case) or to force-overwrite main. This is what
+# stops one agent's stale tree from reverting another's pushed work.
+#
+# Activate once per clone (worktrees inherit it):
+#     git config core.hooksPath scripts/githooks
+#
+# Legitimate fast-forward pushes pass untouched. Bypass intentionally with
+# `git push --no-verify`. See docs/18-multi-agent-workflow.md.
+set -euo pipefail
+
+remote="$1"
+zero="0000000000000000000000000000000000000000"
+blocked=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Only guard pushes that update main.
+  [ "$remote_ref" = "refs/heads/main" ] || continue
+  # Branch deletion (local side all-zero) — allow.
+  [ "$local_sha" = "$zero" ] && continue
+
+  # Refresh our view of origin/main. On a network failure, warn but don't block
+  # (don't wedge offline work); the server's own non-ff rejection still protects.
+  if ! git fetch -q "$remote" main 2>/dev/null; then
+    echo "pre-push: warning — could not fetch $remote/main; skipping staleness check." >&2
+    continue
+  fi
+
+  # If origin/main has commits the pushed tip does NOT contain, this push is stale
+  # or a force-overwrite → it would clobber newer work. Block it.
+  if ! git merge-base --is-ancestor FETCH_HEAD "$local_sha"; then
+    behind="$(git rev-list --count "$local_sha".."FETCH_HEAD" 2>/dev/null || echo '?')"
+    echo "" >&2
+    echo "✗ push to main BLOCKED — origin/main has $behind commit(s) your push doesn't include." >&2
+    echo "  Pushing now would revert other agents' work." >&2
+    echo "  Fix:  git fetch && git rebase origin/main   (or work from a fresh worktree)" >&2
+    echo "  See docs/18-multi-agent-workflow.md. Override deliberately with: git push --no-verify" >&2
+    echo "" >&2
+    blocked=1
+  fi
+done
+
+exit "$blocked"
