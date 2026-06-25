@@ -304,6 +304,10 @@ export interface AuthUser {
 
 export interface MeResponse {
   user: AuthUser;
+  /** The signed-in user's real 2FA state (so the Settings toggle seeds from truth). */
+  twoFactor?: { enabled: boolean; channel: OtpChannel };
+  /** Whether a WhatsApp provider is configured (so the UI can gate that channel). */
+  whatsappAvailable?: boolean;
 }
 
 export type OtpChannel = 'whatsapp' | 'email';

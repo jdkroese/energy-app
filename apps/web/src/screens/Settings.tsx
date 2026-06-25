@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { api, auth } from '../lib/api';
+import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
 import type { Channels, ChannelType, IntegrationStatus, OtpChannel, SettingsResponse, SessionsResponse, UserRole, AuthUser } from '../lib/types';
@@ -278,9 +278,35 @@ function RevokeBtn({ onClick, label = 'Revoke' }: { onClick: () => void; label?:
 
 function TwoFactorRow() {
   const [enabled, setEnabled] = useState(false);
-  const [channel, setChannel] = useState<OtpChannel>('whatsapp');
-  const [busy, setBusy] = useState(false);
+  const [channel, setChannel] = useState<OtpChannel>('email');
+  const [waAvail, setWaAvail] = useState(true);
+  const [busy, setBusy] = useState(true); // busy until the real state has loaded
   const [err, setErr] = useState<string | null>(null);
+
+  // Seed from the server's REAL 2FA state. Never assume "off" — that would let a
+  // stray toggle silently DISABLE a user's active two-factor protection.
+  useEffect(() => {
+    let alive = true;
+    auth
+      .me()
+      .then((me) => {
+        if (!alive) return;
+        if (me.twoFactor) {
+          setEnabled(me.twoFactor.enabled);
+          setChannel(me.twoFactor.channel);
+        }
+        if (typeof me.whatsappAvailable === 'boolean') setWaAvail(me.whatsappAvailable);
+      })
+      .catch(() => {
+        /* leave safe defaults (off / email) */
+      })
+      .finally(() => {
+        if (alive) setBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const save = async (nextEnabled: boolean, nextChannel: OtpChannel) => {
     setBusy(true);
@@ -291,14 +317,22 @@ function TwoFactorRow() {
     setChannel(nextChannel);
     try {
       await auth.set2fa(nextEnabled, nextChannel);
-    } catch {
+    } catch (e) {
       setEnabled(prevEnabled);
       setChannel(prevChannel);
-      setErr('Could not update — try again');
+      setErr(e instanceof ApiError ? e.message : 'Could not update — try again');
     } finally {
       setBusy(false);
     }
   };
+
+  // Only offer WhatsApp once a provider is configured — otherwise it can't deliver.
+  const channelOptions = waAvail
+    ? [
+        { value: 'whatsapp', label: 'WhatsApp' },
+        { value: 'email', label: 'Email' },
+      ]
+    : [{ value: 'email', label: 'Email' }];
 
   return (
     <div style={{ ...row, borderTop: 'none', alignItems: 'flex-start' }}>
@@ -316,12 +350,14 @@ function TwoFactorRow() {
               label="Code channel"
               value={channel}
               disabled={busy}
-              options={[
-                { value: 'whatsapp', label: 'WhatsApp' },
-                { value: 'email', label: 'Email' },
-              ]}
+              options={channelOptions}
               onChange={(e) => void save(true, e.target.value as OtpChannel)}
             />
+          </div>
+        )}
+        {!waAvail && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 6 }}>
+            WhatsApp delivery isn’t set up yet — codes are sent by email.
           </div>
         )}
         {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 6 }}>{err}</div>}

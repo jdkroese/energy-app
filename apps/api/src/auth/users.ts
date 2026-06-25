@@ -63,7 +63,9 @@ export function createUser(input: CreateUserInput): AuthUser {
     name: name || email,
     role,
     passwordHash: null,
-    twoFactor: { enabled: false, channel: 'whatsapp' },
+    // Default to email: it's the universally-configured channel (Resend), so a
+    // new user can never be locked out by an unconfigured WhatsApp provider.
+    twoFactor: { enabled: false, channel: 'email' },
     createdAt: Date.now(),
   };
   store.update((s) => {
@@ -176,7 +178,7 @@ export function bootstrapAdmin(): void {
     name: 'Joris',
     role: 'admin',
     passwordHash: null,
-    twoFactor: { enabled: false, channel: 'whatsapp' },
+    twoFactor: { enabled: false, channel: 'email' },
     createdAt: Date.now(),
   };
   store.update((s) => {

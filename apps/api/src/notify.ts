@@ -39,6 +39,13 @@ export interface SendResult {
   pruned?: number;
 }
 
+/** True if a WhatsApp provider (Meta Cloud API or CallMeBot) is configured. */
+export function whatsAppConfigured(): boolean {
+  return Boolean(
+    (process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID) || process.env.CALLMEBOT_KEY,
+  );
+}
+
 /**
  * Push a notification to every stored subscription. Prunes subscriptions the
  * push service reports as gone (HTTP 404/410).

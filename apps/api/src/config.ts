@@ -12,6 +12,13 @@ export const config = {
   env: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.API_PORT ?? 3002),
   host: process.env.API_HOST ?? '127.0.0.1',
+  auth: {
+    // Break-glass only. When AUTH_DEBUG_SECRETS=1 the server logs raw login OTP
+    // codes + password-reset links to the journal. OFF by default so secrets
+    // never hit production logs; enable temporarily for manual recovery, then
+    // unset. (Reset links also go out by email via Resend, so this is rarely needed.)
+    debugSecrets: process.env.AUTH_DEBUG_SECRETS === '1',
+  },
   sonnen: {
     host: process.env.SONNEN_HOST ?? '192.168.1.197',
     token: process.env.SONNEN_API_TOKEN ?? '',

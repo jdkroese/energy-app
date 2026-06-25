@@ -10,6 +10,15 @@
 import { Router, type Request, type Response } from 'express';
 import * as notify from '../notify';
 import * as store from '../store';
+import { config } from '../config';
+import {
+  rateLimited,
+  OTP_SEND_MAX,
+  OTP_SEND_WINDOW_MS,
+  RESET_MAX_PER_EMAIL,
+  RESET_MAX_PER_IP,
+  RESET_WINDOW_MS,
+} from '../auth/ratelimit';
 import { clientIp, requireAdmin, requireAuth, userAgent } from '../auth/middleware';
 import {
   clearSessionCookie,
@@ -68,9 +77,14 @@ async function deliverOtp(user: AuthUser, code: string): Promise<void> {
   const text = `Your Power login code is ${code}. It expires in 10 minutes.`;
   if (user.twoFactor.channel === 'email') {
     await notify.sendEmail(user.email, 'Power login code', text);
-  } else {
-    const number = store.get().channels.whatsapp.number;
-    await notify.sendWhatsApp(number, text);
+    return;
+  }
+  // WhatsApp channel: try WhatsApp, but ALWAYS fall back to email if it isn't
+  // configured or the send fails — a misconfigured provider must never lock a
+  // user out of their own account.
+  const res = await notify.sendWhatsApp(store.get().channels.whatsapp.number, text);
+  if (!res.sent) {
+    await notify.sendEmail(user.email, 'Power login code', text);
   }
 }
 
@@ -101,9 +115,14 @@ authRouter.post('/login', async (req: Request, res: Response) => {
   // 2FA: require an OTP unless this device is already trusted.
   const trusted = hasValidTrustedDevice(user.id, readCookie(req, TDID));
   if (user.twoFactor.enabled && !trusted) {
-    const code = createOtp(user.id, 'login');
-    console.log(`[auth] login OTP for ${user.email}: ${code}`);
-    await deliverOtp(user, code);
+    // Throttle OTP *delivery* (anti-spam) without ever blocking login: when
+    // rate-limited we skip minting/sending a new code — any code already sent
+    // (10-min TTL) still verifies, and the user can request again after the window.
+    if (!rateLimited(`otp:${user.id}`, OTP_SEND_MAX, OTP_SEND_WINDOW_MS)) {
+      const code = createOtp(user.id, 'login');
+      if (config.auth.debugSecrets) console.log(`[auth] login OTP for ${user.email}: ${code}`);
+      await deliverOtp(user, code);
+    }
     res.json({ step: 'otp', channel: user.twoFactor.channel });
     return;
   }
@@ -157,7 +176,15 @@ authRouter.post('/logout', (req: Request, res: Response) => {
 // ---- GET /me ------------------------------------------------------------
 
 authRouter.get('/me', requireAuth, (req: Request, res: Response) => {
-  res.json({ user: publicUser(req.user as AuthUser) });
+  const u = req.user as AuthUser;
+  // Expose the user's real 2FA state (so the Settings toggle seeds from truth and
+  // can't accidentally disable 2FA) plus whether WhatsApp delivery is available
+  // (so the UI can steer users to a channel that actually works).
+  res.json({
+    user: publicUser(u),
+    twoFactor: u.twoFactor,
+    whatsappAvailable: notify.whatsAppConfigured(),
+  });
 });
 
 // ---- POST /request-reset (ALWAYS 200) -----------------------------------
@@ -166,24 +193,28 @@ authRouter.post('/request-reset', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { email?: unknown };
   const email = normalizeEmail(body.email);
   const user = email ? findUserByEmail(email) : undefined;
-  if (user) {
+  // Throttle by email AND IP so /request-reset can't be used to spam a victim's
+  // inbox or flood live reset tokens. Evaluated even for unknown emails (so the
+  // timing/behaviour can't enumerate accounts) and the response is ALWAYS 200;
+  // when limited we simply skip the token mint + send.
+  const limited =
+    !email ||
+    rateLimited(`reset:email:${email}`, RESET_MAX_PER_EMAIL, RESET_WINDOW_MS) ||
+    rateLimited(`reset:ip:${clientIp(req)}`, RESET_MAX_PER_IP, RESET_WINDOW_MS);
+  if (user && !limited) {
     const token = createResetToken(user.id);
     const link = `${RESET_BASE}?token=${token}`;
-    console.log(`[auth] password reset link for ${user.email}: ${link}`);
+    if (config.auth.debugSecrets) console.log(`[auth] password reset link for ${user.email}: ${link}`);
     const text = `Reset your Power password: ${link} (expires in 1 hour).`;
-    // A reset LINK always goes to the user's email — it's the universal,
-    // always-known contact and Resend is the reliable, configured channel.
-    // WhatsApp is fired best-effort in addition, so the link also arrives once a
-    // provider key is set up. Both notify.* helpers swallow their own errors.
-    // (Previously delivery used ONE channel picked by the 2FA preference, which
-    // defaults to 'whatsapp' — an unconfigured provider — so default users never
-    // received the link at all.)
+    // The reset LINK always goes to the user's email (Resend — the reliable,
+    // always-known channel); WhatsApp is fired best-effort in addition so it
+    // also arrives once a provider key is set up. Both helpers swallow errors.
     await Promise.all([
       notify.sendEmail(user.email, 'Power password reset', text),
       notify.sendWhatsApp(store.get().channels.whatsapp.number, text),
     ]);
   }
-  // Same response whether or not the email exists.
+  // Same response whether or not the email exists / was throttled.
   res.json({ ok: true });
 });
 
@@ -258,6 +289,15 @@ authRouter.post('/2fa', requireAuth, (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { enabled?: unknown; channel?: unknown };
   const enabled = Boolean(body.enabled);
   const channel: TwoFactorChannel = body.channel === 'email' ? 'email' : 'whatsapp';
+  // Don't let a user arm 2FA on a channel that can't deliver — that's the classic
+  // lock-out. WhatsApp is only selectable once a provider is configured.
+  if (enabled && channel === 'whatsapp' && !notify.whatsAppConfigured()) {
+    res.status(400).json({
+      error: 'WhatsApp delivery isn’t configured — choose Email for two-factor codes.',
+      code: 'BAD_INPUT',
+    });
+    return;
+  }
   const user = req.user as AuthUser;
   store.update((s) => {
     const u = s.auth.users.find((x) => x.id === user.id);
