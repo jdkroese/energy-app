@@ -52,6 +52,50 @@ jobs:
           [ -d "$TMP/wk" ] && cp -R "$TMP/wk" "$SITE/apps/web/dist/.well-known" || true
           rm -rf "$TMP"
 
+      - name: Verify web bundle deployed
+        run: |
+          set -uo pipefail
+          SITE=/Users/joris/sites/energy
+
+          # The mini's `pnpm build` can fail silently (native-binary flakiness on
+          # macOS-ARM), and the health check above only proves the API is up — not
+          # that the web bundle changed. So assert the freshly built entry-asset
+          # hash is the one actually on disk AND the one Caddy/Cloudflare serves.
+          # Without this, a stale bundle sails through as a green deploy.
+          ASSET_RE='/assets/index-[A-Za-z0-9_-]+\.js'
+
+          EXPECTED="$(grep -oE "$ASSET_RE" apps/web/dist/index.html | head -1)"
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::could not find an entry asset (/assets/index-*.js) in the freshly built apps/web/dist/index.html — build is broken; dist backup is at $SITE/.deploy-bak"
+            exit 1
+          fi
+          echo "fresh build entry asset: $EXPECTED"
+
+          # 1) On-disk: the copied bundle must reference the just-built hash.
+          DEPLOYED="$(grep -oE "$ASSET_RE" "$SITE/apps/web/dist/index.html" | head -1)"
+          if [ "$DEPLOYED" != "$EXPECTED" ]; then
+            echo "::error::deployed index.html references '$DEPLOYED' but the fresh build is '$EXPECTED' — copy did not land; dist backup is at $SITE/.deploy-bak"
+            exit 1
+          fi
+          echo "on-disk bundle matches"
+
+          # 2) Served: curl the public URL with a cache-buster so we bypass any
+          # Cloudflare edge cache and see what a real visitor gets. The bundle can
+          # take a moment to converge through the tunnel, so retry like the health
+          # loop — only a *persistent* mismatch (or no response at all) fails.
+          SERVED=""
+          for i in $(seq 1 15); do
+            RESP="$(curl -fsS --max-time 8 "https://energy.hirobo.nl/?cb=$(date +%s)-$i" 2>/dev/null || true)"
+            SERVED="$(printf '%s' "$RESP" | grep -oE "$ASSET_RE" | head -1)"
+            if [ "$SERVED" = "$EXPECTED" ]; then
+              echo "served bundle matches after $i attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::energy.hirobo.nl is still serving '$SERVED' (expected '$EXPECTED') after retries — stale bundle; dist backup is at $SITE/.deploy-bak"
+          exit 1
+
       - name: Restart API and verify health
         run: |
           set -uo pipefail
