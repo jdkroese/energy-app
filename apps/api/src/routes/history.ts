@@ -93,10 +93,13 @@ export async function getHistory(range: Range): Promise<unknown> {
   let consumed = 0;
   let exported = 0;
   let imported = 0;
-  const prod: number[] = [];
-  const cons: number[] = [];
-  const labels: string[] = [];
-
+  // Tesla calendar_history returns FINE-GRAINED samples, not summary buckets:
+  // ~2105 points for a year (every ~2h), ~163 for a week (every 30 min). Summing
+  // them gives correct totals, but charting one bar per sample yields a wall of
+  // thousands of bars whose leading labels are all the first period ("Jan, Jan…").
+  // So aggregate the chart series into the natural bucket per range
+  // (year→months, week/month→days, day→hours), summing energy per bucket.
+  const buckets = new Map<string, { label: string; p: number; c: number }>();
   for (const r of rows) {
     const s = rowSolar(r);
     const h = rowHome(r);
@@ -104,10 +107,19 @@ export async function getHistory(range: Range): Promise<unknown> {
     consumed += h;
     exported += rowExport(r);
     imported += rowImport(r);
-    prod.push(round(s / 1000, 2));
-    cons.push(round(h / 1000, 2));
-    labels.push(formatLabel(r.timestamp, range, labels.length, rows.length));
+    const d = toDate(r.timestamp);
+    if (!d) continue;
+    const { key, label } = bucketOf(d, range);
+    const b = buckets.get(key) ?? { label, p: 0, c: 0 };
+    b.p += s / 1000;
+    b.c += h / 1000;
+    buckets.set(key, b);
   }
+  // Map preserves insertion order; Tesla returns rows chronologically.
+  const series = [...buckets.values()];
+  const prod = series.map((b) => round(b.p, 2));
+  const cons = series.map((b) => round(b.c, 2));
+  const labels = series.map((b) => b.label);
 
   const producedKwh = round(solar / 1000);
   const consumedKwh = round(consumed / 1000);
@@ -190,39 +202,31 @@ function toDate(ts: string | number | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-const monthShort = (d: Date) =>
-  new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', month: 'short' }).format(d);
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function formatLabel(
-  ts: string | number | undefined,
-  range: Range,
-  idx: number,
-  count: number,
-): string {
-  const d = toDate(ts);
-
-  if (range === 'year') {
-    // A year view is the trailing `count` months ending this month. Use the real
-    // bucket date when it's plausible; otherwise derive the month from the bucket
-    // position so the axis stays correct even when Tesla's timestamps don't.
-    if (d && d.getFullYear() > 2000) return monthShort(d);
-    const m = new Date();
-    m.setDate(1);
-    m.setMonth(m.getMonth() - (count - 1 - idx));
-    return monthShort(m);
-  }
-
-  if (!d) return String(idx);
-  if (range === 'day') {
-    return new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Europe/Madrid',
-      hour: '2-digit',
-      hour12: false,
-    }).format(d);
-  }
-  return new Intl.DateTimeFormat('en-GB', {
+/** Date parts in the site timezone (so buckets align to local calendar days/months). */
+function madridParts(d: Date): { year: string; month: string; day: string; hour: string } {
+  const p = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Madrid',
-    day: '2-digit',
+    year: 'numeric',
     month: '2-digit',
-  }).format(d);
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? '';
+  return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour') };
+}
+
+/**
+ * Map a sample timestamp to its chart bucket for the given range. `key` groups
+ * samples (sums within it); `label` is the x-axis text. day→hour, week/month→day,
+ * year→month. Keys include year so buckets never collide across calendar boundaries.
+ */
+function bucketOf(d: Date, range: Range): { key: string; label: string } {
+  const { year, month, day, hour } = madridParts(d);
+  if (range === 'day') return { key: `${year}-${month}-${day}-${hour}`, label: `${hour}:00` };
+  if (range === 'year') return { key: `${year}-${month}`, label: MONTHS[Number(month) - 1] ?? month };
+  // week + month → daily buckets
+  return { key: `${year}-${month}-${day}`, label: `${day}/${month}` };
 }
