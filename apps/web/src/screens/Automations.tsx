@@ -5,7 +5,8 @@ import type {
   Automation, AutomationsResponse, DevicesResponse, DevicesStatus,
   LiveResponse, SolarSurplusPrecoolParams,
 } from '../lib/types';
-import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
+import { Card, Icon, Button, SegmentedControl, Slider, Eyebrow } from '../components/ui';
+import { AutomationRow } from '../components/AutomationRow';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -90,19 +91,15 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-      {/* header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Icon name="zap" size={19} color="var(--solar)" />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{a.name}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Automation · climate</div>
-        </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button type="button" disabled={!canWrite} onClick={() => setAuthAndSave('shadow')} style={{ fontSize: 11, padding: '5px 11px', borderRadius: 8, cursor: canWrite ? 'pointer' : 'default', border: '1px solid var(--border-1)', background: authority === 'shadow' ? 'var(--surface-3)' : 'transparent', color: authority === 'shadow' ? 'var(--text-1)' : 'var(--text-3)', fontWeight: 600 }}>Shadow</button>
-          <button type="button" disabled={!canWrite} onClick={() => setAuthAndSave('auto')} style={{ fontSize: 11, padding: '5px 11px', borderRadius: 8, cursor: canWrite ? 'pointer' : 'default', border: 'none', background: authority === 'auto' ? 'var(--solar)' : 'var(--surface-3)', color: authority === 'auto' ? '#06090b' : 'var(--text-3)', fontWeight: 600 }}>Auto</button>
-          <Switch checked={enabled} disabled={!canWrite} onChange={(e) => { setEnabled(e.target.checked); void onSave({ enabled: e.target.checked }); }} />
-        </div>
-      </div>
+      {/* header — the shared automation row (same control as on the Devices hub) */}
+      <AutomationRow
+        automation={{ ...a, authority, enabled }}
+        canWrite={canWrite}
+        onSave={(patch) => {
+          if (patch.authority) setAuthAndSave(patch.authority);
+          if (patch.enabled !== undefined) { setEnabled(patch.enabled); void onSave({ enabled: patch.enabled }); }
+        }}
+      />
 
       {/* WHEN / DO / UNTIL / LIMITS */}
       <Block label="When" color="var(--battery)" wash="var(--battery-wash)">
