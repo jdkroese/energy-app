@@ -36,6 +36,7 @@ import {
   getDevice,
   commandDevice,
   bulkCommand,
+  releaseDevice,
   getDevicesStatus,
   setDevicesArm,
   setDeviceSettings,
@@ -222,6 +223,11 @@ app.put(
   '/api/devices/:id/settings',
   requireAdmin,
   wrap((req) => setDeviceSettings(String(req.params.id), (req.body ?? {}) as never)),
+);
+app.post(
+  '/api/devices/:id/release',
+  requireAdmin,
+  wrap((req) => releaseDevice(String(req.params.id))),
 );
 
 // ---- AC Cloud integration ----

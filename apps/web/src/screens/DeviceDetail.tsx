@@ -76,6 +76,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
     void cmd('setpoint', next);
   };
   const toggleAutomation = (on: boolean) => run(() => api.devices.setSettings(id ?? '', { automationEnabled: on }));
+  const releaseHold = () => run(() => api.devices.release(id ?? ''));
+  const holdMins = dev.manualOverrideUntil ? Math.max(0, Math.round((dev.manualOverrideUntil - Date.now()) / 60_000)) : 0;
 
   const stateOn = dev.power;
   const stateLabel = !stateOn ? 'OFF' : dev.mode === 'cool' ? 'COOLING' : dev.mode === 'heat' ? 'HEATING' : dev.mode.toUpperCase();
@@ -141,6 +143,20 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Fan</div>
         <SegmentedControl size="sm" block options={FANS} onChange={(f) => canWrite && cmd('fan', Number(f))} />
       </div>
+
+      {/* MANUAL HOLD BANNER — manual control overrides automation for a window. */}
+      {holdMins > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
+          <Icon name="hand" size={17} color="var(--text-1)" />
+          <div style={{ flex: 1, fontSize: 12 }}>
+            <span style={{ fontWeight: 600 }}>Manual hold</span>
+            <span style={{ color: 'var(--text-2)' }}> — automation won’t touch this unit for ~{holdMins} min</span>
+          </div>
+          <button type="button" disabled={!canWrite || busy} onClick={releaseHold} style={{ fontSize: 11, color: 'var(--solar)', background: 'none', border: 'none', cursor: canWrite ? 'pointer' : 'default', fontWeight: 600 }}>
+            Release
+          </button>
+        </div>
+      )}
 
       {/* AUTOMATION BANNER */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'rgba(46,230,160,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>

@@ -168,6 +168,8 @@ export const api = {
       id: string,
       patch: { room?: string; automationEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number },
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
+    release: (id: string) =>
+      postJSON<{ ts: string; id: string; released: boolean }>(`/api/devices/${enc(id)}/release`, {}),
   },
 
   integrations: {

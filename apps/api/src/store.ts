@@ -285,6 +285,8 @@ export interface ClimateGuardrails {
   setpointMaxC: number;
   gridImportCapKw: number;
   minCycleMin: number;
+  /** After a manual command, automation defers on that unit for this long (min). */
+  manualOverrideMin: number;
 }
 
 export interface ClimateLogEntry {
@@ -307,6 +309,8 @@ export interface DevicesState {
   /** Ring buffer of the last 100 climate command actions. */
   log: ClimateLogEntry[];
   guardrails: ClimateGuardrails;
+  /** deviceId → epoch ms until which automation defers to a manual command. */
+  manualOverrides: Record<string, number>;
 }
 
 export interface StoreSchema {
@@ -425,7 +429,9 @@ export function defaultDevices(): DevicesState {
       setpointMaxC: 30,
       gridImportCapKw: 14,
       minCycleMin: 8,
+      manualOverrideMin: 120,
     },
+    manualOverrides: {},
   };
 }
 
@@ -568,6 +574,8 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
       ...base.guardrails,
       ...(p.guardrails ?? {}),
     },
+    manualOverrides:
+      p.manualOverrides && typeof p.manualOverrides === 'object' ? p.manualOverrides : {},
   };
 }
 

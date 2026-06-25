@@ -14,7 +14,12 @@ import type {
 } from '../store';
 import { issueClimate, type ClimateLever } from '../control/climate-execute';
 import { takeClimateSnapshot } from '../control/climate-snapshot';
-import { revertClimateToSafe } from '../control/climate-coordinator';
+import {
+  revertClimateToSafe,
+  markManualOverride,
+  clearManualOverride,
+  manualOverrideUntil,
+} from '../control/climate-coordinator';
 import { bandFor } from '../tariff';
 
 function badInput(msg: string): Error & { code: string } {
@@ -28,6 +33,8 @@ function badInput(msg: string): Error & { code: string } {
 export interface DeviceView extends ClimateUnit {
   room: string;
   automationEnabled: boolean;
+  /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
+  manualOverrideUntil: number | null;
   comfortCeilingC: number | null;
   comfortFloorC: number | null;
   /** Warmth tone hint for the UI (relative to a comfortable 24°C). */
@@ -53,6 +60,7 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
     ...u,
     room: ds?.room ?? u.zone ?? u.name,
     automationEnabled: ds?.automationEnabled ?? false,
+    manualOverrideUntil: manualOverrideUntil(u.id),
     comfortCeilingC: ds?.comfortCeilingC ?? null,
     comfortFloorC: ds?.comfortFloorC ?? null,
     warmth: warmthOf(u.currentTempC),
@@ -140,6 +148,8 @@ export async function commandDevice(id: string, lever: ClimateLever, rawValue: u
   const value = parseValue(lever, rawValue);
   const snap = await takeClimateSnapshot();
   const result = await issueClimate(u, lever, value, 'manual command', snap);
+  // Manual control wins: hold automation off this unit for a while.
+  if (result.ok) markManualOverride(id);
   return { ts: new Date().toISOString(), result };
 }
 
@@ -162,9 +172,16 @@ export async function bulkCommand(ids: string[], lever: ClimateLever, rawValue: 
     }
     const r = await issueClimate(u, lever, value, 'bulk command', { ...snap, pendingImportKw });
     results.push({ id, ok: r.ok, reason: r.reason });
+    if (r.ok) markManualOverride(id); // manual control wins — hold automation off
     if (lever === 'power' && value === true && r.ok && !u.power) pendingImportKw += 1.2;
   }
   return { ts: new Date().toISOString(), results };
+}
+
+/** Clear a manual-control hold — hand this unit back to automation immediately. */
+export function releaseDevice(id: string): unknown {
+  clearManualOverride(id);
+  return { ts: new Date().toISOString(), id, released: true };
 }
 
 // ---- Arm (admin) ------------------------------------------------------------

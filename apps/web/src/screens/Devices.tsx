@@ -124,9 +124,15 @@ function FleetRow({
       <span className="pwr-mono" style={{ textAlign: 'right', fontSize: 13, color: 'var(--text-2)' }}>{t1(d.setpointC)}</span>
       <span className="pwr-mono" style={{ textAlign: 'right', fontSize: 13, color: WARMTH_COLOR[d.warmth] }}>{t1(d.currentTempC)}</span>
       {wide && (
-        <span style={{ justifySelf: 'center', color: d.automationEnabled ? 'var(--solar)' : 'var(--text-disabled)' }} title={d.automationEnabled ? 'Automation enabled' : 'Not automated'}>
-          <Icon name="zap" size={14} />
-        </span>
+        d.manualOverrideUntil ? (
+          <span style={{ justifySelf: 'center', color: 'var(--text-1)' }} title="Manual hold — automation paused">
+            <Icon name="hand" size={14} />
+          </span>
+        ) : (
+          <span style={{ justifySelf: 'center', color: d.automationEnabled ? 'var(--solar)' : 'var(--text-disabled)' }} title={d.automationEnabled ? 'Automation enabled' : 'Not automated'}>
+            <Icon name="zap" size={14} />
+          </span>
+        )
       )}
     </div>
   );

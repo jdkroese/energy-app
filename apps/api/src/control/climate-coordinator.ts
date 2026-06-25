@@ -23,6 +23,38 @@ let timer: ReturnType<typeof setInterval> | null = null;
 // Per-device "surplus first dropped at" timestamp, for the sustained-clear debounce.
 const surplusClearedSince = new Map<string, number>();
 
+// ---- Manual override ("hold") ----------------------------------------------
+// A manual command (Devices screen / API) takes precedence over automation: for
+// a window after it, the coordinator (schedules AND surplus pre-cool) leaves that
+// unit entirely alone — it won't turn it off, on, or re-target it. The window
+// refreshes on each manual touch and expires after guardrails.manualOverrideMin.
+
+/** Record that the user just manually commanded a device — start/refresh its hold. */
+export function markManualOverride(deviceId: string): void {
+  const mins = store.get().devices.guardrails.manualOverrideMin ?? 120;
+  store.update((s) => {
+    s.devices.manualOverrides[deviceId] = Date.now() + mins * 60_000;
+  });
+}
+
+/** Epoch ms the hold expires, or null if no active hold. */
+export function manualOverrideUntil(deviceId: string): number | null {
+  const until = store.get().devices.manualOverrides[deviceId];
+  return typeof until === 'number' && until > Date.now() ? until : null;
+}
+
+/** Is automation currently deferring to a manual command on this device? */
+export function isManualOverrideActive(deviceId: string): boolean {
+  return manualOverrideUntil(deviceId) !== null;
+}
+
+/** Hand control back to automation immediately (clear the hold). */
+export function clearManualOverride(deviceId: string): void {
+  store.update((s) => {
+    delete s.devices.manualOverrides[deviceId];
+  });
+}
+
 function nowMadridIso(): string {
   return new Date().toISOString();
 }
@@ -74,6 +106,7 @@ export async function evaluateSolarSurplusPrecool(
   let pendingImportKw = 0;
 
   for (const u of enabled) {
+    if (isManualOverrideActive(u.id)) continue; // manual control wins — hands off
     const room = u.currentTempC;
     const wantCool =
       !inExitBand &&
@@ -181,6 +214,7 @@ export async function evaluateSchedules(fleet: ClimateUnit[], snap: RichClimateS
     for (const id of s.scope.deviceIds) {
       const u = byId.get(id);
       if (!u) continue;
+      if (isManualOverrideActive(u.id)) continue; // manual control wins — hands off
       // CONDITION: only apply when the room is above the threshold (if one is set).
       if (s.roomTempAboveC != null && (u.currentTempC === null || u.currentTempC <= s.roomTempAboveC)) {
         logDecision(u.id, `schedule ${s.name}: skip`, `room ${u.currentTempC ?? '—'}°C not above ${s.roomTempAboveC}°C`);
