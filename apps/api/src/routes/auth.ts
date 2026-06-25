@@ -171,11 +171,17 @@ authRouter.post('/request-reset', async (req: Request, res: Response) => {
     const link = `${RESET_BASE}?token=${token}`;
     console.log(`[auth] password reset link for ${user.email}: ${link}`);
     const text = `Reset your Power password: ${link} (expires in 1 hour).`;
-    if (user.twoFactor.channel === 'email') {
-      await notify.sendEmail(user.email, 'Power password reset', text);
-    } else {
-      await notify.sendWhatsApp(store.get().channels.whatsapp.number, text);
-    }
+    // A reset LINK always goes to the user's email — it's the universal,
+    // always-known contact and Resend is the reliable, configured channel.
+    // WhatsApp is fired best-effort in addition, so the link also arrives once a
+    // provider key is set up. Both notify.* helpers swallow their own errors.
+    // (Previously delivery used ONE channel picked by the 2FA preference, which
+    // defaults to 'whatsapp' — an unconfigured provider — so default users never
+    // received the link at all.)
+    await Promise.all([
+      notify.sendEmail(user.email, 'Power password reset', text),
+      notify.sendWhatsApp(store.get().channels.whatsapp.number, text),
+    ]);
   }
   // Same response whether or not the email exists.
   res.json({ ok: true });
