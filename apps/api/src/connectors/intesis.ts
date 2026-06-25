@@ -268,6 +268,8 @@ export interface SetDatapointResult {
  * `value` is already in device units (temps in tenths °C, mode codes, etc.).
  * Resolves on set_ack; rejects on error or timeout. Never holds state.
  */
+const MAX_WRITE_ATTEMPTS = 3;
+
 export async function setDatapoint(
   deviceId: string,
   uid: number,
@@ -277,7 +279,19 @@ export async function setDatapoint(
   if (!session.serverIP || !session.serverPort) {
     throw new Error('AC Cloud push socket coordinates unavailable');
   }
-  return writeOverSocket(session, deviceId, uid, value);
+  // The push socket can transiently drop before set_ack (server-side). Retry
+  // with a fresh socket a couple of times; a genuine cloud rejection is not.
+  let lastErr: Error | null = null;
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
+    try {
+      return await writeOverSocket(session, deviceId, uid, value);
+    } catch (e) {
+      lastErr = e as Error;
+      if (/rejected/i.test(lastErr.message)) throw lastErr;
+      if (attempt < MAX_WRITE_ATTEMPTS) await new Promise<void>((r) => setTimeout(r, 200 * attempt));
+    }
+  }
+  throw lastErr ?? new Error('AC Cloud set failed');
 }
 
 function writeOverSocket(
@@ -293,11 +307,9 @@ function writeOverSocket(
     const socket = net.createConnection(
       { host: session.serverIP, port: session.serverPort, timeout: 10_000 },
       () => {
-        // 1) authenticate, then 2) issue the set.
+        // Authenticate first; the `set` is issued only after connect_rsp.
+        // Sending both back-to-back races the server's auth → drop before set_ack.
         socket.write(JSON.stringify({ command: 'connect_req', data: { token: session.token } }));
-        socket.write(
-          JSON.stringify({ command: 'set', data: { deviceId: Number(deviceId), uid, value, seqNo } }),
-        );
       },
     );
 
@@ -317,11 +329,14 @@ function writeOverSocket(
         return r;
       })) {
         const cmd = (obj as { command?: string }).command;
-        if (cmd === 'set_ack' || cmd === 'connect_rsp') {
-          if (cmd === 'set_ack') {
-            done(() => resolve({ ok: true, uid, value, detail: `set_ack uid=${uid} value=${value}` }));
-            return;
-          }
+        if (cmd === 'connect_rsp') {
+          // Authenticated — now issue the set.
+          socket.write(JSON.stringify({ command: 'set', data: { deviceId: Number(deviceId), uid, value, seqNo } }));
+          continue;
+        }
+        if (cmd === 'set_ack') {
+          done(() => resolve({ ok: true, uid, value, detail: `set_ack uid=${uid} value=${value}` }));
+          return;
         }
         if (cmd === 'rpc_error' || cmd === 'error') {
           done(() => reject(new Error(`AC Cloud set rejected: ${JSON.stringify(obj)}`)));
