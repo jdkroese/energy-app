@@ -55,23 +55,20 @@ export function freshnessOk(snap: ControlSnapshot): GuardResult<boolean> {
 }
 
 // ---- Tesla reserve ----------------------------------------------------------
-// reserve ∈ [teslaReserveMinPct, 100]; NEVER below the device's CURRENT reserve.
-export function checkTeslaReserve(pct: number, snap: ControlSnapshot): GuardResult<number> {
+// reserve ∈ [teslaReserveMinPct, 100]. TWO-WAY: the owner (and Auto) may RAISE or
+// LOWER reserve to the requested value; the hard floor is the only safety net —
+// values below it are clamped UP to the floor (never rejected), so the floor can
+// never be breached. (The former one-way "never lower than current" rule blocked
+// a normal request like 23%→20% from ever saving.)
+export function checkTeslaReserve(pct: number, _snap: ControlSnapshot): GuardResult<number> {
   const gr = g();
   let v = Math.round(pct);
   if (v > 100) v = 100;
   if (v < gr.teslaReserveMinPct) {
     return {
-      ok: false,
+      ok: true,
       value: gr.teslaReserveMinPct,
-      reason: `reserve ${v}% below floor ${gr.teslaReserveMinPct}% — rejected`,
-    };
-  }
-  if (v < snap.teslaReservePct) {
-    return {
-      ok: false,
-      value: snap.teslaReservePct,
-      reason: `reserve ${v}% below Tesla's current ${snap.teslaReservePct}% — never lower reserve`,
+      reason: `reserve ${v}% clamped up to floor ${gr.teslaReserveMinPct}%`,
     };
   }
   return { ok: true, value: v, reason: 'ok' };

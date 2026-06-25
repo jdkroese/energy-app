@@ -404,7 +404,14 @@ export function Autopilot({ wide }: { wide: boolean }) {
       const s = await api.control.command(device, lever, value);
       setStatus(s);
       setConfirm(null);
-      pushToast('ok', `${label} sent to your ${device === 'tesla' ? 'Tesla' : 'Sonnen'}`);
+      // The command response carries the guardrail outcome; show the real reason
+      // when a write was rejected (e.g. clamped) instead of a misleading "sent".
+      const r = (s as { result?: { ok?: boolean; reason?: string } }).result;
+      if (r && r.ok === false) {
+        pushToast('err', r.reason ? `${label}: ${r.reason}` : `${label} was rejected`);
+      } else {
+        pushToast('ok', `${label} sent to your ${device === 'tesla' ? 'Tesla' : 'Sonnen'}`);
+      }
     } catch (e) {
       pushToast('err', e instanceof ApiError ? e.message : `${label} failed`);
     } finally {

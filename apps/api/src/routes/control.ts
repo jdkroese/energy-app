@@ -92,7 +92,11 @@ export async function command(
 
   const snap = await takeSnapshot();
   const result = await issue(device, lever, value, 'manual command', snap);
-  return { ts: new Date().toISOString(), result };
+  // Return the full control status (same shape as /arm) so the web client can
+  // setStatus() the response without crashing on a missing `current`/`guardrails`.
+  // The issue `result` rides along so the UI can toast confirm/reject + reason.
+  const status = (await getStatus()) as Record<string, unknown>;
+  return { ...status, result };
 }
 
 /** Push the ACTIVE scenario's target settings to the devices. Requires armed+!off. */
