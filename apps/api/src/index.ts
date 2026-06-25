@@ -95,7 +95,7 @@ app.get(
   '/api/history',
   wrap((req) => {
     const range = String(req.query.range ?? 'day');
-    const valid = ['day', 'week', 'month', 'year'] as const;
+    const valid = ['hour', 'day', 'week', 'month', 'year'] as const;
     const r = (valid as readonly string[]).includes(range) ? (range as (typeof valid)[number]) : 'day';
     return getHistory(r);
   }),

@@ -7,7 +7,7 @@ import {
   type Band,
 } from '../tariff';
 
-type Range = 'day' | 'week' | 'month' | 'year';
+export type Range = 'hour' | 'day' | 'week' | 'month' | 'year';
 
 function round(n: number, dp = 1): number {
   const f = 10 ** dp;
@@ -56,8 +56,10 @@ function rowImport(r: EnergyRow): number {
 function powerTermFor(range: Range): number {
   // Capacity term billed monthly; pro-rate to the range window.
   switch (range) {
+    case 'hour':
+      return round(POWER_TERM_EUR_MONTH / 30 / 24, 2);
     case 'day':
-      return round((POWER_TERM_EUR_MONTH / 30), 2);
+      return round(POWER_TERM_EUR_MONTH / 30, 2);
     case 'week':
       return round((POWER_TERM_EUR_MONTH / 30) * 7, 2);
     case 'month':
@@ -79,47 +81,64 @@ const LOAD_SPLIT: Array<{ name: string; icon: string; tone: string; pct: number 
 ];
 
 export async function getHistory(range: Range): Promise<unknown> {
+  // Tesla calendar_history has no sub-day period, so the Hour view reuses the day
+  // series and keeps only the last 60 minutes.
+  const period = range === 'hour' ? 'day' : range;
   let rows: EnergyRow[] = [];
   try {
-    const raw = (await tesla.getCalendarHistory('energy', range)) as {
+    const raw = (await tesla.getCalendarHistory('energy', period)) as {
       time_series?: EnergyRow[];
     };
     rows = raw.time_series ?? [];
   } catch {
     rows = [];
   }
+  if (range === 'hour') {
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    rows = rows.filter((r) => {
+      const d = toDate(r.timestamp);
+      return d != null && d.getTime() >= cutoff;
+    });
+  }
 
   let solar = 0;
   let consumed = 0;
   let exported = 0;
   let imported = 0;
+
   // Tesla calendar_history returns FINE-GRAINED samples, not summary buckets:
   // ~2105 points for a year (every ~2h), ~163 for a week (every 30 min). Summing
   // them gives correct totals, but charting one bar per sample yields a wall of
   // thousands of bars whose leading labels are all the first period ("Jan, Jan…").
   // So aggregate the chart series into the natural bucket per range
-  // (year→months, week/month→days, day→hours), summing energy per bucket.
-  const buckets = new Map<string, { label: string; p: number; c: number }>();
+  // (year→months, week/month→days, day→hours, hour→5-min), summing energy.
+  const buckets = new Map<string, { label: string; p: number; c: number; imp: number }>();
   for (const r of rows) {
     const s = rowSolar(r);
     const h = rowHome(r);
+    const imp = rowImport(r);
     solar += s;
     consumed += h;
     exported += rowExport(r);
-    imported += rowImport(r);
+    imported += imp;
     const d = toDate(r.timestamp);
     if (!d) continue;
     const { key, label } = bucketOf(d, range);
-    const b = buckets.get(key) ?? { label, p: 0, c: 0 };
+    const b = buckets.get(key) ?? { label, p: 0, c: 0, imp: 0 };
     b.p += s / 1000;
     b.c += h / 1000;
+    b.imp += imp / 1000;
     buckets.set(key, b);
   }
   // Map preserves insertion order; Tesla returns rows chronologically.
-  const series = [...buckets.values()];
-  const prod = series.map((b) => round(b.p, 2));
-  const cons = series.map((b) => round(b.c, 2));
-  const labels = series.map((b) => b.label);
+  const ordered = [...buckets.values()];
+  const prod = ordered.map((b) => round(b.p, 2));
+  const cons = ordered.map((b) => round(b.c, 2));
+  const labels = ordered.map((b) => b.label);
+  // Per-bucket self-sufficiency (autonomy) = share of consumption NOT bought from grid.
+  const autonomy = ordered.map((b) =>
+    b.c > 0 ? Math.max(0, Math.min(100, Math.round((1 - b.imp / b.c) * 100))) : 0,
+  );
 
   const producedKwh = round(solar / 1000);
   const consumedKwh = round(consumed / 1000);
@@ -179,18 +198,17 @@ export async function getHistory(range: Range): Promise<unknown> {
     byBand,
     powerTermEur: powerTermFor(range),
     // series.prod = real per-bucket solar generation (Tesla calendar_history);
-    // series.cons = real per-bucket home consumption. byBand (above) is the
-    // documented weighting APPROXIMATION since Tesla history is not band-resolved.
-    series: { prod, cons, labels },
+    // series.cons = real per-bucket home consumption; series.autonomy = per-bucket
+    // self-sufficiency %. byBand (above) is the documented weighting APPROXIMATION.
+    series: { prod, cons, labels, autonomy },
     byLoad,
   };
 }
 
 /**
- * Parse a Tesla bucket timestamp. Usually an ISO string, but numeric epochs also
+ * Parse a Tesla sample timestamp. Usually an ISO string, but numeric epochs also
  * appear — and a 10-digit value is epoch *seconds*: handing that to `new Date()`
- * (which expects ms) collapses every bucket to Jan 1970, which is exactly what
- * made the Year axis read "Jan, Jan, Jan…". Scale seconds → ms before parsing.
+ * (which expects ms) collapses everything to Jan 1970. Scale seconds → ms first.
  */
 function toDate(ts: string | number | undefined): Date | null {
   if (ts == null || ts === '') return null;
@@ -205,26 +223,43 @@ function toDate(ts: string | number | undefined): Date | null {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** Date parts in the site timezone (so buckets align to local calendar days/months). */
-function madridParts(d: Date): { year: string; month: string; day: string; hour: string } {
+function madridParts(d: Date): {
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+} {
   const p = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Madrid',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
   }).formatToParts(d);
   const get = (t: string) => p.find((x) => x.type === t)?.value ?? '';
-  return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour') };
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+  };
 }
 
 /**
  * Map a sample timestamp to its chart bucket for the given range. `key` groups
- * samples (sums within it); `label` is the x-axis text. day→hour, week/month→day,
- * year→month. Keys include year so buckets never collide across calendar boundaries.
+ * samples (sums within it); `label` is the x-axis text. hour→5-min, day→hour,
+ * week/month→day, year→month. Keys include enough date parts to never collide.
  */
 function bucketOf(d: Date, range: Range): { key: string; label: string } {
-  const { year, month, day, hour } = madridParts(d);
+  const { year, month, day, hour, minute } = madridParts(d);
+  if (range === 'hour') {
+    const m5 = String(Math.floor(Number(minute) / 5) * 5).padStart(2, '0');
+    return { key: `${day}-${hour}-${m5}`, label: `${hour}:${m5}` };
+  }
   if (range === 'day') return { key: `${year}-${month}-${day}-${hour}`, label: `${hour}:00` };
   if (range === 'year') return { key: `${year}-${month}`, label: MONTHS[Number(month) - 1] ?? month };
   // week + month → daily buckets

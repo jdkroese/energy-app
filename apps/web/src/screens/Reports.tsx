@@ -8,7 +8,12 @@ import { StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
 
 function toBars(h: HistoryResponse): BarDatum[] {
-  return h.series.labels.map((l, i) => ({ l, p: h.series.prod[i] ?? 0, c: h.series.cons[i] ?? 0 }));
+  return h.series.labels.map((l, i) => ({
+    l,
+    p: h.series.prod[i] ?? 0,
+    c: h.series.cons[i] ?? 0,
+    a: h.series.autonomy?.[i],
+  }));
 }
 
 const bandTotal = (h: HistoryResponse) => h.byBand.reduce((s, b) => s + b.eur, 0);
@@ -25,9 +30,11 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   const sv = h.solarValue;
   const left = sv.worthIfSelfUsedEur - sv.exportEur;
 
-  // Period label tracks the Day/Week/Month/Year selector (was hardcoded "This month").
-  const periodTitle = ctx.range === 'Day' ? 'Today' : `This ${ctx.range.toLowerCase()}`;
-  const periodSub = ctx.range === 'Day' ? 'today' : `this ${ctx.range.toLowerCase()}`;
+  // Period label tracks the Hour/Day/Week/Month/Year selector (was hardcoded "This month").
+  const periodTitle =
+    ctx.range === 'Hour' ? 'Past hour' : ctx.range === 'Day' ? 'Today' : `This ${ctx.range.toLowerCase()}`;
+  const periodSub =
+    ctx.range === 'Hour' ? 'past hour' : ctx.range === 'Day' ? 'today' : `this ${ctx.range.toLowerCase()}`;
 
   // Real average grid price = what each self-consumed kWh is worth (avoided import).
   // Derived from the by-band import cost (Σeur / Σkwh) — replaces a hardcoded €0.21.
@@ -97,7 +104,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   const prodCons = (
     <Card
       title="Production vs consumption"
-      subtitle={ctx.desktop ? `${periodTitle} · kWh` : undefined}
+      subtitle={ctx.desktop ? `${periodTitle} · kWh · ${h.totals.selfSufficiencyPct}% autonomy` : undefined}
       icon={ctx.desktop ? <Icon name="bar-chart-3" /> : undefined}
       style={ctx.desktop ? undefined : { padding: 16 }}
       actions={
@@ -117,7 +124,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
     >
       {!ctx.desktop && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <Eyebrow>Production vs consumption · kWh</Eyebrow>
+          <Eyebrow>Production vs consumption · {h.totals.selfSufficiencyPct}% autonomy</Eyebrow>
           <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-2)' }}>
             <span>
               <i style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: 'var(--solar)', marginRight: 5 }} />
@@ -212,7 +219,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
       </div>
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
-        <SegmentedControl block options={['Day', 'Week', 'Month', 'Year']} value={ctx.range} onChange={ctx.setRange} />
+        <SegmentedControl block options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={ctx.range} onChange={ctx.setRange} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>{kpis}</div>
         {captured}
         {byBand}

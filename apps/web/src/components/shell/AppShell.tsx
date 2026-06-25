@@ -62,14 +62,16 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
             eyebrow={meta.eyebrow}
             title={
               location.pathname === '/reports'
-                ? range === 'Day'
-                  ? 'Today'
-                  : `This ${range.toLowerCase()}`
+                ? range === 'Hour'
+                  ? 'Past hour'
+                  : range === 'Day'
+                    ? 'Today'
+                    : `This ${range.toLowerCase()}`
                 : meta.title
             }
             actions={
               location.pathname === '/reports' ? (
-                <SegmentedControl options={['Day', 'Week', 'Month', 'Year']} value={range} onChange={setRange} size="sm" />
+                <SegmentedControl options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={range} onChange={setRange} size="sm" />
               ) : null
             }
           />

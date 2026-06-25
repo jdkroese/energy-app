@@ -66,7 +66,7 @@ export interface HistoryResponse {
   };
   byBand: HistoryByBand[];
   powerTermEur: number;
-  series: { prod: number[]; cons: number[]; labels: string[] };
+  series: { prod: number[]; cons: number[]; labels: string[]; autonomy?: number[] };
   byLoad: HistoryByLoad[];
 }
 
