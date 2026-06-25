@@ -2,33 +2,39 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceDetailResponse, ClimateLever } from '../lib/types';
-import { Card, Icon, Button, IconButton, Badge, StatusDot, SegmentedControl, Switch, Eyebrow } from '../components/ui';
+import type { DeviceDetailResponse, ClimateLever, DeviceWarmth } from '../lib/types';
+import { Card, Icon, Button, IconButton, SegmentedControl } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * DeviceDetail (/devices/:id) — the per-unit control page. Big setpoint stepper,
- * mode + fan segmented controls, room-temp readout, governing automation note,
- * and an automation-enable toggle. All writes are admin + arm gated server-side;
- * the UI disables controls when not permitted and explains why.
+ * DeviceDetail (/devices/:id) — per-unit control, to the approved design:
+ *   • header (name · model · state pill)
+ *   • two cards: big SETPOINT stepper + ROOM-NOW (temp, target, delta)
+ *   • mode + fan segmented controls
+ *   • governing-automation banner
+ *   • advanced grid (temp limit / range / comfort bounds)
+ * All writes are admin + arm gated server-side.
  * ==========================================================================*/
 
 const MODES = [
-  { value: 'cool', label: 'Cool', icon: <Icon name="snowflake" size={14} /> },
-  { value: 'heat', label: 'Heat', icon: <Icon name="flame" size={14} /> },
-  { value: 'dry', label: 'Dry', icon: <Icon name="droplet" size={14} /> },
-  { value: 'fan', label: 'Fan', icon: <Icon name="fan" size={14} /> },
-  { value: 'auto', label: 'Auto', icon: <Icon name="sparkles" size={14} /> },
+  { value: 'auto', label: 'Auto' },
+  { value: 'heat', label: 'Heat' },
+  { value: 'dry', label: 'Dry' },
+  { value: 'fan', label: 'Fan' },
+  { value: 'cool', label: 'Cool' },
 ];
-
 const FANS = [
   { value: '0', label: 'Auto' },
   { value: '1', label: 'Low' },
   { value: '2', label: 'Med' },
   { value: '3', label: 'High' },
 ];
+const WARMTH_COLOR: Record<DeviceWarmth, string> = {
+  cold: 'var(--battery)', cool: 'var(--battery)', comfortable: 'var(--text-1)',
+  warm: 'var(--grid)', hot: 'var(--danger)', unknown: 'var(--text-3)',
+};
 
 export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { id } = useParams<{ id: string }>();
@@ -36,202 +42,137 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const wide = ctx.desktop;
-  const { data, loading, stale, updatedAt, refetch } = usePolling<DeviceDetailResponse>(
-    () => api.devices.detail(id ?? ''),
-    15_000,
-    [id],
-  );
+  const { data, loading, stale, updatedAt, refetch } = usePolling<DeviceDetailResponse>(() => api.devices.detail(id ?? ''), 15_000, [id]);
   const [busy, setBusy] = useState(false);
-  // Optimistic setpoint while a write is in flight.
   const [pendingSetpoint, setPendingSetpoint] = useState<number | null>(null);
 
   const dev = data?.device ?? null;
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
-    try {
-      await fn();
-    } catch {
-      /* keep last-good */
-    } finally {
-      setBusy(false);
-      setPendingSetpoint(null);
-      refetch();
-    }
+    try { await fn(); } catch { /* keep last-good */ } finally { setBusy(false); setPendingSetpoint(null); refetch(); }
   };
-
-  const cmd = (lever: ClimateLever, value: boolean | number | string) =>
-    run(() => api.devices.command(id ?? '', lever, value));
+  const cmd = (lever: ClimateLever, value: boolean | number | string) => run(() => api.devices.command(id ?? '', lever, value));
 
   if (!dev) {
     return (
       <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: wide ? 0 : '16px 14px' }}>
         <Card padded style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', padding: 28 }}>
           <Icon name="thermometer" size={26} color="var(--text-3)" />
-          <div style={{ fontSize: 15, fontWeight: 600 }}>
-            {loading ? 'Loading device…' : data && !data.connected ? 'AC Cloud not connected' : 'Device not found'}
-          </div>
-          <Button variant="secondary" iconLeft={<Icon name="chevron-left" size={15} />} onClick={() => nav('/devices')}>
-            Back to devices
-          </Button>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>{loading ? 'Loading device…' : data && !data.connected ? 'AC Cloud not connected' : 'Device not found'}</div>
+          <Button variant="secondary" iconLeft={<Icon name="chevron-left" size={15} />} onClick={() => nav('/devices')}>Back to devices</Button>
         </Card>
       </div>
     );
   }
 
-  // Detail doesn't fetch arm state; the server still gates every write on
-  // armed + admin, so the UI optimistically enables for admins and surfaces
-  // any rejection via the (kept-last-good) refetch.
   const canWrite = isAdmin;
   const setpoint = pendingSetpoint ?? dev.setpointC ?? 24;
   const lo = Math.max(16, dev.minSetpointC ?? 16, dev.comfortFloorC ?? 16);
   const hi = Math.min(30, dev.maxSetpointC ?? 30, dev.comfortCeilingC ?? 30);
-
   const step = (delta: number) => {
     const next = Math.min(hi, Math.max(lo, Math.round((setpoint + delta) * 2) / 2));
     setPendingSetpoint(next);
     void cmd('setpoint', next);
   };
+  const toggleAutomation = (on: boolean) => run(() => api.devices.setSettings(id ?? '', { automationEnabled: on }));
 
-  const toggleAutomation = (on: boolean) =>
-    run(() => api.devices.setSettings(id ?? '', { automationEnabled: on }));
+  const stateOn = dev.power;
+  const stateLabel = !stateOn ? 'OFF' : dev.mode === 'cool' ? 'COOLING' : dev.mode === 'heat' ? 'HEATING' : dev.mode.toUpperCase();
+  const stateColor = !stateOn ? 'var(--text-3)' : dev.mode === 'heat' ? 'var(--grid)' : 'var(--solar)';
+  const delta = dev.currentTempC != null ? Math.round((dev.currentTempC - setpoint) * 10) / 10 : null;
 
   return (
-    <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: wide ? 16 : 12 }}>
+    <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* HEADER */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: wide ? 0 : 8 }}>
-        <IconButton variant="solid" aria-label="Back" onClick={() => nav('/devices')}>
-          <Icon name="chevron-left" size={18} />
-        </IconButton>
-        <span style={{ width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', background: dev.power ? 'var(--solar-wash)' : 'var(--surface-3)', color: dev.power ? 'var(--solar)' : 'var(--text-3)', flex: 'none' }}>
-          <Icon name="thermometer" size={21} />
-        </span>
+        <IconButton variant="solid" aria-label="Back" onClick={() => nav('/devices')}><Icon name="chevron-left" size={18} /></IconButton>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h1 style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-.02em', margin: 0 }}>{dev.name}</h1>
-          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{dev.room}{dev.installation ? ` · ${dev.installation}` : ''}</div>
+          <h1 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>{dev.name}</h1>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Panasonic Etherea{dev.installation ? ` · ${dev.installation}` : ''}</div>
         </div>
-        <StatusDot tone={dev.online ? 'battery' : 'offline'} live={dev.online}>{dev.online ? 'Online' : 'Offline'}</StatusDot>
+        <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (dev.mode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateColor }}>{stateLabel}</span>
       </div>
 
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
-      {/* HERO — room temp + setpoint stepper + power */}
-      <Card accent="solar" glow padded style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Eyebrow>Room temperature</Eyebrow>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 44, fontWeight: 600, lineHeight: 1 }}>
-              {dev.currentTempC != null ? dev.currentTempC.toFixed(1) : '—'}<span style={{ fontSize: 22, color: 'var(--text-2)' }}>°C</span>
-            </span>
+      {/* SETPOINT + ROOM-NOW */}
+      <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1.1fr' : '1fr', gap: 12 }}>
+        <Card padded style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8 }}>
+          <div className="pwr-eyebrow">Setpoint</div>
+          <div className="pwr-mono" style={{ fontSize: 44, fontWeight: 600, lineHeight: 1.1, color: 'var(--solar)' }}>{setpoint.toFixed(1)}°</div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+            <IconButton variant="solid" aria-label="Lower setpoint" disabled={!canWrite || busy || setpoint <= lo} onClick={() => step(-0.5)}><Icon name="minus" size={18} /></IconButton>
+            <IconButton variant="solid" aria-label="Raise setpoint" disabled={!canWrite || busy || setpoint >= hi} onClick={() => step(0.5)}><Icon name="plus" size={18} /></IconButton>
           </div>
-          <div style={{ flex: 1 }} />
-          <Button
-            variant={dev.power ? 'secondary' : 'primary'}
-            disabled={!canWrite || busy}
-            iconLeft={<Icon name={dev.power ? 'power-off' : 'power'} size={16} />}
-            onClick={() => cmd('power', !dev.power)}
-          >
-            {dev.power ? 'Turn off' : 'Turn on'}
-          </Button>
-        </div>
-
-        {/* Setpoint stepper */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 22, padding: '6px 0' }}>
-          <IconButton variant="solid" aria-label="Lower setpoint" disabled={!canWrite || busy || setpoint <= lo} onClick={() => step(-0.5)}>
-            <Icon name="minus" size={20} />
-          </IconButton>
-          <div style={{ textAlign: 'center', minWidth: 120 }}>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 40, fontWeight: 600, color: 'var(--solar)' }}>
-              {setpoint.toFixed(1)}°
+        </Card>
+        <Card padded style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div className="pwr-eyebrow">Room now</div>
+              <div className="pwr-mono" style={{ fontSize: 26, fontWeight: 600, color: WARMTH_COLOR[dev.warmth] }}>{dev.currentTempC != null ? `${dev.currentTempC.toFixed(1)}°` : '—'}</div>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>target · {lo}–{hi}°C</div>
-          </div>
-          <IconButton variant="solid" aria-label="Raise setpoint" disabled={!canWrite || busy || setpoint >= hi} onClick={() => step(0.5)}>
-            <Icon name="plus" size={20} />
-          </IconButton>
-        </div>
-
-        {!canWrite && (
-          <div style={{ fontSize: 11.5, color: 'var(--grid)', textAlign: 'center' }}>
-            Read-only — only an admin can command devices, and control must be armed.
-          </div>
-        )}
-      </Card>
-
-      {/* MODE + FAN */}
-      <Card title="Mode & fan" icon={<Icon name="sliders-horizontal" />}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>Mode</div>
-            <SegmentedControl
-              size="sm"
-              block
-              options={MODES}
-              value={dev.mode}
-              onChange={(m) => canWrite && cmd('mode', m)}
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>Fan speed</div>
-            <SegmentedControl
-              size="sm"
-              block
-              options={FANS}
-              onChange={(f) => canWrite && cmd('fan', Number(f))}
-            />
-          </div>
-        </div>
-      </Card>
-
-      {/* GOVERNING automation/schedule */}
-      <Card title="Governance" subtitle="Schedules & automations affecting this unit" icon={<Icon name="workflow" />}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-            <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--battery-wash)', color: 'var(--battery)', flex: 'none' }}>
-              <Icon name="sparkles" size={16} />
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14 }}>Automations</div>
-              <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                {dev.automationEnabled ? 'This room may be pre-cooled on solar surplus' : 'Excluded from automations'}
-              </div>
+            <div style={{ textAlign: 'right' }}>
+              <div className="pwr-eyebrow">Δ to target</div>
+              <div className="pwr-mono" style={{ fontSize: 15, marginTop: 6, color: delta != null && delta > 0 ? 'var(--grid)' : 'var(--solar)' }}>{delta != null ? `${delta > 0 ? '+' : ''}${delta}°` : '—'}</div>
             </div>
-            <Switch checked={dev.automationEnabled} disabled={!canWrite || busy} onChange={(e) => void toggleAutomation(e.target.checked)} />
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingTop: 10, borderTop: '1px solid var(--border-1)' }}>
-            {(data?.schedules ?? []).filter((s) => s.scope.deviceIds.includes(dev.id)).map((s) => (
-              <Badge key={s.id} tone={s.enabled ? 'solar' : 'neutral'} variant="soft" icon={<Icon name="calendar-clock" size={11} />}>{s.name}</Badge>
-            ))}
-            {(data?.schedules ?? []).filter((s) => s.scope.deviceIds.includes(dev.id)).length === 0 && (
-              <span style={{ fontSize: 12, color: 'var(--text-3)' }}>No schedules cover this unit.</span>
-            )}
-            <Button size="sm" variant="ghost" style={{ marginLeft: 'auto' }} iconLeft={<Icon name="calendar-clock" size={14} />} onClick={() => nav('/schedules')}>
-              Schedules
-            </Button>
-            <Button size="sm" variant="ghost" iconLeft={<Icon name="workflow" size={14} />} onClick={() => nav('/automations')}>
-              Automations
-            </Button>
-          </div>
+          {dev.currentTempC != null && (
+            <div style={{ height: 6, borderRadius: 999, background: 'var(--surface-3)', position: 'relative', overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.min(100, Math.max(0, ((dev.currentTempC - lo) / (hi - lo)) * 100))}%`, background: WARMTH_COLOR[dev.warmth] }} />
+            </div>
+          )}
+          <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>cooling to {setpoint.toFixed(1)}° · range {lo}–{hi}°</div>
+        </Card>
+      </div>
+
+      {/* POWER */}
+      <Button variant={stateOn ? 'secondary' : 'primary'} disabled={!canWrite || busy} iconLeft={<Icon name={stateOn ? 'power-off' : 'power'} size={16} />} onClick={() => cmd('power', !stateOn)}>
+        {stateOn ? 'Turn off' : 'Turn on'}
+      </Button>
+
+      {/* MODE */}
+      <div>
+        <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Mode</div>
+        <SegmentedControl size="sm" block options={MODES} value={dev.mode} onChange={(m) => canWrite && cmd('mode', m)} />
+      </div>
+      {/* FAN */}
+      <div>
+        <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Fan</div>
+        <SegmentedControl size="sm" block options={FANS} onChange={(f) => canWrite && cmd('fan', Number(f))} />
+      </div>
+
+      {/* AUTOMATION BANNER */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'rgba(46,230,160,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
+        <Icon name="zap" size={17} color={dev.automationEnabled ? 'var(--solar)' : 'var(--text-3)'} />
+        <div style={{ flex: 1, fontSize: 12 }}>
+          <span style={{ fontWeight: 600 }}>Solar-surplus pre-cool</span>
+          <span style={{ color: 'var(--text-2)' }}> {dev.automationEnabled ? 'may drive this unit on surplus' : 'is excluded from this unit'}</span>
         </div>
-      </Card>
+        <button type="button" disabled={!canWrite || busy} onClick={() => toggleAutomation(!dev.automationEnabled)} style={{ fontSize: 11, color: 'var(--solar)', background: 'none', border: 'none', cursor: canWrite ? 'pointer' : 'default', fontWeight: 600 }}>
+          {dev.automationEnabled ? 'Exclude' : 'Include'}
+        </button>
+      </div>
 
       {/* ADVANCED */}
-      <Card title="Advanced" icon={<Icon name="settings-2" />}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '11px 22px', fontSize: 13 }}>
-          <Row label="Comfort ceiling" value={dev.comfortCeilingC != null ? `${dev.comfortCeilingC}°C` : '—'} />
-          <Row label="Comfort floor" value={dev.comfortFloorC != null ? `${dev.comfortFloorC}°C` : '—'} />
-          <Row label="Device range" value={`${dev.minSetpointC ?? 16}–${dev.maxSetpointC ?? 30}°C`} />
-          <Row label="Installation" value={dev.installation ?? '—'} />
-        </div>
-      </Card>
+      <div className="pwr-eyebrow">Advanced (Intesis)</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <AdvTile label="Temp limit" value={`${dev.minSetpointC ?? 16}–${dev.maxSetpointC ?? 30}°`} />
+        <AdvTile label="Comfort band" value={`${dev.comfortFloorC ?? 16}–${dev.comfortCeilingC ?? 30}°`} />
+        <AdvTile label="Mode" value={dev.mode} />
+        <AdvTile label="Installation" value={dev.installation ?? '—'} />
+      </div>
+
+      {!canWrite && <div style={{ fontSize: 11.5, color: 'var(--grid)', textAlign: 'center' }}>Read-only — only an admin can command devices, and control must be armed.</div>}
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function AdvTile({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '2px 0' }}>
-      <span style={{ color: 'var(--text-2)' }}>{label}</span>
-      <span style={{ color: 'var(--text-1)', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '9px 12px' }}>
+      <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{label}</span>
+      <span className="pwr-mono" style={{ fontSize: 12, color: 'var(--text-1)' }}>{value}</span>
     </div>
   );
 }
