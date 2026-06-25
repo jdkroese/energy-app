@@ -79,7 +79,13 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
 
   const surplus = surplusKw(live);
   const soc = batterySoc(live);
-  const qualifying = (devData?.devices ?? []).filter((d) => d.automationEnabled && d.currentTempC != null && d.currentTempC > p.roomTempLimitC);
+  // Rooms warmer than the limit, split by whether they're included in automation.
+  // The rule (and the coordinator) only act on included rooms — but a room being
+  // *above the limit yet excluded* is the common "why is nothing happening?" case,
+  // so surface it explicitly instead of pretending no room is above the limit.
+  const aboveLimit = (devData?.devices ?? []).filter((d) => d.currentTempC != null && d.currentTempC > p.roomTempLimitC);
+  const qualifying = aboveLimit.filter((d) => d.automationEnabled);
+  const excluded = aboveLimit.filter((d) => !d.automationEnabled);
 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
@@ -130,8 +136,23 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
               ))}
             </div>
           </>
+        ) : surplus <= 0 ? (
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
+            No solar surplus right now — rule is idle.{excluded.length > 0 ? ` (${excluded.length} room${excluded.length > 1 ? 's' : ''} above ${p.roomTempLimitC.toFixed(1)}°, but not included in automation.)` : ''}
+          </div>
+        ) : excluded.length > 0 ? (
+          <>
+            <div style={{ fontSize: 12.5, marginBottom: 8, color: 'var(--text-2)' }}>
+              {excluded.length} room{excluded.length > 1 ? 's are' : ' is'} above {p.roomTempLimitC.toFixed(1)}° but not included in automation — open the device and tap “Include in automation” to let the rule pre-cool {excluded.length > 1 ? 'them' : 'it'}:
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {excluded.slice(0, 6).map((d) => (
+                <span key={d.id} className="pwr-mono" style={{ fontSize: 11.5, background: 'var(--surface-3)', color: 'var(--grid)', borderRadius: 8, padding: '5px 10px' }}>{d.name} · {d.currentTempC!.toFixed(1)}° · excluded</span>
+              ))}
+            </div>
+          </>
         ) : (
-          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{surplus > 0 ? 'No rooms above the limit right now — nothing to pre-cool.' : 'No solar surplus right now — rule is idle.'}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>No rooms above the limit right now — nothing to pre-cool.</div>
         )}
       </div>
 
