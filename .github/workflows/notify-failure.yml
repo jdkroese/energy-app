@@ -1,0 +1,30 @@
+name: Notify on failure
+
+# Sends a WhatsApp ping (via CallMeBot — same channel as the battery alerts)
+# whenever the Deploy or account-recovery workflow finishes in failure. Runs on a
+# cloud runner; it only needs to reach the CallMeBot API, not the mini. The step
+# never fails (|| true) so a notifier hiccup can't itself trigger a failure email.
+on:
+  workflow_run:
+    workflows: ["Deploy", "Ops - Account Recovery"]
+    types: [completed]
+
+jobs:
+  notify:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: WhatsApp ping
+        env:
+          PHONE: ${{ secrets.CALLMEBOT_PHONE }}
+          KEY: ${{ secrets.CALLMEBOT_KEY }}
+          WF: ${{ github.event.workflow_run.name }}
+          BR: ${{ github.event.workflow_run.head_branch }}
+          URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          curl -fsS -G "https://api.callmebot.com/whatsapp.php" \
+            --data-urlencode "phone=${PHONE}" \
+            --data-urlencode "apikey=${KEY}" \
+            --data-urlencode "text=GitHub CI FAILED: ${WF} on ${BR} - ${URL}" \
+            && echo "WhatsApp alert sent" || echo "CallMeBot send failed (non-fatal)"
