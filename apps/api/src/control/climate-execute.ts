@@ -115,6 +115,14 @@ export async function issueClimate(
 
     const settings = store.get().deviceSettings[unit.id];
 
+    // The 30s/lever throttle exists to protect the AC compressor from rapid
+    // cycling — that only applies to POWER, which always stays throttled. Cheap
+    // levers (mode/setpoint/fan/vanes) don't cycle the compressor, so an explicit
+    // MANUAL command bypasses the throttle (quick sequential tweaks aren't
+    // rejected). The automation loop still throttles every lever.
+    const rlExempt = opts.manual === true && lever !== 'power';
+    const limited = (l: ClimateLever): boolean => !rlExempt && rateLimited(unit.id, l);
+
     if (lever === 'power') {
       const want = Boolean(value);
       const guard = checkPower(want);
@@ -138,7 +146,7 @@ export async function issueClimate(
       if (!guard.ok) return reject(unit.id, lever, unit.mode, guard.reason);
       const to = guard.value;
       if (unit.mode === to) return noop(unit.id, lever, to);
-      if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.mode, 'rate-limited (<30s)');
+      if (limited(lever)) return reject(unit.id, lever, unit.mode, 'rate-limited (<30s)');
       if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'mode', to);
       else await intesis.setDatapoint(unit.id, UID.mode, MODE_VALUE[to]);
       markWritten(unit.id, lever);
@@ -150,7 +158,7 @@ export async function issueClimate(
       const guard = checkSetpoint(Number(value), unit, settings);
       const to = guard.value;
       if (unit.setpointC === to) return noop(unit.id, lever, to);
-      if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.setpointC, 'rate-limited (<30s)');
+      if (limited(lever)) return reject(unit.id, lever, unit.setpointC, 'rate-limited (<30s)');
       // Airzone takes whole °C (0.5° steps); Intesis wants tenths of °C.
       if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'setpoint', to);
       else await intesis.setDatapoint(unit.id, UID.setpoint, Math.round(to * 10));
@@ -163,7 +171,7 @@ export async function issueClimate(
       const fan = Math.max(0, Math.round(Number(value)));
       if (isAirzone(unit.id)) return noop(unit.id, lever, fan, 'underfloor has no fan');
       if (unit.fanLevel != null && unit.fanLevel === fan) return noop(unit.id, lever, fan);
-      if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.fanLevel ?? null, 'rate-limited (<30s)');
+      if (limited(lever)) return reject(unit.id, lever, unit.fanLevel ?? null, 'rate-limited (<30s)');
       await intesis.setDatapoint(unit.id, UID.fan, fan);
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, unit.fanLevel ?? null, fan, reason, true, `fan ${fan} issued`);
@@ -177,7 +185,7 @@ export async function issueClimate(
       const to = guard.value;
       const cur = lever === 'vaneUpDown' ? unit.vaneUpDown : unit.vaneLeftRight;
       if (cur != null && cur === to) return noop(unit.id, lever, to);
-      if (rateLimited(unit.id, lever)) return reject(unit.id, lever, cur ?? null, 'rate-limited (<30s)');
+      if (limited(lever)) return reject(unit.id, lever, cur ?? null, 'rate-limited (<30s)');
       await intesis.setDatapoint(unit.id, lever === 'vaneUpDown' ? UID.vaneV : UID.vaneH, to);
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, cur ?? null, to, reason, true, `${lever} ${to} issued`);
