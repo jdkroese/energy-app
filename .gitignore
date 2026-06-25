@@ -24,5 +24,6 @@ coverage/
 .DS_Store
 Thumbs.db
 
-# Claude Code — local machine settings (permissions, paths)
+# Claude Code — local machine settings (permissions, paths) + per-agent worktrees
 .claude/settings.local.json
+.claude/worktrees/

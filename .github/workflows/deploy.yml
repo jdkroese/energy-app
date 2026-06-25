@@ -3,6 +3,16 @@ name: Deploy
 on:
   push:
     branches: [main]
+    # Docs, helper scripts, and CI/meta-only changes don't affect the running app,
+    # so skip the deploy (and its API restart, which boots control DISARMED) for them.
+    # A commit that ALSO touches app code still deploys — paths-ignore only skips a
+    # push when EVERY changed file matches.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - '.github/**'
+      - '.gitignore'
   workflow_dispatch:
 
 # The Mac mini hosts the app but is LAN-only behind CGNAT, so GitHub's cloud
