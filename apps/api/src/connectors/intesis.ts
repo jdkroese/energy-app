@@ -22,9 +22,11 @@ import { cached } from '../cache';
 
 // AC Cloud Control shares the IntesisHome cloud backend (app id com.intesis.intesishome).
 // Host is overridable in case the account lives on the newer accloud.intesis.com edge.
+// Validated live 2026-06-25 against the real account (9 Panasonic Etherea units):
+// host user.intesishome.com, path /api.php/get/control, version 1.8.5 → HTTP 200.
 const API_VERSION = '1.8.5';
 const cloudBase = () => config.intesis.apiBase || 'https://user.intesishome.com';
-const controlUrl = () => `${cloudBase()}/api/php/get/control`;
+const controlUrl = () => `${cloudBase()}/api.php/get/control`;
 
 // Datapoint UID map.
 export const UID = {
@@ -35,6 +37,8 @@ export const UID = {
   vaneH: 6,
   setpoint: 9,
   currentTemp: 10,
+  setpointMin: 35,
+  setpointMax: 36,
 } as const;
 
 export const MODE: Record<number, string> = { 0: 'auto', 1: 'heat', 2: 'dry', 3: 'fan', 4: 'cool' };
@@ -175,6 +179,9 @@ export interface ClimateUnit {
   setpointC: number | null;
   /** Measured room temperature °C. */
   currentTempC: number | null;
+  /** Device-reported setpoint bounds °C (uid 35/36; typically 16–30). */
+  minSetpointC: number | null;
+  maxSetpointC: number | null;
   online: boolean;
 }
 
@@ -197,6 +204,8 @@ export function normalizeDevices(login: IntesisLoginResult): ClimateUnit[] {
       mode: MODE[dp[UID.mode]] ?? 'unknown',
       setpointC: toCelsius(dp[UID.setpoint]),
       currentTempC: toCelsius(dp[UID.currentTemp]),
+      minSetpointC: toCelsius(dp[UID.setpointMin]),
+      maxSetpointC: toCelsius(dp[UID.setpointMax]),
       online: true,
     };
   });
