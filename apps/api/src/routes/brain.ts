@@ -220,6 +220,16 @@ export async function getPlan(): Promise<unknown> {
   // Tariff rate array for the chart (0=P3,1=P2,2=P1 already from bandCodes).
   const tariff = bandCodes;
 
+  // Hourly cloud cover (Open-Meteo, this site). The solar forecast above is
+  // already cloud-attenuated (it derives from shortwave radiation); this just
+  // surfaces the cloud signal explicitly so the UI can show it's accounted for.
+  const cloudPct = (wf?.cloudCover ?? solarKw.map(() => 0)).map((v) => Math.round(v));
+  const dayHours = solarKw.map((v, h) => (v > 0.05 ? h : -1)).filter((h) => h >= 0);
+  const cloudAvgPct =
+    wf && dayHours.length
+      ? Math.round(dayHours.reduce((a, h) => a + (cloudPct[h] ?? 0), 0) / dayHours.length)
+      : 0;
+
   // Why-now narrative based on the current band + current action.
   const bandName: Record<number, Band> = { 0: 'P3', 1: 'P2', 2: 'P1' };
   const curBand = bandName[bandCodes[nowH]];
@@ -229,12 +239,13 @@ export async function getPlan(): Promise<unknown> {
     ts: now.toISOString(),
     scenario: { id: state.activeScenario, name: scenario.name, reservePct },
     projected: result.projected,
-    forecast: { solarKw, loadKw },
+    forecast: { solarKw, loadKw, cloudPct },
     socPct: result.socPct,
     tariff,
     actions: result.actions,
     now: nowH,
     whyNow,
+    weather: { source: wf ? 'live' : 'synthetic', cloudAvgPct },
   };
 }
 

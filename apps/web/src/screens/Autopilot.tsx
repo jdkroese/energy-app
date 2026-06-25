@@ -1,25 +1,35 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, ApiError } from '../lib/api';
+import { usePolling } from '../lib/usePolling';
+import { MOCK_PLAN } from '../lib/mock';
 import { useAuth } from '../auth/AuthProvider';
 import type {
+  BrainPlanResponse,
   ControlCommandValue,
   ControlDevice,
   ControlLever,
   ControlMode,
   ControlStatus,
 } from '../lib/types';
-import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon } from '../components/ui';
+import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Card, StatTile } from '../components/ui';
+import { PlanTimeline } from '../components/energy/PlanTimeline';
+import { StaleBanner } from './_shared';
+import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * Autopilot — the live battery-control panel.
+ * Autopilot — the battery-control screen, organised into four tabs:
+ *   Summary  · the plan (hero) + which systems are armed and in what mode
+ *   Status   · live device truth + always-on guardrails
+ *   Activity · the command audit log ("what the boss did")
+ *   Settings · arm/mode/kill + manual levers (admin only)
  *
- * This commands REAL Sonnen + Tesla hardware, so the design leans hard on
- * unmistakable state (armed banner + pulse), deliberate actions (every arm,
- * kill, and manual command runs through a confirm dialog) and a visible audit
- * trail (the command log + always-on guardrails).
+ * It commands REAL Sonnen + Tesla hardware, so the armed state and kill switch
+ * are pinned in the header on every tab, and every write runs through a confirm
+ * dialog with always-enforced guardrails.
  * ==========================================================================*/
 
 const POLL_MS = 5_000;
+type TabKey = 'summary' | 'status' | 'activity' | 'settings';
 
 /* ---- small toast bus (local to this screen) ------------------------------ */
 type Toast = { id: number; kind: 'ok' | 'err'; text: string };
@@ -33,15 +43,7 @@ interface Confirm {
   onConfirm: () => Promise<void> | void;
 }
 
-function Modal({
-  confirm,
-  busy,
-  onClose,
-}: {
-  confirm: Confirm;
-  busy: boolean;
-  onClose: () => void;
-}) {
+function Modal({ confirm, busy, onClose }: { confirm: Confirm; busy: boolean; onClose: () => void }) {
   return (
     <div
       role="dialog"
@@ -49,189 +51,83 @@ function Modal({
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !busy) onClose();
       }}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 60,
-        background: 'rgba(4,8,10,0.66)',
-        backdropFilter: 'blur(3px)',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 18,
-      }}
+      style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(4,8,10,0.66)', backdropFilter: 'blur(3px)', display: 'grid', placeItems: 'center', padding: 18 }}
     >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 420,
-          background: 'var(--surface-1)',
-          border: '1px solid var(--border-2)',
-          borderRadius: 'var(--radius-lg)',
-          boxShadow: 'var(--shadow-2)',
-          padding: 20,
-        }}
-      >
+      <div style={{ width: '100%', maxWidth: 420, background: 'var(--surface-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-2)', padding: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 10 }}>
-          <span
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 10,
-              display: 'grid',
-              placeItems: 'center',
-              flex: 'none',
-              background: confirm.danger ? 'var(--danger-wash)' : 'var(--battery-wash)',
-              color: confirm.danger ? 'var(--danger)' : 'var(--battery)',
-            }}
-          >
+          <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: confirm.danger ? 'var(--danger-wash)' : 'var(--battery-wash)', color: confirm.danger ? 'var(--danger)' : 'var(--battery)' }}>
             <Icon name={confirm.danger ? 'alert-triangle' : 'send'} size={18} />
           </span>
           <div style={{ fontSize: 16, fontWeight: 600 }}>{confirm.title}</div>
         </div>
         <div style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5 }}>{confirm.body}</div>
         <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button
-            variant={confirm.danger ? 'danger' : 'primary'}
-            loading={busy}
-            onClick={() => void confirm.onConfirm()}
-          >
-            {confirm.confirmLabel}
-          </Button>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant={confirm.danger ? 'danger' : 'primary'} loading={busy} onClick={() => void confirm.onConfirm()}>{confirm.confirmLabel}</Button>
         </div>
       </div>
     </div>
   );
 }
 
-/* ---- status banner ------------------------------------------------------- */
-type BannerTone = { c: string; wash: string; label: string; icon: string };
-
-function bannerTone(s: ControlStatus): BannerTone {
-  if (!s.armed || s.mode === 'off')
-    return { c: 'var(--text-3)', wash: 'var(--surface-2)', label: 'DISARMED', icon: 'power-off' };
-  if (s.mode === 'manual')
-    return { c: 'var(--battery)', wash: 'var(--battery-wash)', label: 'MANUAL — armed', icon: 'hand' };
-  return { c: 'var(--solar)', wash: 'var(--solar-wash)', label: 'AUTO — running', icon: 'sparkles' };
+/* ---- armed-state tone ---------------------------------------------------- */
+function armTone(s: ControlStatus | null): { c: string; wash: string; label: string; icon: string; live: boolean } {
+  if (!s || !s.armed || s.mode === 'off') return { c: 'var(--text-3)', wash: 'var(--surface-2)', label: 'OFF', icon: 'power-off', live: false };
+  if (s.mode === 'manual') return { c: 'var(--battery)', wash: 'var(--battery-wash)', label: 'MANUAL', icon: 'hand', live: true };
+  return { c: 'var(--solar)', wash: 'var(--solar-wash)', label: 'AUTO', icon: 'sparkles', live: true };
 }
 
 function StatusBanner({ s }: { s: ControlStatus }) {
-  const t = bannerTone(s);
-  const live = s.armed && s.mode !== 'off';
+  const t = armTone(s);
   return (
-    <div
-      style={{
-        borderRadius: 'var(--radius-card)',
-        border: `1px solid ${t.c}`,
-        background: t.wash,
-        padding: '16px 18px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
-        boxShadow: live ? `0 0 0 1px ${t.c}, 0 0 24px -6px ${t.c}` : undefined,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-        <span style={{ position: 'relative', width: 14, height: 14, flex: 'none' }}>
-          <span
-            style={{
-              position: 'absolute',
-              inset: 0,
-              borderRadius: '50%',
-              background: t.c,
-              boxShadow: live ? `0 0 10px ${t.c}` : 'none',
-            }}
-          />
-          {live && (
-            <span
-              style={{
-                position: 'absolute',
-                inset: -4,
-                borderRadius: '50%',
-                background: t.c,
-                opacity: 0.5,
-                animation: 'pwr-pulse 1.8s var(--ease-out) infinite',
-              }}
-            />
-          )}
+    <div style={{ borderRadius: 'var(--radius-card)', border: `1px solid ${t.c}`, background: t.wash, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8, boxShadow: t.live ? `0 0 24px -8px ${t.c}` : undefined }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ position: 'relative', width: 12, height: 12, flex: 'none' }}>
+          <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: t.c, boxShadow: t.live ? `0 0 10px ${t.c}` : 'none' }} />
+          {t.live && <span style={{ position: 'absolute', inset: -4, borderRadius: '50%', background: t.c, opacity: 0.5, animation: 'pwr-pulse 1.8s var(--ease-out) infinite' }} />}
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Icon name={t.icon} size={18} color={t.c} />
-          <span
-            style={{
-              fontSize: 17,
-              fontWeight: 700,
-              letterSpacing: '.04em',
-              color: t.c,
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            {t.label}
-          </span>
-        </div>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-3)' }}>
-          {live ? 'Power can send real commands to your batteries' : 'No commands will reach your batteries'}
-        </span>
+        <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '.03em', color: t.c, fontFamily: 'var(--font-mono)' }}>{t.label === 'OFF' ? 'DISARMED' : `${t.label} — running`}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--text-3)', textAlign: 'right' }}>{t.live ? 'Power is commanding your batteries' : 'No commands reach your batteries'}</span>
       </div>
       {s.lastError && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 11px',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--danger-wash)',
-            color: 'var(--danger)',
-            fontSize: 12.5,
-          }}
-        >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 11px', borderRadius: 'var(--radius-md)', background: 'var(--danger-wash)', color: 'var(--danger)', fontSize: 12.5 }}>
           <Icon name="alert-octagon" size={15} />
-          <span>
-            <strong>Last error:</strong> {s.lastError}
-          </span>
+          <span><strong>Last error:</strong> {s.lastError}</span>
         </div>
       )}
     </div>
   );
 }
 
-/* ---- target/current row helpers ------------------------------------------ */
-function TargetRow({ label, value, mono = true }: { label: string; value: ReactNode; mono?: boolean }) {
+/* ---- a single "system" status row (Summary) ------------------------------ */
+function SystemRow({ icon, name, detail, label, tone, dot, first }: { icon: string; name: string; detail: string; label: string; tone: string; dot: boolean; first?: boolean }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 12,
-        padding: '9px 0',
-        borderTop: '1px solid var(--border-1)',
-      }}
-    >
-      <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{label}</span>
-      <span
-        style={{
-          fontSize: 13,
-          fontWeight: 600,
-          color: 'var(--text-1)',
-          fontFamily: mono ? 'var(--font-mono)' : undefined,
-        }}
-      >
-        {value}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0', borderTop: first ? 'none' : '1px solid var(--border-1)' }}>
+      <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: `color-mix(in srgb, var(--${tone}) 16%, transparent)`, color: `var(--${tone})` }}>
+        <Icon name={icon} size={17} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14 }}>{name}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{detail}</div>
+      </div>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', borderRadius: 999, fontSize: 12, fontWeight: 600, background: `color-mix(in srgb, var(--${tone}) 14%, transparent)`, color: `var(--${tone})` }}>
+        {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: `var(--${tone})`, boxShadow: `0 0 6px var(--${tone})` }} />}
+        {label}
       </span>
     </div>
   );
 }
 
-const panelCard: CSSProperties = {
-  background: 'var(--surface-1)',
-  border: '1px solid var(--border-1)',
-  borderRadius: 'var(--radius-card)',
-  padding: 16,
-};
+function TargetRow({ label, value, mono = true }: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 0', borderTop: '1px solid var(--border-1)' }}>
+      <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', fontFamily: mono ? 'var(--font-mono)' : undefined }}>{value}</span>
+    </div>
+  );
+}
+
+const panelCard: CSSProperties = { background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-card)', padding: 16 };
 
 const TESLA_MODES = [
   { value: 'self_consumption', label: 'Self' },
@@ -247,32 +143,36 @@ const SONNEN_MODES = [
 function prettyMode(m: string): string {
   return m.replace(/_/g, ' ');
 }
-
 function fmtVal(v: string | number | boolean | null): string {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'boolean') return v ? 'on' : 'off';
   if (typeof v === 'string') return prettyMode(v);
   return String(v);
 }
+function hhmm(h: number): string {
+  return `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.round((h % 1) * 60)).padStart(2, '0')}`;
+}
 
 /* ============================================================================
  * The screen
  * ==========================================================================*/
-export function Autopilot({ wide }: { wide: boolean }) {
+export function Autopilot({ ctx }: { ctx: ShellContext }) {
+  const wide = ctx.desktop;
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
+  const [tab, setTab] = useState<TabKey>('summary');
   const [status, setStatus] = useState<ControlStatus | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [pending, setPending] = useState<string | null>(null);
+  const [reserveDraft, setReserveDraft] = useState<number | null>(null);
+  const [logFilter, setLogFilter] = useState<'all' | 'errors'>('all');
   const toastId = useRef(0);
 
-  // pending command targets (so a spinner shows on the exact control)
-  const [pending, setPending] = useState<string | null>(null);
-
-  // local draft for the reserve slider (so it doesn't jump while polling)
-  const [reserveDraft, setReserveDraft] = useState<number | null>(null);
+  const { data: planData, stale: planStale, updatedAt: planAt } = usePolling<BrainPlanResponse>(api.brainPlan, 60_000);
+  const plan = planData || MOCK_PLAN;
 
   const pushToast = useCallback((kind: 'ok' | 'err', text: string) => {
     const id = ++toastId.current;
@@ -280,7 +180,7 @@ export function Autopilot({ wide }: { wide: boolean }) {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
   }, []);
 
-  // --- poll status (~5s) ---
+  // poll control status (~5s)
   useEffect(() => {
     let alive = true;
     const run = async () => {
@@ -288,7 +188,7 @@ export function Autopilot({ wide }: { wide: boolean }) {
         const s = await api.control.status();
         if (alive) setStatus(s);
       } catch {
-        /* keep last-good; banner stays as-is */
+        /* keep last-good */
       }
     };
     void run();
@@ -299,7 +199,6 @@ export function Autopilot({ wide }: { wide: boolean }) {
     };
   }, []);
 
-  // keep the reserve draft synced to the device while idle
   useEffect(() => {
     if (status && reserveDraft === null) setReserveDraft(status.current.tesla.reservePct);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -330,15 +229,9 @@ export function Autopilot({ wide }: { wide: boolean }) {
   const onToggleArm = () => {
     if (!status) return;
     if (!status.armed) {
-      // arming → confirm
       setConfirm({
         title: 'Arm Autopilot?',
-        body: (
-          <>
-            This lets Power send <strong>real commands</strong> to your Sonnen + Tesla. Guardrails
-            (SoC floor, reserve min, 14 kW cap) stay enforced at all times.
-          </>
-        ),
+        body: (<>This lets Power send <strong>real commands</strong> to your Sonnen + Tesla. Guardrails (SoC floor, reserve min, 14 kW cap) stay enforced at all times.</>),
         confirmLabel: 'Arm',
         onConfirm: () => doArm(true, status.mode === 'off' ? 'manual' : status.mode),
       });
@@ -355,20 +248,13 @@ export function Autopilot({ wide }: { wide: boolean }) {
       void doArm(false, 'off');
       return;
     }
-    // switching into an active mode arms if needed
     setConfirm({
       title: m === 'auto' ? 'Hand control to Autopilot?' : 'Switch to manual control?',
       body:
         m === 'auto' ? (
-          <>
-            <strong>Auto</strong> lets the brain command your batteries continuously to follow the
-            active scenario. Guardrails stay enforced; the kill switch reverts everything instantly.
-          </>
+          <><strong>Auto</strong> lets the brain command your batteries continuously to follow the active scenario. Guardrails stay enforced; the kill switch reverts everything instantly.</>
         ) : (
-          <>
-            <strong>Manual</strong> arms the link so your explicit commands below reach the
-            batteries. The brain won't act on its own.
-          </>
+          <><strong>Manual</strong> arms the link so your explicit commands reach the batteries. The brain won't act on its own.</>
         ),
       confirmLabel: m === 'auto' ? 'Go Auto' : 'Go Manual',
       onConfirm: () => doArm(true, m),
@@ -378,12 +264,7 @@ export function Autopilot({ wide }: { wide: boolean }) {
   const onKill = () => {
     setConfirm({
       title: 'Kill switch — disarm now?',
-      body: (
-        <>
-          Immediately disarms Autopilot and reverts your Sonnen + Tesla to safe{' '}
-          <strong>self-consumption</strong>. Use this if anything looks wrong.
-        </>
-      ),
+      body: (<>Immediately disarms Autopilot and reverts your Sonnen + Tesla to safe <strong>self-consumption</strong>. Use this if anything looks wrong.</>),
       confirmLabel: 'Disarm now',
       danger: true,
       onConfirm: () => doArm(false, 'off'),
@@ -391,21 +272,13 @@ export function Autopilot({ wide }: { wide: boolean }) {
   };
 
   /* --- manual commands --------------------------------------------------- */
-  const sendCommand = async (
-    key: string,
-    device: ControlDevice,
-    lever: ControlLever,
-    value: ControlCommandValue,
-    label: string,
-  ) => {
+  const sendCommand = async (key: string, device: ControlDevice, lever: ControlLever, value: ControlCommandValue, label: string) => {
     setConfirmBusy(true);
     setPending(key);
     try {
       const s = await api.control.command(device, lever, value);
       setStatus(s);
       setConfirm(null);
-      // The command response carries the guardrail outcome; show the real reason
-      // when a write was rejected (e.g. clamped) instead of a misleading "sent".
       const r = (s as { result?: { ok?: boolean; reason?: string } }).result;
       if (r && r.ok === false) {
         pushToast('err', r.reason ? `${label}: ${r.reason}` : `${label} was rejected`);
@@ -420,21 +293,10 @@ export function Autopilot({ wide }: { wide: boolean }) {
     }
   };
 
-  const confirmCommand = (
-    key: string,
-    device: ControlDevice,
-    lever: ControlLever,
-    value: ControlCommandValue,
-    label: string,
-  ) => {
+  const confirmCommand = (key: string, device: ControlDevice, lever: ControlLever, value: ControlCommandValue, label: string) => {
     setConfirm({
       title: 'Send command?',
-      body: (
-        <>
-          Send <strong>{label}</strong> to your {device === 'tesla' ? 'Tesla Powerwall' : 'Sonnen'}{' '}
-          now?
-        </>
-      ),
+      body: (<>Send <strong>{label}</strong> to your {device === 'tesla' ? 'Tesla Powerwall' : 'Sonnen'} now?</>),
       confirmLabel: 'Send now',
       onConfirm: () => sendCommand(key, device, lever, value, label),
     });
@@ -443,12 +305,7 @@ export function Autopilot({ wide }: { wide: boolean }) {
   const onApplyScenario = () => {
     setConfirm({
       title: 'Apply active scenario?',
-      body: (
-        <>
-          Push the active scenario's full strategy (reserve, modes, export rule) to both batteries
-          now?
-        </>
-      ),
+      body: (<>Push the active scenario's full strategy (reserve, modes, export rule) to both batteries now?</>),
       confirmLabel: 'Apply to devices',
       onConfirm: async () => {
         setConfirmBusy(true);
@@ -468,391 +325,321 @@ export function Autopilot({ wide }: { wide: boolean }) {
     });
   };
 
-  /* --- loading / not-yet ------------------------------------------------- */
-  if (!status) {
-    return (
-      <div style={{ ...panelCard, padding: 22, color: 'var(--text-3)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Icon name="loader" size={16} /> Connecting to control plane…
-      </div>
-    );
-  }
+  /* ---- derived for Summary --------------------------------------------- */
+  const at = armTone(status);
+  const sysLabel = at.label === 'OFF' ? 'Off' : at.label === 'MANUAL' ? 'Manual' : 'Auto';
+  const nowH = plan.now;
+  const solarNow = plan.forecast.solarKw[Math.min(plan.forecast.solarKw.length - 1, Math.max(0, Math.round(nowH)))] ?? 0;
+  const nextAction = plan.actions.find((a) => a.h > nowH) ?? plan.actions[0];
+  const nextRel = nextAction
+    ? nextAction.h > nowH
+      ? `in ${Math.floor(nextAction.h - nowH)}h ${String(Math.round(((nextAction.h - nowH) % 1) * 60)).padStart(2, '0')}m`
+      : 'now'
+    : '';
 
-  const g = status.guardrails;
-  const cur = status.current;
-  const reserveMin = g.teslaReserveMinPct;
-  const disabledHint = !isAdmin
-    ? 'View-only — admin access required'
-    : !armed
-      ? 'Arm Autopilot (Manual or Auto) to send commands'
-      : '';
+  /* ---- connecting placeholder ------------------------------------------ */
+  const connecting = (
+    <div style={{ ...panelCard, padding: 22, color: 'var(--text-3)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
+      <Icon name="loader" size={16} /> Connecting to control plane…
+    </div>
+  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* live-control header — visually distinct from the shadow plan below */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-        <span
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 10,
-            display: 'grid',
-            placeItems: 'center',
-            background: 'var(--danger-wash)',
-            color: 'var(--danger)',
-          }}
-        >
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1100, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px' }}>
+      {/* mobile header */}
+      {!wide && (
+        <div style={{ padding: '4px 2px 0' }}>
+          <Eyebrow>Live control</Eyebrow>
+          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>Autopilot</h1>
+        </div>
+      )}
+      {planStale && <StaleBanner updatedAt={planAt} />}
+
+      {/* persistent armed header — visible on every tab */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--danger-wash)', color: 'var(--danger)' }}>
           <Icon name="radio-tower" size={18} />
         </span>
-        <div style={{ flex: 1 }}>
-          <Eyebrow>Live control</Eyebrow>
-          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-.01em' }}>Autopilot — real device control</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 600 }}>Real device control</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Sonnen + Tesla · guardrails always on</div>
         </div>
-        {!isAdmin && (
-          <Badge tone="neutral" icon={<Icon name="eye" size={12} />}>
-            View-only
-          </Badge>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)', background: at.wash, color: at.c }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 7px ${at.c}` : 'none' }} />
+          {at.label}
+        </span>
+        {isAdmin && armed && (
+          <Button size="sm" variant="danger" iconLeft={<Icon name="power-off" />} onClick={onKill}>Disarm</Button>
         )}
       </div>
 
-      <StatusBanner s={status} />
+      {/* tab bar */}
+      <SegmentedControl
+        block
+        options={[
+          { value: 'summary', label: 'Summary' },
+          { value: 'status', label: 'Status' },
+          { value: 'activity', label: 'Activity' },
+          { value: 'settings', label: 'Settings' },
+        ]}
+        value={tab}
+        onChange={(v) => setTab(v as TabKey)}
+      />
 
-      {/* admin: master + manual controls; member: read-only notice */}
-      {isAdmin ? (
+      {/* ============================= SUMMARY ============================= */}
+      {tab === 'summary' && (
         <>
-          {/* master controls */}
+          {status ? <StatusBanner s={status} /> : connecting}
+
+          {/* systems — what's armed and in which mode */}
           <div style={panelCard}>
-            <Eyebrow>Master</Eyebrow>
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                gap: 16,
-                marginTop: 12,
-                justifyContent: 'space-between',
-              }}
-            >
-              {/* big arm/disarm */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
-                <Switch checked={status.armed} onChange={onToggleArm} />
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 600 }}>{status.armed ? 'Armed' : 'Disarmed'}</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                    {status.armed ? 'Power can command devices' : 'Flip to let Power act'}
-                  </div>
-                </div>
-              </label>
-
-              {/* mode */}
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, textAlign: 'right' }}>Mode</div>
-                <SegmentedControl
-                  options={[
-                    { value: 'off', label: 'Off' },
-                    { value: 'manual', label: 'Manual' },
-                    { value: 'auto', label: 'Auto' },
-                  ]}
-                  value={status.armed ? status.mode : 'off'}
-                  onChange={onMode}
-                />
-              </div>
-            </div>
-
-            {/* kill switch */}
-            <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-1)' }}>
-              <Button
-                variant="danger"
-                block
-                size="lg"
-                iconLeft={<Icon name="power-off" />}
-                disabled={!status.armed}
-                onClick={onKill}
-              >
-                Kill switch — disarm &amp; revert to self-consumption
-              </Button>
+            <Eyebrow>Systems</Eyebrow>
+            <div style={{ marginTop: 6 }}>
+              <SystemRow
+                first
+                icon="cpu"
+                name="Battery autopilot"
+                detail="Sonnen + Tesla command authority"
+                label={sysLabel}
+                tone={at.label === 'OFF' ? 'text-3' : at.label === 'MANUAL' ? 'battery' : 'solar'}
+                dot={at.live}
+              />
+              <SystemRow
+                icon="sun"
+                name="Solar self-consumption"
+                detail={`cloud-adjusted · ~${solarNow.toFixed(1)} kW now · ${plan.weather.cloudAvgPct}% cloud`}
+                label={armed ? sysLabel : 'Producing'}
+                tone="solar"
+                dot
+              />
             </div>
           </div>
 
-          {/* current vs target */}
+          {/* next move */}
+          {nextAction && (
+            <div style={{ ...panelCard, border: '1px solid color-mix(in srgb, var(--battery) 30%, transparent)', display: 'flex', gap: 12, alignItems: 'center' }}>
+              <span style={{ width: 38, height: 38, borderRadius: 11, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--battery-wash)', color: 'var(--battery)' }}>
+                <Icon name={nextAction.icon} size={20} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Eyebrow>Next move</Eyebrow>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--battery)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>{hhmm(nextAction.h)} · {nextRel}</span>
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 600, marginTop: 3 }}>{nextAction.title}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2, lineHeight: 1.45 }}>{nextAction.why}</div>
+              </div>
+            </div>
+          )}
+
+          {/* the plan — hero */}
+          <Card
+            title="The plan · next 24 h"
+            subtitle={`solar forecast · battery trajectory · tariff bands — cloud-adjusted (${plan.weather.source === 'live' ? 'Open-Meteo, Jávea' : 'estimate'}), ${plan.weather.cloudAvgPct}% avg cloud`}
+            icon={<Icon name="brain" />}
+            actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live plan</Badge>}
+          >
+            <PlanTimeline solar={plan.forecast.solarKw} load={plan.forecast.loadKw} soc={plan.socPct} tariff={plan.tariff} actions={plan.actions} now={plan.now} />
+            <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-2)', flexWrap: 'wrap', marginTop: 10 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--solar)' }} /> Solar (cloud-adjusted)</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--home)' }} /> House load</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--battery)' }} /> Battery SoC</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto', color: 'var(--text-3)' }}><Icon name="cloud" size={13} /> {plan.weather.cloudAvgPct}% cloud</span>
+            </div>
+          </Card>
+
+          {/* today's impact */}
+          <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(4,1fr)' : '1fr 1fr', gap: wide ? 14 : 10 }}>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Projected saved" value={`€${plan.projected.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs vendor default" /></Card>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Self-sufficiency" value={String(plan.projected.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} footnote="solar + stored" /></Card>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Backup reserve" value={String(plan.projected.reservePct)} unit="%" tone="battery" icon={<Icon name="shield-check" />} footnote="Tesla floor" /></Card>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="P1 avoided" value={plan.projected.p1AvoidedKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="trending-down" />} footnote="evening peak" /></Card>
+          </div>
+
+          {/* today's moves + why now */}
+          <div style={{ display: 'grid', gridTemplateColumns: wide ? '1.25fr 1fr' : '1fr', gap: wide ? 14 : 12 }}>
+            <Card title="Today's moves" subtitle="scheduled by the brain" icon={<Icon name="list-checks" />} style={{ padding: '16px 18px 6px' }}>
+              {plan.actions.map((a, i) => (
+                <div key={i} style={{ display: 'flex', gap: 12, padding: '12px 2px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+                  <span style={{ width: 24, height: 24, borderRadius: '50%', flex: 'none', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, background: `color-mix(in srgb, var(--${a.tone}) 18%, transparent)`, color: `var(--${a.tone})` }}>{i + 1}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{hhmm(a.h)}</span>
+                      <Icon name={a.icon} size={15} color={`var(--${a.tone})`} />
+                      <span style={{ fontSize: 14, fontWeight: 500 }}>{a.title}</span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 3, lineHeight: 1.45 }}>{a.why}</div>
+                  </div>
+                </div>
+              ))}
+            </Card>
+            <Card accent="battery" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--battery-wash)', color: 'var(--battery)' }}><Icon name="brain" size={18} /></span>
+                <div>
+                  <Eyebrow>Why now · {hhmm(plan.now)}</Eyebrow>
+                  <div style={{ fontSize: 15, fontWeight: 600, marginTop: 2 }}>{plan.whyNow.title}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.55 }}>{plan.whyNow.body}</div>
+              <div style={{ marginTop: 'auto', display: 'flex', gap: 8, fontSize: 12, color: 'var(--text-3)' }}><Icon name="cpu" size={14} /> Re-planned every 10 min · MPC over 36 h</div>
+            </Card>
+          </div>
+        </>
+      )}
+
+      {/* ============================== STATUS ============================= */}
+      {tab === 'status' && (status ? (
+        <>
           <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1fr' : '1fr', gap: 12 }}>
             <div style={panelCard}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <Icon name="car" size={16} color="var(--ev)" />
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Tesla Powerwall</span>
               </div>
-              <TargetRow label="Mode" value={prettyMode(String(cur.tesla.mode))} mono={false} />
-              <TargetRow label="Backup reserve" value={`${cur.tesla.reservePct}%`} />
-              <TargetRow label="Grid charge" value={cur.tesla.gridChargeAllowed ? 'allowed' : 'solar only'} mono={false} />
-              <TargetRow label="Export rule" value={prettyMode(cur.tesla.exportRule)} mono={false} />
+              <TargetRow label="Mode" value={prettyMode(String(status.current.tesla.mode))} mono={false} />
+              <TargetRow label="Backup reserve" value={`${status.current.tesla.reservePct}%`} />
+              <TargetRow label="Grid charge" value={status.current.tesla.gridChargeAllowed ? 'allowed' : 'solar only'} mono={false} />
+              <TargetRow label="Export rule" value={prettyMode(status.current.tesla.exportRule)} mono={false} />
             </div>
             <div style={panelCard}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <Icon name="battery-charging" size={16} color="var(--battery)" />
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Sonnen</span>
               </div>
-              <TargetRow label="Mode" value={prettyMode(String(cur.sonnen.mode))} mono={false} />
-              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.5 }}>
-                Sonnen is the fast actuator for self-consumption; Tesla holds the backup policy.
-              </div>
+              <TargetRow label="Mode" value={prettyMode(String(status.current.sonnen.mode))} mono={false} />
+              <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.5 }}>Sonnen is the fast actuator for self-consumption; Tesla holds the backup policy.</div>
             </div>
           </div>
 
-          {/* manual controls */}
           <div style={panelCard}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-              <Eyebrow>Manual controls</Eyebrow>
-              {disabledHint && (
-                <span style={{ fontSize: 11.5, color: 'var(--grid)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Icon name="lock" size={13} /> {disabledHint}
-                </span>
-              )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <Icon name="shield-check" size={16} color="var(--solar)" />
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Guardrails</span>
+              <Badge tone="solar" icon={<Icon name="lock" size={11} />}>always enforced</Badge>
             </div>
-
-            <fieldset
-              disabled={!canControl}
-              style={{
-                border: 'none',
-                padding: 0,
-                margin: '12px 0 0',
-                opacity: canControl ? 1 : 0.45,
-                pointerEvents: canControl ? 'auto' : 'none',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 16,
-              }}
-            >
-              {/* tesla reserve */}
-              <div>
-                <Slider
-                  label="Tesla backup reserve"
-                  unit="%"
-                  min={reserveMin}
-                  max={100}
-                  value={reserveDraft ?? cur.tesla.reservePct}
-                  onChange={(v) => setReserveDraft(v)}
-                />
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-                  <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                    Floor {reserveMin}% · device now {cur.tesla.reservePct}%
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    style={{ marginLeft: 'auto' }}
-                    loading={pending === 'reserve'}
-                    disabled={(reserveDraft ?? cur.tesla.reservePct) === cur.tesla.reservePct}
-                    onClick={() =>
-                      confirmCommand(
-                        'reserve',
-                        'tesla',
-                        'reserve',
-                        reserveDraft ?? cur.tesla.reservePct,
-                        `backup reserve → ${reserveDraft ?? cur.tesla.reservePct}%`,
-                      )
-                    }
-                  >
-                    Set
-                  </Button>
-                </div>
-              </div>
-
-              {/* tesla mode */}
-              <div>
-                <div style={{ fontSize: 13, marginBottom: 7 }}>Tesla mode</div>
-                <SegmentedControl
-                  block
-                  options={TESLA_MODES}
-                  value={String(cur.tesla.mode)}
-                  onChange={(v) =>
-                    v !== cur.tesla.mode &&
-                    confirmCommand('tesla-mode', 'tesla', 'mode', v, `Tesla mode → ${prettyMode(v)}`)
-                  }
-                />
-              </div>
-
-              {/* tesla grid charge */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  paddingTop: 12,
-                  borderTop: '1px solid var(--border-1)',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 13.5 }}>Tesla grid charging</div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>
-                    {cur.tesla.gridChargeAllowed ? 'Allowed (cheap P3 only)' : 'Solar only — never buy to store'}
-                  </div>
-                </div>
-                <Switch
-                  checked={cur.tesla.gridChargeAllowed}
-                  onChange={() =>
-                    confirmCommand(
-                      'gridCharge',
-                      'tesla',
-                      'gridCharge',
-                      !cur.tesla.gridChargeAllowed,
-                      `grid charging → ${!cur.tesla.gridChargeAllowed ? 'allowed' : 'off'}`,
-                    )
-                  }
-                />
-              </div>
-
-              {/* sonnen mode */}
-              <div style={{ paddingTop: 12, borderTop: '1px solid var(--border-1)' }}>
-                <div style={{ fontSize: 13, marginBottom: 7 }}>Sonnen mode</div>
-                <SegmentedControl
-                  block
-                  options={SONNEN_MODES}
-                  value={String(cur.sonnen.mode)}
-                  onChange={(v) =>
-                    v !== cur.sonnen.mode &&
-                    confirmCommand('sonnen-mode', 'sonnen', 'mode', v, `Sonnen mode → ${prettyMode(v)}`)
-                  }
-                />
-              </div>
-
-              {/* apply scenario */}
-              <div style={{ paddingTop: 12, borderTop: '1px solid var(--border-1)' }}>
-                <Button
-                  block
-                  variant="primary"
-                  iconLeft={<Icon name="zap" />}
-                  loading={pending === 'apply'}
-                  onClick={onApplyScenario}
-                >
-                  Apply active scenario to devices
-                </Button>
-              </div>
-            </fieldset>
+            <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(4,1fr)' : '1fr 1fr', gap: 10 }}>
+              <GuardTile label="SoC floor" value={`${status.guardrails.socFloorPct}%`} />
+              <GuardTile label="Reserve min" value={`${status.guardrails.teslaReserveMinPct}%`} />
+              <GuardTile label="Sonnen max" value={`${(status.guardrails.sonnenMaxW / 1000).toFixed(1)} kW`} />
+              <GuardTile label="Grid import cap" value={`${status.guardrails.gridImportCapKw} kW`} />
+            </div>
           </div>
         </>
-      ) : (
-        <div style={{ ...panelCard, display: 'flex', alignItems: 'center', gap: 11, color: 'var(--text-2)', fontSize: 13 }}>
-          <Icon name="lock" size={16} color="var(--grid)" />
-          <span>
-            <strong style={{ color: 'var(--text-1)' }}>View-only.</strong> You can watch the live
-            state and the command log, but only an admin can arm or command the batteries.
-          </span>
-        </div>
-      )}
+      ) : connecting)}
 
-      {/* command log — "what the boss did" */}
-      <div style={panelCard}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          <Icon name="history" size={16} color="var(--text-3)" />
-          <span style={{ fontSize: 14, fontWeight: 600 }}>What the boss did</span>
-          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-3)' }}>newest first</span>
-        </div>
-        {status.log.length === 0 ? (
-          <div style={{ padding: '14px 0', fontSize: 12.5, color: 'var(--text-3)' }}>
-            No commands yet — nothing has been sent to your batteries.
+      {/* ============================= ACTIVITY =========================== */}
+      {tab === 'activity' && (status ? (
+        <div style={panelCard}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <Icon name="history" size={16} color="var(--text-3)" />
+            <span style={{ fontSize: 14, fontWeight: 600 }}>Command log</span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              {(['all', 'errors'] as const).map((f) => (
+                <button key={f} onClick={() => setLogFilter(f)} style={{ fontSize: 11.5, padding: '4px 10px', borderRadius: 999, border: '1px solid var(--border-2)', cursor: 'pointer', textTransform: 'capitalize', background: logFilter === f ? 'var(--surface-3)' : 'transparent', color: logFilter === f ? 'var(--text-1)' : 'var(--text-3)' }}>{f}</button>
+              ))}
+            </div>
           </div>
-        ) : (
-          <div>
-            {status.log.map((row, i) => (
-              <div
-                key={`${row.ts}-${i}`}
-                style={{
-                  display: 'flex',
-                  gap: 11,
-                  padding: '11px 0',
-                  borderTop: '1px solid var(--border-1)',
-                  alignItems: 'flex-start',
-                }}
-              >
-                <span
-                  title={row.ok ? 'ok' : 'failed'}
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: '50%',
-                    flex: 'none',
-                    display: 'grid',
-                    placeItems: 'center',
-                    marginTop: 1,
-                    background: row.ok ? 'var(--solar-wash)' : 'var(--danger-wash)',
-                    color: row.ok ? 'var(--solar)' : 'var(--danger)',
-                  }}
-                >
+          {(() => {
+            const rows = status.log.filter((r) => (logFilter === 'all' ? true : !r.ok));
+            if (rows.length === 0) {
+              return <div style={{ padding: '14px 0', fontSize: 12.5, color: 'var(--text-3)' }}>{logFilter === 'errors' ? 'No rejected commands — clean run.' : 'No commands yet — nothing has been sent to your batteries.'}</div>;
+            }
+            return rows.map((row, i) => (
+              <div key={`${row.ts}-${i}`} style={{ display: 'flex', gap: 11, padding: '11px 0', borderTop: '1px solid var(--border-1)', alignItems: 'flex-start' }}>
+                <span title={row.ok ? 'ok' : 'failed'} style={{ width: 22, height: 22, borderRadius: '50%', flex: 'none', display: 'grid', placeItems: 'center', marginTop: 1, background: row.ok ? 'var(--solar-wash)' : 'var(--danger-wash)', color: row.ok ? 'var(--solar)' : 'var(--danger)' }}>
                   <Icon name={row.ok ? 'check' : 'x'} size={13} />
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-3)' }}>
-                      {fmtTime(row.ts)}
-                    </span>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>
-                      {cap(row.device)} · {row.lever}
-                    </span>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>
-                      {fmtVal(row.from)} → <span style={{ color: 'var(--text-1)' }}>{fmtVal(row.to)}</span>
-                    </span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-3)' }}>{fmtTime(row.ts)}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{cap(row.device)} · {row.lever}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{fmtVal(row.from)} → <span style={{ color: 'var(--text-1)' }}>{fmtVal(row.to)}</span></span>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 3, lineHeight: 1.45 }}>{row.reason}</div>
-                  {!row.ok && row.detail && (
-                    <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 3 }}>{row.detail}</div>
-                  )}
+                  {!row.ok && row.detail && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 3 }}>{row.detail}</div>}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            ));
+          })()}
+        </div>
+      ) : connecting)}
 
-      {/* guardrails — always on */}
-      <div style={panelCard}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-          <Icon name="shield-check" size={16} color="var(--solar)" />
-          <span style={{ fontSize: 14, fontWeight: 600 }}>Guardrails</span>
-          <Badge tone="solar" icon={<Icon name="lock" size={11} />}>
-            always enforced
-          </Badge>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(4,1fr)' : '1fr 1fr', gap: 10 }}>
-          <GuardTile label="SoC floor" value={`${g.socFloorPct}%`} />
-          <GuardTile label="Reserve min" value={`${g.teslaReserveMinPct}%`} />
-          <GuardTile label="Sonnen max" value={`${(g.sonnenMaxW / 1000).toFixed(1)} kW`} />
-          <GuardTile label="Grid import cap" value={`${g.gridImportCapKw} kW`} />
-        </div>
-      </div>
+      {/* ============================= SETTINGS =========================== */}
+      {tab === 'settings' && (
+        !isAdmin ? (
+          <div style={{ ...panelCard, display: 'flex', alignItems: 'center', gap: 11, color: 'var(--text-2)', fontSize: 13 }}>
+            <Icon name="lock" size={16} color="var(--grid)" />
+            <span><strong style={{ color: 'var(--text-1)' }}>View-only.</strong> You can watch the plan, live state, and the command log, but only an admin can arm or command the batteries.</span>
+          </div>
+        ) : !status ? connecting : (
+          <>
+            {/* master */}
+            <div style={panelCard}>
+              <Eyebrow>Master</Eyebrow>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, marginTop: 12, justifyContent: 'space-between' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+                  <Switch checked={status.armed} onChange={onToggleArm} />
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>{status.armed ? 'Armed' : 'Disarmed'}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{status.armed ? 'Power can command devices' : 'Flip to let Power act'}</div>
+                  </div>
+                </label>
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, textAlign: 'right' }}>Mode</div>
+                  <SegmentedControl options={[{ value: 'off', label: 'Off' }, { value: 'manual', label: 'Manual' }, { value: 'auto', label: 'Auto' }]} value={status.armed ? status.mode : 'off'} onChange={onMode} />
+                </div>
+              </div>
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-1)' }}>
+                <Button variant="danger" block size="lg" iconLeft={<Icon name="power-off" />} disabled={!status.armed} onClick={onKill}>Kill switch — disarm &amp; revert to self-consumption</Button>
+              </div>
+            </div>
+
+            {/* manual controls */}
+            <div style={panelCard}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <Eyebrow>Manual controls</Eyebrow>
+                {!armed && <span style={{ fontSize: 11.5, color: 'var(--grid)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="lock" size={13} /> Arm (Manual or Auto) to send commands</span>}
+              </div>
+              <fieldset disabled={!canControl} style={{ border: 'none', padding: 0, margin: '12px 0 0', opacity: canControl ? 1 : 0.45, pointerEvents: canControl ? 'auto' : 'none', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div>
+                  <Slider label="Tesla backup reserve" unit="%" min={status.guardrails.teslaReserveMinPct} max={100} value={reserveDraft ?? status.current.tesla.reservePct} onChange={(v) => setReserveDraft(v)} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                    <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Floor {status.guardrails.teslaReserveMinPct}% · device now {status.current.tesla.reservePct}%</span>
+                    <Button size="sm" variant="secondary" style={{ marginLeft: 'auto' }} loading={pending === 'reserve'} disabled={(reserveDraft ?? status.current.tesla.reservePct) === status.current.tesla.reservePct} onClick={() => confirmCommand('reserve', 'tesla', 'reserve', reserveDraft ?? status.current.tesla.reservePct, `backup reserve → ${reserveDraft ?? status.current.tesla.reservePct}%`)}>Set</Button>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, marginBottom: 7 }}>Tesla mode</div>
+                  <SegmentedControl block options={TESLA_MODES} value={String(status.current.tesla.mode)} onChange={(v) => v !== status.current.tesla.mode && confirmCommand('tesla-mode', 'tesla', 'mode', v, `Tesla mode → ${prettyMode(v)}`)} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingTop: 12, borderTop: '1px solid var(--border-1)' }}>
+                  <div>
+                    <div style={{ fontSize: 13.5 }}>Tesla grid charging</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{status.current.tesla.gridChargeAllowed ? 'Allowed (cheap P3 only)' : 'Solar only — never buy to store'}</div>
+                  </div>
+                  <Switch checked={status.current.tesla.gridChargeAllowed} onChange={() => confirmCommand('gridCharge', 'tesla', 'gridCharge', !status.current.tesla.gridChargeAllowed, `grid charging → ${!status.current.tesla.gridChargeAllowed ? 'allowed' : 'off'}`)} />
+                </div>
+                <div style={{ paddingTop: 12, borderTop: '1px solid var(--border-1)' }}>
+                  <div style={{ fontSize: 13, marginBottom: 7 }}>Sonnen mode</div>
+                  <SegmentedControl block options={SONNEN_MODES} value={String(status.current.sonnen.mode)} onChange={(v) => v !== status.current.sonnen.mode && confirmCommand('sonnen-mode', 'sonnen', 'mode', v, `Sonnen mode → ${prettyMode(v)}`)} />
+                </div>
+                <div style={{ paddingTop: 12, borderTop: '1px solid var(--border-1)' }}>
+                  <Button block variant="primary" iconLeft={<Icon name="zap" />} loading={pending === 'apply'} onClick={onApplyScenario}>Apply active scenario to devices</Button>
+                </div>
+              </fieldset>
+            </div>
+          </>
+        )
+      )}
 
       {/* confirm dialog */}
       {confirm && <Modal confirm={confirm} busy={confirmBusy} onClose={closeConfirm} />}
 
       {/* toasts */}
-      <div
-        style={{
-          position: 'fixed',
-          right: 18,
-          bottom: 18,
-          zIndex: 70,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          pointerEvents: 'none',
-        }}
-      >
+      <div style={{ position: 'fixed', right: 18, bottom: 18, zIndex: 70, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none' }}>
         {toasts.map((t) => (
-          <div
-            key={t.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 9,
-              padding: '11px 14px',
-              borderRadius: 'var(--radius-md)',
-              fontSize: 13,
-              maxWidth: 360,
-              background: 'var(--surface-1)',
-              border: `1px solid ${t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)'}`,
-              color: t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)',
-              boxShadow: 'var(--shadow-2)',
-            }}
-          >
+          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 'var(--radius-md)', fontSize: 13, maxWidth: 360, background: 'var(--surface-1)', border: `1px solid ${t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)'}`, color: t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)', boxShadow: 'var(--shadow-2)' }}>
             <Icon name={t.kind === 'ok' ? 'check-circle' : 'alert-octagon'} size={16} />
             <span style={{ color: 'var(--text-1)' }}>{t.text}</span>
           </div>
@@ -866,9 +653,7 @@ function GuardTile({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: '11px 12px' }}>
       <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{label}</div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600, color: 'var(--text-1)', marginTop: 3 }}>
-        {value}
-      </div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600, color: 'var(--text-1)', marginTop: 3 }}>{value}</div>
     </div>
   );
 }
@@ -876,7 +661,6 @@ function GuardTile({ label, value }: { label: string; value: string }) {
 function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
-
 function fmtTime(ts: string): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;

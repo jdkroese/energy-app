@@ -258,6 +258,7 @@ export const MOCK_PLAN: BrainPlanResponse = {
   forecast: {
     solarKw: [0, 0, 0, 0, 0, 0, 0.3, 1.5, 3.8, 6.5, 8.8, 10.2, 10.9, 11.0, 10.2, 8.6, 6.4, 4.0, 1.8, 0.4, 0, 0, 0, 0, 0],
     loadKw: [0.5, 0.4, 0.4, 0.4, 0.4, 0.5, 0.7, 1.0, 1.2, 1.4, 2.6, 3.0, 2.8, 2.4, 2.6, 2.8, 2.2, 1.8, 3.4, 3.8, 3.2, 1.6, 0.9, 0.6, 0.5],
+    cloudPct: [12, 10, 8, 8, 10, 14, 18, 22, 20, 16, 12, 10, 14, 24, 30, 28, 22, 18, 16, 20, 24, 22, 18, 14, 12],
   },
   socPct: [38, 34, 30, 28, 28, 28, 30, 42, 58, 72, 84, 92, 98, 100, 100, 100, 98, 92, 78, 58, 40, 30, 30, 32, 34],
   tariff: [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1],
@@ -274,6 +275,7 @@ export const MOCK_PLAN: BrainPlanResponse = {
     title: 'Holding full, banking sun',
     body: 'Both batteries are full and the slab is pre-cooled. Surplus is exporting for now — there is nowhere left to store it.',
   },
+  weather: { source: 'live', cloudAvgPct: 19 },
 };
 
 export const MOCK_SCENARIOS: ScenariosResponse = {

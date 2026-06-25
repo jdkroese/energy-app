@@ -145,12 +145,13 @@ export interface BrainPlanResponse {
     reservePct: number;
     p1AvoidedKwh: number;
   };
-  forecast: { solarKw: number[]; loadKw: number[] };
+  forecast: { solarKw: number[]; loadKw: number[]; cloudPct: number[] };
   socPct: number[];
   tariff: number[];
   actions: PlanAction[];
   now: number;
   whyNow: { title: string; body: string };
+  weather: { source: 'live' | 'synthetic'; cloudAvgPct: number };
 }
 
 export interface Scenario {
@@ -390,6 +391,8 @@ export interface DeviceView {
   online: boolean;
   room: string;
   automationEnabled: boolean;
+  /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
+  manualOverrideUntil: number | null;
   comfortCeilingC: number | null;
   comfortFloorC: number | null;
   warmth: DeviceWarmth;
