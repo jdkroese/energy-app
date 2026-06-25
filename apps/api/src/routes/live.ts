@@ -1,12 +1,36 @@
 import * as sonnen from '../connectors/sonnen';
 import * as tesla from '../connectors/tesla';
 import { bandInfo } from '../tariff';
+import { config } from '../config';
 
-// In-process rolling 24h power buffers for the day chart (best-effort; resets on restart).
+const COMBINED_USABLE_KWH = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
+
+// In-process rolling 24h day buffers for the day chart (best-effort; resets on
+// restart, resets at Madrid midnight). Power series in kW, SoC series in %.
+const SERIES = [
+  'solarKw',
+  'homeKw',
+  'chargeKw',
+  'dischargeKw',
+  'gridImportKw',
+  'gridExportKw',
+  'sonnenSoc',
+  'teslaSoc',
+  'combinedSoc',
+] as const;
+type DaySeriesKey = (typeof SERIES)[number];
+type DaySample = Record<DaySeriesKey, number>;
+
+function blankDay(): Record<DaySeriesKey, number[]> {
+  return Object.fromEntries(SERIES.map((k) => [k, new Array<number>(24).fill(0)])) as Record<
+    DaySeriesKey,
+    number[]
+  >;
+}
+
 const dayBuf = {
   date: madridDateKey(new Date()),
-  solarKw: new Array<number>(24).fill(0),
-  homeKw: new Array<number>(24).fill(0),
+  series: blankDay(),
   seen: new Array<number>(24).fill(0),
 };
 
@@ -31,20 +55,33 @@ function madridHour(d: Date): number {
   );
 }
 
-function recordSample(solarKw: number, homeKw: number) {
+/** Fractional Madrid hour right now (0–24), e.g. 10.58 at 10:35. */
+function madridHourFloat(d: Date): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Madrid',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const hh = Number(parts.find((p) => p.type === 'hour')?.value ?? '0') % 24;
+  const mm = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+  return hh + mm / 60;
+}
+
+function recordSample(sample: DaySample) {
   const now = new Date();
   const key = madridDateKey(now);
   if (key !== dayBuf.date) {
     dayBuf.date = key;
-    dayBuf.solarKw.fill(0);
-    dayBuf.homeKw.fill(0);
+    dayBuf.series = blankDay();
     dayBuf.seen.fill(0);
   }
   const h = madridHour(now);
-  // Running average within the hour bucket.
+  // Running average within the hour bucket, per series.
   const n = dayBuf.seen[h];
-  dayBuf.solarKw[h] = (dayBuf.solarKw[h] * n + solarKw) / (n + 1);
-  dayBuf.homeKw[h] = (dayBuf.homeKw[h] * n + homeKw) / (n + 1);
+  for (const k of SERIES) {
+    dayBuf.series[k][h] = (dayBuf.series[k][h] * n + sample[k]) / (n + 1);
+  }
   dayBuf.seen[h] = n + 1;
 }
 
@@ -149,7 +186,37 @@ export async function getLive(): Promise<unknown> {
     else if (s.gridFeedInW < -20) gridDir = 'importing';
   }
 
-  recordSample(solarKw, homeKw);
+  // Battery charge/discharge, split per direction and summed across both packs.
+  // Connectors report kw as a magnitude + a dir; signs are normalized there.
+  const sonnenCharge = s && s.dir === 'charging' ? s.kw : 0;
+  const sonnenDischarge = s && s.dir === 'discharging' ? s.kw : 0;
+  const teslaCharge = t && t.dir === 'charging' ? t.kw : 0;
+  const teslaDischarge = t && t.dir === 'discharging' ? t.kw : 0;
+  const chargeKw = round(sonnenCharge + teslaCharge);
+  const dischargeKw = round(sonnenDischarge + teslaDischarge);
+
+  const gridImportKw = gridDir === 'importing' ? gridKw : 0;
+  const gridExportKw = gridDir === 'exporting' ? gridKw : 0;
+
+  const sonnenSoc = s ? s.soc : 0;
+  const teslaSoc = t ? t.soc : 0;
+  // Combined fill = stored kWh across both packs over combined usable capacity.
+  const combinedSoc = round(
+    Math.max(0, Math.min(100, (((s?.kwh ?? 0) + (t?.kwh ?? 0)) / COMBINED_USABLE_KWH) * 100)),
+    0,
+  );
+
+  recordSample({
+    solarKw,
+    homeKw: round(homeKw),
+    chargeKw,
+    dischargeKw,
+    gridImportKw,
+    gridExportKw,
+    sonnenSoc,
+    teslaSoc,
+    combinedSoc,
+  });
 
   const tb = bandInfo(new Date());
 
@@ -210,8 +277,16 @@ export async function getLive(): Promise<unknown> {
       savedEur,
     },
     day: {
-      solarKw: dayBuf.solarKw.map((v) => round(v)),
-      homeKw: dayBuf.homeKw.map((v) => round(v)),
+      solarKw: dayBuf.series.solarKw.map((v) => round(v)),
+      homeKw: dayBuf.series.homeKw.map((v) => round(v)),
+      chargeKw: dayBuf.series.chargeKw.map((v) => round(v)),
+      dischargeKw: dayBuf.series.dischargeKw.map((v) => round(v)),
+      gridImportKw: dayBuf.series.gridImportKw.map((v) => round(v)),
+      gridExportKw: dayBuf.series.gridExportKw.map((v) => round(v)),
+      sonnenSoc: dayBuf.series.sonnenSoc.map((v) => round(v, 0)),
+      teslaSoc: dayBuf.series.teslaSoc.map((v) => round(v, 0)),
+      combinedSoc: dayBuf.series.combinedSoc.map((v) => round(v, 0)),
+      nowHour: round(madridHourFloat(new Date()), 2),
     },
   };
 }

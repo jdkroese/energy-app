@@ -5,7 +5,7 @@ import { MOCK_LIVE } from '../lib/mock';
 import type { LiveResponse } from '../lib/types';
 import { Card, StatTile, RadialGauge, ProgressBar, Badge, Eyebrow, Icon } from '../components/ui';
 import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
-import { AreaChart } from '../components/energy/AreaChart';
+import { DayChart, liveDaySeries } from '../components/energy/DayChart';
 import { TariffBand, DEFAULT_TARIFF_24 } from '../components/energy/TariffBand';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -253,15 +253,8 @@ export function Live({ ctx }: { ctx: ShellContext }) {
         })()}
 
         {/* day chart */}
-        <Card title="Today · kW" style={{ padding: 16 }}>
-          <AreaChart
-            height={150}
-            series={[
-              { data: live.day.solarKw, tone: 'solar' },
-              { data: live.day.homeKw, tone: 'home', dash: true, fill: false },
-            ]}
-            labels={['00', '08', '16', '24']}
-          />
+        <Card title="Production & consumption" subtitle="Today" style={{ padding: 16 }}>
+          <DayChart height={170} nowHour={live.day.nowHour} series={liveDaySeries(live.day)} />
         </Card>
       </div>
     </>
@@ -369,16 +362,8 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         <InsightCard live={live} />
       </div>
 
-      <Card title="Production & consumption" subtitle="Today · kW" icon={<Icon name="activity" />}>
-        <AreaChart
-          height={200}
-          axis
-          series={[
-            { data: live.day.solarKw, tone: 'solar' },
-            { data: live.day.homeKw, tone: 'home', dash: true, fill: false },
-          ]}
-          labels={['00', '04', '08', '12', '16', '20', '24']}
-        />
+      <Card title="Production & consumption" subtitle="Today · kW left · SoC % right" icon={<Icon name="activity" />}>
+        <DayChart height={240} nowHour={live.day.nowHour} series={liveDaySeries(live.day)} />
       </Card>
     </div>
   );

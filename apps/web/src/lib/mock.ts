@@ -29,6 +29,24 @@ function series(n: number, base: number, amp: number, seed: number): number[] {
 const solarDay = series(24, 0.2, 9.6, 7).map((v, i) => (i < 7 || i > 21 ? 0 : v));
 const homeDay = series(24, 0.7, 2.6, 13);
 
+// SoC-over-day curves: rise through the solar midday, drain through the P1 evening.
+const sonnenSoc = [44, 40, 36, 33, 31, 30, 32, 41, 58, 76, 90, 98, 100, 100, 100, 98, 94, 86, 70, 56, 52, 50, 48, 46];
+const teslaSoc = [62, 58, 54, 51, 49, 48, 49, 55, 68, 82, 92, 98, 100, 100, 100, 99, 96, 90, 78, 64, 58, 56, 54, 52];
+const sonnenCharge = [0, 0, 0, 0, 0, 0, 0, 0.6, 2.1, 3.4, 4.1, 3.2, 1.4, 0.4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const sonnenDischarge = [0.3, 0.3, 0.2, 0.2, 0.2, 0.3, 0.4, 0, 0, 0, 0, 0, 0, 0, 0.3, 0.6, 0.9, 1.4, 2.6, 1.8, 0.6, 0.4, 0.3, 0.3];
+const teslaCharge = [0, 0, 0, 0, 0, 0, 0, 0.8, 3.1, 5.2, 6.4, 4.8, 2.2, 0.6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const teslaDischarge = [0.5, 0.4, 0.4, 0.4, 0.4, 0.5, 0.6, 0, 0, 0, 0, 0, 0, 0, 0.4, 0.9, 1.6, 2.8, 4.4, 3.2, 1.1, 0.7, 0.5, 0.4];
+// Combined fill weighted by usable capacity (Sonnen 9.2 kWh + Tesla 27 kWh).
+const combinedSocDay = sonnenSoc.map((sv, i) => Math.round((sv * 9.2 + teslaSoc[i] * 27) / 36.2));
+const chargeDay = sonnenCharge.map((v, i) => Math.round((v + teslaCharge[i]) * 100) / 100);
+const dischargeDay = sonnenDischarge.map((v, i) => Math.round((v + teslaDischarge[i]) * 100) / 100);
+const gridExportDay = [0, 0, 0, 0, 0, 0, 0, 0, 1.2, 3.5, 5.1, 4.2, 2.1, 0.6, 0.2, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+const gridImportDay = [0.4, 0.4, 0.3, 0.3, 0.3, 0.4, 0.5, 0.3, 0, 0, 0, 0, 0, 0, 0, 0, 0.2, 0.5, 0.8, 0.6, 0.5, 0.4, 0.4, 0.4];
+const nowHourLocal = (() => {
+  const n = new Date();
+  return Math.round((n.getHours() + n.getMinutes() / 60) * 100) / 100;
+})();
+
 export const MOCK_LIVE: LiveResponse = {
   ts: new Date().toISOString(),
   solar: { kw: 11.1, arrays: [{ name: 'A', kw: 6.6 }, { name: 'B', kw: 4.5 }] },
@@ -38,16 +56,19 @@ export const MOCK_LIVE: LiveResponse = {
   tesla: { soc: 100, kwh: 27, kw: 0, dir: 'idle', reservePct: 20, backupKwh: 27, backupHours: 16, island: false },
   tariff: { band: 'P2', rateEur: 0.131, nextBand: 'P1', minsToNext: 72 },
   today: { producedKwh: 42.3, consumedKwh: 28.6, gridFeedInKwh: 18.4, selfSufficiencyPct: 71, savedEur: 5.4 },
-  day: { solarKw: solarDay, homeKw: homeDay },
+  day: {
+    solarKw: solarDay,
+    homeKw: homeDay,
+    chargeKw: chargeDay,
+    dischargeKw: dischargeDay,
+    gridImportKw: gridImportDay,
+    gridExportKw: gridExportDay,
+    sonnenSoc,
+    teslaSoc,
+    combinedSoc: combinedSocDay,
+    nowHour: nowHourLocal,
+  },
 };
-
-// SoC-over-day curves: rise through the solar midday, drain through the P1 evening.
-const sonnenSoc = [44, 40, 36, 33, 31, 30, 32, 41, 58, 76, 90, 98, 100, 100, 100, 98, 94, 86, 70, 56, 52, 50, 48, 46];
-const teslaSoc = [62, 58, 54, 51, 49, 48, 49, 55, 68, 82, 92, 98, 100, 100, 100, 99, 96, 90, 78, 64, 58, 56, 54, 52];
-const sonnenCharge = [0, 0, 0, 0, 0, 0, 0, 0.6, 2.1, 3.4, 4.1, 3.2, 1.4, 0.4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const sonnenDischarge = [0.3, 0.3, 0.2, 0.2, 0.2, 0.3, 0.4, 0, 0, 0, 0, 0, 0, 0, 0.3, 0.6, 0.9, 1.4, 2.6, 1.8, 0.6, 0.4, 0.3, 0.3];
-const teslaCharge = [0, 0, 0, 0, 0, 0, 0, 0.8, 3.1, 5.2, 6.4, 4.8, 2.2, 0.6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-const teslaDischarge = [0.5, 0.4, 0.4, 0.4, 0.4, 0.5, 0.6, 0, 0, 0, 0, 0, 0, 0, 0.4, 0.9, 1.6, 2.8, 4.4, 3.2, 1.1, 0.7, 0.5, 0.4];
 
 export const MOCK_BATTERIES: BatteriesResponse = {
   ts: new Date().toISOString(),
