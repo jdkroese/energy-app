@@ -36,8 +36,11 @@ work, and broken deploys, every session MUST follow these. Detail: `docs/18-mult
 4. **`main` is the only branch that deploys** (CI → self-hosted runner on the mini).
    Push feature branches freely; merge to `main` (PR or fast-forward) to ship. **Never**
    `ssh`/`scp` a build to the mini by hand — the deploy-guard hook blocks stale pushes/SSH.
-5. **A real deploy restarts the API and boots control DISARMED.** After a deploy you care
-   about, re-arm battery L2 Auto (+ Devices for AC/Airzone automation). Doc/CI/script-only
-   changes are `paths-ignore`d in `deploy.yml` and do not deploy.
+5. **Deploys PRESERVE the armed state** (since 2026-06-26): a restart restores the last
+   armed/mode from `state.json`, so an ordinary release no longer disarms — no re-arm needed.
+   A release must only disarm **when the owner is asked and confirms**; to ship a
+   deliberately-safe boot (e.g. a risky control-logic change) set `ENERGY_BOOT_DISARMED=1`
+   on the API for that restart. Doc/CI/script-only changes are `paths-ignore`d in
+   `deploy.yml` and do not deploy at all.
 6. **Activate the shared git guard once per clone:** `git config core.hooksPath scripts/githooks`
    (the helper-made worktrees inherit it automatically). It blocks force/stale pushes to `main`.
