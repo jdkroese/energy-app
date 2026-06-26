@@ -30,6 +30,10 @@ import type {
   LightsResponse,
   LightDetailResponse,
   LightHsv,
+  LightScene,
+  LightSchedule,
+  ScenesResponse,
+  LightSchedulesResponse,
   TuyaIntegrationStatus,
   LiveResponse,
   ProbeResult,
@@ -197,6 +201,19 @@ export const api = {
       postJSON<{ ts: string; ok: boolean }>(`/api/lights/${enc(id)}/command`, { lever, value }),
     bulkCommand: (ids: string[], lever: LightLever, value: boolean | number | LightHsv) =>
       postJSON<{ ts: string; results: unknown[] }>('/api/lights/bulk-command', { ids, lever, value }),
+
+    // Scenes (named on/off + dim presets; create/update/delete/apply are admin).
+    scenes: () => getJSON<ScenesResponse>('/api/lights/scenes'),
+    createScene: (s: Partial<LightScene>) => postJSON<{ scene: LightScene }>('/api/lights/scenes', s),
+    updateScene: (id: string, s: Partial<LightScene>) => putJSON<{ scene: LightScene }>(`/api/lights/scenes/${enc(id)}`, s),
+    deleteScene: (id: string) => delJSON<{ ok: boolean }>(`/api/lights/scenes/${enc(id)}`),
+    applyScene: (id: string) => postJSON<{ ts: string; applied: number; failed: number }>(`/api/lights/scenes/${enc(id)}/apply`, {}),
+
+    // Schedules (lights/scenes at time windows; writes admin).
+    schedules: () => getJSON<LightSchedulesResponse>('/api/lights/schedules'),
+    createSchedule: (s: Partial<LightSchedule>) => postJSON<{ schedule: LightSchedule }>('/api/lights/schedules', s),
+    updateSchedule: (id: string, s: Partial<LightSchedule>) => putJSON<{ schedule: LightSchedule }>(`/api/lights/schedules/${enc(id)}`, s),
+    deleteSchedule: (id: string) => delJSON<{ ok: boolean }>(`/api/lights/schedules/${enc(id)}`),
   },
 
   /* ---- Blinds / curtains (Tuya); command/bulk are admin ---- */

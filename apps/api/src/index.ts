@@ -77,7 +77,17 @@ import {
   getTuyaIntegration,
   setTuyaIntegration,
   disconnectTuyaIntegration,
+  listScenes,
+  createScene,
+  updateScene,
+  deleteScene,
+  applyScene,
+  listLightSchedules,
+  createLightSchedule,
+  updateLightSchedule,
+  deleteLightSchedule,
 } from './routes/lights';
+import { startLightCoordinator } from './control/light-coordinator';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
 import type { BlindLever } from './connectors/tuya-blinds';
@@ -290,6 +300,19 @@ app.delete('/api/integrations/intesis', requireAdmin, wrap(() => disconnectInteg
 
 // ---- Lights (Tuya) — reads any-authed; commands admin-gated ----
 app.get('/api/lights', wrap(() => getLights()));
+
+// Scenes + schedules — registered BEFORE /api/lights/:id so the literal paths
+// aren't captured as an :id.
+app.get('/api/lights/scenes', wrap(() => listScenes()));
+app.post('/api/lights/scenes', requireAdmin, wrap((req) => createScene((req.body ?? {}) as never)));
+app.put('/api/lights/scenes/:id', requireAdmin, wrap((req) => updateScene(String(req.params.id), (req.body ?? {}) as never)));
+app.delete('/api/lights/scenes/:id', requireAdmin, wrap((req) => deleteScene(String(req.params.id))));
+app.post('/api/lights/scenes/:id/apply', requireAdmin, wrap((req) => applyScene(String(req.params.id))));
+app.get('/api/lights/schedules', wrap(() => listLightSchedules()));
+app.post('/api/lights/schedules', requireAdmin, wrap((req) => createLightSchedule((req.body ?? {}) as never)));
+app.put('/api/lights/schedules/:id', requireAdmin, wrap((req) => updateLightSchedule(String(req.params.id), (req.body ?? {}) as never)));
+app.delete('/api/lights/schedules/:id', requireAdmin, wrap((req) => deleteLightSchedule(String(req.params.id))));
+
 app.get('/api/lights/:id', wrap((req) => getLight(String(req.params.id))));
 app.post(
   '/api/lights/bulk-command',
@@ -438,6 +461,10 @@ startCoordinator();
 // devices.armed + mode==='auto', so it is INERT on boot (DISARMED / 'off') and
 // writes nothing until an admin arms it AND an automation is enabled in 'auto'.
 startClimateCoordinator();
+
+// Start the light-schedule coordinator (edge-triggered; applies scenes/lights at
+// their scheduled times). No arm gate — it only acts on enabled light schedules.
+startLightCoordinator();
 
 // Background 5-minute sampler for the Live day chart. getLive() records the live
 // snapshot into history5m, so the day fills continuously even when no client is

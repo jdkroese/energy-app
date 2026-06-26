@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { LightUnit, LightsResponse, LightLever, LightHsv } from '../lib/types';
+import type { LightUnit, LightsResponse, LightLever, LightHsv, ScenesResponse } from '../lib/types';
 import { Card, Icon, Switch, Slider, SegmentedControl } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
+import { ScenesSection, LightSchedulesSection } from '../components/lights/ScenesAndSchedules';
 
 /* ============================================================================
  * Lights — first Tuya device category, built to the "Power" design system.
@@ -196,6 +197,7 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
     };
   };
 
+  const { data: scenesData } = usePolling<ScenesResponse>(api.lights.scenes, 0);
   const d = data;
 
   const body = (
@@ -239,6 +241,10 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
               })}
             </div>
           )}
+
+          {/* Scenes + schedules — manage on/off+dim presets and time-based rules */}
+          <ScenesSection lights={d.devices} canControl={canControl} />
+          <LightSchedulesSection lights={d.devices} scenes={scenesData?.scenes ?? []} canControl={canControl} />
         </>
       )}
     </div>

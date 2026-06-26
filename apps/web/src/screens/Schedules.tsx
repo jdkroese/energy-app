@@ -2,8 +2,8 @@ import { useMemo, useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceType, DeviceView, DevicesResponse, Schedule, SchedulesResponse } from '../lib/types';
-import { Icon, Button, Eyebrow, SegmentedControl } from '../components/ui';
+import type { DeviceType, DeviceView, DevicesResponse, Schedule, SchedulesResponse, LightSchedule, LightScene, LightSchedulesResponse, ScenesResponse } from '../lib/types';
+import { Icon, Button, Eyebrow, SegmentedControl, Switch } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -144,6 +144,9 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
         ))
       )}
 
+      {/* Lighting — Tuya light/scene schedules (managed in Devices → Lighting) */}
+      {(filter === 'all' || filter === 'lighting') && <LightingSchedulesCard canConfig={!!canConfig} />}
+
       {/* smart-override note */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.18)', borderRadius: 'var(--radius-md)', padding: '10px 13px' }}>
         <Icon name="zap" size={15} color="var(--solar)" />
@@ -189,5 +192,49 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
         />
       )}
     </>
+  );
+}
+
+/* ---- Lighting (Tuya) light/scene schedules — read + enable here; full editing
+ *      lives in Devices → Lighting. Only renders when there are light schedules. */
+const DOW_S = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+function lightSummary(s: LightSchedule, scenes: LightScene[]): string {
+  const days = s.days.length === 7 ? 'Every day' : s.days.length === 0 ? 'No days' : [...s.days].sort().map((d) => DOW_S[d]).join(' ');
+  let tgt: string;
+  if (s.target.kind === 'scene') {
+    const sid = s.target.sceneId;
+    tgt = scenes.find((x) => x.id === sid)?.name ?? 'scene';
+  } else {
+    tgt = `${s.target.members.length} lights`;
+  }
+  const win = s.offTime ? `${s.onTime}–${s.offTime}` : `at ${s.onTime}`;
+  return `${days} · ${win} · ${tgt}`;
+}
+
+function LightingSchedulesCard({ canConfig }: { canConfig: boolean }) {
+  const { data, refetch } = usePolling<LightSchedulesResponse>(api.lights.schedules, 0);
+  const { data: scenesData } = usePolling<ScenesResponse>(api.lights.scenes, 0);
+  const schedules = data?.schedules ?? [];
+  const scenes = scenesData?.scenes ?? [];
+  if (schedules.length === 0) return null;
+  const toggle = (s: LightSchedule, enabled: boolean) => { void api.lights.updateSchedule(s.id, { enabled }).then(refetch); };
+  return (
+    <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 14px', borderBottom: '1px solid var(--border-1)' }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--home)' }} />
+        <Icon name="lightbulb" size={15} color="var(--home)" />
+        <span style={{ fontSize: 13.5, fontWeight: 600, flex: 1 }}>Lighting</span>
+        <span style={{ fontSize: 11, color: 'var(--text-3)' }}>edit in Devices → Lighting</span>
+      </div>
+      {schedules.map((s, i) => (
+        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 14px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{lightSummary(s, scenes)}</div>
+          </div>
+          <Switch checked={s.enabled} disabled={!canConfig} onChange={(e) => toggle(s, e.target.checked)} />
+        </div>
+      ))}
+    </div>
   );
 }

@@ -386,6 +386,45 @@ export interface DevicesState {
   manualOverrides: Record<string, number>;
 }
 
+// ---- Lights: scenes + schedules --------------------------------------------
+// A dedicated, self-contained subsystem for the Tuya light fleet (kept separate
+// from the climate Schedule/Action model). A SCENE is a named set of per-light
+// targets (on/off + optional brightness). A light SCHEDULE applies a target
+// (a scene, or an ad-hoc set of lights) at an on-time and optionally switches
+// the involved lights off at an off-time, on chosen weekdays.
+
+export interface LightSceneMember {
+  lightId: string;
+  on: boolean;
+  /** Brightness % (1–100) to set when turning on; null/undefined = leave as-is. */
+  brightnessPct?: number | null;
+}
+
+export interface LightScene {
+  id: string;
+  name: string;
+  /** Lucide icon name (UI wayfinding). */
+  icon?: string;
+  members: LightSceneMember[];
+}
+
+export type LightScheduleTarget =
+  | { kind: 'scene'; sceneId: string }
+  | { kind: 'lights'; members: LightSceneMember[] };
+
+export interface LightSchedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Days of week the schedule runs on (0=Sun..6=Sat). */
+  days: number[];
+  /** Local "HH:MM" — apply the target (turn on / apply scene). */
+  onTime: string;
+  /** Optional local "HH:MM" — switch the target's lights off. null = no auto-off. */
+  offTime?: string | null;
+  target: LightScheduleTarget;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -405,6 +444,9 @@ export interface StoreSchema {
   schedules: Schedule[];
   automations: Automation[];
   devices: DevicesState;
+  /** Tuya light scenes + schedules (self-contained; see types above). */
+  lightScenes: LightScene[];
+  lightSchedules: LightSchedule[];
 }
 
 // ---- Defaults -----------------------------------------------------------
@@ -561,6 +603,8 @@ function defaults(): StoreSchema {
     schedules: [],
     automations: defaultAutomations(),
     devices: defaultDevices(),
+    lightScenes: [],
+    lightSchedules: [],
   };
 }
 
@@ -765,6 +809,8 @@ function hydrate(raw: unknown): StoreSchema {
     automations:
       Array.isArray(p.automations) && p.automations.length ? p.automations : base.automations,
     devices: hydrateDevices(p.devices, base.devices),
+    lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
+    lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,
   };
 }
 

@@ -739,3 +739,43 @@ export interface TuyaIntegrationStatus {
   categories: Array<{ label: string; count: number }>;
   error: string | null;
 }
+
+/* ---- Light scenes + schedules (self-contained light subsystem) ---- */
+
+export interface LightSceneMember {
+  lightId: string;
+  on: boolean;
+  /** Brightness % (1–100) to set when on; null = leave as-is / not dimmable. */
+  brightnessPct?: number | null;
+}
+
+export interface LightScene {
+  id: string;
+  name: string;
+  icon?: string;
+  members: LightSceneMember[];
+}
+
+export type LightScheduleTarget =
+  | { kind: 'scene'; sceneId: string }
+  | { kind: 'lights'; members: LightSceneMember[] };
+
+export interface LightSchedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  days: number[];
+  onTime: string;
+  offTime?: string | null;
+  target: LightScheduleTarget;
+}
+
+export interface ScenesResponse {
+  ts: string;
+  scenes: LightScene[];
+}
+
+export interface LightSchedulesResponse {
+  ts: string;
+  schedules: LightSchedule[];
+}
