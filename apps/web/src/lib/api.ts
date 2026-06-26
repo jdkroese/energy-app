@@ -6,6 +6,7 @@ import type {
   BatteriesResponse,
   BatteryPriorityKey,
   BatteryPriorityRule,
+  SoakExportRule,
   BlindLever,
   BlindsResponse,
   BlindDetailResponse,
@@ -172,6 +173,8 @@ export const api = {
     applyScenario: () => postJSON<ControlStatus>('/api/control/apply-scenario', {}),
     batteryPriority: (rule: BatteryPriorityKey, patch: Partial<BatteryPriorityRule>) =>
       putJSON<ControlStatus>(`/api/control/battery-priority/${enc(rule)}`, patch),
+    soakExport: (patch: Partial<SoakExportRule>) =>
+      putJSON<ControlStatus>('/api/control/soak-export', patch),
   },
 
   /* ---- Devices / Climate (command/arm/CRUD are admin) ---- */
