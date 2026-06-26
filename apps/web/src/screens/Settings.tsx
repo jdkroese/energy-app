@@ -5,6 +5,7 @@ import { MOCK_SETTINGS } from '../lib/mock';
 import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, UserRole, AuthUser } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge } from '../components/ui';
 import { StaleBanner } from './_shared';
+import { AlertRulesCard } from '../components/Notifications';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
 import { InstallSheet } from '../components/InstallSheet';
 import { isStandalone } from '../lib/install';
@@ -1250,7 +1251,12 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
     <>
       {active === 'Connections' && <ConnectionsCard connections={s.connections} />}
 
-      {active === 'Notifications' && <NotificationsCard channels={ch} onChannels={setChannels} />}
+      {active === 'Notifications' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <NotificationsCard channels={ch} onChannels={setChannels} />
+          <AlertRulesCard />
+        </div>
+      )}
 
       {active === 'Security' && <SecurityCard />}
 
