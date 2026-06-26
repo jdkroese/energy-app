@@ -83,3 +83,28 @@ you want merged into one coherent result), let a single Claude session **spawn s
 rather than you opening N terminals — it keeps one plan and one reviewer. Give writing
 subagents their own worktree isolation so they don't collide. Use separate top-level
 sessions only when you genuinely want independent threads of control.
+
+## Always work with task numbers
+
+Every unit of orchestrated work gets a **task number** so progress is measurable and
+nothing silently drops. The orchestrating session keeps a numbered task list — one entry
+per brief, bugfix, feature, or refinement — marks each `in_progress` when an agent picks it
+up and `completed` when its PR is open and verified, and refers to work by its number in
+updates ("#3 in review", "#5 blocked on #4"). Briefs handed to subagents and the PRs they
+open should carry the task number. The rule of thumb: **no number → not tracked → it doesn't
+count as progress.**
+
+## Minimize approvals — bias to autonomy
+
+Inside an **already-agreed** process, agents run to completion without pausing for
+step-by-step approval. Once a brief/design is signed off, the agent creates its worktree,
+implements, typechecks/builds, verifies, pushes, and opens a PR **without checking in at
+each step** — the PR is the review gate, not the intermediate steps. Remove permission
+friction up front (scoped `settings.local.json` allows; sibling worktree paths in
+`additionalDirectories`) so background agents don't stall on prompts.
+
+The only thing that should interrupt an agent mid-process is a **genuine clarification
+question** — an ambiguity it cannot resolve from the brief, the code, or sensible defaults.
+Reserve human approval for: the initial brief/design sign-off, anything irreversible or
+outward-facing (**merging to `main`, deploys, disarming**), and those clarification
+questions. Everything else, the agent just does.
