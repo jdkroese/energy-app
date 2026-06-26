@@ -27,7 +27,7 @@ export interface DeviceTypeMeta {
 export const DEVICE_TYPES: DeviceTypeMeta[] = [
   { type: 'cooling', label: 'Cooling', hue: 'var(--solar)', icon: 'snowflake', built: true },
   { type: 'heating', label: 'Heating', hue: 'var(--grid)', icon: 'flame', built: false },
-  { type: 'lighting', label: 'Lighting', hue: 'var(--home)', icon: 'lightbulb', built: false },
+  { type: 'lighting', label: 'Lighting', hue: 'var(--home)', icon: 'lightbulb', built: true },
   { type: 'switching', label: 'Switching', hue: 'var(--battery)', icon: 'toggle-right', built: false },
 ];
 

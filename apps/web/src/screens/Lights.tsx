@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { LightUnit, LightsResponse, LightLever, LightHsv } from '../lib/types';
 import { Card, Icon, Switch, Slider, SegmentedControl } from '../components/ui';
-import { MobileHeader, Avatar, StaleBanner } from './_shared';
+import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 
@@ -146,7 +146,8 @@ function LightCard({
   );
 }
 
-export function Lights({ ctx }: { ctx: ShellContext }) {
+/** The lights content (no page chrome) — embedded in the Devices → Lighting tab. */
+export function LightsPanel({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
   const canControl = user?.role === 'admin';
   const wide = ctx.desktop;
@@ -243,25 +244,7 @@ export function Lights({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  if (wide) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 880, margin: '0 auto', width: '100%' }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>Lights</h1>
-          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
-            {d?.connected ? `${d.context.deviceCount} lights · Tuya` : 'Tuya'}
-          </div>
-        </div>
-        {body}
-      </div>
-    );
-  }
-  return (
-    <>
-      <MobileHeader eyebrow={d?.connected ? `${d.context.deviceCount} lights` : 'Tuya'} title="Lights" right={<Avatar />} />
-      <div style={{ padding: '8px 14px 22px' }}>{body}</div>
-    </>
-  );
+  return body;
 }
 
 function Chip({ label, value, color, accent }: { label: string; value: string; color?: string; accent?: boolean }) {

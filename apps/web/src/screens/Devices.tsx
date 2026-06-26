@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
-  DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation,
+  DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, LightsResponse,
 } from '../lib/types';
 import { Card, Icon } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
@@ -11,6 +11,7 @@ import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { DEVICE_TYPES, typeMeta, classifyDevice, type DeviceType } from '../lib/deviceTypes';
 import { AutomationRow } from '../components/AutomationRow';
+import { LightsPanel } from './Lights';
 
 /* ============================================================================
  * Devices — the typed-device hub. A segmented type bar (Cooling · Heating ·
@@ -148,6 +149,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const { data: live } = usePolling<LiveResponse>(api.live, 20_000);
   const { data: status } = usePolling<DevicesStatus>(api.devices.status, 20_000);
   const { data: autoData, refetch: refetchAuto } = usePolling<AutomationsResponse>(api.automations.list, 0);
+  const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 20_000);
   const [activeType, setActiveType] = useState<DeviceType>('cooling');
 
   const d = data;
@@ -157,6 +159,8 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     acc[m.type] = (d?.devices ?? []).filter((x) => classifyDevice(x) === m.type).length;
     return acc;
   }, {} as Record<DeviceType, number>);
+  // Lights are a separate Tuya fleet (not in the climate /api/devices list).
+  counts.lighting = lightsData?.context.deviceCount ?? 0;
 
   const cooling = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'cooling');
   const coolingNow = cooling.filter((x) => x.power && x.mode === 'cool').length;
@@ -232,7 +236,13 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {d && (
         <>
           <TypeTabs active={activeType} counts={counts} wide={wide} onSelect={setActiveType} />
-          {activeType === 'cooling' ? coolingContent : <ComingSoon meta={typeMeta(activeType)} />}
+          {activeType === 'cooling' ? (
+            coolingContent
+          ) : activeType === 'lighting' ? (
+            <LightsPanel ctx={ctx} />
+          ) : (
+            <ComingSoon meta={typeMeta(activeType)} />
+          )}
         </>
       )}
     </div>
