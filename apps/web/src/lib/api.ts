@@ -187,7 +187,7 @@ export const api = {
       postJSON<{ ts: string; results: unknown[] }>('/api/devices/bulk-command', { ids, lever, value }),
     setSettings: (
       id: string,
-      patch: { room?: string; automationEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number; invertPosition?: boolean },
+      patch: { room?: string; automationEnabled?: boolean; solarCoolEnabled?: boolean; solarHeatEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number; invertPosition?: boolean },
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
     release: (id: string) =>
       postJSON<{ ts: string; id: string; released: boolean }>(`/api/devices/${enc(id)}/release`, {}),

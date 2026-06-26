@@ -501,7 +501,12 @@ export interface DeviceView {
   /** Radio thermostat reporting a low battery. */
   lowBattery?: boolean | null;
   room: string;
+  /** LEGACY: true iff EITHER solar direction is enrolled. */
   automationEnabled: boolean;
+  /** Solar-surplus COOLING enrolment (independent per-direction flag). */
+  solarCoolEnabled: boolean;
+  /** Solar-surplus HEATING enrolment (independent per-direction flag). */
+  solarHeatEnabled: boolean;
   /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
   manualOverrideUntil: number | null;
   /** Sticky: user manually switched this unit ON → excluded from the surplus auto-stop. */

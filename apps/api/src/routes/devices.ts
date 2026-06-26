@@ -45,7 +45,12 @@ export interface DeviceView extends ClimateUnit {
   /** Device category — drives which controls/rules apply (Airzone = heating). */
   type: DeviceType;
   room: string;
+  /** LEGACY: true iff EITHER direction is enrolled (back-compat for old clients). */
   automationEnabled: boolean;
+  /** Solar-surplus COOLING enrolment (independent per-direction flag). */
+  solarCoolEnabled: boolean;
+  /** Solar-surplus HEATING enrolment (independent per-direction flag). */
+  solarHeatEnabled: boolean;
   /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
   manualOverrideUntil: number | null;
   /** Sticky: user manually switched this unit ON → excluded from the surplus auto-stop. */
@@ -96,7 +101,14 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
     wireless: u.wireless ?? null,
     lowBattery: u.lowBattery ?? null,
     room: withPrefix(ds?.room ?? u.zone ?? u.name),
-    automationEnabled: ds?.automationEnabled ?? false,
+    // Per-direction flags. Migration safety: fall back to the legacy single flag when a
+    // record predates the split (hydrateDeviceSettings already migrates persisted state,
+    // but be defensive for any in-flight record).
+    solarCoolEnabled: ds?.solarCoolEnabled ?? ds?.automationEnabled ?? false,
+    solarHeatEnabled: ds?.solarHeatEnabled ?? ds?.automationEnabled ?? false,
+    automationEnabled:
+      (ds?.solarCoolEnabled ?? ds?.automationEnabled ?? false) ||
+      (ds?.solarHeatEnabled ?? ds?.automationEnabled ?? false),
     manualOverrideUntil: manualOverrideUntil(u.id),
     // Provenance-derived: a powered-on unit the surplus rule did NOT start (dashboard,
     // physical remote, or schedule) is manual and shows the hand marker; a rule-started
@@ -108,7 +120,8 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
     governedBy: {
       schedules: schedules.filter((s) => s.enabled && ruleTargetsUnit(s, u.id)).map((s) => s.id),
       automations:
-        ds?.automationEnabled && automations.some((a) => a.enabled)
+        (ds?.solarCoolEnabled || ds?.solarHeatEnabled || ds?.automationEnabled) &&
+        automations.some((a) => a.enabled)
           ? automations.filter((a) => a.enabled).map((a) => a.id)
           : [],
     },
@@ -293,9 +306,21 @@ export async function setDevicesArm(armed: boolean, mode?: ControlMode): Promise
 
 export function setDeviceSettings(id: string, patch: Partial<DeviceSettings>): unknown {
   const saved = store.update((s) => {
-    const existing = s.deviceSettings[id] ?? { automationEnabled: false };
+    const existing = s.deviceSettings[id] ?? {};
+    // Per-direction solar flags are the source of truth. A legacy `automationEnabled`
+    // patch (old clients) is honored by setting BOTH directions to it; the split flags,
+    // when present, take precedence over that legacy value within the same patch.
+    const legacyExisting = existing.solarCoolEnabled ?? existing.solarHeatEnabled ?? existing.automationEnabled ?? false;
+    const solarCoolEnabled =
+      patch.solarCoolEnabled ?? patch.automationEnabled ?? existing.solarCoolEnabled ?? legacyExisting;
+    const solarHeatEnabled =
+      patch.solarHeatEnabled ?? patch.automationEnabled ?? existing.solarHeatEnabled ?? legacyExisting;
     const merged: DeviceSettings = {
-      automationEnabled: patch.automationEnabled ?? existing.automationEnabled,
+      ...existing,
+      solarCoolEnabled,
+      solarHeatEnabled,
+      // Keep the legacy field in sync (true iff either direction is on) for old readers.
+      automationEnabled: solarCoolEnabled || solarHeatEnabled,
       room: patch.room ?? existing.room,
       comfortCeilingC: patch.comfortCeilingC ?? existing.comfortCeilingC,
       comfortFloorC: patch.comfortFloorC ?? existing.comfortFloorC,
@@ -472,6 +497,11 @@ function sanitizeParams(p: Partial<SolarSurplusPrecoolParams> | undefined, base:
   return {
     roomTempLimitC: typeof p?.roomTempLimitC === 'number' ? p.roomTempLimitC : base.roomTempLimitC,
     targetSetpointC: typeof p?.targetSetpointC === 'number' ? p.targetSetpointC : base.targetSetpointC,
+    // Heating bounds — must be preserved on edit, else the unified rule loses its heat side
+    // and the coordinator falls back to its 19/21°C defaults (the #14 bug).
+    heatRoomFloorC: typeof p?.heatRoomFloorC === 'number' ? p.heatRoomFloorC : base.heatRoomFloorC,
+    heatTargetSetpointC:
+      typeof p?.heatTargetSetpointC === 'number' ? p.heatTargetSetpointC : base.heatTargetSetpointC,
     surplusClearSec: typeof p?.surplusClearSec === 'number' ? p.surplusClearSec : base.surplusClearSec,
     bandRestrictionEnabled:
       typeof p?.bandRestrictionEnabled === 'boolean' ? p.bandRestrictionEnabled : base.bandRestrictionEnabled,
@@ -486,8 +516,8 @@ export function createAutomation(body: Partial<Automation>): unknown {
   // Defaults flip with the type: precool acts above 25→23°C; preheat below 19→21°C.
   const base: SolarSurplusPrecoolParams =
     type === 'solar_surplus_preheat'
-      ? { roomTempLimitC: 19, targetSetpointC: 21, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 }
-      : { roomTempLimitC: 25, targetSetpointC: 23, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 };
+      ? { roomTempLimitC: 19, targetSetpointC: 21, heatRoomFloorC: 19, heatTargetSetpointC: 21, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 }
+      : { roomTempLimitC: 25, targetSetpointC: 23, heatRoomFloorC: 19, heatTargetSetpointC: 21, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 };
   const a: Automation = {
     id: newId('auto'),
     name: body.name?.trim() || (type === 'solar_surplus_preheat' ? 'Solar-surplus pre-heat' : 'New automation'),

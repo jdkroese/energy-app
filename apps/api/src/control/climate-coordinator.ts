@@ -176,11 +176,15 @@ export async function evaluateSolarSurplusPrecool(
   const inExitBand = bandRestrictionOn && snap.band === p.exitBand;
   const half = DIRECTION_DEADBAND_C / 2;
 
-  // Candidate devices: automation-enabled HVAC (NON-Airzone) rooms. Underfloor zones
-  // are no longer surplus-eligible. Evaluate WARMEST-FIRST so the hottest room wins the
-  // first compressor start under the 14 kW cap (heating starts follow).
+  // Candidate devices: HVAC (NON-Airzone) rooms enrolled in EITHER surplus direction.
+  // Cool and heat are now independent per-unit flags (solarCoolEnabled / solarHeatEnabled);
+  // a unit is a candidate if it opts into at least one. Underfloor zones are no longer
+  // surplus-eligible. Evaluate WARMEST-FIRST so the hottest room wins the first compressor
+  // start under the 14 kW cap (heating starts follow).
+  const coolOn = (id: string) => settings[id]?.solarCoolEnabled === true;
+  const heatOn = (id: string) => settings[id]?.solarHeatEnabled === true;
   const enabled = fleet
-    .filter((u) => !isAirzone(u) && settings[u.id]?.automationEnabled)
+    .filter((u) => !isAirzone(u) && (coolOn(u.id) || heatOn(u.id)))
     .sort((a, b) => (b.currentTempC ?? -Infinity) - (a.currentTempC ?? -Infinity));
 
   // Track committed import as we stagger starts within this tick.
@@ -200,11 +204,12 @@ export async function evaluateSolarSurplusPrecool(
     const room = u.currentTempC;
 
     // Direction with a deadband so a running unit won't flip cool↔heat mid-window:
-    //  - cool only when clearly warm (room > limit + ½ band)
-    //  - heat only when clearly cold (room < floor − ½ band)
+    //  - cool only when clearly warm (room > limit + ½ band) AND enrolled in cooling
+    //  - heat only when clearly cold (room < floor − ½ band) AND enrolled in heating
+    // Each direction is an independent per-unit enrolment (solarCool/HeatEnabled).
     const surplusOk = !inExitBand && snap.surplusW > startThreshold && room !== null;
-    const wantCool = surplusOk && room! > p.roomTempLimitC + half;
-    const wantHeat = surplusOk && !wantCool && room! < heatFloor - half;
+    const wantCool = surplusOk && coolOn(u.id) && room! > p.roomTempLimitC + half;
+    const wantHeat = surplusOk && heatOn(u.id) && !wantCool && room! < heatFloor - half;
     const dir: 'cool' | 'heat' | null = wantCool ? 'cool' : wantHeat ? 'heat' : null;
     const targetC = dir === 'heat' ? heatTarget : p.targetSetpointC;
 
