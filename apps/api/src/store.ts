@@ -263,8 +263,18 @@ export interface DeviceSettings {
   room?: string;
   /** Custom display name override (lights; falls back to the device's reported name). */
   name?: string;
-  /** Whether automations may command this device. */
-  automationEnabled: boolean;
+  /**
+   * LEGACY single solar-surplus enrolment flag. Superseded by the two independent
+   * direction flags below (solarCoolEnabled / solarHeatEnabled). Kept readable for
+   * back-compat: a persisted `automationEnabled === true` migrates to BOTH new flags on,
+   * preserving the prior bidirectional behavior. New writes set the split flags directly.
+   * @deprecated use solarCoolEnabled / solarHeatEnabled
+   */
+  automationEnabled?: boolean;
+  /** Solar-surplus COOLING enrolment: cool this HVAC on surplus when the room is warm. */
+  solarCoolEnabled?: boolean;
+  /** Solar-surplus HEATING enrolment: heat this HVAC on surplus when the room is cold. */
+  solarHeatEnabled?: boolean;
   /** Hard comfort bounds for automations (°C). */
   comfortCeilingC?: number;
   comfortFloorC?: number;
@@ -921,10 +931,7 @@ function hydrate(raw: unknown): StoreSchema {
       ...(p.integrations?.airzone ? { airzone: p.integrations.airzone } : {}),
       ...(p.integrations?.tuya ? { tuya: p.integrations.tuya } : {}),
     },
-    deviceSettings:
-      p.deviceSettings && typeof p.deviceSettings === 'object'
-        ? p.deviceSettings
-        : base.deviceSettings,
+    deviceSettings: hydrateDeviceSettings(p.deviceSettings, base.deviceSettings),
     schedules: migrateSchedules(p.schedules),
     dismissedDefaultAutomationIds: Array.isArray(p.dismissedDefaultAutomationIds)
       ? [...new Set(p.dismissedDefaultAutomationIds.filter((id): id is string => typeof id === 'string'))]
@@ -951,6 +958,34 @@ function hydrate(raw: unknown): StoreSchema {
  */
 const FORCE_DISARM_ON_BOOT = process.env.ENERGY_BOOT_DISARMED === '1';
 const isControlMode = (m: unknown): m is ControlMode => m === 'off' || m === 'manual' || m === 'auto';
+
+/**
+ * Coerce + migrate persisted per-device settings. MIGRATION: the single legacy
+ * `automationEnabled` flag is split into two independent direction flags —
+ * `solarCoolEnabled` and `solarHeatEnabled`. A legacy `automationEnabled === true`
+ * enables BOTH (preserving the prior bidirectional surplus behavior); false/absent ⇒
+ * both off. Explicit new-shape flags, when present, win over the legacy one. The legacy
+ * field is retained on the record (back-compat reads) but is no longer authoritative.
+ */
+function hydrateDeviceSettings(
+  p: Record<string, DeviceSettings> | undefined,
+  base: Record<string, DeviceSettings>,
+): Record<string, DeviceSettings> {
+  if (!p || typeof p !== 'object') return base;
+  const out: Record<string, DeviceSettings> = {};
+  for (const [id, raw] of Object.entries(p)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const legacyOn = raw.automationEnabled === true;
+    out[id] = {
+      ...raw,
+      solarCoolEnabled:
+        typeof raw.solarCoolEnabled === 'boolean' ? raw.solarCoolEnabled : legacyOn,
+      solarHeatEnabled:
+        typeof raw.solarHeatEnabled === 'boolean' ? raw.solarHeatEnabled : legacyOn,
+    };
+  }
+  return out;
+}
 
 /**
  * Rehydrate the devices/climate section. Restores the persisted armed state + mode

@@ -258,20 +258,22 @@ function PowerToggle({ on, accent, accentWash, disabled, syncing, onToggle }: { 
   );
 }
 
-/** Solar bolt — three states: lit (free surplus), dim (on paid energy), faint (not enrolled).
- *  Orange (--grid) = pre-heat; matches the unified surplus-bolt icon system (cool = blue bolt).
- *  Clickable (admin) to toggle this device's enrolment in surplus pre-heat. */
-function SolarBolt({ enrolled, demand, exporting, hue = 'var(--grid)', label = 'pre-heat', canToggle, onToggle }: {
-  enrolled: boolean; demand: boolean; exporting: boolean; hue?: string; label?: string; canToggle?: boolean; onToggle?: () => void;
+/** Solar bolt — one PER DIRECTION. Blue (--battery) = solar COOL, orange (--grid) = solar
+ *  HEAT. Three states: lit (enrolled + this direction in demand + exporting), dim (enrolled,
+ *  on paid energy / no demand), faint (not enrolled). Clickable (admin) to toggle THIS
+ *  direction's enrolment independently. */
+function SolarBolt({ dir, enrolled, demand, exporting, canToggle, onToggle }: {
+  dir: 'cool' | 'heat'; enrolled: boolean; demand: boolean; exporting: boolean; canToggle?: boolean; onToggle?: () => void;
 }) {
+  const hue = dir === 'cool' ? 'var(--battery)' : 'var(--grid)';
+  const word = dir === 'cool' ? 'cooling' : 'heating';
   const lit = enrolled && demand && exporting;
   const color = enrolled ? hue : 'var(--text-3)';
   const opacity = lit ? 1 : enrolled ? 0.5 : 0.25;
-  // The HVAC bolt now means "solar climate": cool when warm / heat when cold, on surplus.
-  const title = !enrolled ? 'Not in solar climate (cool when warm / heat when cold) — tap to enrol'
-    : lit ? 'Conditioning on free solar surplus — tap to remove'
-    : 'Solar climate enrolled — cools when warm, heats when cold on surplus (on paid energy now) — tap to remove';
-  const inner = <Icon name="zap" size={16} color={color} />;
+  const title = !enrolled ? `Not enrolled in solar ${word} — tap to enrol`
+    : lit ? `Solar ${word} on free surplus now — tap to remove`
+    : `Solar ${word} enrolled (on paid energy / no demand now) — tap to remove`;
+  const inner = <Icon name="zap" size={15} color={color} />;
   const glow = lit ? `drop-shadow(0 0 5px ${hue})` : 'none';
   if (!canToggle) {
     return <span title={title} style={{ display: 'inline-flex', filter: glow, opacity }}>{inner}</span>;
@@ -279,11 +281,11 @@ function SolarBolt({ enrolled, demand, exporting, hue = 'var(--grid)', label = '
   return (
     <button
       type="button"
-      aria-label={enrolled ? `Remove from solar ${label}` : `Enrol in solar ${label}`}
+      aria-label={enrolled ? `Remove from solar ${word}` : `Enrol in solar ${word}`}
       aria-pressed={enrolled}
       title={title}
       onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
-      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', padding: 4, margin: -4, cursor: 'pointer', filter: glow, opacity }}
+      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', padding: 3, margin: -3, cursor: 'pointer', filter: glow, opacity }}
     >
       {inner}
     </button>
@@ -327,17 +329,23 @@ function climateState(power: boolean, mode: string, active: boolean, hasDemand: 
   return { label: m[0], color: m[1], bg: m[2] };
 }
 
+// Desktop row grids. COOLING has a wider Solar column to fit TWO bolts (blue cool +
+// orange heat) and keeps the Manual column. HEATING drops both Solar and Manual.
+//                Unit    State  Mode  Solar Manual Setpt Room Pwr  ›
+const COOL_GRID = '1.5fr 92px 78px 56px 30px 116px 56px 52px 22px';
+//                Unit    State  Mode  Setpt Room Pwr  ›
+const HEAT_GRID = '1.5fr 92px 78px 116px 56px 52px 22px';
+
 function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, sendLever, onToggleSurplus, onOpen }: {
   d: DeviceView; type: 'cooling' | 'heating'; wide: boolean; canWrite: boolean; canConfig: boolean; exporting: boolean;
   pending: Partial<Record<ClimateLever, number | boolean | string>>;
   sendLever: (id: string, lever: ClimateLever, value: number | boolean | string, debounceMs?: number) => void;
-  onToggleSurplus: (id: string, next: boolean) => void;
+  onToggleSurplus: (id: string, dir: 'cool' | 'heat', next: boolean) => void;
   onOpen: () => void;
 }) {
   const isHeat = type === 'heating';
   const accent = isHeat ? 'var(--grid)' : 'var(--battery)';
   const accentWash = isHeat ? 'var(--grid-wash)' : 'var(--battery-wash)';
-  const boltLabel = isHeat ? 'pre-heat' : 'pre-cool';
   // availableModes isn't on DeviceView yet; both fleets support cool/heat/auto — cycle
   // those (the server clamps anything else). Fan/dry/vanes stay on the detail page.
   const available = isHeat ? ['heat', 'cool', 'auto'] : ['cool', 'heat', 'auto'];
@@ -360,12 +368,16 @@ function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, se
   const cycleMode = () => sendLever(d.id, 'mode', nextMode(mode, available), 0);
   const togglePower = () => sendLever(d.id, 'power', !power, 0);
 
-  // Solar enrolment applies only to the HVAC (cooling) fleet now — the "solar climate"
-  // rule cools when warm / heats when cold. Underfloor heating is no longer surplus-
-  // eligible, so the heating tab shows no zap (an empty placeholder keeps alignment).
-  const bolt = isHeat
-    ? <span aria-hidden style={{ display: 'inline-flex', width: 16 }} />
-    : <SolarBolt enrolled={d.automationEnabled} demand={active} exporting={exporting} hue={accent} label={boltLabel} canToggle={canConfig} onToggle={() => onToggleSurplus(d.id, !d.automationEnabled)} />;
+  // Solar enrolment applies only to the HVAC (cooling) fleet — TWO independent bolts:
+  // blue = solar cooling (lit when warm), orange = solar heating (lit when cold). The
+  // heating (underfloor) tab is not surplus-eligible and shows no bolts at all.
+  const warmNow = d.currentTempC != null ? d.currentTempC >= 24 : power;
+  const bolts = isHeat ? null : (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <SolarBolt dir="cool" enrolled={d.solarCoolEnabled} demand={warmNow} exporting={exporting} canToggle={canConfig} onToggle={() => onToggleSurplus(d.id, 'cool', !d.solarCoolEnabled)} />
+      <SolarBolt dir="heat" enrolled={d.solarHeatEnabled} demand={!warmNow} exporting={exporting} canToggle={canConfig} onToggle={() => onToggleSurplus(d.id, 'heat', !d.solarHeatEnabled)} />
+    </span>
+  );
   const handMark = <HandMark manualOn={d.manualOn} />;
 
   if (!wide) {
@@ -377,8 +389,10 @@ function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, se
             <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-1)' }}>{d.name}</div>
             {d.room && d.room !== d.name && <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{d.room}</div>}
           </button>
-          {bolt}
-          {handMark}
+          {/* Cooling: two solar bolts (blue cool / orange heat) + manual hand. Heating
+              (underfloor) is not surplus-eligible and carries no solar/manual markers. */}
+          {!isHeat && bolts}
+          {!isHeat && handMark}
           <span className="pwr-mono" style={{ fontSize: 13, color: WARMTH_COLOR[d.warmth], minWidth: 42, textAlign: 'right' }}>{t1(d.currentTempC)}</span>
           <PowerToggle on={power} accent={accent} accentWash={accentWash} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} />
         </div>
@@ -392,9 +406,11 @@ function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, se
     );
   }
 
-  // Desktop grid: Room/zone · State · Mode · Solar · Manual · Setpoint · Room · Power · ›
+  // Desktop grid. Cooling: Unit · State · Mode · Solar(2 bolts) · Manual · Setpoint · Room ·
+  // Power · ›. Heating: same MINUS Solar + Manual (underfloor isn't surplus-eligible and
+  // manual protection is irrelevant there).
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 92px 78px 34px 30px 116px 56px 52px 22px', alignItems: 'center', gap: 10, padding: '10px 10px', borderRadius: 'var(--radius-md)' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: isHeat ? HEAT_GRID : COOL_GRID, alignItems: 'center', gap: 10, padding: '10px 10px', borderRadius: 'var(--radius-md)' }}>
       <button type="button" onClick={onOpen} style={{ minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
         <div style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-1)' }}>{d.name}</div>
         {d.room && d.room !== d.name && (
@@ -403,8 +419,8 @@ function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, se
       </button>
       <span style={{ justifySelf: 'start', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '3px 8px', borderRadius: 'var(--radius-pill)', background: st.bg, color: st.color }}>{st.label}</span>
       <span style={{ justifySelf: 'start' }}><ModeChip mode={mode} available={available} disabled={!canWrite || !power} syncing={pending.mode !== undefined} onCycle={cycleMode} /></span>
-      <span style={{ justifySelf: 'center' }}>{bolt}</span>
-      <span style={{ justifySelf: 'center' }}>{handMark}</span>
+      {!isHeat && <span style={{ justifySelf: 'center' }}>{bolts}</span>}
+      {!isHeat && <span style={{ justifySelf: 'center' }}>{handMark}</span>}
       <span style={{ justifySelf: 'end' }}><SetpointStepper value={setpoint} lo={lo} hi={hi} step={step} accent={accent} disabled={!canWrite || !power} syncing={pending.setpoint !== undefined} onStep={clampStep} /></span>
       <span className="pwr-mono" style={{ textAlign: 'right', fontSize: 13, color: WARMTH_COLOR[d.warmth] }}>{t1(d.currentTempC)}</span>
       <span style={{ justifySelf: 'end' }}><PowerToggle on={power} accent={accent} accentWash={accentWash} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} /></span>
@@ -478,8 +494,10 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   // the disarmed note below explains that the *automation* won't act.
   const canWrite = isAdmin;
   // Per-device solar-surplus enrolment is a config setting (admin), independent of arm.
-  const toggleSurplus = (id: string, next: boolean) => {
-    void api.devices.setSettings(id, { automationEnabled: next }).then(() => refetch());
+  // Cool and heat are now independent flags — toggle whichever direction was tapped.
+  const toggleSurplus = (id: string, dir: 'cool' | 'heat', next: boolean) => {
+    const patch = dir === 'cool' ? { solarCoolEnabled: next } : { solarHeatEnabled: next };
+    void api.devices.setSettings(id, patch).then(() => refetch());
   };
 
   const automation: Automation | null = autoData?.automations?.[0] ?? null;
@@ -522,7 +540,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {cooling.length > 0 ? (
         <Card padded style={{ padding: '6px 6px' }}>
           {wide && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 92px 78px 34px 30px 116px 56px 52px 22px', gap: 10, padding: '4px 12px 6px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: COOL_GRID, gap: 10, padding: '4px 12px 6px' }}>
               <span className="pwr-eyebrow">Unit / room</span>
               <span className="pwr-eyebrow">State</span>
               <span className="pwr-eyebrow">Mode</span>
@@ -567,12 +585,12 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {heating.length > 0 ? (
         <Card padded style={{ padding: '6px 6px' }}>
           {wide && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 92px 78px 34px 30px 116px 56px 52px 22px', gap: 10, padding: '4px 12px 6px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: HEAT_GRID, gap: 10, padding: '4px 12px 6px' }}>
+              {/* Underfloor heating: not surplus-eligible (no Solar) and not surplus-
+                  owned, so manual protection is irrelevant (no Manual column either). */}
               <span className="pwr-eyebrow">Room / zone</span>
               <span className="pwr-eyebrow">State</span>
               <span className="pwr-eyebrow">Mode</span>
-              <span />{/* underfloor is not surplus-eligible — no Solar column */}
-              <span className="pwr-eyebrow" style={{ textAlign: 'center' }}>Manual</span>
               <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Setpoint</span>
               <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Room</span>
               <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Power</span>
