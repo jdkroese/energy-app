@@ -237,8 +237,9 @@ export interface ControlState {
 // ---- Devices / Climate ------------------------------------------------------
 // A generic devices layer; AC (Intesis/Panasonic Etherea) is the first type. The
 // store holds: integration creds, per-device user settings, schedules, automations,
-// climate guardrails, a master arm flag, and a ring-buffer command log. Like the
-// battery control, devices BOOT DISARMED — nothing is ever written until armed.
+// climate guardrails, a master arm flag, and a ring-buffer command log. The armed
+// state PERSISTS across restarts (a deploy resumes where it left off); a fresh install
+// with no state defaults to disarmed, and ENERGY_BOOT_DISARMED=1 forces a safe boot.
 
 /** Third-party integration credentials/config (set in Settings; env is a fallback). */
 export interface IntegrationsState {
@@ -817,15 +818,26 @@ function hydrate(raw: unknown): StoreSchema {
 }
 
 /**
- * Rehydrate the devices/climate section. SAFETY: a fresh process always boots
- * DISARMED in mode 'off' regardless of what was persisted — the climate
- * coordinator must never resume issuing commands without an explicit re-arm.
+ * Force a DISARMED boot regardless of persisted state. OFF by default, so a
+ * restart/deploy now PRESERVES the last armed state (set via the arm endpoints) —
+ * an ordinary release no longer silently disarms control. Set ENERGY_BOOT_DISARMED=1
+ * for a deliberately-safe boot when a release changes control logic; confirm that
+ * with the owner before shipping it (see CLAUDE.md §5).
+ */
+const FORCE_DISARM_ON_BOOT = process.env.ENERGY_BOOT_DISARMED === '1';
+const isControlMode = (m: unknown): m is ControlMode => m === 'off' || m === 'manual' || m === 'auto';
+
+/**
+ * Rehydrate the devices/climate section. Restores the persisted armed state + mode
+ * across restarts; a graceful shutdown switches off rule-started units but does NOT
+ * persist a disarm, so a deploy resumes where it left off. FORCE_DISARM_ON_BOOT
+ * overrides to a safe DISARMED/'off' boot. Guardrails + log are preserved.
  */
 function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState): DevicesState {
   if (!p || typeof p !== 'object') return base;
   return {
-    armed: false,
-    mode: 'off',
+    armed: FORCE_DISARM_ON_BOOT ? false : typeof p.armed === 'boolean' ? p.armed : base.armed,
+    mode: FORCE_DISARM_ON_BOOT ? 'off' : isControlMode(p.mode) ? p.mode : base.mode,
     updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
     lastError: typeof p.lastError === 'string' ? p.lastError : null,
     log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
@@ -839,15 +851,16 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
 }
 
 /**
- * Rehydrate the control section. SAFETY: a fresh process always boots DISARMED in
- * mode 'off' regardless of what was persisted — the coordinator must never resume
- * issuing commands without an explicit re-arm. Guardrails + log are preserved.
+ * Rehydrate the control section. Restores the persisted armed state + mode across
+ * restarts so a deploy doesn't silently disarm the battery coordinator; an explicit
+ * disarm persists armed=false and stays that way. FORCE_DISARM_ON_BOOT overrides to
+ * a safe DISARMED/'off' boot. Guardrails + log are preserved.
  */
 function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState): ControlState {
   if (!p || typeof p !== 'object') return base;
   return {
-    armed: false,
-    mode: 'off',
+    armed: FORCE_DISARM_ON_BOOT ? false : typeof p.armed === 'boolean' ? p.armed : base.armed,
+    mode: FORCE_DISARM_ON_BOOT ? 'off' : isControlMode(p.mode) ? p.mode : base.mode,
     updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
     lastError: typeof p.lastError === 'string' ? p.lastError : null,
     log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
