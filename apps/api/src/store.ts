@@ -221,6 +221,22 @@ export interface BatteryPriority {
   chargeTeslaFirst: BatteryPriorityRule;
 }
 
+// ---- Surplus-soak (force-charge-to-soak-export) rule ------------------------
+// When solar exports to the grid (worthless in Spain), force-charge the Sonnen to
+// absorb the would-be-export before it spills. A hysteresis deadband (startW high /
+// stopW low) stops flapping; socCeilingPct keeps it off a near-full battery. These
+// were hardcoded constants in the coordinator — now tunable + toggleable from the UI.
+export interface SoakExportRule {
+  /** Master toggle. Default true — the rule is live today, must stay live on deploy. */
+  enabled: boolean;
+  /** Engage once net grid export exceeds this (W). */
+  startW: number;
+  /** Revert to self-consumption once export drops below this (W). Must be < startW. */
+  stopW: number;
+  /** Don't force-charge a battery at/above this SoC (%). */
+  socCeilingPct: number;
+}
+
 export interface ControlState {
   /** Master safety switch — DISARMED by default; nothing is ever written until armed. */
   armed: boolean;
@@ -232,6 +248,8 @@ export interface ControlState {
   guardrails: ControlGuardrails;
   /** Sonnen-first / Tesla-first battery-priority rules. */
   batteryPriority: BatteryPriority;
+  /** Force-charge-to-soak-export rule (absorb surplus before it spills to grid). */
+  soakExport: SoakExportRule;
 }
 
 // ---- Devices / Climate ------------------------------------------------------
@@ -666,6 +684,7 @@ export function defaultControl(): ControlState {
       gridImportCapKw: 14,
     },
     batteryPriority: defaultBatteryPriority(),
+    soakExport: defaultSoakExport(),
   };
 }
 
@@ -676,6 +695,12 @@ export function defaultBatteryPriority(): BatteryPriority {
     dischargeSonnenFirst: { enabled: true, authority: 'shadow', throughputKw: 3.0 },
     chargeTeslaFirst: { enabled: true, authority: 'shadow', throughputKw: 3.0 },
   };
+}
+
+/** Surplus-soak defaults — the values that were hardcoded in the coordinator.
+ *  ENABLED so a deploy preserves today's live behaviour. */
+export function defaultSoakExport(): SoakExportRule {
+  return { enabled: true, startW: 400, stopW: 150, socCeilingPct: 98 };
 }
 
 /** DISARMED, mode 'off' — the safe default for the devices/climate layer. */
@@ -1182,6 +1207,20 @@ function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState
     log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
     guardrails: { ...base.guardrails, ...(p.guardrails ?? {}) },
     batteryPriority: hydrateBatteryPriority(p.batteryPriority, base.batteryPriority),
+    soakExport: hydrateSoakExport(p.soakExport, base.soakExport),
+  };
+}
+
+function hydrateSoakExport(
+  p: Partial<SoakExportRule> | undefined,
+  base: SoakExportRule,
+): SoakExportRule {
+  if (!p || typeof p !== 'object') return base;
+  return {
+    enabled: typeof p.enabled === 'boolean' ? p.enabled : base.enabled,
+    startW: typeof p.startW === 'number' ? p.startW : base.startW,
+    stopW: typeof p.stopW === 'number' ? p.stopW : base.stopW,
+    socCeilingPct: typeof p.socCeilingPct === 'number' ? p.socCeilingPct : base.socCeilingPct,
   };
 }
 

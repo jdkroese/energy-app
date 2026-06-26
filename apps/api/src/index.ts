@@ -28,6 +28,7 @@ import {
   command as controlCommand,
   applyScenarioToDevices,
   setBatteryPriority,
+  setSoakExport,
 } from './routes/control';
 import { startCoordinator } from './control/coordinator';
 import { startSolarModelScheduler } from './solar-model';
@@ -242,6 +243,11 @@ app.put(
     const rule = String(req.params.rule) as 'dischargeSonnenFirst' | 'chargeTeslaFirst';
     return setBatteryPriority(rule, (req.body ?? {}) as never);
   }),
+);
+app.put(
+  '/api/control/soak-export',
+  requireAdmin,
+  wrap((req) => setSoakExport((req.body ?? {}) as never)),
 );
 
 // ---- Devices / Climate (REAL device writes; reads are any-authed) ----

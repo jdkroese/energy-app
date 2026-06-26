@@ -44,6 +44,7 @@ export async function getStatus(): Promise<unknown> {
     },
     guardrails: ctrl.guardrails,
     batteryPriority: ctrl.batteryPriority,
+    soakExport: ctrl.soakExport,
     log: ctrl.log.slice(-100),
   };
 }
@@ -63,6 +64,30 @@ export async function setBatteryPriority(
     if (typeof patch.throughputKw === 'number' && Number.isFinite(patch.throughputKw)) {
       r.throughputKw = Math.min(14, Math.max(0, patch.throughputKw));
     }
+    st.control.updatedAt = Date.now();
+  });
+  return getStatus();
+}
+
+/** Update the surplus-soak (force-charge-to-soak-export) rule (admin). Clamps each
+ *  field and enforces the hysteresis invariant startW > stopW. Returns full status. */
+export async function setSoakExport(patch: Partial<store.SoakExportRule>): Promise<unknown> {
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  store.update((st) => {
+    const r = st.control.soakExport;
+    if (typeof patch.enabled === 'boolean') r.enabled = patch.enabled;
+    if (typeof patch.startW === 'number' && Number.isFinite(patch.startW)) {
+      r.startW = clamp(Math.round(patch.startW), 0, 4600);
+    }
+    if (typeof patch.stopW === 'number' && Number.isFinite(patch.stopW)) {
+      r.stopW = clamp(Math.round(patch.stopW), 0, 4600);
+    }
+    if (typeof patch.socCeilingPct === 'number' && Number.isFinite(patch.socCeilingPct)) {
+      r.socCeilingPct = clamp(Math.round(patch.socCeilingPct), 50, 100);
+    }
+    // Invariant: stop must sit below start (hysteresis deadband). Gently pull stopW
+    // under startW rather than rejecting the whole patch.
+    if (r.stopW >= r.startW) r.stopW = Math.max(0, r.startW - 1);
     st.control.updatedAt = Date.now();
   });
   return getStatus();

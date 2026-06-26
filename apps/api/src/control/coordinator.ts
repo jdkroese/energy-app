@@ -127,17 +127,16 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   await coordinateSonnen(snap, reason, plan);
 }
 
-// ---- Force-charge-to-soak-export thresholds (hysteresis deadband) -----------
+// ---- Force-charge-to-soak-export (hysteresis deadband) ----------------------
 // When solar is exporting to the grid (worth ~nothing in Spain), force-charge the
 // Sonnen to absorb the would-be-export BEFORE it spills to the grid. The Sonnen's
 // own self-consumption firmware ('2') only offsets house load — it does NOT chase
 // net grid export — so without this the surplus is wasted.
 //
-// A hysteresis deadband (START_W high / STOP_W low) prevents flapping between
-// manual ('1') and self-consumption ('2') when export hovers near the threshold.
-const FC_START_W = 400; // engage/continue force-charge once export exceeds this
-const FC_STOP_W = 150; // revert to self-consumption once export drops below this
-const FC_SOC_CEILING = 98; // don't force-charge an (almost) full battery
+// A hysteresis deadband (startW high / stopW low) prevents flapping between manual
+// ('1') and self-consumption ('2') when export hovers near the threshold. The rule's
+// enable flag + thresholds are user-tunable in store.control.soakExport (defaults
+// 400 / 150 / 98 — see store.defaultSoakExport()).
 
 /**
  * Sonnen logic.
@@ -200,7 +199,8 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   // the valley; if it's in manual for another reason (#34 soak-export), that branch already
   // ran first and returned, so reaching here in manual means a prior arbitrage charge.
   const exportW = Math.max(0, snap.gridExportKw * 1000);
-  const exporting = exportW > FC_STOP_W;
+  const soak = store.get().control.soakExport;
+  const exporting = exportW > soak.stopW;
 
   // Valley-band + spread gate. Outside the valley, or if the spread is too small, OR if
   // surplus appeared, REVERT any lingering arbitrage manual charge to self-consumption.
@@ -221,8 +221,8 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
     }
   }
 
-  // Never grid-charge a (near-)full battery (mirrors #34's FC_SOC_CEILING guard).
-  const nearFull = soc !== null && soc >= FC_SOC_CEILING;
+  // Never grid-charge a (near-)full battery (mirrors the soak-export SoC ceiling).
+  const nearFull = soc !== null && soc >= soak.socCeilingPct;
   const shouldCharge = inValley && spreadOk && !surplusDefers && soc !== null && !targetMet && !nearFull;
 
   if (!shouldCharge) {
@@ -279,38 +279,56 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
   // and issue() refuses when !armed, so the manual "apply scenario" endpoint can
   // never leave the Sonnen in a stale manual charge either).
   const ctrl = store.get().control;
+  const soak = ctrl.soakExport;
   if (ctrl.armed && ctrl.mode === 'auto') {
     const exportW = Math.max(0, snap.gridExportKw * 1000);
     const socPct = s.soc;
     const inManual = s.mode === 'manual'; // currently force-charging?
-    const exporting = exportW > FC_STOP_W;
+    const exporting = exportW > soak.stopW;
 
-    // PRIORITY ORDER: free solar (#@34 soak-export) > valley grid-charge (arbitrage) >
+    // PRIORITY ORDER: free solar (soak-export, #34) > valley grid-charge (arbitrage, #37) >
     // battery-through-peak / Tesla-first / self-consumption (below).
     //
-    // (A) FREE SOLAR — #34 soak-export. When there's net export, the surplus is worth ~nothing
-    //     in Spain, so absorb it. This OUTRANKS arbitrage grid-charge: while exporting we never
-    //     grid-buy. The engage/continue hysteresis + the priority safety-revert are unchanged.
+    // (A) FREE SOLAR — soak-export. When there's net export, the surplus is worth ~nothing in
+    //     Spain, so absorb it. This OUTRANKS arbitrage grid-charge: while exporting we never
+    //     grid-buy. Thresholds + the enable flag come from store.control.soakExport (tunable).
     if (exporting || (inManual && exportW > 0)) {
-      // REVERT (safety-critical): export collapsed OR battery (near-)full → hand control back
-      // to self-consumption. A stale manual charge during a surplus collapse would IMPORT, so
-      // this revert must always be able to fire (priority bypasses the rate-limit).
-      if (inManual && (exportW <= FC_STOP_W || socPct >= FC_SOC_CEILING)) {
-        const why = socPct >= FC_SOC_CEILING ? `SoC ${socPct}% ≥ ceiling` : `export ${Math.round(exportW)}W ≤ ${FC_STOP_W}W`;
-        await issue('sonnen', 'mode', '2', `${reason}: end soak-export (${why}) — back to self-consumption`, snap, {
-          priority: true,
-        });
-        return;
+      if (!soak.enabled) {
+        // DISABLED un-strand (safety-critical): the rule was turned off while it still had the
+        // Sonnen force-charging (manual AND actively charging) → hand control back to
+        // self-consumption immediately so a stale setpoint can't import from the grid (priority
+        // bypasses the rate-limit). Gated on dir === 'charging' so it ignores the legitimate
+        // charge-priority manual-0W idle below and never flaps with it; otherwise fall through.
+        if (inManual && s.dir === 'charging') {
+          await issue('sonnen', 'mode', '2', `${reason}: soak disabled — end force-charge, back to self-consumption`, snap, {
+            priority: true,
+          });
+          return;
+        }
+      } else {
+        // REVERT (safety-critical): export collapsed OR battery (near-)full → hand control back
+        // to self-consumption. A stale manual charge during a surplus collapse would IMPORT, so
+        // this revert must always be able to fire (priority bypasses the rate-limit).
+        if (inManual && (exportW <= soak.stopW || socPct >= soak.socCeilingPct)) {
+          const why = socPct >= soak.socCeilingPct ? `SoC ${socPct}% ≥ ceiling` : `export ${Math.round(exportW)}W ≤ ${soak.stopW}W`;
+          await issue('sonnen', 'mode', '2', `${reason}: end soak-export (${why}) — back to self-consumption`, snap, {
+            priority: true,
+          });
+          return;
+        }
+        // ENGAGE / CONTINUE (hysteresis): headroom (SoC < ceiling) AND export over the threshold
+        // (HIGH startW to engage; once charging, hold down to LOW stopW — the revert handles
+        // < stopW). Issue the mode FIRST (the charge setpoint is rejected unless Sonnen reports
+        // manual). checkSonnenWatts clamps to [0, sonnenMaxW=4600].
+        const engageThreshold = inManual ? soak.stopW : soak.startW;
+        if (exportW > engageThreshold && socPct < soak.socCeilingPct) {
+          const watt = checkSonnenWatts(Math.min(exportW, store.get().control.guardrails.sonnenMaxW), 'charge', snap);
+          await issue('sonnen', 'mode', '1', `${reason}: soak-export — absorb surplus before it spills to grid`, snap);
+          await issue('sonnen', 'charge', watt.value, `${reason}: soak-export ${watt.value}W (export ${Math.round(exportW)}W, SoC ${socPct}%)`, snap);
+          return;
+        }
+        // Below startW and not already charging (or at the ceiling): fall through.
       }
-      // ENGAGE / CONTINUE (hysteresis): headroom (SoC < ceiling) AND export over the threshold.
-      const engageThreshold = inManual ? FC_STOP_W : FC_START_W;
-      if (exportW > engageThreshold && socPct < FC_SOC_CEILING) {
-        const watt = checkSonnenWatts(Math.min(exportW, store.get().control.guardrails.sonnenMaxW), 'charge', snap);
-        await issue('sonnen', 'mode', '1', `${reason}: soak-export — absorb surplus before it spills to grid`, snap);
-        await issue('sonnen', 'charge', watt.value, `${reason}: soak-export ${watt.value}W (export ${Math.round(exportW)}W, SoC ${socPct}%)`, snap);
-        return;
-      }
-      // Below FC_START_W and not already charging (or at the ceiling): fall through.
     } else {
       // (B) VALLEY GRID-CHARGE — tariff arbitrage. Runs ONLY when NOT exporting (free solar
       //     above always wins). Pre-buys cheap valley grid up to the forecast pre-peak target,

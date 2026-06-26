@@ -327,6 +327,17 @@ export interface BatteryPriority {
 }
 export type BatteryPriorityKey = keyof BatteryPriority;
 
+/** Force-charge-to-soak-export rule — absorb solar surplus before it spills to grid. */
+export interface SoakExportRule {
+  enabled: boolean;
+  /** Engage once net grid export exceeds this (W). */
+  startW: number;
+  /** Revert to self-consumption once export drops below this (W). Always < startW. */
+  stopW: number;
+  /** Don't force-charge a battery at/above this SoC (%). */
+  socCeilingPct: number;
+}
+
 export interface ControlStatus {
   armed: boolean;
   mode: ControlMode;
@@ -334,6 +345,7 @@ export interface ControlStatus {
   current: ControlCurrent;
   guardrails: ControlGuardrails;
   batteryPriority: BatteryPriority;
+  soakExport: SoakExportRule;
   log: ControlLogEntry[];
 }
 

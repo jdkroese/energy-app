@@ -5,7 +5,7 @@ import { usePolling } from '../lib/usePolling';
 import type {
   Automation, AutomationsResponse, DevicesResponse, DevicesStatus,
   LiveResponse, SolarSurplusPrecoolParams, TariffArbitrageParams,
-  ControlStatus, BatteryPriorityKey, BatteryPriorityRule,
+  ControlStatus, BatteryPriorityKey, BatteryPriorityRule, SoakExportRule,
 } from '../lib/types';
 import { isTariffArbitrage } from '../lib/types';
 import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
@@ -453,6 +453,106 @@ function BatteryRuleCard({ meta, rule, live, socFloorPct, canWrite, onSave }: {
   );
 }
 
+/* ----------------------------------------------------------------------------
+ * Surplus soak — the force-charge-to-soak-export rule, surfaced + made tunable.
+ * No Shadow/Auto authority (it acts only in armed+auto, like the priority rules);
+ * just an enable toggle + the hysteresis thresholds. Mirrors BatteryRuleCard.
+ * --------------------------------------------------------------------------*/
+function SoakRuleCard({ rule, live, canWrite, onSave }: {
+  rule: SoakExportRule; live: LiveResponse | null;
+  canWrite: boolean; onSave: (patch: Partial<SoakExportRule>) => void;
+}) {
+  const [enabled, setEnabled] = useState(rule.enabled);
+  const [startW, setStartW] = useState(rule.startW);
+  const [stopW, setStopW] = useState(rule.stopW);
+  const [ceil, setCeil] = useState(rule.socCeilingPct);
+  const [editing, setEditing] = useState(false);
+
+  const toggleEnabled = (on: boolean) => { setEnabled(on); onSave({ enabled: on }); };
+  const dirty = startW !== rule.startW || stopW !== rule.stopW || ceil !== rule.socCeilingPct;
+  const invalid = stopW >= startW; // hysteresis: stop must sit below start
+  const save = () => { onSave({ startW, stopW, socCeilingPct: ceil }); setEditing(false); };
+  const cancel = () => { setStartW(rule.startW); setStopW(rule.stopW); setCeil(rule.socCeilingPct); setEditing(false); };
+
+  const tone = 'var(--solar)';
+  const wash = 'var(--solar-wash)';
+  const sonnenSoc = live ? Math.round(live.sonnen.soc) : null;
+  const exportKw = live && live.grid.dir === 'exporting' ? Math.round(live.grid.kw * 10) / 10 : 0;
+  const exportW = Math.round(exportKw * 1000);
+  const soaking = live?.sonnen.mode === 'manual' && live?.sonnen.dir === 'charging';
+
+  // Live preview — mirror the coordinator's decision so the UI shows what WOULD happen.
+  let preview = 'Connecting to live data…';
+  let active = false;
+  if (live && sonnenSoc != null) {
+    if (!enabled) preview = 'Rule off — surplus follows charge-priority / self-consumption.';
+    else if (sonnenSoc >= ceil) preview = `Battery full — held at SoC ${sonnenSoc}% ≥ ${ceil}% ceiling.`;
+    else if (soaking) { active = true; preview = `Soaking ~${Math.min(exportW, 4600)} W — absorbing surplus before it spills to grid.`; }
+    else if (exportW > startW) { active = true; preview = `Surplus +${exportKw} kW > ${startW} W — would force-charge to soak it.`; }
+    else if (exportW > stopW) preview = `Surplus +${exportKw} kW in the deadband — holding current state.`;
+    else preview = exportKw > 0 ? `Only +${exportKw} kW surplus — below the ${startW} W start.` : 'No surplus to soak — self-consumption.';
+  }
+
+  return (
+    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Icon name="battery-charging" size={19} color={tone} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Surplus soak — Sonnen absorbs export</div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Automation · battery</div>
+        </div>
+        <Switch checked={enabled} disabled={!canWrite} onChange={(e) => toggleEnabled(e.target.checked)} />
+      </div>
+
+      {/* WHEN / DO / UNTIL */}
+      <Block label="When" color="var(--battery)" wash="var(--battery-wash)">
+        <Tok>grid exporting</Tok><span style={{ color: 'var(--text-3)' }}>and</span><Tok>SoC &lt; {ceil}%</Tok>
+      </Block>
+      <Block label="Do" color={tone} wash={wash}>
+        force-charge <Tok color="var(--battery)">Sonnen</Tok> at the would-be-export · soak surplus before it spills to <Tok color="var(--grid)">grid</Tok>
+      </Block>
+      <Block label="Until" color="var(--home)" wash="var(--home-wash)">
+        export <span style={{ color: 'var(--text-3)' }}>&lt;</span> <Tok>{stopW} W</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> SoC <span style={{ color: 'var(--text-3)' }}>≥</span> <Tok>{ceil}%</Tok> <span style={{ color: 'var(--text-3)' }}>→</span> self-consumption
+      </Block>
+
+      {/* LIVE PREVIEW */}
+      <div style={{ background: 'var(--surface-2)', border: `1px solid ${active ? tone : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <span className="pwr-eyebrow" style={{ color: active ? tone : 'var(--text-3)' }}>Live preview · right now</span>
+          <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>
+            {exportKw > 0 ? `+${exportKw} kW` : 'no surplus'}{sonnenSoc != null ? ` · S ${sonnenSoc}%` : ''}
+          </span>
+        </div>
+        <div style={{ fontSize: 12.5, color: active ? 'var(--text-1)' : 'var(--text-2)' }}>{preview}</div>
+      </div>
+
+      {/* EDIT */}
+      {canWrite && (
+        <button type="button" onClick={() => setEditing((v) => !v)} style={{ alignSelf: 'flex-start', fontSize: 11.5, color: 'var(--text-2)', background: 'none', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name={editing ? 'chevron-up' : 'sliders-horizontal'} size={14} /> {editing ? 'Hide settings' : 'Edit rule'}
+        </button>
+      )}
+      {editing && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4, borderTop: '1px solid var(--border-1)' }}>
+          <Slider label="Engage when export exceeds" unit=" W" min={0} max={2000} step={50} value={startW} onChange={(v) => setStartW(v)} />
+          <Slider label="Revert when export drops below" unit=" W" min={0} max={2000} step={50} value={stopW} onChange={(v) => setStopW(v)} />
+          <Slider label="Don't charge above SoC" unit=" %" min={50} max={100} step={1} value={ceil} onChange={(v) => setCeil(v)} />
+          <div style={{ fontSize: 11, color: invalid ? 'var(--danger)' : 'var(--text-3)' }}>
+            {invalid
+              ? `Revert (${stopW} W) must sit below engage (${startW} W) — that gap is the hysteresis deadband that stops flapping.`
+              : `Engages once export clears ${startW} W; keeps soaking until it falls under ${stopW} W. Never charges a battery at/above ${ceil}%.`}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant="primary" disabled={!dirty || invalid} onClick={save}>Save</Button>
+            <Button size="sm" variant="ghost" onClick={cancel}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function Automations({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
   const canWrite = user?.role === 'admin';
@@ -481,6 +581,9 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
   const saveBatteryRule = async (key: BatteryPriorityKey, patch: Partial<BatteryPriorityRule>) => {
     try { await api.control.batteryPriority(key, patch); } catch { /* ignore */ } finally { refetchCtrl(); }
   };
+  const saveSoak = async (patch: Partial<SoakExportRule>) => {
+    try { await api.control.soakExport(patch); } catch { /* ignore */ } finally { refetchCtrl(); }
+  };
 
   const list = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -505,6 +608,9 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
             <BatteryRuleCard key={m.key} meta={m} rule={bp[m.key]} live={live ?? null} socFloorPct={socFloorPct} canWrite={!!canWrite} onSave={(patch) => void saveBatteryRule(m.key, patch)} />
           ))
         : <Card padded style={{ color: 'var(--text-3)', fontSize: 12.5 }}>Connecting to the battery control plane…</Card>}
+      {ctrl?.soakExport && (
+        <SoakRuleCard rule={ctrl.soakExport} live={live ?? null} canWrite={!!canWrite} onSave={(patch) => void saveSoak(patch)} />
+      )}
       {arbAutomations.map((a) => (
         <TariffArbitrageCard key={a.id} a={a} live={live ?? null} ctrlArmedAuto={batteryArmedAuto} canWrite={!!canWrite} onSave={(patch) => saveAuto(a.id, patch)} onDelete={() => void removeAuto(a.id)} />
       ))}
