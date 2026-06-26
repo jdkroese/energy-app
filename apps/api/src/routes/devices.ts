@@ -460,19 +460,18 @@ function sanitizeParams(p: Partial<SolarSurplusPrecoolParams> | undefined, base:
 }
 
 export function createAutomation(body: Partial<Automation>): unknown {
-  const base: SolarSurplusPrecoolParams = {
-    roomTempLimitC: 25,
-    targetSetpointC: 23,
-    surplusClearSec: 120,
-    bandRestrictionEnabled: true,
-    exitBand: 'P1',
-    startThresholdW: 800,
-  };
+  const type: Automation['type'] =
+    body.type === 'solar_surplus_preheat' ? 'solar_surplus_preheat' : 'solar_surplus_precool';
+  // Defaults flip with the type: precool acts above 25→23°C; preheat below 19→21°C.
+  const base: SolarSurplusPrecoolParams =
+    type === 'solar_surplus_preheat'
+      ? { roomTempLimitC: 19, targetSetpointC: 21, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 }
+      : { roomTempLimitC: 25, targetSetpointC: 23, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 };
   const a: Automation = {
     id: newId('auto'),
-    name: body.name?.trim() || 'New automation',
+    name: body.name?.trim() || (type === 'solar_surplus_preheat' ? 'Solar-surplus pre-heat' : 'New automation'),
     enabled: body.enabled ?? false,
-    type: 'solar_surplus_precool',
+    type,
     params: sanitizeParams(body.params, base),
     lastEval: null,
   };

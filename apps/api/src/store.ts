@@ -329,10 +329,16 @@ export interface Schedule {
   condition: RunCondition;
 }
 
-export type AutomationType = 'solar_surplus_precool';
+export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat';
 
+/**
+ * Shared params for the two solar-surplus comfort automations. The semantics of
+ * `roomTempLimitC`/`targetSetpointC` flip with the automation type:
+ *  - precool: act while room is ABOVE the limit, cool DOWN to the target.
+ *  - preheat: act while room is BELOW the limit, heat UP to the target.
+ */
 export interface SolarSurplusPrecoolParams {
-  /** Run cooling when a room is above this (°C). */
+  /** Comfort limit (°C): cooling runs while room > limit; heating while room < limit. */
   roomTempLimitC: number;
   /** Target setpoint to drive the room toward (°C). */
   targetSetpointC: number;
@@ -563,7 +569,7 @@ export function defaultDevices(): DevicesState {
   };
 }
 
-/** The flagship automation, seeded disabled so it never acts until enabled + armed. */
+/** The flagship automations, seeded disabled so they never act until enabled + armed. */
 export function defaultAutomations(): Automation[] {
   return [
     {
@@ -574,6 +580,22 @@ export function defaultAutomations(): Automation[] {
       params: {
         roomTempLimitC: 25,
         targetSetpointC: 23,
+        surplusClearSec: 120,
+        bandRestrictionEnabled: true,
+        exitBand: 'P1',
+        startThresholdW: 800,
+      },
+      lastEval: null,
+    },
+    {
+      id: 'solar-surplus-preheat',
+      name: 'Solar-surplus pre-heat',
+      enabled: false,
+      type: 'solar_surplus_preheat',
+      params: {
+        // Heat a heating zone while it's BELOW 19°C, up to a 21°C target.
+        roomTempLimitC: 19,
+        targetSetpointC: 21,
         surplusClearSec: 120,
         bandRestrictionEnabled: true,
         exitBand: 'P1',
@@ -766,6 +788,20 @@ function migrateSchedules(raw: unknown): Schedule[] {
   return out;
 }
 
+/**
+ * Keep the user's persisted automations as-is, but append any seeded default
+ * automation (matched by id) the persisted store predates — so a newly shipped
+ * default (e.g. Solar-surplus pre-heat) appears on existing installs without
+ * clobbering edits to the ones already there. Defaults seed disabled, so a
+ * re-appearing card never acts on its own.
+ */
+function mergeAutomations(raw: unknown, base: Automation[]): Automation[] {
+  if (!Array.isArray(raw) || raw.length === 0) return base;
+  const persisted = raw as Automation[];
+  const have = new Set(persisted.map((a) => a.id));
+  return [...persisted, ...base.filter((b) => !have.has(b.id))];
+}
+
 /** Merge persisted JSON onto defaults so new fields appear with sane values. */
 function hydrate(raw: unknown): StoreSchema {
   const base = defaults();
@@ -809,8 +845,7 @@ function hydrate(raw: unknown): StoreSchema {
         ? p.deviceSettings
         : base.deviceSettings,
     schedules: migrateSchedules(p.schedules),
-    automations:
-      Array.isArray(p.automations) && p.automations.length ? p.automations : base.automations,
+    automations: mergeAutomations(p.automations, base.automations),
     devices: hydrateDevices(p.devices, base.devices),
     lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
     lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,

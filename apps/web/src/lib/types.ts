@@ -598,6 +598,7 @@ export interface SchedulesResponse {
 }
 
 export interface SolarSurplusPrecoolParams {
+  /** Comfort limit (°C): cooling runs while room > limit; heating while room < limit. */
   roomTempLimitC: number;
   targetSetpointC: number;
   surplusClearSec: number;
@@ -611,7 +612,7 @@ export interface Automation {
   id: string;
   name: string;
   enabled: boolean;
-  type: 'solar_surplus_precool';
+  type: 'solar_surplus_precool' | 'solar_surplus_preheat';
   params: SolarSurplusPrecoolParams;
   lastEval: number | null;
 }

@@ -5,13 +5,16 @@
 // an enabled automation under armed+auto always acts). The whole tick is wrapped
 // so it can never crash the process.
 //
-// First automation type: solar_surplus_precool. Run cooling in automation-enabled
-// rooms when roomTemp > limit AND solar surplus exceeds battery intake headroom;
-// stop when surplus clears sustained ≥ surplusClearSec, OR room ≤ target, OR band
-// turns to the exit band (P1). Compressor starts are staggered under the 14 kW cap.
+// Automation types: solar_surplus_precool (cooling AC) and its mirror
+// solar_surplus_preheat (Airzone underfloor heating). Pre-cool runs cooling when
+// roomTemp > limit; pre-heat runs heating when roomTemp < limit — both only while
+// solar surplus exceeds battery intake headroom, and both stop when surplus clears
+// sustained ≥ surplusClearSec, OR the room reaches target, OR the tariff turns to
+// the exit band (P1). Starts are staggered under the 14 kW cap.
 
 import * as store from '../store';
 import * as intesis from '../connectors/intesis';
+import * as airzone from '../connectors/airzone';
 import type { ClimateUnit } from '../connectors/intesis';
 import type { Automation, SolarSurplusPrecoolParams } from '../store';
 import { issueClimate, _resetClimateRateLimits } from './climate-execute';
@@ -29,6 +32,12 @@ const surplusClearedSince = new Map<string, number>();
 // into a grid-import load (e.g. when the battery-headroom term keeps surplusW > 0
 // while the house is actually pulling from the grid). 0.4 kW clears measurement noise.
 const DEFICIT_IMPORT_KW = 0.4;
+
+// Airzone underfloor zones (id `air-*`) are the HEATING fleet; everything else
+// (Intesis AC) is COOLING. Pre-cool acts on cooling units, pre-heat on heating.
+function isHeating(u: ClimateUnit): boolean {
+  return u.id.startsWith('air-');
+}
 
 // Provenance: unit ids the surplus rule itself switched ON. Lets disarm/shutdown
 // switch off ONLY rule-started cooling — never occupant/manual units. In-memory
@@ -109,10 +118,11 @@ export async function evaluateSolarSurplusPrecool(
   const bandRestrictionOn = p.bandRestrictionEnabled ?? true;
   const inExitBand = bandRestrictionOn && snap.band === p.exitBand;
 
-  // Candidate devices: automation-enabled rooms. Evaluate WARMEST-FIRST so the
-  // hottest room wins the first compressor start under the 14 kW cap.
+  // Candidate devices: automation-enabled COOLING rooms (heating zones are driven
+  // by the pre-heat rule, never cooled here). Evaluate WARMEST-FIRST so the hottest
+  // room wins the first compressor start under the 14 kW cap.
   const enabled = fleet
-    .filter((u) => settings[u.id]?.automationEnabled)
+    .filter((u) => !isHeating(u) && settings[u.id]?.automationEnabled)
     .sort((a, b) => (b.currentTempC ?? -Infinity) - (a.currentTempC ?? -Infinity));
 
   // Track committed import as we stagger starts within this tick.
@@ -175,6 +185,101 @@ export async function evaluateSolarSurplusPrecool(
     const reason = `${automation.name}: cool@${p.targetSetpointC}°C (room ${room}°C, surplus ${(snap.surplusW / 1000).toFixed(1)}kW)`;
     // Drive: cool mode + target setpoint + power on. Order: mode → setpoint → power.
     await issueClimate(u, 'mode', 'cool', reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'setpoint', p.targetSetpointC, reason, { ...snap, pendingImportKw });
+    const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
+    if (res.ok) surplusStartedIds.add(u.id); // rule owns this unit now
+    if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
+  }
+
+  store.update((s) => {
+    const a = s.automations.find((x) => x.id === automation.id);
+    if (a) a.lastEval = Date.now();
+  });
+}
+
+/**
+ * Evaluate a single solar_surplus_preheat automation — the mirror of pre-cool for
+ * the heating fleet (Airzone underfloor zones). Run heating in automation-enabled
+ * heating rooms when roomTemp < limit AND solar surplus exceeds battery intake
+ * headroom; stop when surplus clears sustained ≥ surplusClearSec, OR room ≥ target,
+ * OR the tariff turns to the exit band (P1). Starts are staggered under the 14 kW
+ * cap. An enabled automation under armed+auto always acts. Best-effort; never throws.
+ */
+export async function evaluateSolarSurplusPreheat(
+  automation: Automation,
+  fleet: ClimateUnit[],
+  snap: RichClimateSnapshot,
+): Promise<void> {
+  const p: SolarSurplusPrecoolParams = automation.params;
+  const startThreshold = p.startThresholdW ?? 800;
+  const settings = store.get().deviceSettings;
+
+  const bandRestrictionOn = p.bandRestrictionEnabled ?? true;
+  const inExitBand = bandRestrictionOn && snap.band === p.exitBand;
+
+  // Candidate devices: automation-enabled HEATING rooms. Evaluate COLDEST-FIRST so
+  // the coldest room wins the first start under the 14 kW cap.
+  const enabled = fleet
+    .filter((u) => isHeating(u) && settings[u.id]?.automationEnabled)
+    .sort((a, b) => (a.currentTempC ?? Infinity) - (b.currentTempC ?? Infinity));
+
+  // Track committed import as we stagger starts within this tick.
+  let pendingImportKw = 0;
+
+  for (const u of enabled) {
+    if (isManualOverrideActive(u.id)) continue; // manual control wins — hands off
+    const room = u.currentTempC;
+    const wantHeat =
+      !inExitBand &&
+      snap.surplusW > startThreshold &&
+      room !== null &&
+      room < p.roomTempLimitC;
+
+    // ----- STOP conditions (debounced) -----
+    const roomAtTarget = room !== null && room >= p.targetSetpointC;
+    const importingFromGrid = snap.gridImportKw > DEFICIT_IMPORT_KW;
+    const surplusGone = snap.surplusW <= 0 || importingFromGrid;
+    if (surplusGone) {
+      if (!surplusClearedSince.has(u.id)) surplusClearedSince.set(u.id, Date.now());
+    } else {
+      surplusClearedSince.delete(u.id);
+    }
+    const clearedFor = surplusClearedSince.has(u.id)
+      ? Date.now() - (surplusClearedSince.get(u.id) ?? Date.now())
+      : 0;
+    const surplusSustainedClear = clearedFor >= p.surplusClearSec * 1000;
+
+    const shouldStop = u.power && (surplusSustainedClear || roomAtTarget || inExitBand);
+
+    if (shouldStop) {
+      const why = inExitBand
+        ? `band ${snap.band} (exit)`
+        : roomAtTarget
+          ? `room ${room}°C ≥ target ${p.targetSetpointC}°C`
+          : `${importingFromGrid ? `grid import ${snap.gridImportKw.toFixed(1)}kW` : 'no surplus'} ${Math.round(clearedFor / 1000)}s ≥ ${p.surplusClearSec}s`;
+      const reason = `${automation.name}: stop — ${why}`;
+      await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
+      surplusStartedIds.delete(u.id);
+      continue;
+    }
+
+    if (!wantHeat) continue;
+
+    // ----- START / maintain heating -----
+    const startingCompressor = !u.power;
+    const projected = snap.gridImportKw + pendingImportKw + (startingCompressor ? COMPRESSOR_START_KW : 0);
+    if (startingCompressor && projected > store.get().devices.guardrails.gridImportCapKw) {
+      logDecision(
+        u.id,
+        `${automation.name}: defer start`,
+        `staggering — projected ${projected.toFixed(1)}kW > cap`,
+      );
+      continue;
+    }
+
+    const reason = `${automation.name}: heat@${p.targetSetpointC}°C (room ${room}°C, surplus ${(snap.surplusW / 1000).toFixed(1)}kW)`;
+    // Drive: heat mode + target setpoint + power on. Order: mode → setpoint → power.
+    await issueClimate(u, 'mode', 'heat', reason, { ...snap, pendingImportKw });
     await issueClimate(u, 'setpoint', p.targetSetpointC, reason, { ...snap, pendingImportKw });
     const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
     if (res.ok) surplusStartedIds.add(u.id); // rule owns this unit now
@@ -279,13 +384,21 @@ async function tick(): Promise<void> {
   try {
     const dev = store.get().devices;
     if (!dev.armed || dev.mode !== 'auto') return; // self-gated: inert unless armed+auto
-    if (!intesis.isConfigured()) return;
+    if (!intesis.isConfigured() && !airzone.isConfigured()) return;
 
     const automations = store.get().automations.filter((a) => a.enabled);
     const schedules = store.get().schedules.filter((s) => s.enabled);
     if (automations.length === 0 && schedules.length === 0) return;
 
-    const fleet = await intesis.getFleet();
+    // Combined fleet across both connectors (cooling = Intesis, heating = Airzone).
+    // Soft-fail per connector so one being unreachable doesn't starve the other.
+    const fleet: ClimateUnit[] = [];
+    if (intesis.isConfigured()) {
+      try { fleet.push(...(await intesis.getFleet())); } catch (e) { console.error('[climate] intesis fleet:', (e as Error).message); }
+    }
+    if (airzone.isConfigured()) {
+      try { fleet.push(...(await airzone.getFleet())); } catch (e) { console.error('[climate] airzone fleet:', (e as Error).message); }
+    }
     if (fleet.length === 0) return;
 
     const snap = await takeClimateSnapshot();
@@ -296,13 +409,18 @@ async function tick(): Promise<void> {
       return;
     }
 
-    // Schedules are the floor; automations (surplus pre-cool) run after and may
-    // pre-cool earlier or push colder when free solar is available.
-    await evaluateSchedules(fleet, snap);
+    // Schedules are the floor; automations (surplus pre-cool/pre-heat) run after and
+    // may pre-condition earlier or push harder when free solar is available.
+    // NOTE: schedules keep their prior cooling-only reach — adding the Airzone fleet
+    // here is purely so the pre-heat automation can act; we don't want to silently
+    // start driving heating *schedules* as a side effect of that wiring.
+    await evaluateSchedules(fleet.filter((u) => !isHeating(u)), snap);
 
     for (const a of automations) {
       if (a.type === 'solar_surplus_precool') {
         await evaluateSolarSurplusPrecool(a, fleet, snap);
+      } else if (a.type === 'solar_surplus_preheat') {
+        await evaluateSolarSurplusPreheat(a, fleet, snap);
       }
     }
   } catch (e) {
