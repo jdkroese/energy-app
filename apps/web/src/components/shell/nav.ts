@@ -8,7 +8,7 @@ export interface NavItem {
 /** Primary nav used by both the mobile tab bar and the desktop rail. */
 export const NAV: NavItem[] = [
   { to: '/', label: 'Live', icon: 'activity' },
-  { to: '/reports', label: 'Reports', icon: 'bar-chart-3' },
+  { to: '/reports', label: 'Reports', icon: 'chart-column' },
   { to: '/batteries', label: 'Batteries', icon: 'battery-charging' },
   { to: '/devices', label: 'Devices', icon: 'thermometer' },
   { to: '/alerts', label: 'Alerts', icon: 'bell' },
