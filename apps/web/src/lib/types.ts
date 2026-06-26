@@ -189,7 +189,12 @@ export interface SettingsResponse {
 }
 
 export interface PlanAction {
+  /** Legacy point-in-time hour (kept for back-compat: marker placement). */
   h: number;
+  /** Fractional start hour (0–24) for the duration bar. */
+  startH: number;
+  /** Fractional end hour (0–24) for the duration bar. Overlaps allowed. */
+  endH: number;
   icon: string;
   tone: string;
   title: string;
@@ -203,8 +208,22 @@ export interface BrainPlanResponse {
     selfSufficiencyPct: number;
     reservePct: number;
     p1AvoidedKwh: number;
+    /** Surplus-solar kWh spent on HVAC during pre-cool/heat windows ("free" climatization). */
+    freeClimatizationKwh: number;
   };
-  forecast: { solarKw: number[]; loadKw: number[]; cloudPct: number[] };
+  forecast: {
+    solarKw: number[];
+    loadKw: number[];
+    cloudPct: number[];
+    /** 25-length 0..24 hourly sun-intensity (% of clear-sky), 0 below horizon. */
+    sunIntensityPct: number[];
+    /** 25-length predicted generation per hour (kWh, 1dp) = GHI/1000·kWp·PR_eff. */
+    genKwh: number[];
+    /** 25-length predicted usage per hour (kWh) from the load forecast. */
+    usageKwh: number[];
+  };
+  /** The learned-roof model summary for the active month. */
+  model: { month: string; confidencePct: number; days: number };
   socPct: number[];
   tariff: number[];
   actions: PlanAction[];

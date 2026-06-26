@@ -319,6 +319,11 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
       : 'now'
     : '';
 
+  // Day totals for the KPI row (sum the first 24 hourly buckets).
+  const sum24 = (a: number[]) => a.slice(0, 24).reduce((s, v) => s + (v || 0), 0);
+  const genKwhTotal = Math.round(sum24(plan.forecast.genKwh));
+  const usageKwhTotal = Math.round(sum24(plan.forecast.usageKwh));
+
   /* ---- connecting placeholder ------------------------------------------ */
   const connecting = (
     <div style={{ ...panelCard, padding: 22, color: 'var(--text-3)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -418,12 +423,30 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
           {/* the plan — hero */}
           <Card
             title="The plan · next 24 h"
-            subtitle={`solar forecast · battery trajectory · tariff bands — cloud-adjusted (${plan.weather.source === 'live' ? 'Open-Meteo, Jávea' : 'estimate'}), ${plan.weather.cloudAvgPct}% avg cloud`}
+            subtitle={`sun forecast · predicted generation · battery trajectory · tariff bands — cloud-adjusted (${plan.weather.source === 'live' ? 'Open-Meteo, Jávea' : 'estimate'}), ${plan.weather.cloudAvgPct}% avg cloud`}
             icon={<Icon name="brain" />}
-            actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live plan</Badge>}
+            actions={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <Badge tone="battery" variant="soft" icon={<Icon name="graduation-cap" size={12} />}>
+                  {`${plan.model.month} roof model · ${plan.model.confidencePct}% (${plan.model.days}d)`}
+                </Badge>
+                <Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live plan</Badge>
+              </div>
+            }
           >
-            <PlanTimeline solar={plan.forecast.solarKw} load={plan.forecast.loadKw} soc={plan.socPct} tariff={plan.tariff} actions={plan.actions} now={plan.now} />
+            <PlanTimeline
+              solar={plan.forecast.solarKw}
+              load={plan.forecast.loadKw}
+              soc={plan.socPct}
+              tariff={plan.tariff}
+              sunIntensityPct={plan.forecast.sunIntensityPct}
+              genKwh={plan.forecast.genKwh}
+              actions={plan.actions}
+              now={plan.now}
+              wide={wide}
+            />
             <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-2)', flexWrap: 'wrap', marginTop: 10 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 12, height: 8, borderRadius: 2, background: 'linear-gradient(#ffe27a,#f5c518)' }} /> Sun intensity</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--solar)' }} /> Solar (cloud-adjusted)</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--home)' }} /> House load</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--battery)' }} /> Battery SoC</span>
@@ -431,12 +454,13 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
             </div>
           </Card>
 
-          {/* today's impact */}
-          <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(4,1fr)' : '1fr 1fr', gap: wide ? 14 : 10 }}>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Projected saved" value={`€${plan.projected.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs vendor default" /></Card>
+          {/* today's impact — 5-metric KPI row (one row desktop, 2-up mobile) */}
+          <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(5,1fr)' : '1fr 1fr', gap: wide ? 12 : 10 }}>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Production & usage" value={`${genKwhTotal} / ${usageKwhTotal}`} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote="forecast today" /></Card>
             <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Self-sufficiency" value={String(plan.projected.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} footnote="solar + stored" /></Card>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Backup reserve" value={String(plan.projected.reservePct)} unit="%" tone="battery" icon={<Icon name="shield-check" />} footnote="Tesla floor" /></Card>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="P1 avoided" value={plan.projected.p1AvoidedKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="trending-down" />} footnote="evening peak" /></Card>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="P1 avoided" value={plan.projected.p1AvoidedKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="trending-down" />} footnote="moved to P3" /></Card>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Free climatization" value={plan.projected.freeClimatizationKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="snowflake" />} footnote="surplus → HVAC" /></Card>
+            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Projected savings" value={`€${plan.projected.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs vendor default" /></Card>
           </div>
 
           {/* today's moves + why now */}
@@ -447,7 +471,7 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
                   <span style={{ width: 24, height: 24, borderRadius: '50%', flex: 'none', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, background: `color-mix(in srgb, var(--${a.tone}) 18%, transparent)`, color: `var(--${a.tone})` }}>{i + 1}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{hhmm(a.h)}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{hhmm(a.startH)}–{hhmm(a.endH)}</span>
                       <Icon name={a.icon} size={15} color={`var(--${a.tone})`} />
                       <span style={{ fontSize: 14, fontWeight: 500 }}>{a.title}</span>
                     </div>
