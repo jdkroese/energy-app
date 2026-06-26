@@ -4,9 +4,10 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
   Automation, AutomationsResponse, DevicesResponse, DevicesStatus,
-  LiveResponse, SolarSurplusPrecoolParams,
+  LiveResponse, SolarSurplusPrecoolParams, TariffArbitrageParams,
   ControlStatus, BatteryPriorityKey, BatteryPriorityRule,
 } from '../lib/types';
+import { isTariffArbitrage } from '../lib/types';
 import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
 import { AutomationRow } from '../components/AutomationRow';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
@@ -71,7 +72,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
   canWrite: boolean; onSave: (patch: Partial<Automation>) => Promise<void>; onDelete: () => void;
 }) {
   const [enabled, setEnabled] = useState(a.enabled);
-  const [p, setP] = useState<SolarSurplusPrecoolParams>(a.params);
+  const [p, setP] = useState<SolarSurplusPrecoolParams>(a.params as SolarSurplusPrecoolParams);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<SolarSurplusPrecoolParams>) => setP((prev) => ({ ...prev, ...patch }));
@@ -216,6 +217,122 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
 }
 
 /* ============================================================================
+ * Tariff arbitrage (task #15) — a battery rule. Shifts grid purchases from the P1
+ * peak to the P3 valley: pre-charge from cheap valley grid when the forecast solar
+ * won't carry the peak, discharge through P1, refill after. Solar-first (only the
+ * shortfall) and live-self-correcting (if solar surges, the buy stands down and the
+ * soak-export takes over). Seeded DISABLED — ACTS only when enabled AND the battery
+ * Autopilot is armed in Auto. Mirrors the surplus rules' WHEN/DO/UNTIL/LIMITS layout.
+ * ==========================================================================*/
+
+// Spain 2.0TD rates (mirror apps/api/src/tariff.ts) for the live spread readout.
+const TARIFF_RATES: Record<string, number> = { P1: 0.2093, P2: 0.1309, P3: 0.0957 };
+
+function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelete }: {
+  a: Automation & { params: TariffArbitrageParams };
+  live: LiveResponse | null; ctrlArmedAuto: boolean;
+  canWrite: boolean; onSave: (patch: Partial<Automation>) => Promise<void>; onDelete: () => void;
+}) {
+  const [enabled, setEnabled] = useState(a.enabled);
+  const [p, setP] = useState<TariffArbitrageParams>(a.params);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const set = (patch: Partial<TariffArbitrageParams>) => setP((prev) => ({ ...prev, ...patch }));
+
+  const tone = 'var(--ev)';
+  const wash = 'color-mix(in srgb, var(--ev) 12%, transparent)';
+  const spread = (TARIFF_RATES[p.peakBand] ?? 0) - (TARIFF_RATES[p.valleyBand] ?? 0);
+  const spreadOk = spread >= p.minSpreadEur;
+
+  const soc = batterySoc(live);
+  const surplus = surplusKw(live);
+  const exporting = surplus > 0;
+
+  // Live preview — mirror the coordinator's gating (band isn't in /live, so we describe
+  // the conditions rather than assert the exact band here).
+  let preview = 'Connecting to live data…';
+  if (live && soc != null) {
+    if (!spreadOk) preview = `Spread €${spread.toFixed(4)} < €${p.minSpreadEur.toFixed(2)} — arbitrage stands down (not worthwhile).`;
+    else if (exporting && p.surplusOverridesGridCharge) preview = `Exporting +${surplus} kW now — solar covers it; grid-charge defers to soak-export.`;
+    else if (soc >= p.peakTargetSocPct) preview = `Batteries ${soc}% ≥ target ${p.peakTargetSocPct}% — no pre-buy needed; will discharge through the peak.`;
+    else preview = `Batteries ${soc}% < target ${p.peakTargetSocPct}% — in a P3 valley it would pre-buy the forecast shortfall (≤ ${p.maxGridChargeKw} kW), then discharge through P1 to ${p.dischargeFloorPct}%.`;
+  }
+
+  const save = async () => { setBusy(true); try { await onSave({ enabled, params: p }); setEditing(false); } finally { setBusy(false); } };
+
+  return (
+    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Icon name="arrow-left-right" size={19} color={tone} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{a.name}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Automation · battery</div>
+        </div>
+        <Switch checked={enabled} disabled={!canWrite} onChange={(e) => { setEnabled(e.target.checked); void onSave({ enabled: e.target.checked }); }} />
+      </div>
+
+      {/* WHEN / DO / UNTIL / LIMITS */}
+      <Block label="When" color="var(--battery)" wash="var(--battery-wash)">
+        <Tok color="var(--grid)">{p.valleyBand}</Tok><span style={{ color: 'var(--text-3)' }}>valley is cheap</span>
+        <span style={{ color: 'var(--text-3)' }}>and</span><Tok>forecast solar won’t carry the {p.peakBand} peak</Tok>
+      </Block>
+      <Block label="Do" color={tone} wash={wash}>
+        grid-charge to <Tok color={tone}>{p.peakTargetSocPct}%</Tok> before the peak <span style={{ color: 'var(--text-3)' }}>·then·</span> discharge through <Tok color="var(--grid)">{p.peakBand}</Tok> to <Tok color={tone}>{p.dischargeFloorPct}%</Tok>
+      </Block>
+      <Block label="Until" color="var(--home)" wash="var(--home-wash)">
+        target reached <span style={{ color: 'var(--text-3)' }}>·or·</span> solar surges (export) <span style={{ color: 'var(--text-3)' }}>·or·</span> band leaves <Tok color="var(--grid)">{p.valleyBand}</Tok>
+      </Block>
+      <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: '10px 14px' }}>
+        <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Limits (always enforced)</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <Tok color="var(--text-2)">spread ≥ €{p.minSpreadEur.toFixed(2)}</Tok>
+          <Tok color="var(--text-2)">≤ {p.maxGridChargeKw} kW grid-charge</Tok>
+          <Tok color="var(--text-2)">never P1 / P2</Tok>
+          <Tok color="var(--text-2)">solar-first</Tok>
+          <Tok color="var(--text-2)">SoC floor + Tesla reserve</Tok>
+        </div>
+      </div>
+
+      {/* LIVE PREVIEW */}
+      <div style={{ background: 'var(--surface-2)', border: `1px solid ${spreadOk ? tone : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <span className="pwr-eyebrow" style={{ color: spreadOk ? tone : 'var(--text-3)' }}>Live preview · right now</span>
+          <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>
+            spread €{spread.toFixed(3)}{soc != null ? ` · batteries ${soc}%` : ''}{exporting ? ` · +${surplus} kW` : ''}
+          </span>
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{preview}</div>
+        {!ctrlArmedAuto && (
+          <div style={{ fontSize: 11, color: 'var(--grid)', marginTop: 6 }}>
+            Acts only when <Link to="/brain" style={{ color: 'var(--battery)' }}>Autopilot</Link> is armed in Auto.
+          </div>
+        )}
+      </div>
+
+      {/* EDIT */}
+      {canWrite && (
+        <button type="button" onClick={() => setEditing((v) => !v)} style={{ alignSelf: 'flex-start', fontSize: 11.5, color: 'var(--text-2)', background: 'none', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name={editing ? 'chevron-up' : 'sliders-horizontal'} size={14} /> {editing ? 'Hide settings' : 'Edit rule'}
+        </button>
+      )}
+      {editing && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4, borderTop: '1px solid var(--border-1)' }}>
+          <Slider label="Pre-peak SoC target" unit=" %" min={40} max={100} step={5} value={p.peakTargetSocPct} onChange={(v) => set({ peakTargetSocPct: v })} />
+          <Slider label="Discharge floor through peak" unit=" %" min={10} max={60} step={5} value={p.dischargeFloorPct} onChange={(v) => set({ dischargeFloorPct: v })} />
+          <Slider label="Max grid-charge rate" unit=" kW" min={1} max={4.6} step={0.1} value={p.maxGridChargeKw} onChange={(v) => set({ maxGridChargeKw: v })} />
+          <Slider label="Min worthwhile spread" unit=" €/kWh" min={0} max={0.2} step={0.01} value={p.minSpreadEur} onChange={(v) => set({ minSpreadEur: v })} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save</Button>
+            <Button size="sm" variant="ghost" onClick={onDelete}>Delete</Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ============================================================================
  * Battery-priority rules — Sonnen-first discharge / Tesla-first charge. These are
  * battery-control policies (persisted in control state), so they ACT only when the
  * battery Autopilot is armed in Auto (on the Autopilot screen), independent of the
@@ -348,6 +465,8 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
   const [busy, setBusy] = useState(false);
 
   const automations = data?.automations ?? [];
+  const arbAutomations = automations.filter(isTariffArbitrage);
+  const climateAutomations = automations.filter((a) => !isTariffArbitrage(a));
   const bp = ctrl?.batteryPriority ?? null;
   const socFloorPct = ctrl?.guardrails.socFloorPct ?? 10;
   const batteryArmedAuto = !!ctrl?.armed && ctrl.mode === 'auto';
@@ -386,6 +505,9 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
             <BatteryRuleCard key={m.key} meta={m} rule={bp[m.key]} live={live ?? null} socFloorPct={socFloorPct} canWrite={!!canWrite} onSave={(patch) => void saveBatteryRule(m.key, patch)} />
           ))
         : <Card padded style={{ color: 'var(--text-3)', fontSize: 12.5 }}>Connecting to the battery control plane…</Card>}
+      {arbAutomations.map((a) => (
+        <TariffArbitrageCard key={a.id} a={a} live={live ?? null} ctrlArmedAuto={batteryArmedAuto} canWrite={!!canWrite} onSave={(patch) => saveAuto(a.id, patch)} onDelete={() => void removeAuto(a.id)} />
+      ))}
 
       {/* ---- Climate ---- */}
       <Eyebrow>Climate</Eyebrow>
@@ -396,7 +518,7 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
           <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>AC Cloud is not connected — automations have nothing to act on until you connect it in Settings.</div>
         </Card>
       )}
-      {automations.map((a) => (
+      {climateAutomations.map((a) => (
         <RuleCard key={a.id} a={a} live={live ?? null} devData={devData ?? null} canWrite={!!canWrite} onSave={(patch) => saveAuto(a.id, patch)} onDelete={() => void removeAuto(a.id)} />
       ))}
       {canWrite && <Button variant="secondary" iconLeft={<Icon name="plus" size={16} />} onClick={() => void addAuto()}>New automation</Button>}

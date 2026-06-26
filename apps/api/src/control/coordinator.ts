@@ -8,14 +8,61 @@
 // manual setpoint.
 
 import * as store from '../store';
-import type { ControlDevice } from '../store';
+import type { ControlDevice, TariffArbitrageParams } from '../store';
 import { issue, _resetRateLimits } from './execute';
 import { checkSonnenWatts } from './guardrails';
 import { takeSnapshot, type RichSnapshot } from './snapshot';
 import { planBatteryPriority, type PriorityPlan } from './battery-priority';
+import { planArbitrage, arbitrageSpreadEur, type ArbitragePlan } from './arbitrage';
+import { config } from '../config';
+import * as weather from '../connectors/weather';
+import { bandCodesForDay } from '../tariff';
+import { effectivePR } from '../solar-model';
+import { solarForecast, loadForecast } from '../routes/brain';
 
 const TICK_MS = 90_000;
 let timer: ReturnType<typeof setInterval> | null = null;
+
+// ---- Tariff-arbitrage forecast cache ----------------------------------------
+// The arbitrage decision needs a forecast-derived pre-peak SoC target. The forecast is a
+// network fetch, so cache the computed ArbitragePlan and refresh it at most every 15 min.
+// The cache is only ever populated when the rule is enabled+armed+auto (computeArbitragePlan
+// is called lazily from coordinateArbitrage), so a disabled rule never even fetches weather.
+const ARB_CACHE_TTL_MS = 15 * 60_000;
+let arbCache: { at: number; plan: ArbitragePlan; targetParams: string } | null = null;
+
+/** Compute (or reuse a cached) ArbitragePlan from the live forecast for the given params +
+ *  current combined SoC. Best-effort: returns null if the forecast is unavailable. */
+async function computeArbitragePlan(
+  params: TariffArbitrageParams,
+  startSoc: number,
+): Promise<ArbitragePlan | null> {
+  const paramsKey = JSON.stringify(params);
+  const now = Date.now();
+  if (arbCache && now - arbCache.at < ARB_CACHE_TTL_MS && arbCache.targetParams === paramsKey) {
+    return arbCache.plan;
+  }
+  let wf: weather.WeatherForecast | null = null;
+  try {
+    wf = await weather.getForecast();
+  } catch {
+    wf = null;
+  }
+  const { prEff } = effectivePR();
+  const solarKw = solarForecast(wf?.shortwaveRadiation ?? null, prEff);
+  const loadKw = loadForecast(wf?.temperature ?? null);
+  const bandCodes = bandCodesForDay(new Date());
+  const capKwh = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
+  const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
+  const plan = planArbitrage(solarKw, loadKw, bandCodes, startSoc, capKwh, maxKw, params);
+  arbCache = { at: now, plan, targetParams: paramsKey };
+  return plan;
+}
+
+/** Test/diagnostic helper — drop the arbitrage forecast cache. */
+export function _resetArbitrageCache(): void {
+  arbCache = null;
+}
 
 /** Does this scenario lean toward savings/arbitrage (→ Tesla 'autonomous')? */
 function favoursArbitrage(scenario: store.ScenarioDef): boolean {
@@ -107,6 +154,116 @@ const FC_SOC_CEILING = 98; // don't force-charge an (almost) full battery
  *    charges the Tesla first. 'shadow' just logs the intended idle.
  *  • Otherwise → self-consumption, which discharges to cover the house load.
  */
+// ---- Tariff arbitrage (task #15) -------------------------------------------
+// Combined battery SoC (%) across Sonnen + Tesla, energy-weighted (mirrors brain.ts).
+function combinedSoc(snap: RichSnapshot): number | null {
+  const sKwh = config.assets.sonnenUsableKwh;
+  const tKwh = config.assets.teslaUsableKwh;
+  if (snap.sonnen && snap.tesla) {
+    return (snap.sonnen.soc * sKwh + snap.tesla.soc * tKwh) / (sKwh + tKwh);
+  }
+  return snap.tesla?.soc ?? snap.sonnen?.soc ?? null;
+}
+
+/**
+ * Tariff-arbitrage VALLEY GRID-CHARGE execution. Returns true when it took authority over
+ * the Sonnen this tick (so the caller stops). Acts ONLY when:
+ *   • the rule is enabled + we're armed+auto,
+ *   • the live band is the configured valley (P3) — NEVER P1/P2,
+ *   • the spread ≥ minSpreadEur,
+ *   • we are NOT exporting (surplusOverridesGridCharge: free solar / #34 soak-export wins),
+ *   • the forecast pre-peak SoC target isn't met yet (live combined SoC < target).
+ * It force-charges the Sonnen from grid at min(shortfall-rate, maxGridChargeKw, sonnenMaxW)
+ * via manual mode + forceCharge. It mirrors #34's safety-revert: if we drift out of the
+ * valley, the spread fails, the target is met, or surplus appears, it hands the Sonnen back
+ * to self-consumption (priority write, can't be rate-limited) so a stale manual charge can
+ * never keep importing. Returns false (no authority) so the caller falls through otherwise.
+ *
+ * The PEAK DISCHARGE half is NOT a separate command: self-consumption (the fallback below)
+ * already discharges the battery to cover the house through the peak, and the SoC floor +
+ * Tesla reserve guardrails enforce the discharge floor — so we compose with the existing
+ * discharge logic rather than double-commanding.
+ */
+async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: string): Promise<boolean> {
+  const automation = store
+    .get()
+    .automations.find((a) => a.type === 'tariff_arbitrage' && a.enabled);
+  // Disabled / absent → never act. (Type-narrow to the battery param shape.)
+  if (!automation || automation.type !== 'tariff_arbitrage') return false;
+  const params = automation.params as TariffArbitrageParams;
+
+  const s = snap.sonnen;
+  if (!s) return false; // Sonnen offline — nothing to do
+  const inManual = s.mode === 'manual';
+
+  // Is the Sonnen currently OUR arbitrage charge? We only ever take over to grid-charge in
+  // the valley; if it's in manual for another reason (#34 soak-export), that branch already
+  // ran first and returned, so reaching here in manual means a prior arbitrage charge.
+  const exportW = Math.max(0, snap.gridExportKw * 1000);
+  const exporting = exportW > FC_STOP_W;
+
+  // Valley-band + spread gate. Outside the valley, or if the spread is too small, OR if
+  // surplus appeared, REVERT any lingering arbitrage manual charge to self-consumption.
+  const inValley = snap.band === params.valleyBand;
+  const spreadOk = arbitrageSpreadEur(params) >= params.minSpreadEur;
+  const surplusDefers = params.surplusOverridesGridCharge && exporting;
+
+  // Pre-peak SoC target from the forecast (cached). Best-effort; if unavailable, do NOT
+  // grid-charge (conservative: no forecast ⇒ no speculative buy).
+  const soc = combinedSoc(snap);
+  let targetMet = true;
+  let targetReason = 'no forecast — standing down (conservative)';
+  if (inValley && spreadOk && !surplusDefers && soc !== null) {
+    const arb = await computeArbitragePlan(params, soc);
+    if (arb && arb.active) {
+      targetMet = soc >= arb.targetSocPct;
+      targetReason = `SoC ${Math.round(soc)}% ${targetMet ? '≥' : '<'} target ${Math.round(arb.targetSocPct)}%`;
+    }
+  }
+
+  // Never grid-charge a (near-)full battery (mirrors #34's FC_SOC_CEILING guard).
+  const nearFull = soc !== null && soc >= FC_SOC_CEILING;
+  const shouldCharge = inValley && spreadOk && !surplusDefers && soc !== null && !targetMet && !nearFull;
+
+  if (!shouldCharge) {
+    // REVERT a lingering arbitrage manual charge (safety): out of valley / spread fails /
+    // target met / surplus appeared / near-full. Hand back to self-consumption with a priority
+    // write so it can never be rate-limited. (Not in manual ⇒ just fall through — no command.)
+    if (inManual) {
+      const why = !inValley
+        ? `band ${snap.band} ≠ valley ${params.valleyBand}`
+        : !spreadOk
+          ? `spread < €${params.minSpreadEur.toFixed(2)}`
+          : surplusDefers
+            ? 'surplus present — defer to soak-export'
+            : nearFull
+              ? `SoC ${Math.round(soc ?? 0)}% ≥ ceiling`
+              : targetReason;
+      await issue('sonnen', 'mode', '2', `${reason}: end arbitrage grid-charge (${why}) — back to self-consumption`, snap, {
+        priority: true,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // ENGAGE valley grid-charge. Per-tick rate = maxGridChargeKw, clamped to the sonnenMaxW
+  // guardrail (the SoC-target check above stops us at target; near-full is gated above),
+  // favouring a steady safe fill.
+  const wantW = Math.min(params.maxGridChargeKw * 1000, store.get().control.guardrails.sonnenMaxW);
+  const watt = checkSonnenWatts(wantW, 'charge', snap);
+  // Mode FIRST (a charge setpoint is rejected unless the Sonnen reports manual).
+  await issue('sonnen', 'mode', '1', `${reason}: arbitrage valley grid-charge (${targetReason}, band ${snap.band})`, snap);
+  await issue(
+    'sonnen',
+    'charge',
+    watt.value,
+    `${reason}: arbitrage grid-charge ${watt.value}W — pre-buy ${params.valleyBand} for ${params.peakBand} peak`,
+    snap,
+  );
+  return true;
+}
+
 async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: PriorityPlan): Promise<void> {
   const s = snap.sonnen;
   if (!s) return; // offline — nothing to do
@@ -126,36 +283,41 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
     const exportW = Math.max(0, snap.gridExportKw * 1000);
     const socPct = s.soc;
     const inManual = s.mode === 'manual'; // currently force-charging?
+    const exporting = exportW > FC_STOP_W;
 
-    // REVERT (safety-critical): export collapsed OR battery (near-)full → hand
-    // control back to self-consumption firmware. Manual mode disables firmware
-    // self-consumption, so a stale manual charge during a cloud-driven surplus
-    // collapse would IMPORT from the grid — the revert must always be able to fire,
-    // so it bypasses the per-lever rate-limit (priority).
-    if (inManual && (exportW <= FC_STOP_W || socPct >= FC_SOC_CEILING)) {
-      const why = socPct >= FC_SOC_CEILING ? `SoC ${socPct}% ≥ ceiling` : `export ${Math.round(exportW)}W ≤ ${FC_STOP_W}W`;
-      await issue('sonnen', 'mode', '2', `${reason}: end soak-export (${why}) — back to self-consumption`, snap, {
-        priority: true,
-      });
-      return;
+    // PRIORITY ORDER: free solar (#@34 soak-export) > valley grid-charge (arbitrage) >
+    // battery-through-peak / Tesla-first / self-consumption (below).
+    //
+    // (A) FREE SOLAR — #34 soak-export. When there's net export, the surplus is worth ~nothing
+    //     in Spain, so absorb it. This OUTRANKS arbitrage grid-charge: while exporting we never
+    //     grid-buy. The engage/continue hysteresis + the priority safety-revert are unchanged.
+    if (exporting || (inManual && exportW > 0)) {
+      // REVERT (safety-critical): export collapsed OR battery (near-)full → hand control back
+      // to self-consumption. A stale manual charge during a surplus collapse would IMPORT, so
+      // this revert must always be able to fire (priority bypasses the rate-limit).
+      if (inManual && (exportW <= FC_STOP_W || socPct >= FC_SOC_CEILING)) {
+        const why = socPct >= FC_SOC_CEILING ? `SoC ${socPct}% ≥ ceiling` : `export ${Math.round(exportW)}W ≤ ${FC_STOP_W}W`;
+        await issue('sonnen', 'mode', '2', `${reason}: end soak-export (${why}) — back to self-consumption`, snap, {
+          priority: true,
+        });
+        return;
+      }
+      // ENGAGE / CONTINUE (hysteresis): headroom (SoC < ceiling) AND export over the threshold.
+      const engageThreshold = inManual ? FC_STOP_W : FC_START_W;
+      if (exportW > engageThreshold && socPct < FC_SOC_CEILING) {
+        const watt = checkSonnenWatts(Math.min(exportW, store.get().control.guardrails.sonnenMaxW), 'charge', snap);
+        await issue('sonnen', 'mode', '1', `${reason}: soak-export — absorb surplus before it spills to grid`, snap);
+        await issue('sonnen', 'charge', watt.value, `${reason}: soak-export ${watt.value}W (export ${Math.round(exportW)}W, SoC ${socPct}%)`, snap);
+        return;
+      }
+      // Below FC_START_W and not already charging (or at the ceiling): fall through.
+    } else {
+      // (B) VALLEY GRID-CHARGE — tariff arbitrage. Runs ONLY when NOT exporting (free solar
+      //     above always wins). Pre-buys cheap valley grid up to the forecast pre-peak target,
+      //     and reverts any lingering arbitrage manual charge to self-consumption when it
+      //     should stop. Takes Sonnen authority (returns true) when it acts.
+      if (await coordinateArbitrageValleyCharge(snap, reason)) return;
     }
-
-    // ENGAGE / CONTINUE (hysteresis): battery has headroom (SoC < ceiling) AND
-    //   • not yet charging → engage only once export clears the HIGH threshold; or
-    //   • already charging → keep charging until export drops below the LOW one
-    //     (the revert above handles the < FC_STOP_W case), tracking live export.
-    // So within the deadband we hold whatever state we're in — no flapping.
-    // Issue the mode FIRST (the charge setpoint is rejected unless the Sonnen
-    // reports manual). checkSonnenWatts clamps to [0, sonnenMaxW=4600].
-    const engageThreshold = inManual ? FC_STOP_W : FC_START_W;
-    if (exportW > engageThreshold && socPct < FC_SOC_CEILING) {
-      const watt = checkSonnenWatts(Math.min(exportW, store.get().control.guardrails.sonnenMaxW), 'charge', snap);
-      await issue('sonnen', 'mode', '1', `${reason}: soak-export — absorb surplus before it spills to grid`, snap);
-      await issue('sonnen', 'charge', watt.value, `${reason}: soak-export ${watt.value}W (export ${Math.round(exportW)}W, SoC ${socPct}%)`, snap);
-      return;
-    }
-    // Below FC_START_W and NOT already charging (or at the ceiling): fall through
-    // to the existing self-consumption / Tesla-first idle logic below.
   }
 
   const cp = plan.charge;

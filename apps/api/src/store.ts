@@ -351,7 +351,7 @@ export interface Schedule {
 // either. The two rules share ONE param shape (below) to minimise churn: a cooling rule
 // reads the cooling fields (roomTempLimitC → targetSetpointC) and a heating rule reads the
 // heating fields (heatRoomFloorC → heatTargetSetpointC).
-export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat';
+export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat' | 'tariff_arbitrage';
 
 /**
  * Params shared by both single-direction solar-surplus rules. A rule reads only the
@@ -385,14 +385,60 @@ export interface SolarSurplusPrecoolParams {
   startThresholdW?: number;
 }
 
+/**
+ * Params for the TARIFF-ARBITRAGE battery automation (task #15). A weather/forecast-aware
+ * rule that shifts grid purchases from the P1 peak to the P3 valley: pre-charge the batteries
+ * from cheap grid when the day's solar won't cover the peak, discharge through P1 to avoid
+ * pricey imports. SOLAR-FIRST (only buy the forecast shortfall) and LIVE-self-correcting (if
+ * solar surges and we're exporting, the planned buy stands down and the #34 soak-export takes
+ * over). Seeded DISABLED; only ever acts when enabled && armed && mode==='auto'.
+ */
+export interface TariffArbitrageParams {
+  /** Pre-peak SoC target ceiling (%): never grid-charge above this. */
+  peakTargetSocPct: number;
+  /** Max grid-charge power into the Sonnen during the valley (kW; clamped to sonnenMaxW). */
+  maxGridChargeKw: number;
+  /** Minimum P1−P3 price spread (€/kWh) for the arbitrage to be worthwhile. */
+  minSpreadEur: number;
+  /** Discharge floor (%) the peak discharge respects (≥ Tesla reserve / SoC floor). */
+  dischargeFloorPct: number;
+  /** Only buy the shortfall the forecast solar won't provide (true = solar-first). */
+  solarShortfallOnly: boolean;
+  /** When exporting (live surplus), defer to #34 soak-export and DON'T grid-buy. */
+  surplusOverridesGridCharge: boolean;
+  /**
+   * Valley band for grid-charging (cheap window). Derived from the live tariff (P3),
+   * overridable. Grid-charge is permitted ONLY while the live band equals this.
+   */
+  valleyBand: Band;
+  /**
+   * Peak band to discharge through (expensive window). Derived from the live tariff (P1),
+   * overridable. Grid-charge is NEVER permitted in this band (nor in P2).
+   */
+  peakBand: Band;
+}
+
+/** Discriminated automation params: the surplus rules carry the climate shape; the
+ *  tariff-arbitrage rule carries the battery shape. The coordinator narrows on `type`. */
+export type AutomationParams = SolarSurplusPrecoolParams | TariffArbitrageParams;
+
 export interface Automation {
   id: string;
   name: string;
   enabled: boolean;
   type: AutomationType;
-  params: SolarSurplusPrecoolParams;
+  /** Shape depends on `type`: SolarSurplusPrecoolParams for the surplus rules,
+   *  TariffArbitrageParams for `tariff_arbitrage`. Narrow on `type` before reading. */
+  params: AutomationParams;
   /** Epoch ms of the last coordinator evaluation. */
   lastEval: number | null;
+}
+
+/** Type guard: a tariff-arbitrage automation (battery rule), narrowing its params shape. */
+export function isTariffArbitrage(
+  a: Automation,
+): a is Automation & { params: TariffArbitrageParams } {
+  return a.type === 'tariff_arbitrage';
 }
 
 /**
@@ -405,6 +451,25 @@ export const SOLAR_SURPLUS_COOL_AUTOMATION_ID = 'solar-surplus-cool';
 export const SOLAR_SURPLUS_HEAT_AUTOMATION_ID = 'solar-surplus-heat';
 /** @deprecated kept for back-compat with any importers of the pre-split single id. */
 export const SOLAR_SURPLUS_AUTOMATION_ID = SOLAR_SURPLUS_COOL_AUTOMATION_ID;
+
+/** STABLE canonical id for the seeded tariff-arbitrage default (task #15). Pinned so a
+ *  relabel never drifts the id; the dismissal + de-dupe logic keys off it (and its type). */
+export const TARIFF_ARBITRAGE_AUTOMATION_ID = 'tariff-arbitrage';
+
+/** Conservative default params for the tariff-arbitrage rule. Defaults match the
+ *  owner-approved proposal; valley/peak default to the live tariff bands (P3/P1). */
+export function defaultTariffArbitrageParams(): TariffArbitrageParams {
+  return {
+    peakTargetSocPct: 90,
+    maxGridChargeKw: 4.6,
+    minSpreadEur: 0.1,
+    dischargeFloorPct: 20,
+    solarShortfallOnly: true,
+    surplusOverridesGridCharge: true,
+    valleyBand: 'P3',
+    peakBand: 'P1',
+  };
+}
 
 export interface ClimateGuardrails {
   setpointMinC: number;
@@ -674,6 +739,16 @@ export function defaultAutomations(): Automation[] {
         exitBand: 'P1',
         startThresholdW: 800,
       },
+      lastEval: null,
+    },
+    {
+      // Tariff arbitrage (task #15) — battery rule. SEEDED DISABLED: shipping it must NOT
+      // change battery behavior. It only ever acts when enabled && armed && mode==='auto'.
+      id: TARIFF_ARBITRAGE_AUTOMATION_ID,
+      name: 'Tariff arbitrage',
+      enabled: false,
+      type: 'tariff_arbitrage',
+      params: defaultTariffArbitrageParams(),
       lastEval: null,
     },
   ];
