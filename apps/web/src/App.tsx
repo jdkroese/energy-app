@@ -9,7 +9,6 @@ import { Batteries } from './screens/Batteries';
 import { BatteryDetail } from './screens/BatteryDetail';
 import { Devices } from './screens/Devices';
 import { DeviceDetail } from './screens/DeviceDetail';
-import { Schedules } from './screens/Schedules';
 import { Automations } from './screens/Automations';
 import { Login } from './screens/auth/Login';
 import { Setup } from './screens/auth/Setup';
@@ -48,7 +47,9 @@ function AppRoutes() {
           <Route path="/batteries/:id" element={<BatteryDetail ctx={ctx} />} />
           <Route path="/devices" element={<Devices ctx={ctx} />} />
           <Route path="/devices/:id" element={<DeviceDetail ctx={ctx} />} />
-          <Route path="/schedules" element={<Schedules ctx={ctx} />} />
+          {/* /schedules folded into Automations behind a tab — keep the path as a
+              back-compat redirect to the Schedules tab for bookmarks/links. */}
+          <Route path="/schedules" element={<Navigate to="/automations?tab=schedules" replace />} />
           <Route path="/automations" element={<Automations ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}
           <Route path="/login" element={<Navigate to="/" replace />} />
