@@ -19,16 +19,16 @@ export function AutomationRow({
   onSave,
   subtitle = 'Automation · climate',
   icon = 'zap',
-  iconColor = 'var(--solar)',
+  iconColor = 'var(--battery)',
   dim = false,
 }: {
   automation: Automation;
   canWrite: boolean;
   onSave: (patch: Partial<Automation>) => void;
   subtitle?: string;
-  /** Lucide icon name — defaults to the cooling bolt; heating passes 'flame'. */
+  /** Lucide icon name — the surplus bolt ('zap') for both cool and heat. */
   icon?: string;
-  /** Icon hue — cooling --solar (default), heating --grid. */
+  /** Bolt hue — cooling --battery (blue, default), heating --grid (orange). */
   iconColor?: string;
   /** Visually de-emphasise when control is disarmed (the rule can't act). */
   dim?: boolean;

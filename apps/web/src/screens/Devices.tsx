@@ -268,15 +268,16 @@ function PowerToggle({ on, disabled, syncing, onToggle }: { on: boolean; disable
   );
 }
 
-/** Solar flame — three states: lit (free surplus), dim (on paid energy), faint (not pre-heating). */
-function SolarFlame({ enrolled, demand, exporting }: { enrolled: boolean; demand: boolean; exporting: boolean }) {
+/** Solar bolt — three states: lit (free surplus), dim (on paid energy), faint (not pre-heating).
+ *  Orange (--grid) = pre-heat; matches the unified surplus-bolt icon system (cool = blue bolt). */
+function SolarBolt({ enrolled, demand, exporting }: { enrolled: boolean; demand: boolean; exporting: boolean }) {
   const lit = enrolled && demand && exporting;
   const dim = enrolled && demand && !exporting;
   const color = lit ? 'var(--grid)' : dim ? 'var(--grid)' : 'var(--text-3)';
   const opacity = lit ? 1 : dim ? 0.32 : 0.25;
   return (
     <span title={lit ? 'Heating on free solar surplus' : dim ? 'Pre-heat enrolled — on paid energy now' : 'Not in solar pre-heat'} style={{ display: 'inline-flex', filter: lit ? 'drop-shadow(0 0 5px var(--grid))' : 'none', opacity }}>
-      <Icon name="flame" size={16} color={color} />
+      <Icon name="zap" size={16} color={color} />
     </span>
   );
 }
@@ -327,18 +328,18 @@ function HeatRow({ d, wide, canWrite, exporting, pending, sendLever, onOpen }: {
   const cycleMode = () => sendLever(d.id, 'mode', nextMode(mode, available), 0);
   const togglePower = () => sendLever(d.id, 'power', !power, 0);
 
-  const flame = <SolarFlame enrolled={d.automationEnabled} demand={demand} exporting={exporting} />;
+  const bolt = <SolarBolt enrolled={d.automationEnabled} demand={demand} exporting={exporting} />;
 
   if (!wide) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 12px' }}>
-        {/* line 1: name · flame · room temp · power */}
+        {/* line 1: name · bolt · room temp · power */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button type="button" onClick={onOpen} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
             <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-1)' }}>{d.name}</div>
             {d.room && d.room !== d.name && <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{d.room}</div>}
           </button>
-          {flame}
+          {bolt}
           <span className="pwr-mono" style={{ fontSize: 13, color: WARMTH_COLOR[d.warmth], minWidth: 42, textAlign: 'right' }}>{t1(d.currentTempC)}</span>
           <PowerToggle on={power} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} />
         </div>
@@ -363,7 +364,7 @@ function HeatRow({ d, wide, canWrite, exporting, pending, sendLever, onOpen }: {
       </button>
       <span style={{ justifySelf: 'start', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '3px 8px', borderRadius: 'var(--radius-pill)', background: st.bg, color: st.color }}>{st.label}</span>
       <span style={{ justifySelf: 'start' }}><ModeChip mode={mode} available={available} disabled={!canWrite || !power} syncing={pending.mode !== undefined} onCycle={cycleMode} /></span>
-      <span style={{ justifySelf: 'center' }}>{flame}</span>
+      <span style={{ justifySelf: 'center' }}>{bolt}</span>
       <span style={{ justifySelf: 'end' }}><SetpointStepper value={setpoint} lo={lo} hi={hi} step={step} disabled={!canWrite || !power} syncing={pending.setpoint !== undefined} onStep={clampStep} /></span>
       <span className="pwr-mono" style={{ textAlign: 'right', fontSize: 13, color: WARMTH_COLOR[d.warmth] }}>{t1(d.currentTempC)}</span>
       <span style={{ justifySelf: 'end' }}><PowerToggle on={power} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} /></span>
@@ -486,7 +487,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {/* AUTOPILOT ROW — shared automation object (read/write here and on Automations) */}
       {automation && (
         <Card padded style={{ padding: '13px 15px' }}>
-          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Automation · cooling" dim={!armed} />
+          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Automation · cooling" icon="zap" iconColor="var(--battery)" dim={!armed} />
           {disarmedNote}
         </Card>
       )}
@@ -528,10 +529,10 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
         <SummaryTile label="Surplus" value={surplus != null ? `${surplus >= 0 ? '+' : ''}${surplus} kW` : '—'} color="var(--grid)" accent="grid" />
       </div>
 
-      {/* AUTOPILOT ROW — shared automation object; flame icon (--grid) */}
+      {/* AUTOPILOT ROW — shared automation object; orange bolt (--grid) */}
       {automation && (
         <Card padded style={{ padding: '13px 15px' }}>
-          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Automation · heating" icon="flame" iconColor="var(--grid)" dim={!armed} />
+          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Automation · heating" icon="zap" iconColor="var(--grid)" dim={!armed} />
           {disarmedNote}
         </Card>
       )}
