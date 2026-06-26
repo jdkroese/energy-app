@@ -500,7 +500,13 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     void api.devices.setSettings(id, patch).then(() => refetch());
   };
 
-  const automation: Automation | null = autoData?.automations?.[0] ?? null;
+  // The Cooling hub shows the COOLING surplus rule (solar_surplus_precool); the heating
+  // rule lives on the Automations screen. Fall back to the first automation for any
+  // legacy single-rule install.
+  const automation: Automation | null =
+    autoData?.automations?.find((a) => a.type === 'solar_surplus_precool') ??
+    autoData?.automations?.[0] ??
+    null;
   const saveAuto = (patch: Partial<Automation>) => {
     if (!automation) return;
     void api.automations.update(automation.id, patch).then(() => refetchAuto());
@@ -531,7 +537,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {/* AUTOPILOT ROW — shared automation object (read/write here and on Automations) */}
       {automation && (
         <Card padded style={{ padding: '13px 15px' }}>
-          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Solar-surplus climate · pre-cools when warm, heats when cold — on surplus" icon="zap" iconColor="var(--battery)" dim={!armed} />
+          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Solar-surplus cooling · cools enrolled HVAC when a room is warm — on surplus" icon="zap" iconColor="var(--battery)" dim={!armed} />
           {disarmedNote}
         </Card>
       )}

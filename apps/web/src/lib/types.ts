@@ -625,10 +625,22 @@ export interface SchedulesResponse {
   schedules: Schedule[];
 }
 
+/**
+ * Params shared by both single-direction solar-surplus rules. A rule reads only its own
+ * direction's fields: a COOLING rule (solar_surplus_precool) uses roomTempLimitC →
+ * targetSetpointC; a HEATING rule (solar_surplus_preheat) uses heatRoomFloorC →
+ * heatTargetSetpointC. Both are serialised so a save never drops the other direction's
+ * target (matches the API sanitiser).
+ */
 export interface SolarSurplusPrecoolParams {
-  /** Comfort limit (°C): cooling runs while room > limit; heating while room < limit. */
+  /** Cooling trigger (°C): cooling runs while room > this limit. */
   roomTempLimitC: number;
+  /** Cooling target setpoint to drive the room down toward (°C). */
   targetSetpointC: number;
+  /** Heating trigger (°C): heating runs while room < this floor. */
+  heatRoomFloorC?: number;
+  /** Heating target setpoint to drive the room up toward (°C). */
+  heatTargetSetpointC?: number;
   surplusClearSec: number;
   /** Whether the tariff-band stand-down applies at all. Default true (undefined ⇒ on). */
   bandRestrictionEnabled?: boolean;
@@ -636,11 +648,14 @@ export interface SolarSurplusPrecoolParams {
   startThresholdW?: number;
 }
 
+/** COOLING rule = solar_surplus_precool · HEATING rule = solar_surplus_preheat. */
+export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat';
+
 export interface Automation {
   id: string;
   name: string;
   enabled: boolean;
-  type: 'solar_surplus_precool' | 'solar_surplus_preheat';
+  type: AutomationType;
   params: SolarSurplusPrecoolParams;
   lastEval: number | null;
 }

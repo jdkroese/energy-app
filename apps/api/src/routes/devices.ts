@@ -513,14 +513,24 @@ function sanitizeParams(p: Partial<SolarSurplusPrecoolParams> | undefined, base:
 export function createAutomation(body: Partial<Automation>): unknown {
   const type: Automation['type'] =
     body.type === 'solar_surplus_preheat' ? 'solar_surplus_preheat' : 'solar_surplus_precool';
-  // Defaults flip with the type: precool acts above 25→23°C; preheat below 19→21°C.
-  const base: SolarSurplusPrecoolParams =
-    type === 'solar_surplus_preheat'
-      ? { roomTempLimitC: 19, targetSetpointC: 21, heatRoomFloorC: 19, heatTargetSetpointC: 21, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 }
-      : { roomTempLimitC: 25, targetSetpointC: 23, heatRoomFloorC: 19, heatTargetSetpointC: 21, surplusClearSec: 120, bandRestrictionEnabled: true, exitBand: 'P1', startThresholdW: 800 };
+  // Both directions carry the full param shape (so a save never drops the other side's
+  // target); the coordinator reads only its own direction. Cooling triggers warm 25→23°C,
+  // heating triggers cold 19→21°C.
+  const base: SolarSurplusPrecoolParams = {
+    roomTempLimitC: 25,
+    targetSetpointC: 23,
+    heatRoomFloorC: 19,
+    heatTargetSetpointC: 21,
+    surplusClearSec: 120,
+    bandRestrictionEnabled: true,
+    exitBand: 'P1',
+    startThresholdW: 800,
+  };
   const a: Automation = {
     id: newId('auto'),
-    name: body.name?.trim() || (type === 'solar_surplus_preheat' ? 'Solar-surplus pre-heat' : 'New automation'),
+    name:
+      body.name?.trim() ||
+      (type === 'solar_surplus_preheat' ? 'Solar-surplus heating' : 'Solar-surplus cooling'),
     enabled: body.enabled ?? false,
     type,
     params: sanitizeParams(body.params, base),

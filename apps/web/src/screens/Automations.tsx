@@ -78,26 +78,34 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
 
   const save = async () => { setBusy(true); try { await onSave({ enabled, params: p }); setEditing(false); } finally { setBusy(false); } };
 
-  // Unified "solar climate" rule: it drives the Intesis HVAC fleet on surplus —
-  // cooling when a room is warm, heating when a room is cold. (Airzone underfloor is
-  // no longer surplus-eligible, so this rule no longer touches it.)
-  const tone = 'var(--solar)';
-  const wash = 'var(--solar-wash)';
+  // Single-direction rule: COOLING (solar_surplus_precool) cools warm rooms, HEATING
+  // (solar_surplus_preheat) heats cold rooms. Render every block for the rule's own
+  // direction only. (Airzone underfloor is excluded from both.)
+  const heating = a.type === 'solar_surplus_preheat';
+  const triggerC = heating ? (p.heatRoomFloorC ?? 19) : p.roomTempLimitC;
+  const targetC = heating ? (p.heatTargetSetpointC ?? 21) : p.targetSetpointC;
+  const verb = heating ? 'heat' : 'cool';
+  const tone = heating ? 'var(--grid)' : 'var(--battery)';
+  const wash = heating ? 'var(--grid-wash)' : 'var(--battery-wash)';
 
   const surplus = surplusKw(live);
   const soc = batterySoc(live);
-  // HVAC rooms warmer than the comfort limit (the rule would cool them on surplus),
-  // split by whether they're included in automation. The rule (and the coordinator)
-  // only act on included cooling rooms — but a room being *off the limit yet excluded*
-  // is the common "why is nothing happening?" case, so surface it explicitly.
-  const offLimit = (devData?.devices ?? []).filter(
+  // Rooms that QUALIFY for this direction right now: cooling wants rooms ABOVE the warm
+  // limit, heating wants rooms BELOW the cold floor. Enrolment is per-direction
+  // (solarCoolEnabled / solarHeatEnabled). Split into included (rule would act) vs
+  // excluded (off-trigger but not enrolled) — the common "why is nothing happening?" case.
+  // Both rules target the Intesis HVAC fleet (device type 'cooling'); Airzone underfloor
+  // ('heating') is excluded from surplus. The heat rule runs those HVAC units in heat mode.
+  const offTrigger = (devData?.devices ?? []).filter(
     (d) =>
       d.type === 'cooling' &&
       d.currentTempC != null &&
-      d.currentTempC > p.roomTempLimitC,
+      (heating ? d.currentTempC < triggerC : d.currentTempC > triggerC),
   );
-  const qualifying = offLimit.filter((d) => d.automationEnabled);
-  const excluded = offLimit.filter((d) => !d.automationEnabled);
+  const enrolled = (d: { solarCoolEnabled?: boolean; solarHeatEnabled?: boolean }) =>
+    heating ? !!d.solarHeatEnabled : !!d.solarCoolEnabled;
+  const qualifying = offTrigger.filter(enrolled);
+  const excluded = offTrigger.filter((d) => !enrolled(d));
   const bandOn = p.bandRestrictionEnabled ?? true;
 
   return (
@@ -116,10 +124,10 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       {/* WHEN / DO / UNTIL / LIMITS */}
       <Block label="When" color="var(--battery)" wash="var(--battery-wash)">
         <Tok>solar surplus</Tok><span style={{ color: 'var(--text-3)' }}>&gt;</span><Tok>battery intake headroom</Tok>
-        <span style={{ color: 'var(--text-3)' }}>and</span><Tok>a room is warm</Tok><span style={{ color: 'var(--text-3)' }}>&gt;</span><Tok color="var(--grid)">{p.roomTempLimitC.toFixed(1)}°</Tok>
+        <span style={{ color: 'var(--text-3)' }}>and</span><Tok>a room is {heating ? 'cold' : 'warm'}</Tok><span style={{ color: 'var(--text-3)' }}>{heating ? '<' : '>'}</span><Tok color="var(--grid)">{triggerC.toFixed(1)}°</Tok>
       </Block>
       <Block label="Do" color={tone} wash={wash}>
-        run the <Tok>HVAC units</Tok> — <Tok color="var(--battery)">cool</Tok> when warm, <Tok color="var(--grid)">heat</Tok> when cold — at <Tok color={tone}>{p.targetSetpointC.toFixed(1)}°</Tok>, <Tok>staggered ≤ 14 kW</Tok>
+        run the <Tok>HVAC units</Tok> — <Tok color={tone}>{verb}</Tok> — to <Tok color={tone}>{targetC.toFixed(1)}°</Tok>, <Tok>staggered ≤ 14 kW</Tok>
       </Block>
       <Block label="Until" color="var(--home)" wash="var(--home-wash)">
         surplus clears <span style={{ color: 'var(--text-3)' }}>for</span> <Tok>{p.surplusClearSec}s</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> room reaches target
@@ -140,21 +148,21 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
         </div>
         {qualifying.length > 0 ? (
           <>
-            <div style={{ fontSize: 12.5, marginBottom: 8 }}>{qualifying.length} room{qualifying.length > 1 ? 's' : ''} qualify — would cool to {p.targetSetpointC.toFixed(1)}°:</div>
+            <div style={{ fontSize: 12.5, marginBottom: 8 }}>{qualifying.length} room{qualifying.length > 1 ? 's' : ''} qualify — would {verb} to {targetC.toFixed(1)}°:</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {qualifying.slice(0, 6).map((d) => (
-                <span key={d.id} className="pwr-mono" style={{ fontSize: 11.5, background: wash, color: tone, borderRadius: 8, padding: '5px 10px' }}>{d.name} · {d.currentTempC!.toFixed(1)}°→{p.targetSetpointC.toFixed(0)}°</span>
+                <span key={d.id} className="pwr-mono" style={{ fontSize: 11.5, background: wash, color: tone, borderRadius: 8, padding: '5px 10px' }}>{d.name} · {d.currentTempC!.toFixed(1)}°→{targetC.toFixed(0)}°</span>
               ))}
             </div>
           </>
         ) : surplus <= 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
-            No solar surplus right now — rule is idle.{excluded.length > 0 ? ` (${excluded.length} room${excluded.length > 1 ? 's' : ''} above ${p.roomTempLimitC.toFixed(1)}°, but not included in automation.)` : ''}
+            No solar surplus right now — rule is idle.{excluded.length > 0 ? ` (${excluded.length} room${excluded.length > 1 ? 's' : ''} ${heating ? 'below' : 'above'} ${triggerC.toFixed(1)}°, but not included in automation.)` : ''}
           </div>
         ) : excluded.length > 0 ? (
           <>
             <div style={{ fontSize: 12.5, marginBottom: 8, color: 'var(--text-2)' }}>
-              {excluded.length} room{excluded.length > 1 ? 's are' : ' is'} above {p.roomTempLimitC.toFixed(1)}° but not included in automation — open the device and tap “Include in automation” to let the rule cool {excluded.length > 1 ? 'them' : 'it'}:
+              {excluded.length} room{excluded.length > 1 ? 's are' : ' is'} {heating ? 'below' : 'above'} {triggerC.toFixed(1)}° but not included in automation — open the device and tap “Include in automation” to let the rule {verb} {excluded.length > 1 ? 'them' : 'it'}:
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {excluded.slice(0, 6).map((d) => (
@@ -163,7 +171,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
             </div>
           </>
         ) : (
-          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>No rooms above the limit right now — nothing to cool.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>No rooms {heating ? 'below' : 'above'} the {heating ? 'floor' : 'limit'} right now — nothing to {verb}.</div>
         )}
       </div>
 
@@ -175,8 +183,17 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       )}
       {editing && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4, borderTop: '1px solid var(--border-1)' }}>
-          <Slider label="Cool when room above" unit="°C" min={20} max={30} step={0.5} value={p.roomTempLimitC} onChange={(v) => set({ roomTempLimitC: v })} />
-          <Slider label="Cool to target" unit="°C" min={16} max={26} step={0.5} value={p.targetSetpointC} onChange={(v) => set({ targetSetpointC: v })} />
+          {heating ? (
+            <>
+              <Slider label="Heat when room below" unit="°C" min={14} max={24} step={0.5} value={p.heatRoomFloorC ?? 19} onChange={(v) => set({ heatRoomFloorC: v })} />
+              <Slider label="Heat to target" unit="°C" min={16} max={26} step={0.5} value={p.heatTargetSetpointC ?? 21} onChange={(v) => set({ heatTargetSetpointC: v })} />
+            </>
+          ) : (
+            <>
+              <Slider label="Cool when room above" unit="°C" min={20} max={30} step={0.5} value={p.roomTempLimitC} onChange={(v) => set({ roomTempLimitC: v })} />
+              <Slider label="Cool to target" unit="°C" min={16} max={26} step={0.5} value={p.targetSetpointC} onChange={(v) => set({ targetSetpointC: v })} />
+            </>
+          )}
           <Slider label="Surplus must clear for" unit=" s" min={30} max={600} step={30} value={p.surplusClearSec} onChange={(v) => set({ surplusClearSec: v })} />
           <div>
             <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Price-band stand-down</div>
