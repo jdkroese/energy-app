@@ -7,6 +7,7 @@ import * as tuya from '../connectors/tuya';
 import * as blinds from '../connectors/tuya-blinds';
 import type { BlindLever, BlindUnit } from '../connectors/tuya-blinds';
 import * as store from '../store';
+import { markManualOverride } from '../control/climate-coordinator';
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -83,6 +84,7 @@ export async function commandBlind(id: string, lever: BlindLever, value: unknown
   const commands = blinds.buildCommands(d, lever, value, invert); // may throw BAD_INPUT
   await tuya.sendCommands(id, commands);
   tuya.invalidateFleet(); // reflect the change on the next read immediately
+  markManualOverride(id); // a manual move pauses any blinds schedule on this unit
   return { ts: new Date().toISOString(), ok: true, id, lever, commands };
 }
 

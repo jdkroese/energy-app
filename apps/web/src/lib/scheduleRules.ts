@@ -82,8 +82,17 @@ export function wouldOverlapUnit(candidate: Schedule, deviceId: string, all: Sch
 const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 const fanLabel = (f: Action['fan']): string => (f === 'auto' ? 'auto' : `fan ${f}`);
 
-/** Short mono action summary, e.g. "cool 24° · fan auto". */
-export function actionSummary(a: Action): string {
+/** Blinds target → label: "open" / "close" / "to 40%". */
+export function blindTargetLabel(positionPct: number): string {
+  if (positionPct >= 98) return 'open';
+  if (positionPct <= 2) return 'close';
+  return `to ${positionPct}% open`;
+}
+
+/** Short mono action summary, e.g. "cool 24° · fan auto" (or "close" for blinds). */
+export function actionSummary(s: Schedule): string {
+  if (s.type === 'blinds') return blindTargetLabel(s.action.positionPct ?? 0);
+  const a = s.action;
   if (!a.power) return 'off';
   const parts = [`${a.mode} ${a.setpointC}°`];
   if (a.fan !== 'auto') parts.push(fanLabel(a.fan));
@@ -107,6 +116,7 @@ export const TYPE_LABEL: Record<DeviceType, string> = {
   heating: 'Heating',
   lighting: 'Lighting',
   circuit: 'Circuits',
+  blinds: 'Blinds',
 };
 
 /** Accent colour per device type, matching the Power palette. */
@@ -115,27 +125,33 @@ export const TYPE_COLOR: Record<DeviceType, string> = {
   heating: 'var(--grid)',
   lighting: 'var(--solar)',
   circuit: 'var(--home)',
+  blinds: 'var(--ev)',
 };
 
 /** A fresh default rule for "+ Add rule" on a given unit + type. */
 export function newRuleDraft(opts: { type: DeviceType; deviceId: string; name?: string }): Schedule {
   const isHeat = opts.type === 'heating';
+  const isBlind = opts.type === 'blinds';
+  // Climate fields are required by Action but ignored on a blinds rule.
+  const baseClimate = {
+    power: true,
+    mode: (isHeat ? 'heat' : 'cool') as Action['mode'],
+    setpointC: isHeat ? 21 : 24,
+    fan: 'auto' as const,
+    vaneUpDown: 'auto' as const,
+    vaneLeftRight: 'auto' as const,
+  };
   return {
     id: '',
-    name: opts.name ?? (isHeat ? 'Heating rule' : 'Cooling rule'),
+    name: opts.name ?? (isBlind ? 'Close at night' : isHeat ? 'Heating rule' : 'Cooling rule'),
     enabled: true,
     type: opts.type,
     scope: { kind: 'unit', deviceId: opts.deviceId },
     days: [1, 2, 3, 4, 5],
-    windows: [{ start: isHeat ? '06:00' : '14:00', end: isHeat ? '08:00' : '17:00' }],
-    action: {
-      power: true,
-      mode: isHeat ? 'heat' : 'cool',
-      setpointC: isHeat ? 21 : 24,
-      fan: 'auto',
-      vaneUpDown: 'auto',
-      vaneLeftRight: 'auto',
-    },
+    windows: isBlind
+      ? [{ start: '21:00', end: '07:00' }] // close overnight by default
+      : [{ start: isHeat ? '06:00' : '14:00', end: isHeat ? '08:00' : '17:00' }],
+    action: isBlind ? { ...baseClimate, positionPct: 0 } : baseClimate,
     condition: { kind: 'always' },
   };
 }
