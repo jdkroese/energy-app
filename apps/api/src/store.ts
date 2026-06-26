@@ -381,6 +381,14 @@ export interface Automation {
   lastEval: number | null;
 }
 
+/**
+ * STABLE canonical id for the seeded solar-surplus "solar climate" default. Pinned so
+ * future relabels/retargets of the default never drift its id — the dismissal +
+ * de-dupe logic keys off this. Older installs may carry a different persisted id for
+ * the same rule; the de-dupe collapses by `type` so those are treated as the same rule.
+ */
+export const SOLAR_SURPLUS_AUTOMATION_ID = 'solar-surplus-precool';
+
 export interface ClimateGuardrails {
   setpointMinC: number;
   setpointMaxC: number;
@@ -413,14 +421,18 @@ export interface DevicesState {
   /** deviceId → epoch ms until which automation defers to a manual command. */
   manualOverrides: Record<string, number>;
   /**
-   * Sticky, PERSISTED manual-ON ownership: deviceId → true once the user manually
-   * powers a unit ON, cleared on a manual power OFF. Distinct from the timed
-   * `manualOverrides` hold (which expires): while a unit is `manualOn`, the surplus
-   * automation treats it as user-owned and will never power it off or retune its
-   * mode/setpoint. A unit is "auto-owned" iff it is NOT manualOn — so auto-ownership
-   * is derivable and survives a restart. Manual ON → manual OFF only.
+   * PERSISTED provenance: the ids of units the solar-surplus rule itself switched ON.
+   * This is the SINGLE SOURCE OF TRUTH for ownership and survives a restart/deploy:
+   *   • A unit IN this set is rule-owned — the surplus rule may stop/retune it.
+   *   • A unit that is powered ON but NOT in this set (dashboard, physical remote, or a
+   *     schedule turned it on) is treated as MANUAL — the rule never powers it off and
+   *     never retunes its mode/setpoint, and the UI shows the manual (hand) marker.
+   * The rule adds an id when it starts a unit, and drops it when it stops the unit, the
+   * unit is observed OFF, or the user takes manual control of it. (Replaces the former
+   * `manualOn` map — manual is now derived as "powered on AND not rule-started", which
+   * also protects remote-/schedule-started units that never touched our API.)
    */
-  manualOn: Record<string, boolean>;
+  surplusStartedIds: string[];
 }
 
 // ---- Lights: scenes + schedules --------------------------------------------
@@ -480,6 +492,12 @@ export interface StoreSchema {
   deviceSettings: Record<string, DeviceSettings>;
   schedules: Schedule[];
   automations: Automation[];
+  /**
+   * Ids of SEEDED DEFAULT automations the owner has deleted. `mergeAutomations` will
+   * not re-add a default whose id is listed here, so deleting a default rule makes it
+   * stay gone across restarts/deploys (previously a default was re-seeded every boot).
+   */
+  dismissedDefaultAutomationIds: string[];
   devices: DevicesState;
   /** Tuya light scenes + schedules (self-contained; see types above). */
   lightScenes: LightScene[];
@@ -594,7 +612,7 @@ export function defaultDevices(): DevicesState {
       manualOverrideMin: 120,
     },
     manualOverrides: {},
-    manualOn: {},
+    surplusStartedIds: [],
   };
 }
 
@@ -605,7 +623,7 @@ export function defaultDevices(): DevicesState {
 export function defaultAutomations(): Automation[] {
   return [
     {
-      id: 'solar-surplus-precool',
+      id: SOLAR_SURPLUS_AUTOMATION_ID,
       name: 'Solar-surplus climate',
       enabled: false,
       type: 'solar_surplus_precool',
@@ -645,6 +663,7 @@ function defaults(): StoreSchema {
     deviceSettings: {},
     schedules: [],
     automations: defaultAutomations(),
+    dismissedDefaultAutomationIds: [],
     devices: defaultDevices(),
     lightScenes: [],
     lightSchedules: [],
@@ -668,8 +687,12 @@ export function defaultAuth(): AuthState {
 function statePath(): string {
   if (process.env.STATE_FILE) return process.env.STATE_FILE;
   if (process.env.NODE_ENV === 'production') return '/opt/energy/state.json';
-  // repoRoot = two levels up from apps/api/src.
-  const repoRoot = resolve(__dirname, '..', '..', '..');
+  // repoRoot = three levels up from apps/api/src in the CJS prod bundle. Under
+  // tsx/ESM dev __dirname is undefined, so derive it from cwd (apps/api).
+  const repoRoot =
+    typeof __dirname !== 'undefined'
+      ? resolve(__dirname, '..', '..', '..')
+      : resolve(process.cwd(), '..', '..');
   return resolve(repoRoot, '.data', 'state.json');
 }
 
@@ -809,18 +832,55 @@ function migrateSchedules(raw: unknown): Schedule[] {
   return out;
 }
 
+/** Default ids of the same logical rule as `b`: the canonical id for the surplus rule,
+ *  PLUS any persisted instance sharing its `type` (so a relabeled/retargeted older id is
+ *  recognized as the same rule and de-duped rather than left as a stale duplicate). */
+function sameRuleAsDefault(a: Automation, b: Automation): boolean {
+  return a.id === b.id || a.type === b.type;
+}
+
 /**
- * Keep the user's persisted automations as-is, but append any seeded default
- * automation (matched by id) the persisted store predates — so a newly shipped
- * default (e.g. Solar-surplus pre-heat) appears on existing installs without
- * clobbering edits to the ones already there. Defaults seed disabled, so a
- * re-appearing card never acts on its own.
+ * Reconcile persisted automations with the seeded defaults:
+ *  1. DE-DUPE migration — collapse multiple instances of the same `type` (e.g. two
+ *     `solar_surplus_precool` left over from a relabel/retarget) into ONE: keep the
+ *     user-ENABLED instance if any, else the canonical-id instance, else the first.
+ *     This cleans a live state.json that already holds a duplicate.
+ *  2. RE-SEED only the missing, NON-dismissed defaults — a default the owner DELETED
+ *     (its id recorded in `dismissedDefaultAutomationIds`) is NOT re-added, so deleting
+ *     a default keeps it gone across restarts. Newly shipped defaults still appear on
+ *     existing installs (seeded disabled, so a re-appearing card never acts on its own).
  */
-function mergeAutomations(raw: unknown, base: Automation[]): Automation[] {
-  if (!Array.isArray(raw) || raw.length === 0) return base;
-  const persisted = raw as Automation[];
-  const have = new Set(persisted.map((a) => a.id));
-  return [...persisted, ...base.filter((b) => !have.has(b.id))];
+function mergeAutomations(raw: unknown, base: Automation[], dismissed: string[]): Automation[] {
+  const persisted = Array.isArray(raw) ? (raw as Automation[]) : [];
+  const dismissedSet = new Set(dismissed);
+
+  // 1. De-dupe persisted instances by type. Within each type-group, prefer an enabled
+  //    instance, then the canonical-default id, then the first seen.
+  const byType = new Map<string, Automation[]>();
+  for (const a of persisted) {
+    const group = byType.get(a.type) ?? [];
+    group.push(a);
+    byType.set(a.type, group);
+  }
+  const deduped: Automation[] = [];
+  for (const group of byType.values()) {
+    if (group.length === 1) {
+      deduped.push(group[0]);
+      continue;
+    }
+    const defaultIds = new Set(base.map((b) => b.id));
+    const winner =
+      group.find((a) => a.enabled) ??
+      group.find((a) => defaultIds.has(a.id)) ??
+      group[0];
+    deduped.push(winner);
+  }
+
+  // 2. Re-seed defaults that are neither present (by canonical id or type) nor dismissed.
+  const toSeed = base.filter(
+    (b) => !dismissedSet.has(b.id) && !deduped.some((a) => sameRuleAsDefault(a, b)),
+  );
+  return [...deduped, ...toSeed];
 }
 
 /** Merge persisted JSON onto defaults so new fields appear with sane values. */
@@ -866,7 +926,16 @@ function hydrate(raw: unknown): StoreSchema {
         ? p.deviceSettings
         : base.deviceSettings,
     schedules: migrateSchedules(p.schedules),
-    automations: mergeAutomations(p.automations, base.automations),
+    dismissedDefaultAutomationIds: Array.isArray(p.dismissedDefaultAutomationIds)
+      ? [...new Set(p.dismissedDefaultAutomationIds.filter((id): id is string => typeof id === 'string'))]
+      : base.dismissedDefaultAutomationIds,
+    automations: mergeAutomations(
+      p.automations,
+      base.automations,
+      Array.isArray(p.dismissedDefaultAutomationIds)
+        ? p.dismissedDefaultAutomationIds.filter((id): id is string => typeof id === 'string')
+        : [],
+    ),
     devices: hydrateDevices(p.devices, base.devices),
     lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
     lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,
@@ -903,13 +972,13 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
     },
     manualOverrides:
       p.manualOverrides && typeof p.manualOverrides === 'object' ? p.manualOverrides : {},
-    // Sticky manual-ON ownership persists across restarts so auto-ownership (NOT
-    // manualOn) is restored on boot — an auto-started unit stays auto-managed, a
-    // user-switched-on unit stays hands-off — without re-deriving from volatile memory.
-    manualOn:
-      p.manualOn && typeof p.manualOn === 'object'
-        ? Object.fromEntries(Object.entries(p.manualOn).filter(([, v]) => v === true))
-        : {},
+    // Rule provenance persists across restarts: a unit the surplus rule started stays
+    // rule-owned (auto-managed) on boot, while everything else powered-on is treated as
+    // manual. (Legacy installs that persisted a `manualOn` map carry nothing forward —
+    // ownership is now derived purely from this provenance set.)
+    surplusStartedIds: Array.isArray(p.surplusStartedIds)
+      ? [...new Set(p.surplusStartedIds.filter((id): id is string => typeof id === 'string'))]
+      : [],
   };
 }
 

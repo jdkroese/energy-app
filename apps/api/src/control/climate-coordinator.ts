@@ -14,10 +14,12 @@
 // 14 kW cap. (solar_surplus_preheat is retained as a legacy no-op type; the Airzone
 // underfloor fleet is no longer surplus-eligible.)
 //
-// Manual-ON protection: a unit the USER manually switched on (store.devices.manualOn,
-// persisted) is treated as user-owned — the surplus rule never powers it off and never
-// retunes its mode/setpoint. Auto-ownership is derivable as "NOT manualOn", so it
-// survives a restart. The rule may still start/stop OTHER (non-manual) units.
+// Manual protection is PROVENANCE-BASED and persisted (store.devices.surplusStartedIds):
+// the rule owns ONLY the units it switched on itself. ANY powered-on unit NOT in that set
+// — dashboard, a physical REMOTE, or a schedule turned it on — is treated as MANUAL: the
+// surplus rule never powers it off and never retunes its mode/setpoint. (False-negative by
+// design: the rule would rather leave a unit alone than risk switching off one a person
+// turned on outside our API.) The rule still freely starts/stops the units it owns.
 
 import * as store from '../store';
 import * as intesis from '../connectors/intesis';
@@ -53,35 +55,41 @@ function isAirzone(u: ClimateUnit): boolean {
 // half-band. Between those, the unit holds whatever direction it's already in.
 const DIRECTION_DEADBAND_C = 1.0;
 
-// Provenance: unit ids the surplus rule itself switched ON. Lets disarm/shutdown
-// switch off ONLY rule-started cooling — never occupant/manual units. In-memory
-// (per process); a manual command or a successful rule stop removes a unit from it.
-const surplusStartedIds = new Set<string>();
+// ---- Provenance: rule-started units (persisted) ----------------------------
+// The single source of truth for ownership. A unit's id is in surplusStartedIds iff the
+// surplus rule itself switched it ON. PERSISTED in store.devices.surplusStartedIds so it
+// survives a restart/deploy: an auto-started unit stays rule-managed across reboots, and
+// a remote-/dashboard-/schedule-started unit stays MANUAL (rule never touches it).
 
-// ---- Sticky manual-ON ownership (persisted) --------------------------------
-// A unit is "manual-on" once the USER powers it on by hand; the surplus rule then
-// leaves it entirely alone (no auto-off, no mode/setpoint retune) until the user
-// powers it off. Persisted in store.devices.manualOn so auto-ownership (= NOT
-// manualOn) survives a restart. These mutate the store from the manual command path.
-
-/** Mark a unit user-owned (manual ON). The surplus rule won't touch it after this. */
-export function setManualOn(deviceId: string): void {
-  store.update((s) => {
-    s.devices.manualOn[deviceId] = true;
-  });
-  surplusStartedIds.delete(deviceId); // user owns it now — rule no longer does
+/** Does the surplus rule currently own (it started) this unit? */
+export function surplusOwns(deviceId: string): boolean {
+  return store.get().devices.surplusStartedIds.includes(deviceId);
 }
 
-/** Clear manual-ON ownership (manual OFF) — hand the unit back to automation. */
-export function clearManualOn(deviceId: string): void {
+/** Record that the rule started this unit (idempotent). */
+function addSurplusStarted(deviceId: string): void {
   store.update((s) => {
-    delete s.devices.manualOn[deviceId];
+    if (!s.devices.surplusStartedIds.includes(deviceId)) s.devices.surplusStartedIds.push(deviceId);
   });
 }
 
-/** Is this unit currently user-owned (manually switched on)? */
-export function isManualOn(deviceId: string): boolean {
-  return store.get().devices.manualOn[deviceId] === true;
+/** Drop this unit from rule provenance — the rule stopped it, it was observed OFF, or
+ *  the user took manual control of it. Exported so the manual command path can release a
+ *  rule-started unit when the user powers it off. */
+export function dropSurplusStarted(deviceId: string): void {
+  store.update((s) => {
+    const i = s.devices.surplusStartedIds.indexOf(deviceId);
+    if (i >= 0) s.devices.surplusStartedIds.splice(i, 1);
+  });
+}
+
+/**
+ * Is this unit MANUAL (user-/remote-/schedule-owned), given its current power state?
+ * Manual ⇔ powered ON but NOT rule-started. A unit that is OFF is owned by nobody. The
+ * surplus rule must never power-off or retune a manual unit.
+ */
+export function isManual(deviceId: string, poweredOn: boolean): boolean {
+  return poweredOn && !surplusOwns(deviceId);
 }
 
 // ---- Manual override ("hold") ----------------------------------------------
@@ -96,7 +104,7 @@ export function markManualOverride(deviceId: string): void {
   store.update((s) => {
     s.devices.manualOverrides[deviceId] = Date.now() + mins * 60_000;
   });
-  surplusStartedIds.delete(deviceId); // user took control — rule no longer owns it
+  dropSurplusStarted(deviceId); // user took control — rule no longer owns it
 }
 
 /** Epoch ms the hold expires, or null if no active hold. */
@@ -179,9 +187,15 @@ export async function evaluateSolarSurplusPrecool(
   let pendingImportKw = 0;
 
   for (const u of enabled) {
-    // Manual-ON protection: a user-owned unit is hands-off — never auto-off, never
-    // retune. (This is BEFORE the stop branch and the start/retune branch.)
-    if (isManualOn(u.id)) continue;
+    // Provenance reconcile: if a rule-started unit is observed OFF (someone turned it
+    // off), drop it from the set so it's no longer considered rule-owned.
+    if (!u.power && surplusOwns(u.id)) dropSurplusStarted(u.id);
+
+    // Manual protection (provenance): a unit that is powered ON but the rule did NOT
+    // start (dashboard, remote, or schedule) is hands-off — never auto-off, never
+    // retune. This is BEFORE the stop branch and the start/retune branch, so the rule
+    // only ever stops/retunes units it owns. (A unit it owns may still be retuned.)
+    if (isManual(u.id, u.power)) continue;
     if (isManualOverrideActive(u.id)) continue; // timed manual hold — hands off too
     const room = u.currentTempC;
 
@@ -226,7 +240,7 @@ export async function evaluateSolarSurplusPrecool(
           : `${importingFromGrid ? `grid import ${snap.gridImportKw.toFixed(1)}kW` : 'no surplus'} ${Math.round(clearedFor / 1000)}s ≥ ${p.surplusClearSec}s`;
       const reason = `${automation.name}: stop — ${why}`;
       await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
-      surplusStartedIds.delete(u.id);
+      dropSurplusStarted(u.id);
       continue;
     }
 
@@ -250,7 +264,7 @@ export async function evaluateSolarSurplusPrecool(
     await issueClimate(u, 'mode', dir, reason, { ...snap, pendingImportKw });
     await issueClimate(u, 'setpoint', targetC, reason, { ...snap, pendingImportKw });
     const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
-    if (res.ok) surplusStartedIds.add(u.id); // rule owns this unit now
+    if (res.ok) addSurplusStarted(u.id); // rule owns this unit now (persisted)
     if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
   }
 
@@ -428,9 +442,10 @@ async function tick(): Promise<void> {
  * cooling is never stranded importing from the grid. Returns the count switched off.
  */
 export async function stopSurplusStartedUnits(reason: string): Promise<number> {
-  if (surplusStartedIds.size === 0) return 0;
+  const owned = store.get().devices.surplusStartedIds;
+  if (owned.length === 0) return 0;
   if (!intesis.isConfigured()) {
-    surplusStartedIds.clear();
+    store.update((s) => { s.devices.surplusStartedIds = []; });
     return 0;
   }
   let fleet: ClimateUnit[];
@@ -443,13 +458,14 @@ export async function stopSurplusStartedUnits(reason: string): Promise<number> {
   }
   _resetClimateRateLimits(); // safety action — bypass the inter-write debounce
   // Power-OFF only REDUCES load, so the 14 kW cap is irrelevant — run them in
-  // parallel to bound wall-clock (matters on the shutdown grace window).
+  // parallel to bound wall-clock (matters on the shutdown grace window). Only act on
+  // units the rule still owns that are on and not under a manual hold.
   const targets = fleet.filter(
-    (u) => surplusStartedIds.has(u.id) && u.power && !isManualOverrideActive(u.id) && !isManualOn(u.id),
+    (u) => surplusOwns(u.id) && u.power && !isManualOverrideActive(u.id),
   );
   // Drop any tracked id we won't act on (already off / now manual / gone) from the set.
-  for (const id of [...surplusStartedIds]) {
-    if (!targets.some((u) => u.id === id)) surplusStartedIds.delete(id);
+  for (const id of owned) {
+    if (!targets.some((u) => u.id === id)) dropSurplusStarted(id);
   }
   const results = await Promise.all(
     targets.map((u) =>
@@ -461,7 +477,7 @@ export async function stopSurplusStartedUnits(reason: string): Promise<number> {
   let stopped = 0;
   for (const r of results) {
     if (r.ok) {
-      surplusStartedIds.delete(r.id);
+      dropSurplusStarted(r.id);
       stopped++;
     }
   }
