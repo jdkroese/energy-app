@@ -78,23 +78,23 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
 
   const save = async () => { setBusy(true); try { await onSave({ enabled, params: p }); setEditing(false); } finally { setBusy(false); } };
 
-  // Pre-cool (cooling AC) vs its mirror, pre-heat (Airzone underfloor heating).
-  const heating = a.type === 'solar_surplus_preheat';
-  const verb = heating ? 'heat' : 'cool';
-  const tone = heating ? 'var(--grid)' : 'var(--solar)';
-  const wash = heating ? 'var(--grid-wash)' : 'var(--solar-wash)';
+  // Unified "solar climate" rule: it drives the Intesis HVAC fleet on surplus —
+  // cooling when a room is warm, heating when a room is cold. (Airzone underfloor is
+  // no longer surplus-eligible, so this rule no longer touches it.)
+  const tone = 'var(--solar)';
+  const wash = 'var(--solar-wash)';
 
   const surplus = surplusKw(live);
   const soc = batterySoc(live);
-  // Rooms off the comfort limit (cooling: warmer than; heating: colder than), split
-  // by whether they're included in automation. The rule (and the coordinator) only
-  // act on included rooms of the matching type — but a room being *off the limit yet
-  // excluded* is the common "why is nothing happening?" case, so surface it explicitly.
+  // HVAC rooms warmer than the comfort limit (the rule would cool them on surplus),
+  // split by whether they're included in automation. The rule (and the coordinator)
+  // only act on included cooling rooms — but a room being *off the limit yet excluded*
+  // is the common "why is nothing happening?" case, so surface it explicitly.
   const offLimit = (devData?.devices ?? []).filter(
     (d) =>
-      d.type === (heating ? 'heating' : 'cooling') &&
+      d.type === 'cooling' &&
       d.currentTempC != null &&
-      (heating ? d.currentTempC < p.roomTempLimitC : d.currentTempC > p.roomTempLimitC),
+      d.currentTempC > p.roomTempLimitC,
   );
   const qualifying = offLimit.filter((d) => d.automationEnabled);
   const excluded = offLimit.filter((d) => !d.automationEnabled);
@@ -106,7 +106,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       <AutomationRow
         automation={{ ...a, enabled }}
         canWrite={canWrite}
-        subtitle={heating ? 'Automation · heating' : 'Automation · climate'}
+        subtitle="Automation · climate"
         iconColor={tone}
         onSave={(patch) => {
           if (patch.enabled !== undefined) { setEnabled(patch.enabled); void onSave({ enabled: patch.enabled }); }
@@ -116,10 +116,10 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       {/* WHEN / DO / UNTIL / LIMITS */}
       <Block label="When" color="var(--battery)" wash="var(--battery-wash)">
         <Tok>solar surplus</Tok><span style={{ color: 'var(--text-3)' }}>&gt;</span><Tok>battery intake headroom</Tok>
-        <span style={{ color: 'var(--text-3)' }}>and</span><Tok>room temp</Tok><span style={{ color: 'var(--text-3)' }}>{heating ? '<' : '>'}</span><Tok color="var(--grid)">{p.roomTempLimitC.toFixed(1)}°</Tok>
+        <span style={{ color: 'var(--text-3)' }}>and</span><Tok>a room is warm</Tok><span style={{ color: 'var(--text-3)' }}>&gt;</span><Tok color="var(--grid)">{p.roomTempLimitC.toFixed(1)}°</Tok>
       </Block>
       <Block label="Do" color={tone} wash={wash}>
-        run <Tok>{verb}</Tok> in <Tok>matching rooms</Tok> at <Tok color={tone}>{p.targetSetpointC.toFixed(1)}°</Tok>, <Tok>staggered ≤ 14 kW</Tok>
+        run the <Tok>HVAC units</Tok> — <Tok color="var(--battery)">cool</Tok> when warm, <Tok color="var(--grid)">heat</Tok> when cold — at <Tok color={tone}>{p.targetSetpointC.toFixed(1)}°</Tok>, <Tok>staggered ≤ 14 kW</Tok>
       </Block>
       <Block label="Until" color="var(--home)" wash="var(--home-wash)">
         surplus clears <span style={{ color: 'var(--text-3)' }}>for</span> <Tok>{p.surplusClearSec}s</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> room reaches target
@@ -133,14 +133,14 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       </div>
 
       {/* LIVE PREVIEW */}
-      <div style={{ background: 'var(--surface-2)', border: `1px solid ${heating ? 'rgba(245,165,36,0.2)' : 'rgba(46,230,160,0.2)'}`, borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
+      <div style={{ background: 'var(--surface-2)', border: '1px solid rgba(46,230,160,0.2)', borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <span className="pwr-eyebrow" style={{ color: tone }}>Live preview · right now</span>
           <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>surplus <span style={{ color: surplus > 0 ? 'var(--solar)' : 'var(--text-3)' }}>+{surplus} kW</span>{soc != null ? ` · batteries ${soc}%` : ''}</span>
         </div>
         {qualifying.length > 0 ? (
           <>
-            <div style={{ fontSize: 12.5, marginBottom: 8 }}>{qualifying.length} room{qualifying.length > 1 ? 's' : ''} qualify — would {verb} to {p.targetSetpointC.toFixed(1)}°:</div>
+            <div style={{ fontSize: 12.5, marginBottom: 8 }}>{qualifying.length} room{qualifying.length > 1 ? 's' : ''} qualify — would cool to {p.targetSetpointC.toFixed(1)}°:</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {qualifying.slice(0, 6).map((d) => (
                 <span key={d.id} className="pwr-mono" style={{ fontSize: 11.5, background: wash, color: tone, borderRadius: 8, padding: '5px 10px' }}>{d.name} · {d.currentTempC!.toFixed(1)}°→{p.targetSetpointC.toFixed(0)}°</span>
@@ -149,12 +149,12 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
           </>
         ) : surplus <= 0 ? (
           <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
-            No solar surplus right now — rule is idle.{excluded.length > 0 ? ` (${excluded.length} room${excluded.length > 1 ? 's' : ''} ${heating ? 'below' : 'above'} ${p.roomTempLimitC.toFixed(1)}°, but not included in automation.)` : ''}
+            No solar surplus right now — rule is idle.{excluded.length > 0 ? ` (${excluded.length} room${excluded.length > 1 ? 's' : ''} above ${p.roomTempLimitC.toFixed(1)}°, but not included in automation.)` : ''}
           </div>
         ) : excluded.length > 0 ? (
           <>
             <div style={{ fontSize: 12.5, marginBottom: 8, color: 'var(--text-2)' }}>
-              {excluded.length} room{excluded.length > 1 ? 's are' : ' is'} {heating ? 'below' : 'above'} {p.roomTempLimitC.toFixed(1)}° but not included in automation — open the device and tap “Include in automation” to let the rule pre-{verb} {excluded.length > 1 ? 'them' : 'it'}:
+              {excluded.length} room{excluded.length > 1 ? 's are' : ' is'} above {p.roomTempLimitC.toFixed(1)}° but not included in automation — open the device and tap “Include in automation” to let the rule cool {excluded.length > 1 ? 'them' : 'it'}:
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {excluded.slice(0, 6).map((d) => (
@@ -163,7 +163,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
             </div>
           </>
         ) : (
-          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>No rooms {heating ? 'below' : 'above'} the limit right now — nothing to pre-{verb}.</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>No rooms above the limit right now — nothing to cool.</div>
         )}
       </div>
 
@@ -175,8 +175,8 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       )}
       {editing && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4, borderTop: '1px solid var(--border-1)' }}>
-          <Slider label={heating ? 'Room below' : 'Room above'} unit="°C" min={heating ? 12 : 20} max={heating ? 24 : 30} step={0.5} value={p.roomTempLimitC} onChange={(v) => set({ roomTempLimitC: v })} />
-          <Slider label={heating ? 'Heat to target' : 'Cool to target'} unit="°C" min={16} max={26} step={0.5} value={p.targetSetpointC} onChange={(v) => set({ targetSetpointC: v })} />
+          <Slider label="Cool when room above" unit="°C" min={20} max={30} step={0.5} value={p.roomTempLimitC} onChange={(v) => set({ roomTempLimitC: v })} />
+          <Slider label="Cool to target" unit="°C" min={16} max={26} step={0.5} value={p.targetSetpointC} onChange={(v) => set({ targetSetpointC: v })} />
           <Slider label="Surplus must clear for" unit=" s" min={30} max={600} step={30} value={p.surplusClearSec} onChange={(v) => set({ surplusClearSec: v })} />
           <div>
             <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Price-band stand-down</div>
@@ -186,7 +186,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
               value={bandOn ? p.exitBand : 'Off'}
               onChange={(b) => (b === 'Off' ? set({ bandRestrictionEnabled: false }) : set({ bandRestrictionEnabled: true, exitBand: b as SolarSurplusPrecoolParams['exitBand'] }))}
             />
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 5 }}>{bandOn ? `Stands down (and won't start) while the tariff is in ${p.exitBand}.` : `Pre-${verb}s in any tariff band, including P1 peak.`}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 5 }}>{bandOn ? `Stands down (and won't start) while the tariff is in ${p.exitBand}.` : `Conditions in any tariff band, including P1 peak.`}</div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save</Button>
@@ -340,7 +340,7 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     try { await api.devices.arm(armed, mode); } catch { /* ignore */ } finally { setBusy(false); refetchStatus(); }
   };
   const saveAuto = async (id: string, patch: Partial<Automation>) => { await api.automations.update(id, patch); refetch(); };
-  const addAuto = async () => { await api.automations.create({ name: 'Solar-surplus pre-cool', type: 'solar_surplus_precool' }); refetch(); };
+  const addAuto = async () => { await api.automations.create({ name: 'Solar-surplus climate', type: 'solar_surplus_precool' }); refetch(); };
   const removeAuto = async (id: string) => { await api.automations.remove(id); refetch(); };
   const saveBatteryRule = async (key: BatteryPriorityKey, patch: Partial<BatteryPriorityRule>) => {
     try { await api.control.batteryPriority(key, patch); } catch { /* ignore */ } finally { refetchCtrl(); }
