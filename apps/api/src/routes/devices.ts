@@ -76,15 +76,21 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
   const ds = settings[u.id];
   const automations = store.get().automations;
   const schedules = store.get().schedules;
+  const type = deviceTypeOf(u.id);
+  // Display-name prefix per device type, applied at the source so it shows across the
+  // whole system (list, detail, schedules, mobile). Idempotent — never double-prefixes.
+  const prefix = type === 'heating' ? 'Heating - ' : 'AC Unit - ';
+  const withPrefix = (s: string) => (s.startsWith(prefix) ? s : `${prefix}${s}`);
   return {
     ...u,
-    type: deviceTypeOf(u.id),
+    type,
+    name: withPrefix(u.name),
     // Heating (Airzone) read fields; normalize to null for cooling (Intesis) units.
     floorDemand: u.floorDemand ?? null,
     humidity: u.humidity ?? null,
     wireless: u.wireless ?? null,
     lowBattery: u.lowBattery ?? null,
-    room: ds?.room ?? u.zone ?? u.name,
+    room: withPrefix(ds?.room ?? u.zone ?? u.name),
     automationEnabled: ds?.automationEnabled ?? false,
     manualOverrideUntil: manualOverrideUntil(u.id),
     comfortCeilingC: ds?.comfortCeilingC ?? null,
