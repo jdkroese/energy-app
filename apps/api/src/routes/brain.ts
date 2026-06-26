@@ -112,17 +112,20 @@ function plan(
     const band = bandCodes[h]; // 0=P3 1=P2 2=P1
     consumedKwh += loadKw[h];
 
-    // Free climatization: the HVAC slice of the load that solar surplus can cover
-    // during a pre-cool/heat window. HVAC demand mirrors loadForecast's thermal
-    // nudge (heating <16 °C, cooling >26 °C). Counted only when there's surplus
-    // PV available to run it for free.
+    // Free climatization: HVAC energy that absorbs would-be-EXPORT. The HVAC load
+    // component is loadForecast's thermal nudge (heating <16 °C, cooling >26 °C);
+    // the rest of loadKw is the non-HVAC base load. "Surplus available to HVAC" is
+    // solar minus that non-HVAC base — i.e. the PV that would otherwise be exported
+    // for near-zero credit. We count only the HVAC kWh that fits inside it:
+    //   freeKwh += min( hvacKw, max(0, solarKw − (loadKw − hvacKw)) )
     if (temp && temp[h] !== undefined) {
       const t = temp[h];
       let hvacKw = 0;
       if (t < 16) hvacKw = (16 - t) * 0.08;
       if (t > 26) hvacKw = (t - 26) * 0.1;
-      if (hvacKw > 0 && surplus > 0) {
-        freeClimatizationKwh += Math.min(hvacKw, surplus);
+      if (hvacKw > 0) {
+        const wouldBeExportKw = Math.max(0, solarKw[h] - (loadKw[h] - hvacKw));
+        freeClimatizationKwh += Math.min(hvacKw, wouldBeExportKw);
       }
     }
 

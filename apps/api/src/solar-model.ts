@@ -139,7 +139,12 @@ function modelPath(): string {
   if (process.env.SOLAR_MODEL_FILE) return process.env.SOLAR_MODEL_FILE;
   if (process.env.STATE_FILE) return resolve(dirname(process.env.STATE_FILE), 'solar-model.json');
   if (process.env.NODE_ENV === 'production') return '/opt/energy/solar-model.json';
-  const repoRoot = resolve(__dirname, '..', '..', '..');
+  // __dirname exists in the CJS prod bundle (repoRoot = src/../../..); under tsx/ESM
+  // dev it's undefined, so derive repoRoot from cwd (the dev server runs in apps/api).
+  const repoRoot =
+    typeof __dirname !== 'undefined'
+      ? resolve(__dirname, '..', '..', '..')
+      : resolve(process.cwd(), '..', '..');
   return resolve(repoRoot, '.data', 'solar-model.json');
 }
 
@@ -155,18 +160,61 @@ function clamp(n: number, lo: number, hi: number): number {
 function load(): ModelFile {
   if (cache) return cache;
   const f = file();
+  let seeded = false;
   try {
     if (existsSync(f)) {
       const raw = JSON.parse(readFileSync(f, 'utf8')) as Partial<ModelFile>;
       cache = hydrate(raw);
     } else {
+      // First run, no persisted model: warm-start from the existing 30-day 5-min
+      // history instead of a cold PR=0.82 with zero confidence.
       cache = { v: 1, months: {}, ingested: [] };
+      seeded = backfillFromHistory(cache);
     }
   } catch (e) {
     console.error('[solar-model] load failed, starting empty:', (e as Error).message);
     cache = { v: 1, months: {}, ingested: [] };
   }
+  // Persist the seeded model once so the backfill runs at first load, not every boot.
+  if (seeded) persist(cache);
   return cache;
+}
+
+/**
+ * One-time warm start: BACKFILL the learned model from the existing 30-day 5-min
+ * history (history5m). For each retained day we derive the day's PR exactly as the
+ * nightly ingest does (median actual/clear-sky base over daytime hours) and fold it
+ * into its month, marking the day ingested so the nightly path never double-counts.
+ * Returns true if it produced any data (so the caller persists). A house with no
+ * history yields nothing and we fall back cleanly to the cold-start (PR=0.82, conf 0).
+ */
+function backfillFromHistory(state: ModelFile): boolean {
+  let dayKeys: string[];
+  try {
+    dayKeys = history.availableDayKeys();
+  } catch {
+    return false;
+  }
+  if (dayKeys.length === 0) return false;
+
+  let changed = false;
+  for (const dateKey of dayKeys) {
+    if (state.ingested.includes(dateKey)) continue;
+    const dayPR = dayPRFromHistory(dateKey);
+    state.ingested.push(dateKey); // mark seen either way so nightly won't re-touch it
+    if (dayPR === null) continue; // no usable daytime production that day
+    const monthKey = madridMonthKey(new Date(`${dateKey}T12:00:00`));
+    applyDayPR(state, monthKey, dayPR);
+    changed = true;
+  }
+  prune(state);
+  if (changed) {
+    const months = Object.keys(state.months).length;
+    console.log(
+      `[solar-model] backfilled ${dayKeys.length} history day(s) → ${months} month(s) seeded`,
+    );
+  }
+  return changed;
 }
 
 function hydrate(raw: Partial<ModelFile>): ModelFile {
@@ -229,18 +277,17 @@ export function effectivePR(monthKey?: string): { prEff: number; confidence: num
 }
 
 /**
- * Ingest a single finished day (Madrid YYYY-MM-DD) into the learned model.
- * Compares the day's measured solar (kW, 5-min buckets aggregated to hourly kWh)
- * against the modelled base GHI/1000·kWp (PR=1) over DAYTIME hours, then updates
- * the month's learned PR = clamp(median(actual/base), 0.5, 0.95). Idempotent:
- * a day already ingested is skipped. Returns true if it updated the model.
+ * Compute a single day's measured performance ratio against the Haurwitz
+ * clear-sky base, or null when the day has no usable daytime production.
+ *
+ * Aggregates measured solarKw (288 5-min buckets) → 24 hourly mean kW ≈ kWh/h,
+ * then over DAYTIME hours takes the median of actual/(GHIc/1000·kWp) (PR=1 base).
+ * Shared by the nightly ingest and the one-time history backfill so both seed
+ * the learned PR identically.
  */
-export async function ingestDay(dateKey: string): Promise<boolean> {
-  const state = load();
-  if (state.ingested.includes(dateKey)) return false;
-
+function dayPRFromHistory(dateKey: string): number | null {
   const series = history.getDay(dateKey);
-  if (!series) return false;
+  if (!series) return null;
 
   // Aggregate measured solarKw (288 5-min buckets) → 24 hourly mean kW ≈ kWh/h.
   const hourlyActualKwh = new Array<number>(24).fill(0);
@@ -275,7 +322,37 @@ export async function ingestDay(dateKey: string): Promise<boolean> {
     const ratio = hourlyActualKwh[h] / base;
     if (Number.isFinite(ratio) && ratio > 0) ratios.push(ratio);
   }
-  if (ratios.length === 0) {
+  if (ratios.length === 0) return null;
+  return clamp(median(ratios), 0.5, 0.95);
+}
+
+/** Fold one day's PR into the month record as a day-weighted running mean. */
+function applyDayPR(state: ModelFile, monthKey: string, dayPR: number): void {
+  const rec = state.months[monthKey] ?? { pr: dayPR, days: 0 };
+  // Running median proxy: blend the new day's PR into the stored PR weighted by
+  // accumulated days (stable, monotone toward the true median over many days).
+  const newDays = rec.days + 1;
+  rec.pr = clamp((rec.pr * rec.days + dayPR) / newDays, 0.5, 0.95);
+  rec.days = newDays;
+  state.months[monthKey] = rec;
+}
+
+/**
+ * Ingest a single finished day (Madrid YYYY-MM-DD) into the learned model.
+ * Compares the day's measured solar against the modelled base GHI/1000·kWp
+ * (PR=1) over DAYTIME hours, then updates the month's learned PR =
+ * clamp(median(actual/base), 0.5, 0.95). Idempotent: a day already ingested is
+ * skipped. Returns true if it updated the model.
+ */
+export async function ingestDay(dateKey: string): Promise<boolean> {
+  const state = load();
+  if (state.ingested.includes(dateKey)) return false;
+
+  const series = history.getDay(dateKey);
+  if (!series) return false;
+
+  const dayPR = dayPRFromHistory(dateKey);
+  if (dayPR === null) {
     // No usable daytime production (e.g. fully missing data) — record as ingested
     // so we don't retry endlessly, but leave the model untouched.
     state.ingested.push(dateKey);
@@ -284,15 +361,8 @@ export async function ingestDay(dateKey: string): Promise<boolean> {
     return false;
   }
 
-  const monthKey = madridMonthKey(date);
-  const dayPR = clamp(median(ratios), 0.5, 0.95);
-  const rec = state.months[monthKey] ?? { pr: dayPR, days: 0 };
-  // Running median proxy: blend the new day's PR into the stored PR weighted by
-  // accumulated days (stable, monotone toward the true median over many days).
-  const newDays = rec.days + 1;
-  rec.pr = clamp((rec.pr * rec.days + dayPR) / newDays, 0.5, 0.95);
-  rec.days = newDays;
-  state.months[monthKey] = rec;
+  const monthKey = madridMonthKey(new Date(`${dateKey}T12:00:00`));
+  applyDayPR(state, monthKey, dayPR);
   state.ingested.push(dateKey);
   prune(state);
   persist(state);
@@ -331,6 +401,10 @@ export async function runNightlyIngest(): Promise<void> {
  * Re-arms itself after every run. Call once at boot.
  */
 export function startSolarModelScheduler(): void {
+  // Warm-start the learned model from history at boot (one-time if the model file
+  // is absent). load() does the backfill + persist; this just forces it eagerly so
+  // the first /api/brain/plan already reflects seeded confidence, not cold-start.
+  load();
   const schedule = () => {
     const now = new Date();
     const h = madridHour(now);
