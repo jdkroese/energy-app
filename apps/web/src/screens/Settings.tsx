@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { SegmentedControl } from '../components/ui';
 import type { ShellContext } from '../components/shell/AppShell';
 import { settingsTabsFor, type SettingsTabLabel } from '../components/shell/nav';
+import { SiteLocationCard } from '../components/SiteLocationCard';
 
 const Chev = () => <Icon name="chevron-right" size={18} color="var(--text-3)" />;
 const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px' };
@@ -209,28 +210,16 @@ function SonnenConfig({ conn, ok, cfg, reload }: { conn: SettingsResponse['conne
   );
 }
 
-function WeatherConfig({ cfg, reload }: { cfg: IntegrationsConfig; reload: () => void }) {
-  const [lat, setLat] = useState(String(cfg.weather.lat));
-  const [lon, setLon] = useState(String(cfg.weather.lon));
-  const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState<ProbeResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  const save = async () => {
-    setBusy(true); setErr(null); setRes(null);
-    try { const r = await api.integrations.setWeather(Number(lat), Number(lon)); setRes({ ok: r.ok, detail: r.detail }); reload(); }
-    catch (e) { setErr(errMsg(e)); } finally { setBusy(false); }
-  };
-
+function WeatherConfig({ cfg }: { cfg: IntegrationsConfig; reload: () => void }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={cfgDesc}>Open-Meteo forecast location — drives solar &amp; load planning.</div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <Input label="Latitude" inputMode="decimal" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="38.79" />
-        <Input label="Longitude" inputMode="decimal" value={lon} onChange={(e) => setLon(e.target.value)} placeholder="0.17" />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <DetailLine label="Location" value={`${cfg.weather.lat}, ${cfg.weather.lon}`} />
       </div>
-      <ResultLine r={res} err={err} />
-      <div><Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save location</Button></div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+        Set the coordinates from the map in the <strong style={{ color: 'var(--text-2)' }}>Site location</strong> card above.
+      </div>
     </div>
   );
 }
@@ -286,7 +275,7 @@ function ConnectionPanel({ conn, ok, cfg, reload }: { conn: SettingsResponse['co
   if (user?.role !== 'admin') return <ConnectionInfo conn={conn} ok={ok} note="Only an admin can change this." />;
   if (cfg) {
     if (conn.name === 'Sonnen LAN') return <SonnenConfig conn={conn} ok={ok} cfg={cfg} reload={reload} />;
-    if (conn.name === 'Weather') return <WeatherConfig cfg={cfg} reload={reload} />;
+    if (conn.name === 'Weather') return <WeatherConfig cfg={cfg} reload={reload} />; // read-only; editing lives in SiteLocationCard
     if (conn.name === 'Tesla cloud') return <TeslaConfig conn={conn} ok={ok} cfg={cfg} reload={reload} />;
   }
   return <ConnectionInfo conn={conn} ok={ok} />;
@@ -1249,7 +1238,12 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
 
   const sections = (
     <>
-      {active === 'Connections' && <ConnectionsCard connections={s.connections} />}
+      {active === 'Connections' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <SiteLocationCard />
+          <ConnectionsCard connections={s.connections} />
+        </div>
+      )}
 
       {active === 'Notifications' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
