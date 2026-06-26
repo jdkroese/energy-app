@@ -79,6 +79,8 @@ import {
   disconnectTuyaIntegration,
 } from './routes/lights';
 import type { LightLever } from './connectors/tuya-lights';
+import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
+import type { BlindLever } from './connectors/tuya-blinds';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
 import { authRouter } from './routes/auth';
@@ -303,6 +305,26 @@ app.post(
   wrap((req) => {
     const body = (req.body ?? {}) as { lever?: string; value?: unknown };
     return commandLight(String(req.params.id), body.lever as LightLever, body.value);
+  }),
+);
+
+// ---- Blinds / curtains (Tuya) — reads any-authed; commands admin-gated ----
+app.get('/api/blinds', wrap(() => getBlinds()));
+app.get('/api/blinds/:id', wrap((req) => getBlind(String(req.params.id))));
+app.post(
+  '/api/blinds/bulk-command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { ids?: string[]; lever?: string; value?: unknown };
+    return bulkCommandBlinds(body.ids ?? [], body.lever as BlindLever, body.value);
+  }),
+);
+app.post(
+  '/api/blinds/:id/command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { lever?: string; value?: unknown };
+    return commandBlind(String(req.params.id), body.lever as BlindLever, body.value);
   }),
 );
 

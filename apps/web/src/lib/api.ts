@@ -6,6 +6,9 @@ import type {
   BatteriesResponse,
   BatteryPriorityKey,
   BatteryPriorityRule,
+  BlindLever,
+  BlindsResponse,
+  BlindDetailResponse,
   BrainPlanResponse,
   Channels,
   ChannelType,
@@ -180,7 +183,7 @@ export const api = {
       postJSON<{ ts: string; results: unknown[] }>('/api/devices/bulk-command', { ids, lever, value }),
     setSettings: (
       id: string,
-      patch: { room?: string; automationEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number },
+      patch: { room?: string; automationEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number; invertPosition?: boolean },
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
     release: (id: string) =>
       postJSON<{ ts: string; id: string; released: boolean }>(`/api/devices/${enc(id)}/release`, {}),
@@ -194,6 +197,16 @@ export const api = {
       postJSON<{ ts: string; ok: boolean }>(`/api/lights/${enc(id)}/command`, { lever, value }),
     bulkCommand: (ids: string[], lever: LightLever, value: boolean | number | LightHsv) =>
       postJSON<{ ts: string; results: unknown[] }>('/api/lights/bulk-command', { ids, lever, value }),
+  },
+
+  /* ---- Blinds / curtains (Tuya); command/bulk are admin ---- */
+  blinds: {
+    list: () => getJSON<BlindsResponse>('/api/blinds'),
+    detail: (id: string) => getJSON<BlindDetailResponse>(`/api/blinds/${enc(id)}`),
+    command: (id: string, lever: BlindLever, value?: number) =>
+      postJSON<{ ts: string; ok: boolean }>(`/api/blinds/${enc(id)}/command`, { lever, value }),
+    bulkCommand: (ids: string[], lever: BlindLever, value?: number) =>
+      postJSON<{ ts: string; results: unknown[] }>('/api/blinds/bulk-command', { ids, lever, value }),
   },
 
   integrations: {

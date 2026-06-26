@@ -693,6 +693,42 @@ export interface LightDetailResponse {
   device: LightUnit | null;
 }
 
+/* ============================================================================
+ * Blinds / curtains (Tuya, category 'cl'/'clkg'). positionPct is 100 = fully OPEN.
+ * ==========================================================================*/
+
+export type BlindLever = 'open' | 'close' | 'stop' | 'position';
+
+export interface BlindUnit {
+  id: string;
+  name: string;
+  room: string;
+  category: string;
+  online: boolean;
+  /** Current position, 0 = closed, 100 = open; null if the motor has no feedback. */
+  positionPct: number | null;
+  /** Whether the motor is currently travelling. */
+  moving: boolean;
+  /** Device exposes a settable target position (vs. open/close/stop only). */
+  supportsPosition: boolean;
+  /** Echo of the per-device invert setting that was applied. */
+  inverted: boolean;
+}
+
+export interface BlindsResponse {
+  ts: string;
+  connected: boolean;
+  fleetError: string | null;
+  devices: BlindUnit[];
+  context: { deviceCount: number; openCount: number };
+}
+
+export interface BlindDetailResponse {
+  ts: string;
+  connected: boolean;
+  device: BlindUnit | null;
+}
+
 /** Tuya Cloud connection status + discovered category breakdown. */
 export interface TuyaIntegrationStatus {
   ts: string;
