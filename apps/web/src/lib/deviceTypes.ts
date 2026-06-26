@@ -26,7 +26,7 @@ export interface DeviceTypeMeta {
 
 export const DEVICE_TYPES: DeviceTypeMeta[] = [
   { type: 'cooling', label: 'Cooling', hue: 'var(--solar)', icon: 'snowflake', built: true },
-  { type: 'heating', label: 'Heating', hue: 'var(--grid)', icon: 'flame', built: false },
+  { type: 'heating', label: 'Heating', hue: 'var(--grid)', icon: 'flame', built: true },
   { type: 'lighting', label: 'Lighting', hue: 'var(--home)', icon: 'lightbulb', built: true },
   { type: 'switching', label: 'Switching', hue: 'var(--battery)', icon: 'toggle-right', built: false },
 ];
@@ -34,7 +34,19 @@ export const DEVICE_TYPES: DeviceTypeMeta[] = [
 export const typeMeta = (t: DeviceType): DeviceTypeMeta =>
   DEVICE_TYPES.find((m) => m.type === t) ?? DEVICE_TYPES[0];
 
-/** Map a fleet unit to its device type (heuristic until the API exposes `type`). */
-export function classifyDevice(d: { installation?: string | null }): DeviceType {
-  return (d.installation ?? '').toLowerCase().includes('airzone') ? 'heating' : 'cooling';
+/** Map a fleet unit to its device type. Prefers the API's `type` discriminator;
+ *  falls back to the installation heuristic for older payloads. The API's 'circuit'
+ *  maps to the hub's 'switching' tab. */
+export function classifyDevice(d: { type?: string | null; installation?: string | null }): DeviceType {
+  switch (d.type) {
+    case 'heating':
+    case 'cooling':
+    case 'lighting':
+      return d.type;
+    case 'circuit':
+    case 'switching':
+      return 'switching';
+    default:
+      return (d.installation ?? '').toLowerCase().includes('airzone') ? 'heating' : 'cooling';
+  }
 }

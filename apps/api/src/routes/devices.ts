@@ -79,6 +79,11 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
   return {
     ...u,
     type: deviceTypeOf(u.id),
+    // Heating (Airzone) read fields; normalize to null for cooling (Intesis) units.
+    floorDemand: u.floorDemand ?? null,
+    humidity: u.humidity ?? null,
+    wireless: u.wireless ?? null,
+    lowBattery: u.lowBattery ?? null,
     room: ds?.room ?? u.zone ?? u.name,
     automationEnabled: ds?.automationEnabled ?? false,
     manualOverrideUntil: manualOverrideUntil(u.id),
@@ -461,7 +466,6 @@ export function createAutomation(body: Partial<Automation>): unknown {
     name: body.name?.trim() || 'New automation',
     enabled: body.enabled ?? false,
     type: 'solar_surplus_precool',
-    authority: body.authority === 'auto' ? 'auto' : 'shadow',
     params: sanitizeParams(body.params, base),
     lastEval: null,
   };
@@ -480,7 +484,6 @@ export function updateAutomation(id: string, body: Partial<Automation>): unknown
       ...cur,
       name: body.name ?? cur.name,
       enabled: body.enabled ?? cur.enabled,
-      authority: body.authority === 'auto' || body.authority === 'shadow' ? body.authority : cur.authority,
       params: sanitizeParams(body.params, cur.params),
     };
     st.automations[idx] = merged;

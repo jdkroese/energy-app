@@ -70,15 +70,13 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
   a: Automation; live: LiveResponse | null; devData: DevicesResponse | null;
   canWrite: boolean; onSave: (patch: Partial<Automation>) => Promise<void>; onDelete: () => void;
 }) {
-  const [authority, setAuthority] = useState(a.authority);
   const [enabled, setEnabled] = useState(a.enabled);
   const [p, setP] = useState<SolarSurplusPrecoolParams>(a.params);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<SolarSurplusPrecoolParams>) => setP((prev) => ({ ...prev, ...patch }));
 
-  const save = async () => { setBusy(true); try { await onSave({ enabled, authority, params: p }); setEditing(false); } finally { setBusy(false); } };
-  const setAuthAndSave = (next: 'shadow' | 'auto') => { setAuthority(next); void onSave({ authority: next }); };
+  const save = async () => { setBusy(true); try { await onSave({ enabled, params: p }); setEditing(false); } finally { setBusy(false); } };
 
   const surplus = surplusKw(live);
   const soc = batterySoc(live);
@@ -95,10 +93,9 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
       {/* header — the shared automation row (same control as on the Devices hub) */}
       <AutomationRow
-        automation={{ ...a, authority, enabled }}
+        automation={{ ...a, enabled }}
         canWrite={canWrite}
         onSave={(patch) => {
-          if (patch.authority) setAuthAndSave(patch.authority);
           if (patch.enabled !== undefined) { setEnabled(patch.enabled); void onSave({ enabled: patch.enabled }); }
         }}
       />

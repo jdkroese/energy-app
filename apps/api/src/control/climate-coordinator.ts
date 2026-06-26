@@ -1,8 +1,9 @@
 // The climate coordinator loop. Runs every 45s but ACTS only when the devices
 // layer is armed && mode==='auto'. Each tick it evaluates enabled automations
-// against a fresh snapshot. In SHADOW authority it logs intended actions and
-// writes NOTHING; in AUTO authority it issues guardrailed commands through
-// issueClimate(). The whole tick is wrapped so it can never crash the process.
+// against a fresh snapshot and issues guardrailed commands through issueClimate()
+// for every enabled automation (there is no longer a shadow/dry-run authority —
+// an enabled automation under armed+auto always acts). The whole tick is wrapped
+// so it can never crash the process.
 //
 // First automation type: solar_surplus_precool. Run cooling in automation-enabled
 // rooms when roomTemp > limit AND solar surplus exceeds battery intake headroom;
@@ -89,8 +90,9 @@ function logDecision(deviceId: string, reason: string, detail: string, ok = true
 }
 
 /**
- * Evaluate a single solar_surplus_precool automation. Returns intended decisions;
- * in AUTO authority it also issues the guardrailed commands. Best-effort; never throws.
+ * Evaluate a single solar_surplus_precool automation and issue the guardrailed
+ * commands. An enabled automation under armed+auto always acts (no shadow/dry-run
+ * authority anymore). Best-effort; never throws.
  */
 export async function evaluateSolarSurplusPrecool(
   automation: Automation,
@@ -99,7 +101,6 @@ export async function evaluateSolarSurplusPrecool(
 ): Promise<void> {
   const p: SolarSurplusPrecoolParams = automation.params;
   const startThreshold = p.startThresholdW ?? 800;
-  const isAuto = automation.authority === 'auto';
   const settings = store.get().deviceSettings;
 
   // Optional tariff-band stand-down: when enabled, never start cooling in the exit
@@ -152,12 +153,8 @@ export async function evaluateSolarSurplusPrecool(
           ? `room ${room}°C ≤ target ${p.targetSetpointC}°C`
           : `${importingFromGrid ? `grid import ${snap.gridImportKw.toFixed(1)}kW` : 'no surplus'} ${Math.round(clearedFor / 1000)}s ≥ ${p.surplusClearSec}s`;
       const reason = `${automation.name}: stop — ${why}`;
-      if (isAuto) {
-        await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
-        surplusStartedIds.delete(u.id);
-      } else {
-        logDecision(u.id, reason, 'SHADOW — would power OFF');
-      }
+      await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
+      surplusStartedIds.delete(u.id);
       continue;
     }
 
@@ -176,17 +173,12 @@ export async function evaluateSolarSurplusPrecool(
     }
 
     const reason = `${automation.name}: cool@${p.targetSetpointC}°C (room ${room}°C, surplus ${(snap.surplusW / 1000).toFixed(1)}kW)`;
-    if (isAuto) {
-      // Drive: cool mode + target setpoint + power on. Order: mode → setpoint → power.
-      await issueClimate(u, 'mode', 'cool', reason, { ...snap, pendingImportKw });
-      await issueClimate(u, 'setpoint', p.targetSetpointC, reason, { ...snap, pendingImportKw });
-      const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
-      if (res.ok) surplusStartedIds.add(u.id); // rule owns this unit now
-      if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
-    } else {
-      logDecision(u.id, reason, `SHADOW — would cool@${p.targetSetpointC}°C`);
-      if (startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
-    }
+    // Drive: cool mode + target setpoint + power on. Order: mode → setpoint → power.
+    await issueClimate(u, 'mode', 'cool', reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'setpoint', p.targetSetpointC, reason, { ...snap, pendingImportKw });
+    const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
+    if (res.ok) surplusStartedIds.add(u.id); // rule owns this unit now
+    if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
   }
 
   store.update((s) => {

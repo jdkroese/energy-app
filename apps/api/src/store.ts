@@ -325,7 +325,6 @@ export interface Schedule {
 }
 
 export type AutomationType = 'solar_surplus_precool';
-export type AutomationAuthority = 'shadow' | 'auto';
 
 export interface SolarSurplusPrecoolParams {
   /** Run cooling when a room is above this (°C). */
@@ -347,7 +346,6 @@ export interface Automation {
   name: string;
   enabled: boolean;
   type: AutomationType;
-  authority: AutomationAuthority;
   params: SolarSurplusPrecoolParams;
   /** Epoch ms of the last coordinator evaluation. */
   lastEval: number | null;
@@ -518,7 +516,7 @@ export function defaultDevices(): DevicesState {
   };
 }
 
-/** The flagship automation, seeded disabled + shadow so it never acts until armed. */
+/** The flagship automation, seeded disabled so it never acts until enabled + armed. */
 export function defaultAutomations(): Automation[] {
   return [
     {
@@ -526,7 +524,6 @@ export function defaultAutomations(): Automation[] {
       name: 'Solar-surplus pre-cool',
       enabled: false,
       type: 'solar_surplus_precool',
-      authority: 'shadow',
       params: {
         roomTempLimitC: 25,
         targetSetpointC: 23,

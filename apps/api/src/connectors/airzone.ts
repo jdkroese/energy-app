@@ -11,8 +11,9 @@
 //  - READ  : POST /hvac {"systemID":0,"zoneID":0} -> {systems:[{data:[zone,...]}]}.
 //            A single-zone query {"systemID":s,"zoneID":z} returns {data:[zone]}.
 //  - WRITE : PUT /hvac {"systemID":s,"zoneID":z, setpoint|on|mode|speed|sleep}
-//            -> 200 {data:[{...changed fields}]}. `mode` is SYSTEM-level (apply on the
-//            system's master zone). Temps are whole °C with 0.5° steps (NOT tenths).
+//            -> 200 {data:[{...changed fields}]}. `mode` is PER-ZONE (apply on the
+//            target zoneID, like power/setpoint — user-confirmed 2026-06-26). Temps
+//            are whole °C with 0.5° steps (NOT tenths).
 //  - INFO  : POST /webserver, POST /version.
 
 import { cached } from '../cache';
@@ -38,7 +39,7 @@ export function isConfigured(): boolean {
 
 const base = () => `http://${host()}:${PORT}/api/v1`;
 
-// Airzone system modes (system-level; reported per zone).
+// Airzone modes (per-zone; reported and written per zone).
 export const MODE: Record<number, string> = { 1: 'stop', 2: 'cool', 3: 'heat', 4: 'fan', 5: 'dry', 7: 'auto' };
 export const MODE_VALUE: Record<string, number> = { stop: 1, cool: 2, heat: 3, fan: 4, dry: 5, auto: 7 };
 
@@ -98,7 +99,7 @@ export interface AirzoneZone {
   zoneID: number;
   name: string;
   on: boolean;
-  mode: string; // system mode reflected on the zone
+  mode: string; // per-zone mode
   availableModes: string[];
   roomTempC: number | null;
   setpointC: number | null;
@@ -153,6 +154,11 @@ export interface ClimateUnit {
   minSetpointC: number | null;
   maxSetpointC: number | null;
   online: boolean;
+  /** Heating (Airzone) read fields surfaced through to the Devices view. */
+  floorDemand?: boolean | null;
+  humidity?: number | null;
+  wireless?: boolean | null;
+  lowBattery?: boolean | null;
 }
 
 export function toClimateUnit(z: AirzoneZone): ClimateUnit {
@@ -168,6 +174,10 @@ export function toClimateUnit(z: AirzoneZone): ClimateUnit {
     minSetpointC: z.minSetpointC,
     maxSetpointC: z.maxSetpointC,
     online: true,
+    floorDemand: z.floorDemand,
+    humidity: z.humidity,
+    wireless: z.wireless,
+    lowBattery: z.lowBattery,
   };
 }
 
@@ -211,7 +221,8 @@ export interface AirzoneSetResult {
  * does the clamping; this just talks to the box). `id` is `air-<system>-<zone>`.
  *  - power: boolean -> {"on":0|1}
  *  - setpoint: °C (caller clamps to min/max & 0.5° step) -> {"setpoint":N}
- *  - mode: string (heat|cool|fan|stop|dry|auto) -> {"mode":N} (system master)
+ *  - mode: string (heat|cool|fan|stop|dry|auto) -> {"mode":N} (per-zone, written on
+ *    the target zoneID — same as power/setpoint)
  */
 export async function setLever(
   id: string,
