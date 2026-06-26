@@ -388,15 +388,19 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         </Banner>
       )}
 
-      {/* SOLAR-SURPLUS PRE-HEAT / PRE-COOL — per-unit opt-in for surplus-driven runs */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? (isHeating ? 'var(--grid-wash)' : 'var(--battery-wash)') : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? (isHeating ? 'rgba(245,165,36,0.2)' : 'rgba(56,217,245,0.2)') : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
-        <Icon name="zap" size={17} color={dev.automationEnabled ? (isHeating ? 'var(--grid)' : 'var(--battery)') : 'var(--text-3)'} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{isHeating ? 'Solar-surplus pre-heat' : 'Solar-surplus cooling'}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{dev.automationEnabled ? (isHeating ? 'Uses excess solar to pre-heat this room' : 'Uses excess solar to pre-cool this unit') : (isHeating ? 'This room is excluded from surplus pre-heat' : 'This unit is excluded from surplus cooling')}</div>
+      {/* SOLAR-SURPLUS CLIMATE — per-unit opt-in, HVAC only. The rule conditions on
+          surplus (cools when warm / heats when cold). Underfloor (Airzone) is no longer
+          surplus-eligible, so the enrolment toggle isn't shown for heating zones. */}
+      {!isHeating && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--battery-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'rgba(56,217,245,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
+          <Icon name="zap" size={17} color={dev.automationEnabled ? 'var(--battery)' : 'var(--text-3)'} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Solar-surplus climate</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{dev.automationEnabled ? 'Uses excess solar to cool this unit when warm / heat when cold' : 'This unit is excluded from solar-surplus climate'}</div>
+          </div>
+          <Switch checked={dev.automationEnabled} disabled={!canConfig || busy} onChange={(e) => toggleAutomation(e.target.checked)} />
         </div>
-        <Switch checked={dev.automationEnabled} disabled={!canConfig || busy} onChange={(e) => toggleAutomation(e.target.checked)} />
-      </div>
+      )}
 
       {/* SCHEDULE — this unit's rules, via the shared UnitScheduleBox + overlay */}
       <UnitScheduleBox

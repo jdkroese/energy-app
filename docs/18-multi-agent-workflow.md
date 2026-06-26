@@ -48,9 +48,11 @@ Do it again in another terminal for a second agent. They cannot touch each other
 - **Doc / script / CI-only changes don't deploy** — `deploy.yml` has a `paths-ignore`
   for `**/*.md`, `docs/**`, `scripts/**`, `.github/**`, `.gitignore`. (A commit that also
   touches app code still deploys.)
-- **Every real deploy restarts the API, which boots control DISARMED** (battery + devices,
-  by design). After a deploy that you care about, **re-arm** battery L2 Auto (and arm
-  Devices for AC/Airzone automation). See [[energy-app-control]] / [[energy-app-mac-mini]].
+- **Deploys PRESERVE the armed state** (since 2026-06-26): a restart restores the last
+  armed/mode from `state.json`, so an ordinary release no longer disarms — no re-arm
+  needed. A release must only boot safe **when the owner is asked and confirms**; to ship
+  a deliberately-safe boot (e.g. a risky control-logic change) set `ENERGY_BOOT_DISARMED=1`
+  on the API for that restart. See [[energy-app-control]] / [[energy-app-mac-mini]].
 
 ## Guardrails already in place
 
