@@ -26,6 +26,9 @@ import {
   markManualOverride,
   clearManualOverride,
   manualOverrideUntil,
+  setManualOn,
+  clearManualOn,
+  isManualOn,
 } from '../control/climate-coordinator';
 import { bandFor } from '../tariff';
 import { checkRuleOverlap } from '../schedule-rules';
@@ -45,6 +48,8 @@ export interface DeviceView extends ClimateUnit {
   automationEnabled: boolean;
   /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
   manualOverrideUntil: number | null;
+  /** Sticky: user manually switched this unit ON → excluded from the surplus auto-stop. */
+  manualOn: boolean;
   comfortCeilingC: number | null;
   comfortFloorC: number | null;
   /** Warmth tone hint for the UI (relative to a comfortable 24°C). */
@@ -93,6 +98,7 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
     room: withPrefix(ds?.room ?? u.zone ?? u.name),
     automationEnabled: ds?.automationEnabled ?? false,
     manualOverrideUntil: manualOverrideUntil(u.id),
+    manualOn: isManualOn(u.id),
     comfortCeilingC: ds?.comfortCeilingC ?? null,
     comfortFloorC: ds?.comfortFloorC ?? null,
     warmth: warmthOf(u.currentTempC),
@@ -200,7 +206,15 @@ export async function commandDevice(id: string, lever: ClimateLever, rawValue: u
   const snap = await takeClimateSnapshot();
   const result = await issueClimate(u, lever, value, 'manual command', snap, { manual: true });
   // Manual control wins: hold automation off this unit for a while.
-  if (result.ok) markManualOverride(id);
+  if (result.ok) {
+    markManualOverride(id);
+    // Sticky manual-ON ownership: a manual power ON makes the unit user-owned (the
+    // surplus rule won't auto-stop or retune it); a manual power OFF hands it back.
+    if (lever === 'power') {
+      if (value === true) setManualOn(id);
+      else clearManualOn(id);
+    }
+  }
   return { ts: new Date().toISOString(), result };
 }
 
@@ -223,7 +237,14 @@ export async function bulkCommand(ids: string[], lever: ClimateLever, rawValue: 
     }
     const r = await issueClimate(u, lever, value, 'bulk command', { ...snap, pendingImportKw }, { manual: true });
     results.push({ id, ok: r.ok, reason: r.reason });
-    if (r.ok) markManualOverride(id); // manual control wins — hold automation off
+    if (r.ok) {
+      markManualOverride(id); // manual control wins — hold automation off
+      // Sticky manual-ON ownership mirrors commandDevice (ON owns / OFF releases).
+      if (lever === 'power') {
+        if (value === true) setManualOn(id);
+        else clearManualOn(id);
+      }
+    }
     if (lever === 'power' && value === true && r.ok && !u.power) pendingImportKw += 1.2;
   }
   return { ts: new Date().toISOString(), results };

@@ -485,6 +485,8 @@ export interface DeviceView {
   automationEnabled: boolean;
   /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
   manualOverrideUntil: number | null;
+  /** Sticky: user manually switched this unit ON → excluded from the surplus auto-stop. */
+  manualOn: boolean;
   comfortCeilingC: number | null;
   comfortFloorC: number | null;
   warmth: DeviceWarmth;
