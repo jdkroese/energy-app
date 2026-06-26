@@ -16,6 +16,7 @@ import {
   checkTeslaGridCharge,
   checkTeslaReserve,
   freshnessOk,
+  TESLA_RESERVE_MAX_PCT,
   type ControlSnapshot,
   type Lever,
 } from './guardrails';
@@ -169,7 +170,7 @@ async function issueTesla(
     await tesla.setReserve(to);
     markWritten('tesla', lever);
     const after = await tesla.readControlConfig();
-    return confirm('tesla', lever, cur.reservePct, to, after.reservePct, reason);
+    return confirmTeslaReserve('tesla', lever, cur.reservePct, to, after.reservePct, reason);
   }
 
   if (lever === 'gridExport') {
@@ -273,6 +274,39 @@ function confirm(
   const detail = ok
     ? `confirmed ${to}`
     : `read-back MISMATCH: wanted ${to}, device reports ${readBack}`;
+  logEntry(device, lever, from, readBack, reason, ok, detail);
+  return { ok, skipped: false, reason, from, to: readBack };
+}
+
+/**
+ * Read-back confirm for the Tesla reserve lever, TOLERANT of the Powerwall's
+ * usable-reserve ceiling. We already clamp requests down to TESLA_RESERVE_MAX_PCT,
+ * but the device's effective ceiling can be a touch lower than our constant, so:
+ *  - exact match → confirmed;
+ *  - we asked for the cap (or above) AND the device applied its own ceiling
+ *    (readBack ≤ what we wanted, and readBack ≥ our cap) → confirmed-with-clamp,
+ *    treated as SUCCESS and noted, not a MISMATCH;
+ *  - anything else (value unchanged when it should have changed, or wildly off)
+ *    → genuine MISMATCH error.
+ */
+function confirmTeslaReserve(
+  device: ControlDevice,
+  lever: Lever,
+  from: string | number | null,
+  to: number,
+  readBack: number,
+  reason: string,
+): IssueResult {
+  const exact = readBack === to;
+  // Device applied its own ceiling: we requested at least the cap, and it landed
+  // at-or-above the cap but no higher than we asked.
+  const clampedToCeiling = to >= TESLA_RESERVE_MAX_PCT && readBack >= TESLA_RESERVE_MAX_PCT && readBack <= to;
+  const ok = exact || clampedToCeiling;
+  const detail = exact
+    ? `confirmed ${to}`
+    : clampedToCeiling
+      ? `confirmed ${readBack} (device caps usable reserve at ${readBack}%; requested ${to}%)`
+      : `read-back MISMATCH: wanted ${to}, device reports ${readBack}`;
   logEntry(device, lever, from, readBack, reason, ok, detail);
   return { ok, skipped: false, reason, from, to: readBack };
 }

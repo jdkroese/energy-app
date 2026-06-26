@@ -55,15 +55,29 @@ export function freshnessOk(snap: ControlSnapshot): GuardResult<boolean> {
 }
 
 // ---- Tesla reserve ----------------------------------------------------------
-// reserve ∈ [teslaReserveMinPct, 100]. TWO-WAY: the owner (and Auto) may RAISE or
-// LOWER reserve to the requested value; the hard floor is the only safety net —
-// values below it are clamped UP to the floor (never rejected), so the floor can
-// never be breached. (The former one-way "never lower than current" rule blocked
-// a normal request like 23%→20% from ever saving.)
+// reserve ∈ [teslaReserveMinPct, TESLA_RESERVE_MAX_PCT]. TWO-WAY: the owner (and
+// Auto) may RAISE or LOWER reserve to the requested value; the hard floor is the
+// only safety net — values below it are clamped UP to the floor (never rejected),
+// so the floor can never be breached. (The former one-way "never lower than
+// current" rule blocked a normal request like 23%→20% from ever saving.)
+//
+// The Powerwall caps the *usable* backup_reserve_percent at an operational ceiling
+// (it will silently apply ~80% when asked for more), so we clamp DOWN to that cap
+// too — otherwise an upstream "hold Tesla at its SoC" request of e.g. 99% would be
+// written, the device would apply 80%, and the read-back confirm would (wrongly)
+// flag a MISMATCH. Clamping here means the plan/UI reflect the achievable value.
+export const TESLA_RESERVE_MAX_PCT = 80;
+
 export function checkTeslaReserve(pct: number, _snap: ControlSnapshot): GuardResult<number> {
   const gr = g();
   let v = Math.round(pct);
-  if (v > 100) v = 100;
+  if (v > TESLA_RESERVE_MAX_PCT) {
+    return {
+      ok: true,
+      value: TESLA_RESERVE_MAX_PCT,
+      reason: `reserve ${v}% clamped down to device cap ${TESLA_RESERVE_MAX_PCT}%`,
+    };
+  }
   if (v < gr.teslaReserveMinPct) {
     return {
       ok: true,
