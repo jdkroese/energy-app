@@ -45,13 +45,12 @@ const MODES: { value: string; label: string; icon: string }[] = [
   { value: 'fan', label: 'Fan', icon: 'fan' },
 ];
 
-// Underfloor (Airzone) modes — no Dry, plus an explicit Stop. No fan-steps / vanes.
+// Underfloor (Airzone) modes — cool / heat / auto only. No Dry, no Fan, no Stop
+// (power on/off covers stop), no fan-steps / vanes. Power is the on/off lever.
 const HEATING_MODES: { value: string; label: string; icon: string }[] = [
-  { value: 'auto', label: 'Auto', icon: '_a' },
-  { value: 'heat', label: 'Heat', icon: 'flame' },
   { value: 'cool', label: 'Cool', icon: 'snowflake' },
-  { value: 'fan', label: 'Fan', icon: 'fan' },
-  { value: 'stop', label: 'Stop', icon: 'power' },
+  { value: 'heat', label: 'Heat', icon: 'flame' },
+  { value: 'auto', label: 'Auto', icon: '_a' },
 ];
 
 const WARMTH_COLOR: Record<DeviceWarmth, string> = {
@@ -390,8 +389,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       )}
 
       {/* SOLAR-SURPLUS PRE-HEAT / PRE-COOL — per-unit opt-in for surplus-driven runs */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? (isHeating ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? (isHeating ? 'rgba(245,165,36,0.2)' : 'rgba(46,230,160,0.2)') : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
-        <Icon name={isHeating ? 'flame' : 'zap'} size={17} color={dev.automationEnabled ? (isHeating ? 'var(--grid)' : 'var(--solar)') : 'var(--text-3)'} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? (isHeating ? 'var(--grid-wash)' : 'var(--battery-wash)') : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? (isHeating ? 'rgba(245,165,36,0.2)' : 'rgba(56,217,245,0.2)') : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
+        <Icon name="zap" size={17} color={dev.automationEnabled ? (isHeating ? 'var(--grid)' : 'var(--battery)') : 'var(--text-3)'} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{isHeating ? 'Solar-surplus pre-heat' : 'Solar-surplus cooling'}</div>
           <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{dev.automationEnabled ? (isHeating ? 'Uses excess solar to pre-heat this room' : 'Uses excess solar to pre-cool this unit') : (isHeating ? 'This room is excluded from surplus pre-heat' : 'This unit is excluded from surplus cooling')}</div>
