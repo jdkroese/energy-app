@@ -38,17 +38,6 @@ function surplusKw(live: LiveResponse | null): number | null {
   return live.grid.dir === 'exporting' ? Math.round(live.grid.kw * 10) / 10 : 0;
 }
 
-function stateLabel(d: DeviceView): { label: string; color: string; bg: string } {
-  if (!d.power) return { label: 'OFF', color: 'var(--text-3)', bg: 'var(--surface-3)' };
-  const map: Record<string, string> = { cool: 'COOLING', heat: 'HEATING', dry: 'DRYING', fan: 'FAN', auto: 'AUTO' };
-  const warm = d.mode === 'heat';
-  return {
-    label: map[d.mode] ?? d.mode.toUpperCase(),
-    color: warm ? 'var(--grid)' : 'var(--solar)',
-    bg: warm ? 'var(--grid-wash)' : 'var(--solar-wash)',
-  };
-}
-
 /* ----------------------------------------------------------------------------
  * Shared optimistic lever-command hook for inline row controls. Mirrors the AC
  * detail pipeline (commits 260ed1b / 9f8c5a9): every lever updates its shown value
@@ -181,7 +170,7 @@ function SummaryTile({ label, value, color, accent }: { label: string; value: st
   );
 }
 
-/* ---- inline row controls (heating) ---------------------------------------- */
+/* ---- inline row controls (shared by cooling + heating rows) --------------- */
 
 /** Pulsing dot shown while a lever's command is in flight / unconfirmed. */
 function SyncDot() {
@@ -219,8 +208,8 @@ function ModeChip({ mode, available, disabled, syncing, onCycle }: {
 }
 
 /** −/＋ setpoint steppers around a mono value. Dimmed/disabled when the room is off. */
-function SetpointStepper({ value, lo, hi, step, disabled, syncing, onStep, compact }: {
-  value: number | null; lo: number; hi: number; step: number; disabled: boolean; syncing: boolean; onStep: (delta: number) => void; compact?: boolean;
+function SetpointStepper({ value, lo, hi, step, accent, disabled, syncing, onStep, compact }: {
+  value: number | null; lo: number; hi: number; step: number; accent: string; disabled: boolean; syncing: boolean; onStep: (delta: number) => void; compact?: boolean;
 }) {
   const v = value;
   const stepBtn = (label: string, delta: number, off: boolean) => (
@@ -239,7 +228,7 @@ function SetpointStepper({ value, lo, hi, step, disabled, syncing, onStep, compa
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, opacity: disabled ? 0.5 : 1 }}>
       {stepBtn('−', -step, disabled || v == null || v <= lo)}
-      <span className="pwr-mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--grid)', minWidth: 42, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+      <span className="pwr-mono" style={{ fontSize: 13, fontWeight: 600, color: accent, minWidth: 42, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
         {v == null ? '—' : `${v.toFixed(1)}°`}{syncing && <SyncDot />}
       </span>
       {stepBtn('+', step, disabled || v == null || v >= hi)}
@@ -248,7 +237,7 @@ function SetpointStepper({ value, lo, hi, step, disabled, syncing, onStep, compa
 }
 
 /** Inline pill power toggle. */
-function PowerToggle({ on, disabled, syncing, onToggle }: { on: boolean; disabled: boolean; syncing: boolean; onToggle: () => void }) {
+function PowerToggle({ on, accent, accentWash, disabled, syncing, onToggle }: { on: boolean; accent: string; accentWash: string; disabled: boolean; syncing: boolean; onToggle: () => void }) {
   return (
     <button
       type="button"
@@ -257,11 +246,11 @@ function PowerToggle({ on, disabled, syncing, onToggle }: { on: boolean; disable
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
       style={{
         width: 44, height: 24, borderRadius: 'var(--radius-pill)', border: '1px solid var(--border-2)', position: 'relative',
-        background: on ? 'var(--grid-wash)' : 'var(--surface-3)', cursor: disabled ? 'default' : 'pointer', flex: 'none', padding: 0,
+        background: on ? accentWash : 'var(--surface-3)', cursor: disabled ? 'default' : 'pointer', flex: 'none', padding: 0,
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      <span style={{ position: 'absolute', top: 2, left: on ? 22 : 2, width: 18, height: 18, borderRadius: '50%', background: on ? 'var(--grid)' : 'var(--text-3)', transition: 'left .14s', display: 'grid', placeItems: 'center' }}>
+      <span style={{ position: 'absolute', top: 2, left: on ? 22 : 2, width: 18, height: 18, borderRadius: '50%', background: on ? accent : 'var(--text-3)', transition: 'left .14s', display: 'grid', placeItems: 'center' }}>
         {syncing && <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--surface-1)', animation: 'pwrSyncPulse 1s ease-in-out infinite' }} />}
       </span>
     </button>
@@ -271,72 +260,83 @@ function PowerToggle({ on, disabled, syncing, onToggle }: { on: boolean; disable
 /** Solar bolt — three states: lit (free surplus), dim (on paid energy), faint (not enrolled).
  *  Orange (--grid) = pre-heat; matches the unified surplus-bolt icon system (cool = blue bolt).
  *  Clickable (admin) to toggle this device's enrolment in surplus pre-heat. */
-function SolarBolt({ enrolled, demand, exporting, canToggle, onToggle }: {
-  enrolled: boolean; demand: boolean; exporting: boolean; canToggle?: boolean; onToggle?: () => void;
+function SolarBolt({ enrolled, demand, exporting, hue = 'var(--grid)', label = 'pre-heat', canToggle, onToggle }: {
+  enrolled: boolean; demand: boolean; exporting: boolean; hue?: string; label?: string; canToggle?: boolean; onToggle?: () => void;
 }) {
   const lit = enrolled && demand && exporting;
-  const dim = enrolled && demand && !exporting;
-  const color = enrolled ? 'var(--grid)' : 'var(--text-3)';
+  const color = enrolled ? hue : 'var(--text-3)';
   const opacity = lit ? 1 : enrolled ? 0.5 : 0.25;
-  const title = !enrolled ? 'Not in solar pre-heat — tap to enrol'
-    : lit ? 'Heating on free solar surplus — tap to remove'
-    : 'Pre-heat enrolled (on paid energy now) — tap to remove';
+  const verb = label === 'pre-cool' ? 'Cooling' : 'Heating';
+  const title = !enrolled ? `Not in solar ${label} — tap to enrol`
+    : lit ? `${verb} on free solar surplus — tap to remove`
+    : `Solar ${label} enrolled (on paid energy now) — tap to remove`;
   const inner = <Icon name="zap" size={16} color={color} />;
+  const glow = lit ? `drop-shadow(0 0 5px ${hue})` : 'none';
   if (!canToggle) {
-    return <span title={title} style={{ display: 'inline-flex', filter: lit ? 'drop-shadow(0 0 5px var(--grid))' : 'none', opacity }}>{inner}</span>;
+    return <span title={title} style={{ display: 'inline-flex', filter: glow, opacity }}>{inner}</span>;
   }
   return (
     <button
       type="button"
-      aria-label={enrolled ? 'Remove from solar pre-heat' : 'Enrol in solar pre-heat'}
+      aria-label={enrolled ? `Remove from solar ${label}` : `Enrol in solar ${label}`}
       aria-pressed={enrolled}
       title={title}
       onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
-      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', padding: 4, margin: -4, cursor: 'pointer', filter: lit ? 'drop-shadow(0 0 5px var(--grid))' : 'none', opacity }}
+      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', padding: 4, margin: -4, cursor: 'pointer', filter: glow, opacity }}
     >
       {inner}
     </button>
   );
 }
 
-/* ---- heating unit row ----------------------------------------------------- */
-
-const MODE_CYCLE = ['heat', 'cool', 'auto'];
+/* ---- shared climate unit row (cooling + heating) -------------------------- */
 
 function nextMode(cur: string, available: string[]): string {
-  const order = MODE_CYCLE.filter((m) => available.includes(m));
-  const pool = order.length ? order : available;
-  if (pool.length === 0) return cur;
-  const i = pool.indexOf(cur);
-  return pool[(i + 1) % pool.length];
+  if (available.length === 0) return cur;
+  const i = available.indexOf(cur);
+  return available[(i + 1) % available.length];
 }
 
-function HeatRow({ d, wide, canWrite, canConfig, exporting, pending, sendLever, onToggleSurplus, onOpen }: {
-  d: DeviceView; wide: boolean; canWrite: boolean; canConfig: boolean; exporting: boolean;
+/** State pill — driven by the active mode + running state. Heating distinguishes IDLE
+ *  (on but not calling for heat) via the floor-demand signal; cooling has no such signal. */
+function climateState(power: boolean, mode: string, active: boolean, hasDemand: boolean): { label: string; color: string; bg: string } {
+  if (!power) return { label: 'OFF', color: 'var(--text-3)', bg: 'var(--surface-3)' };
+  if (hasDemand && !active) return { label: 'IDLE', color: 'var(--text-2)', bg: 'var(--surface-3)' };
+  const M: Record<string, [string, string, string]> = {
+    cool: ['COOLING', 'var(--battery)', 'var(--battery-wash)'],
+    heat: ['HEATING', 'var(--grid)', 'var(--grid-wash)'],
+    dry: ['DRYING', 'var(--battery)', 'var(--battery-wash)'],
+    fan: ['FAN', 'var(--text-2)', 'var(--surface-3)'],
+    auto: ['AUTO', 'var(--text-2)', 'var(--surface-3)'],
+  };
+  const m = M[mode] ?? [mode.toUpperCase(), 'var(--text-2)', 'var(--surface-3)'];
+  return { label: m[0], color: m[1], bg: m[2] };
+}
+
+function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, sendLever, onToggleSurplus, onOpen }: {
+  d: DeviceView; type: 'cooling' | 'heating'; wide: boolean; canWrite: boolean; canConfig: boolean; exporting: boolean;
   pending: Partial<Record<ClimateLever, number | boolean | string>>;
   sendLever: (id: string, lever: ClimateLever, value: number | boolean | string, debounceMs?: number) => void;
   onToggleSurplus: (id: string, next: boolean) => void;
   onOpen: () => void;
 }) {
+  const isHeat = type === 'heating';
+  const accent = isHeat ? 'var(--grid)' : 'var(--battery)';
+  const accentWash = isHeat ? 'var(--grid-wash)' : 'var(--battery-wash)';
+  const boltLabel = isHeat ? 'pre-heat' : 'pre-cool';
+  // availableModes isn't on DeviceView yet; both fleets support cool/heat/auto — cycle
+  // those (the server clamps anything else). Fan/dry/vanes stay on the detail page.
+  const available = isHeat ? ['heat', 'cool', 'auto'] : ['cool', 'heat', 'auto'];
+
   const power = (pending.power as boolean | undefined) ?? d.power;
   const mode = (pending.mode as string | undefined) ?? d.mode;
   const setpoint = (pending.setpoint as number | undefined) ?? d.setpointC;
-  // availableModes isn't surfaced to DeviceView yet; the underfloor zones support
-  // heat / cool / auto, so cycle through those (the server still clamps unknown modes).
-  const available = ['heat', 'cool', 'auto'];
-
-  const lo = d.minSetpointC ?? 15;
+  const lo = d.minSetpointC ?? (isHeat ? 15 : 16);
   const hi = d.maxSetpointC ?? 30;
   const step = 0.5;
-  const demand = Boolean(d.floorDemand);
-
-  // State pill: HEATING when power && demand; tint follows active mode.
-  const coolMode = mode === 'cool';
-  const st = !power
-    ? { label: 'OFF', color: 'var(--text-3)', bg: 'var(--surface-3)' }
-    : demand
-      ? (coolMode ? { label: 'COOLING', color: 'var(--battery)', bg: 'var(--battery-wash)' } : { label: 'HEATING', color: 'var(--grid)', bg: 'var(--grid-wash)' })
-      : { label: 'IDLE', color: 'var(--text-2)', bg: 'var(--surface-3)' };
+  // "Currently conditioning": heating has the floor-demand signal; cooling = on.
+  const active = isHeat ? Boolean(d.floorDemand) : power;
+  const st = climateState(power, mode, active, isHeat);
 
   const clampStep = (delta: number) => {
     const base = setpoint ?? lo;
@@ -346,7 +346,7 @@ function HeatRow({ d, wide, canWrite, canConfig, exporting, pending, sendLever, 
   const cycleMode = () => sendLever(d.id, 'mode', nextMode(mode, available), 0);
   const togglePower = () => sendLever(d.id, 'power', !power, 0);
 
-  const bolt = <SolarBolt enrolled={d.automationEnabled} demand={demand} exporting={exporting} canToggle={canConfig} onToggle={() => onToggleSurplus(d.id, !d.automationEnabled)} />;
+  const bolt = <SolarBolt enrolled={d.automationEnabled} demand={active} exporting={exporting} hue={accent} label={boltLabel} canToggle={canConfig} onToggle={() => onToggleSurplus(d.id, !d.automationEnabled)} />;
 
   if (!wide) {
     return (
@@ -359,13 +359,13 @@ function HeatRow({ d, wide, canWrite, canConfig, exporting, pending, sendLever, 
           </button>
           {bolt}
           <span className="pwr-mono" style={{ fontSize: 13, color: WARMTH_COLOR[d.warmth], minWidth: 42, textAlign: 'right' }}>{t1(d.currentTempC)}</span>
-          <PowerToggle on={power} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} />
+          <PowerToggle on={power} accent={accent} accentWash={accentWash} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} />
         </div>
         {/* line 2: mode chip + setpoint steppers (right) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <ModeChip mode={mode} available={available} disabled={!canWrite || !power} syncing={pending.mode !== undefined} onCycle={cycleMode} />
           <span style={{ flex: 1 }} />
-          <SetpointStepper value={setpoint} lo={lo} hi={hi} step={step} disabled={!canWrite || !power} syncing={pending.setpoint !== undefined} onStep={clampStep} compact />
+          <SetpointStepper value={setpoint} lo={lo} hi={hi} step={step} accent={accent} disabled={!canWrite || !power} syncing={pending.setpoint !== undefined} onStep={clampStep} compact />
         </div>
       </div>
     );
@@ -383,43 +383,10 @@ function HeatRow({ d, wide, canWrite, canConfig, exporting, pending, sendLever, 
       <span style={{ justifySelf: 'start', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '3px 8px', borderRadius: 'var(--radius-pill)', background: st.bg, color: st.color }}>{st.label}</span>
       <span style={{ justifySelf: 'start' }}><ModeChip mode={mode} available={available} disabled={!canWrite || !power} syncing={pending.mode !== undefined} onCycle={cycleMode} /></span>
       <span style={{ justifySelf: 'center' }}>{bolt}</span>
-      <span style={{ justifySelf: 'end' }}><SetpointStepper value={setpoint} lo={lo} hi={hi} step={step} disabled={!canWrite || !power} syncing={pending.setpoint !== undefined} onStep={clampStep} /></span>
+      <span style={{ justifySelf: 'end' }}><SetpointStepper value={setpoint} lo={lo} hi={hi} step={step} accent={accent} disabled={!canWrite || !power} syncing={pending.setpoint !== undefined} onStep={clampStep} /></span>
       <span className="pwr-mono" style={{ textAlign: 'right', fontSize: 13, color: WARMTH_COLOR[d.warmth] }}>{t1(d.currentTempC)}</span>
-      <span style={{ justifySelf: 'end' }}><PowerToggle on={power} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} /></span>
+      <span style={{ justifySelf: 'end' }}><PowerToggle on={power} accent={accent} accentWash={accentWash} disabled={!canWrite} syncing={pending.power !== undefined} onToggle={togglePower} /></span>
       <button type="button" onClick={onOpen} aria-label="Open detail" style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, justifySelf: 'center' }}><Icon name="chevron-right" size={15} color="var(--text-3)" /></button>
-    </div>
-  );
-}
-
-function AcRow({ d, wide, onOpen }: { d: DeviceView; wide: boolean; onOpen: () => void }) {
-  const st = stateLabel(d);
-  if (!wide) {
-    const sub = d.power ? `${d.mode} · set ${t1(d.setpointC)}` : 'off';
-    return (
-      <button type="button" onClick={onOpen} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', padding: '11px 12px', cursor: 'pointer' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
-          <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{sub}</div>
-        </div>
-        <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', padding: '3px 8px', borderRadius: 'var(--radius-pill)', background: st.bg, color: st.color }}>{st.label}</span>
-        <span className="pwr-mono" style={{ fontSize: 13, color: WARMTH_COLOR[d.warmth], minWidth: 44, textAlign: 'right' }}>{t1(d.currentTempC)}</span>
-        <Icon name="chevron-right" size={15} color="var(--text-3)" />
-      </button>
-    );
-  }
-  return (
-    <div role="button" onClick={onOpen} style={{ display: 'grid', gridTemplateColumns: '1.5fr 96px 64px 60px 60px 22px', alignItems: 'center', gap: 10, padding: '11px 10px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</div>
-        {d.room && d.room !== d.name && (
-          <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.room}</div>
-        )}
-      </div>
-      <span style={{ justifySelf: 'start', fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '3px 8px', borderRadius: 'var(--radius-pill)', background: st.bg, color: st.color }}>{st.label}</span>
-      <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>{d.mode}</span>
-      <span className="pwr-mono" style={{ textAlign: 'right', fontSize: 13, color: 'var(--text-2)' }}>{t1(d.setpointC)}</span>
-      <span className="pwr-mono" style={{ textAlign: 'right', fontSize: 13, color: WARMTH_COLOR[d.warmth] }}>{t1(d.currentTempC)}</span>
-      <Icon name="chevron-right" size={15} color="var(--text-3)" />
     </div>
   );
 }
@@ -481,6 +448,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const coldestCold = coldest != null && coldest < 19;
 
   const heatCmds = useLeverCommands(heating, refetch);
+  const coolCmds = useLeverCommands(cooling, refetch);
   // Manual row commands (power/mode/setpoint) are NOT arm-gated server-side (issueClimate
   // { manual: true }, commit 0c41458) — same as the unit detail. Only admin is required;
   // the disarmed note below explains that the *automation* won't act.
@@ -526,21 +494,25 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
         </Card>
       )}
 
-      {/* UNIT LIST */}
+      {/* UNIT LIST — same interactive row as Heating (blue accent, full mode set) */}
       {cooling.length > 0 ? (
         <Card padded style={{ padding: '6px 6px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: wide ? '1.5fr 96px 64px 60px 60px 22px' : '1fr 56px 44px 15px', gap: 10, padding: '4px 12px 6px' }}>
-            <span className="pwr-eyebrow">Unit / room</span>
-            <span className="pwr-eyebrow">State</span>
-            {wide && <span className="pwr-eyebrow">Mode</span>}
-            {wide && <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Set</span>}
-            <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Room</span>
-            <span />
-          </div>
+          {wide && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 92px 78px 34px 116px 56px 52px 22px', gap: 10, padding: '4px 12px 6px' }}>
+              <span className="pwr-eyebrow">Unit / room</span>
+              <span className="pwr-eyebrow">State</span>
+              <span className="pwr-eyebrow">Mode</span>
+              <span className="pwr-eyebrow" style={{ textAlign: 'center' }}>Solar</span>
+              <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Setpoint</span>
+              <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Room</span>
+              <span className="pwr-eyebrow" style={{ textAlign: 'right' }}>Power</span>
+              <span />
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {cooling.map((dev, i) => (
               <div key={dev.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
-                <AcRow d={dev} wide={wide} onOpen={() => nav(`/devices/${dev.id}`)} />
+                <ClimateRow d={dev} type="cooling" wide={wide} canWrite={canWrite} canConfig={isAdmin} exporting={exporting} pending={coolCmds.pendingFor(dev.id)} sendLever={coolCmds.sendLever} onToggleSurplus={toggleSurplus} onOpen={() => nav(`/devices/${dev.id}`)} />
               </div>
             ))}
           </div>
@@ -589,7 +561,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {heating.map((dev, i) => (
               <div key={dev.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
-                <HeatRow d={dev} wide={wide} canWrite={canWrite} canConfig={isAdmin} exporting={exporting} pending={heatCmds.pendingFor(dev.id)} sendLever={heatCmds.sendLever} onToggleSurplus={toggleSurplus} onOpen={() => nav(`/devices/${dev.id}`)} />
+                <ClimateRow d={dev} type="heating" wide={wide} canWrite={canWrite} canConfig={isAdmin} exporting={exporting} pending={heatCmds.pendingFor(dev.id)} sendLever={heatCmds.sendLever} onToggleSurplus={toggleSurplus} onOpen={() => nav(`/devices/${dev.id}`)} />
               </div>
             ))}
           </div>
