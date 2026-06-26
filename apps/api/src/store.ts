@@ -265,6 +265,8 @@ export interface DeviceSettings {
   /** Hard comfort bounds for automations (°C). */
   comfortCeilingC?: number;
   comfortFloorC?: number;
+  /** Blinds only: flip 0/100 so the app's "% open" matches the motor's direction. */
+  invertPosition?: boolean;
 }
 
 export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';

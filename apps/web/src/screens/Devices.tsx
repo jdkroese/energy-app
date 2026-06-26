@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
-  DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse,
+  DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse,
 } from '../lib/types';
 import { Card, Icon } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
@@ -12,6 +12,7 @@ import type { ShellContext } from '../components/shell/AppShell';
 import { DEVICE_TYPES, typeMeta, classifyDevice, type DeviceType } from '../lib/deviceTypes';
 import { AutomationRow } from '../components/AutomationRow';
 import { LightsPanel } from './Lights';
+import { BlindsPanel } from './Blinds';
 
 /* ============================================================================
  * Devices — the typed-device hub. A segmented type bar (Cooling · Heating ·
@@ -444,6 +445,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const { data: status } = usePolling<DevicesStatus>(api.devices.status, 20_000);
   const { data: autoData, refetch: refetchAuto } = usePolling<AutomationsResponse>(api.automations.list, 0);
   const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 20_000);
+  const { data: blindsData } = usePolling<BlindsResponse>(api.blinds.list, 20_000);
   // Active tab persists in the URL (?type=) so returning from a unit detail
   // restores the tab the device lives on (e.g. back from a heating zone → Heating).
   const [params, setParams] = useSearchParams();
@@ -462,8 +464,9 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     acc[m.type] = (d?.devices ?? []).filter((x) => classifyDevice(x) === m.type).length;
     return acc;
   }, {} as Record<DeviceType, number>);
-  // Lights are a separate Tuya fleet (not in the climate /api/devices list).
+  // Lights and blinds are separate Tuya fleets (not in the climate /api/devices list).
   counts.lighting = lightsData?.context.deviceCount ?? 0;
+  counts.blinds = blindsData?.context.deviceCount ?? 0;
 
   const cooling = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'cooling');
   const heating = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'heating');
@@ -608,6 +611,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     if (t === 'cooling') return coolingContent;
     if (t === 'heating') return heatingContent;
     if (t === 'lighting') return <LightsPanel ctx={ctx} />;
+    if (t === 'blinds') return <BlindsPanel ctx={ctx} />;
     return <ComingSoon meta={typeMeta(t)} />;
   };
 

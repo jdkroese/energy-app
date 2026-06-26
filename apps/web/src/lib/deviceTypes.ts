@@ -11,7 +11,7 @@
  * route), swap `classifyDevice` to read `d.type` directly.
  */
 
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'switching';
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'blinds' | 'switching';
 
 export interface DeviceTypeMeta {
   type: DeviceType;
@@ -28,6 +28,7 @@ export const DEVICE_TYPES: DeviceTypeMeta[] = [
   { type: 'cooling', label: 'Cooling', hue: 'var(--solar)', icon: 'snowflake', built: true },
   { type: 'heating', label: 'Heating', hue: 'var(--grid)', icon: 'flame', built: true },
   { type: 'lighting', label: 'Lighting', hue: 'var(--home)', icon: 'lightbulb', built: true },
+  { type: 'blinds', label: 'Blinds', hue: 'var(--ev)', icon: 'blinds', built: true },
   { type: 'switching', label: 'Switching', hue: 'var(--battery)', icon: 'toggle-right', built: false },
 ];
 

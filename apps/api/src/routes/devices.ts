@@ -272,6 +272,7 @@ export function setDeviceSettings(id: string, patch: Partial<DeviceSettings>): u
       room: patch.room ?? existing.room,
       comfortCeilingC: patch.comfortCeilingC ?? existing.comfortCeilingC,
       comfortFloorC: patch.comfortFloorC ?? existing.comfortFloorC,
+      invertPosition: patch.invertPosition ?? existing.invertPosition,
     };
     s.deviceSettings[id] = merged;
     return merged;
