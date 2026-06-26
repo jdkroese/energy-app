@@ -30,6 +30,7 @@ import {
   setBatteryPriority,
 } from './routes/control';
 import { startCoordinator } from './control/coordinator';
+import { startSolarModelScheduler } from './solar-model';
 import {
   startClimateCoordinator,
   stopClimateCoordinator,
@@ -481,6 +482,11 @@ startLightCoordinator();
 const SAMPLE_MS = 5 * 60 * 1000;
 setTimeout(() => void getLive().catch(() => {}), 10_000); // one shortly after boot
 setInterval(() => void getLive().catch(() => {}), SAMPLE_MS);
+
+// Nightly (Madrid 00:10) the solar model folds the prior day's measured
+// production into a per-month learned performance ratio, so genKwh predictions
+// track the real roof over time. Read-only on history; no arm gate.
+startSolarModelScheduler();
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`[energy-api] http://${config.host}:${config.port}  (env=${config.env})`);

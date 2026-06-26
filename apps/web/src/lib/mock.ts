@@ -337,22 +337,24 @@ export const MOCK_SETTINGS: SettingsResponse = {
 
 export const MOCK_PLAN: BrainPlanResponse = {
   ts: new Date().toISOString(),
-  projected: { savedEur: 6.1, selfSufficiencyPct: 84, reservePct: 20, p1AvoidedKwh: 11.2 },
+  projected: { savedEur: 6.1, selfSufficiencyPct: 84, reservePct: 20, p1AvoidedKwh: 11.2, freeClimatizationKwh: 4.3 },
   forecast: {
     solarKw: [0, 0, 0, 0, 0, 0, 0.3, 1.5, 3.8, 6.5, 8.8, 10.2, 10.9, 11.0, 10.2, 8.6, 6.4, 4.0, 1.8, 0.4, 0, 0, 0, 0, 0],
     loadKw: [0.5, 0.4, 0.4, 0.4, 0.4, 0.5, 0.7, 1.0, 1.2, 1.4, 2.6, 3.0, 2.8, 2.4, 2.6, 2.8, 2.2, 1.8, 3.4, 3.8, 3.2, 1.6, 0.9, 0.6, 0.5],
     cloudPct: [12, 10, 8, 8, 10, 14, 18, 22, 20, 16, 12, 10, 14, 24, 30, 28, 22, 18, 16, 20, 24, 22, 18, 14, 12],
+    sunIntensityPct: [0, 0, 0, 0, 0, 0, 18, 42, 64, 80, 90, 96, 100, 98, 90, 76, 58, 36, 14, 4, 0, 0, 0, 0, 0],
+    genKwh: [0, 0, 0, 0, 0, 0, 0.3, 1.5, 3.8, 6.5, 8.8, 10.2, 10.9, 11.0, 10.2, 8.6, 6.4, 4.0, 1.8, 0.4, 0, 0, 0, 0, 0],
+    usageKwh: [0.5, 0.4, 0.4, 0.4, 0.4, 0.5, 0.7, 1.0, 1.2, 1.4, 2.6, 3.0, 2.8, 2.4, 2.6, 2.8, 2.2, 1.8, 3.4, 3.8, 3.2, 1.6, 0.9, 0.6, 0.5],
   },
+  model: { month: 'Jun', confidencePct: 55, days: 11 },
   socPct: [38, 34, 30, 28, 28, 28, 30, 42, 58, 72, 84, 92, 98, 100, 100, 100, 98, 92, 78, 58, 40, 30, 30, 32, 34],
   tariff: [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1],
   now: 16.8,
   actions: [
-    { h: 2.0, icon: 'moon', tone: 'battery', title: 'No overnight charge', why: 'Sunny tomorrow — solar will refill the batteries for free.' },
-    { h: 7.5, icon: 'sun', tone: 'solar', title: 'Charging from solar', why: 'House covered; surplus banked into both batteries.' },
-    { h: 11.0, icon: 'wind', tone: 'battery', title: 'Pre-cooling the house', why: '>31 °C forecast — A/C runs on solar now so the slab coasts cool through the evening peak.' },
-    { h: 13.5, icon: 'upload', tone: 'grid', title: 'Surplus to grid', why: 'Batteries full; export is unavoidable (and worth little).' },
-    { h: 18.0, icon: 'battery-charging', tone: 'solar', title: 'Discharging for P1 peak', why: 'Both batteries cover the house 18:00–22:00 — near-zero grid import at €0.209.' },
-    { h: 22.0, icon: 'shield-check', tone: 'battery', title: 'Holding 20% backup', why: 'Storm-free — standard Tesla reserve kept for resilience.' },
+    { h: 7.5, startH: 7.5, endH: 18, icon: 'sun', tone: 'solar', title: 'Charge from surplus solar', why: 'House covered; surplus banked into both batteries instead of exporting for near-zero credit.' },
+    { h: 11.0, startH: 11, endH: 18, icon: 'snowflake', tone: 'home', title: 'Pre-cool the house', why: '>31 °C forecast — A/C runs on solar now so the slab coasts cool through the evening peak.' },
+    { h: 18.0, startH: 18, endH: 22, icon: 'battery-charging', tone: 'battery', title: 'Discharge through P1', why: 'Both batteries cover the house 18:00–22:00 — near-zero grid import at €0.209/kWh.' },
+    { h: 0, startH: 0, endH: 24, icon: 'shield', tone: 'grid', title: 'Hold 20% reserve', why: 'Storm-free — standard Tesla backup floor kept for resilience.' },
   ],
   whyNow: {
     title: 'Holding full, banking sun',

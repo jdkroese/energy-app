@@ -61,8 +61,12 @@ function historyPath(): string {
   // and doesn't exist there — writing it failed silently, losing all history.)
   if (process.env.STATE_FILE) return resolve(dirname(process.env.STATE_FILE), 'history-5m.json');
   if (process.env.NODE_ENV === 'production') return '/opt/energy/history-5m.json';
-  // repoRoot = two levels up from apps/api/src.
-  const repoRoot = resolve(__dirname, '..', '..', '..');
+  // repoRoot = three levels up from apps/api/src in the CJS prod bundle. Under
+  // tsx/ESM dev __dirname is undefined, so derive it from cwd (apps/api).
+  const repoRoot =
+    typeof __dirname !== 'undefined'
+      ? resolve(__dirname, '..', '..', '..')
+      : resolve(process.cwd(), '..', '..');
   return resolve(repoRoot, '.data', 'history-5m.json');
 }
 

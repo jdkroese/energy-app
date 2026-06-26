@@ -5,10 +5,27 @@ import * as weather from '../connectors/weather';
 import { bandCodesForDay, RATES, type Band } from '../tariff';
 import * as store from '../store';
 import type { ScenarioDef } from '../store';
+import { weatherCoords } from '../runtime-config';
+import {
+  effectivePR,
+  haurwitzGHI,
+  madridDayOfYear,
+  monthLabel,
+  solarElevationDeg,
+} from '../solar-model';
 
 function round(n: number, dp = 1): number {
   const f = 10 ** dp;
   return Math.round(n * f) / f;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+/** Clamp a fractional hour to the 0..24 plot range. */
+function clampH(h: number): number {
+  return Math.max(0, Math.min(24, h));
 }
 
 function madridHour(d: Date): number {
@@ -24,17 +41,16 @@ function madridHour(d: Date): number {
 }
 
 /** Solar forecast (kW per hour) from Open-Meteo shortwave radiation, or a synthetic bell. */
-function solarForecast(rad: number[] | null): number[] {
+function solarForecast(rad: number[] | null, pr: number): number[] {
   const kwp = config.site.solarKwp;
   if (rad && rad.length === 24) {
-    // Rough PV model: kW ≈ radiation(W/m²) / 1000 × kWp × performance ratio.
-    const pr = 0.82;
+    // PV model: kW ≈ radiation(W/m²) / 1000 × kWp × learned performance ratio.
     return rad.map((w) => round(Math.max(0, (w / 1000) * kwp * pr), 2));
   }
   // Synthetic clear-day bell centred ~13:30 Madrid.
   return Array.from({ length: 24 }, (_, h) => {
     const x = (h - 13.5) / 3.6;
-    const v = Math.exp(-0.5 * x * x) * kwp * 0.72;
+    const v = Math.exp(-0.5 * x * x) * kwp * (pr * 0.88);
     return round(Math.max(0, v), 2);
   });
 }
@@ -75,7 +91,7 @@ function plan(
   const capKwh = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh; // combined tank
   const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
   const socPct: number[] = [];
-  const actions: Array<{ h: number; icon: string; tone: string; title: string; why: string }> = [];
+  const actions: Array<{ h: number; startH: number; endH: number; icon: string; tone: string; title: string; why: string }> = [];
 
   // Scenario bias: a self/independence-leaning scenario discharges the battery
   // more eagerly in cheaper bands (P2/P3) to lean less on the grid; a savings-
@@ -89,11 +105,29 @@ function plan(
   let savedEur = 0;
   let importedKwh = 0;
   let consumedKwh = 0;
+  let freeClimatizationKwh = 0;
 
   for (let h = 0; h < 24; h++) {
     const surplus = solarKw[h] - loadKw[h]; // kW net for the hour (≈ kWh over 1h)
     const band = bandCodes[h]; // 0=P3 1=P2 2=P1
     consumedKwh += loadKw[h];
+
+    // Free climatization: HVAC energy that absorbs would-be-EXPORT. The HVAC load
+    // component is loadForecast's thermal nudge (heating <16 °C, cooling >26 °C);
+    // the rest of loadKw is the non-HVAC base load. "Surplus available to HVAC" is
+    // solar minus that non-HVAC base — i.e. the PV that would otherwise be exported
+    // for near-zero credit. We count only the HVAC kWh that fits inside it:
+    //   freeKwh += min( hvacKw, max(0, solarKw − (loadKw − hvacKw)) )
+    if (temp && temp[h] !== undefined) {
+      const t = temp[h];
+      let hvacKw = 0;
+      if (t < 16) hvacKw = (16 - t) * 0.08;
+      if (t > 26) hvacKw = (t - 26) * 0.1;
+      if (hvacKw > 0) {
+        const wouldBeExportKw = Math.max(0, solarKw[h] - (loadKw[h] - hvacKw));
+        freeClimatizationKwh += Math.min(hvacKw, wouldBeExportKw);
+      }
+    }
 
     let deltaKwh = 0; // + charge / - discharge battery
     if (surplus > 0) {
@@ -123,11 +157,19 @@ function plan(
     socPct.push(Math.round(soc));
   }
 
-  // Timed action markers.
+  // Timed action markers — each is a duration window (startH..endH) the timeline
+  // draws as a bar; `h` keeps the legacy point marker (window start).
   const firstP1 = bandCodes.findIndex((b) => b === 2);
+  // Last hour where surplus solar exceeds load → end of the charge window.
+  const lastP1 = bandCodes.length - 1 - [...bandCodes].reverse().findIndex((b) => b === 2);
   const peakSolarH = solarKw.indexOf(Math.max(...solarKw));
+  const surplusHours = solarKw.map((kw, h) => (kw - loadKw[h] > 0.2 ? h : -1)).filter((h) => h >= 0);
+  const chargeStart = surplusHours.length ? surplusHours[0] : Math.max(0, peakSolarH - 3);
+  const chargeEnd = surplusHours.length ? surplusHours[surplusHours.length - 1] + 1 : Math.min(24, peakSolarH + 3);
   actions.push({
     h: peakSolarH,
+    startH: chargeStart,
+    endH: clampH(chargeEnd),
     icon: 'sun',
     tone: 'solar',
     title: 'Charge from surplus solar',
@@ -136,6 +178,8 @@ function plan(
   if (temp && Math.max(...temp) > 26 && firstP1 > 1) {
     actions.push({
       h: firstP1 - 1,
+      startH: clampH(firstP1 - 2),
+      endH: firstP1,
       icon: 'snowflake',
       tone: 'home',
       title: 'Pre-cool the house',
@@ -145,6 +189,8 @@ function plan(
   if (firstP1 >= 0) {
     actions.push({
       h: firstP1,
+      startH: firstP1,
+      endH: clampH(lastP1 + 1),
       icon: 'battery-charging',
       tone: 'battery',
       title: 'Discharge through P1',
@@ -153,12 +199,14 @@ function plan(
   }
   actions.push({
     h: 0,
+    startH: 0,
+    endH: 24,
     icon: 'shield',
     tone: 'grid',
     title: `Hold ${reservePct}% reserve`,
     why: 'Keep a backup floor on the Tesla for outage resilience.',
   });
-  actions.sort((a, b) => a.h - b.h);
+  actions.sort((a, b) => a.startH - b.startH || a.h - b.h);
 
   const selfSufficiencyPct =
     consumedKwh > 0
@@ -173,6 +221,7 @@ function plan(
       selfSufficiencyPct,
       reservePct,
       p1AvoidedKwh: round(p1AvoidedKwh, 1),
+      freeClimatizationKwh: round(freeClimatizationKwh, 1),
     },
   };
 }
@@ -193,7 +242,12 @@ export async function getPlan(): Promise<unknown> {
 
   const rad = wf?.shortwaveRadiation ?? null;
   const temp = wf?.temperature ?? null;
-  const solarKw = solarForecast(rad);
+
+  // Learned roof performance ratio for this month (seeded at 0.82, sharpens with
+  // measured days). Drives both the solar-kW forecast and the genKwh prediction.
+  const { prEff, confidence, days, month } = effectivePR();
+
+  const solarKw = solarForecast(rad, prEff);
   const loadKw = loadForecast(temp);
   const bandCodes = bandCodesForDay(now);
 
@@ -230,6 +284,35 @@ export async function getPlan(): Promise<unknown> {
       ? Math.round(dayHours.reduce((a, h) => a + (cloudPct[h] ?? 0), 0) / dayHours.length)
       : 0;
 
+  // Sun intensity (% of clear-sky) per hour, from MEASURED shortwave radiation vs
+  // the Haurwitz clear-sky GHI; 0 below the horizon. Falls back to a solar-shaped
+  // proxy from solarKw when no live radiation is available.
+  const doy = madridDayOfYear(now);
+  const { lat } = weatherCoords();
+  const kwp = config.site.solarKwp;
+  const sunIntensity24 = Array.from({ length: 24 }, (_, h) => {
+    const elev = solarElevationDeg(h, doy, lat);
+    const ghiC = haurwitzGHI(elev);
+    if (elev <= 0 || ghiC <= 0) return 0;
+    const actual = rad ? rad[h] ?? 0 : (solarKw[h] / Math.max(0.01, kwp * prEff)) * 1000;
+    return clamp(Math.round((actual / ghiC) * 100), 0, 100);
+  });
+
+  // Predicted generation per hour (kWh) = actualGHI/1000·kWp·PR_eff (≈ solarKw·1h).
+  const genKwh24 = solarKw.map((kw) => round(kw, 1));
+  // Predicted usage per hour (kWh) from the load forecast (loadKw integrated 1h).
+  const usageKwh24 = loadKw.map((kw) => round(kw, 1));
+
+  // Extend the per-hour series to 25 points (0..24) so the timeline curves close
+  // cleanly at the right edge. The 25th point mirrors hour-0 wrap (≈ overnight).
+  const ext = (a: number[]): number[] => [...a, a[0] ?? 0];
+  const sunIntensityPct = ext(sunIntensity24);
+  const genKwh = ext(genKwh24);
+  const usageKwh = ext(usageKwh24);
+  const solarKw25 = ext(solarKw);
+  const loadKw25 = ext(loadKw);
+  const socPct25 = [...result.socPct, result.socPct[0] ?? result.socPct[result.socPct.length - 1] ?? 0];
+
   // Why-now narrative based on the current band + current action.
   const bandName: Record<number, Band> = { 0: 'P3', 1: 'P2', 2: 'P1' };
   const curBand = bandName[bandCodes[nowH]];
@@ -239,8 +322,9 @@ export async function getPlan(): Promise<unknown> {
     ts: now.toISOString(),
     scenario: { id: state.activeScenario, name: scenario.name, reservePct },
     projected: result.projected,
-    forecast: { solarKw, loadKw, cloudPct },
-    socPct: result.socPct,
+    forecast: { solarKw: solarKw25, loadKw: loadKw25, cloudPct, sunIntensityPct, genKwh, usageKwh },
+    model: { month: monthLabel(month), confidencePct: Math.round(confidence * 100), days },
+    socPct: socPct25,
     tariff,
     actions: result.actions,
     now: nowH,
