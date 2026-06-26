@@ -648,16 +648,50 @@ export interface SolarSurplusPrecoolParams {
   startThresholdW?: number;
 }
 
-/** COOLING rule = solar_surplus_precool · HEATING rule = solar_surplus_preheat. */
-export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat';
+/**
+ * Params for the TARIFF-ARBITRAGE battery automation (task #15). Mirrors the API's
+ * TariffArbitrageParams. Seeded DISABLED; only acts when enabled && battery Autopilot
+ * is armed in Auto.
+ */
+export interface TariffArbitrageParams {
+  /** Pre-peak SoC target ceiling (%): never grid-charge above this. */
+  peakTargetSocPct: number;
+  /** Max grid-charge power into the Sonnen during the valley (kW). */
+  maxGridChargeKw: number;
+  /** Minimum P1−P3 price spread (€/kWh) for the arbitrage to be worthwhile. */
+  minSpreadEur: number;
+  /** Discharge floor (%) the peak discharge respects (≥ Tesla reserve / SoC floor). */
+  dischargeFloorPct: number;
+  /** Only buy the shortfall the forecast solar won't provide. */
+  solarShortfallOnly: boolean;
+  /** When exporting (live surplus), defer to #34 soak-export and don't grid-buy. */
+  surplusOverridesGridCharge: boolean;
+  /** Valley band for grid-charging (cheap window; P3). */
+  valleyBand: Band;
+  /** Peak band to discharge through (expensive window; P1). Never grid-charge here or in P2. */
+  peakBand: Band;
+}
+
+/** COOLING = solar_surplus_precool · HEATING = solar_surplus_preheat · BATTERY = tariff_arbitrage. */
+export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat' | 'tariff_arbitrage';
+
+/** Shape depends on `type`: climate params for the surplus rules, battery params for arbitrage. */
+export type AutomationParams = SolarSurplusPrecoolParams | TariffArbitrageParams;
 
 export interface Automation {
   id: string;
   name: string;
   enabled: boolean;
   type: AutomationType;
-  params: SolarSurplusPrecoolParams;
+  params: AutomationParams;
   lastEval: number | null;
+}
+
+/** Type guard narrowing an automation to the tariff-arbitrage (battery) shape. */
+export function isTariffArbitrage(
+  a: Automation,
+): a is Automation & { params: TariffArbitrageParams } {
+  return a.type === 'tariff_arbitrage';
 }
 
 export interface AutomationsResponse {

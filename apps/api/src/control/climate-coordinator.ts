@@ -165,7 +165,10 @@ async function evaluateSurplusDirection(
   fleet: ClimateUnit[],
   snap: RichClimateSnapshot,
 ): Promise<void> {
-  const p: SolarSurplusPrecoolParams = automation.params;
+  // This evaluator is only ever reached for the surplus rules, so the battery
+  // (tariff-arbitrage) shape can't appear here. Bail defensively, then read the climate shape.
+  if (automation.type === 'tariff_arbitrage') return;
+  const p = automation.params as SolarSurplusPrecoolParams;
   const startThreshold = p.startThresholdW ?? 800;
   const heatFloor = p.heatRoomFloorC ?? 19;
   const heatTarget = p.heatTargetSetpointC ?? 21;

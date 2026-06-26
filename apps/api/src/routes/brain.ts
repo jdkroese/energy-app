@@ -4,7 +4,8 @@ import * as tesla from '../connectors/tesla';
 import * as weather from '../connectors/weather';
 import { bandCodesForDay, RATES, type Band } from '../tariff';
 import * as store from '../store';
-import type { ScenarioDef } from '../store';
+import { isTariffArbitrage, type ScenarioDef } from '../store';
+import { planArbitrage } from '../control/arbitrage';
 import { weatherCoords } from '../runtime-config';
 import {
   effectivePR,
@@ -41,7 +42,7 @@ function madridHour(d: Date): number {
 }
 
 /** Solar forecast (kW per hour) from Open-Meteo shortwave radiation, or a synthetic bell. */
-function solarForecast(rad: number[] | null, pr: number): number[] {
+export function solarForecast(rad: number[] | null, pr: number): number[] {
   const kwp = config.site.solarKwp;
   if (rad && rad.length === 24) {
     // PV model: kW ≈ radiation(W/m²) / 1000 × kWp × learned performance ratio.
@@ -56,7 +57,7 @@ function solarForecast(rad: number[] | null, pr: number): number[] {
 }
 
 /** Load forecast (kW per hour) for the all-electric house, thermally nudged by temp. */
-function loadForecast(temp: number[] | null): number[] {
+export function loadForecast(temp: number[] | null): number[] {
   // Base daily profile (kW) — morning + evening peaks, all-electric.
   const base = [
     0.6, 0.5, 0.5, 0.5, 0.5, 0.6, 0.9, 1.4, 1.6, 1.3, 1.1, 1.2, 1.3, 1.2, 1.1, 1.2, 1.4, 1.8,
@@ -271,6 +272,57 @@ export async function getPlan(): Promise<unknown> {
 
   const result = plan(solarKw, loadKw, bandCodes, startSoc, reservePct, temp, scenario);
 
+  // ---- Tariff arbitrage overlay (task #15) -----------------------------------
+  // ONLY reflected in the plan when the rule is ENABLED (a disabled rule shows nothing —
+  // shipping it changes no chart). When enabled, compute the valley pre-buy + peak-discharge
+  // schedule from the same forecast and OVERLAY it: add move-bars to the actions and replace
+  // the SoC trajectory with the arbitrage-applied one so the chart SHOWS the arbitrage. This
+  // is presentation-only; the live battery writes are gated separately in the coordinator.
+  const arbAutomation = state.automations.find(
+    (a) => a.type === 'tariff_arbitrage' && a.enabled,
+  );
+  let arbSocPct: number[] | null = null;
+  if (arbAutomation && isTariffArbitrage(arbAutomation)) {
+    const capKwh = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
+    const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
+    const arb = planArbitrage(
+      solarKw,
+      loadKw,
+      bandCodes,
+      startSoc,
+      capKwh,
+      maxKw,
+      arbAutomation.params,
+    );
+    if (arb.active) {
+      arbSocPct = arb.socPct;
+      for (const m of arb.moves) {
+        if (m.kind === 'valley-charge') {
+          result.actions.push({
+            h: Math.floor(m.startH),
+            startH: m.startH,
+            endH: m.endH,
+            icon: 'plug-zap',
+            tone: 'ev',
+            title: 'Grid-charge in valley',
+            why: `Pre-buy ${m.kwh.toFixed(1)} kWh of cheap ${arbAutomation.params.valleyBand} grid to carry the ${arbAutomation.params.peakBand} peak (target ${Math.round(arb.targetSocPct)}%). Solar-first: only the forecast shortfall.`,
+          });
+        } else {
+          result.actions.push({
+            h: Math.floor(m.startH),
+            startH: m.startH,
+            endH: m.endH,
+            icon: 'trending-down',
+            tone: 'ev',
+            title: 'Discharge for peak',
+            why: `Cover the ${arbAutomation.params.peakBand} peak from the pre-charged battery (~${m.kwh.toFixed(1)} kWh) down to ${Math.round(arbAutomation.params.dischargeFloorPct)}% — avoids €${RATES[arbAutomation.params.peakBand].toFixed(4)}/kWh imports.`,
+          });
+        }
+      }
+      result.actions.sort((a, b) => a.startH - b.startH || a.h - b.h);
+    }
+  }
+
   // Tariff rate array for the chart (0=P3,1=P2,2=P1 already from bandCodes).
   const tariff = bandCodes;
 
@@ -311,7 +363,10 @@ export async function getPlan(): Promise<unknown> {
   const usageKwh = ext(usageKwh24);
   const solarKw25 = ext(solarKw);
   const loadKw25 = ext(loadKw);
-  const socPct25 = [...result.socPct, result.socPct[0] ?? result.socPct[result.socPct.length - 1] ?? 0];
+  // When the arbitrage rule is enabled+active, show its bent trajectory instead of the
+  // baseline so the chart reflects the planned valley-charge + peak-discharge.
+  const socSeries = arbSocPct ?? result.socPct;
+  const socPct25 = [...socSeries, socSeries[0] ?? socSeries[socSeries.length - 1] ?? 0];
 
   // Why-now narrative based on the current band + current action.
   const bandName: Record<number, Band> = { 0: 'P3', 1: 'P2', 2: 'P1' };

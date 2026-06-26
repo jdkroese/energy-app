@@ -6,10 +6,11 @@ import * as intesis from '../connectors/intesis';
 import type { ClimateUnit } from '../connectors/intesis';
 import * as airzone from '../connectors/airzone';
 import * as store from '../store';
-import { defaultAutomations } from '../store';
+import { defaultAutomations, defaultTariffArbitrageParams } from '../store';
 import type {
   Action,
   Automation,
+  AutomationParams,
   ControlMode,
   DeviceSettings,
   DeviceType,
@@ -18,7 +19,9 @@ import type {
   ScheduleScope,
   ScheduleWindow,
   SolarSurplusPrecoolParams,
+  TariffArbitrageParams,
 } from '../store';
+import type { Band } from '../tariff';
 import { issueClimate, type ClimateLever } from '../control/climate-execute';
 import { takeClimateSnapshot } from '../control/climate-snapshot';
 import {
@@ -493,7 +496,10 @@ export function listAutomations(): unknown {
   return { ts: new Date().toISOString(), automations: store.get().automations };
 }
 
-function sanitizeParams(p: Partial<SolarSurplusPrecoolParams> | undefined, base: SolarSurplusPrecoolParams): SolarSurplusPrecoolParams {
+function sanitizeSurplusParams(
+  p: Partial<SolarSurplusPrecoolParams> | undefined,
+  base: SolarSurplusPrecoolParams,
+): SolarSurplusPrecoolParams {
   return {
     roomTempLimitC: typeof p?.roomTempLimitC === 'number' ? p.roomTempLimitC : base.roomTempLimitC,
     targetSetpointC: typeof p?.targetSetpointC === 'number' ? p.targetSetpointC : base.targetSetpointC,
@@ -510,13 +516,62 @@ function sanitizeParams(p: Partial<SolarSurplusPrecoolParams> | undefined, base:
   };
 }
 
+const isBand = (b: unknown): b is Band => b === 'P1' || b === 'P2' || b === 'P3';
+
+/** Sanitize tariff-arbitrage params, clamping to conservative safe ranges. The
+ *  per-tick guardrails (sonnenMaxW, SoC floor, import cap) are the final authority;
+ *  this just keeps a saved rule's params sane. */
+function sanitizeArbitrageParams(
+  p: Partial<TariffArbitrageParams> | undefined,
+  base: TariffArbitrageParams,
+): TariffArbitrageParams {
+  const num = (v: unknown, fb: number, lo: number, hi: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fb;
+  return {
+    peakTargetSocPct: num(p?.peakTargetSocPct, base.peakTargetSocPct, 0, 100),
+    maxGridChargeKw: num(p?.maxGridChargeKw, base.maxGridChargeKw, 0, 10),
+    minSpreadEur: num(p?.minSpreadEur, base.minSpreadEur, 0, 1),
+    dischargeFloorPct: num(p?.dischargeFloorPct, base.dischargeFloorPct, 0, 100),
+    solarShortfallOnly:
+      typeof p?.solarShortfallOnly === 'boolean' ? p.solarShortfallOnly : base.solarShortfallOnly,
+    surplusOverridesGridCharge:
+      typeof p?.surplusOverridesGridCharge === 'boolean'
+        ? p.surplusOverridesGridCharge
+        : base.surplusOverridesGridCharge,
+    valleyBand: isBand(p?.valleyBand) ? p.valleyBand : base.valleyBand,
+    peakBand: isBand(p?.peakBand) ? p.peakBand : base.peakBand,
+  };
+}
+
+/** Sanitize a body's params against the rule's TYPE (the discriminator), so a
+ *  battery rule never gets climate params and vice-versa. */
+function sanitizeParams(
+  type: Automation['type'],
+  p: AutomationParams | undefined,
+  base: AutomationParams,
+): AutomationParams {
+  if (type === 'tariff_arbitrage') {
+    return sanitizeArbitrageParams(
+      p as Partial<TariffArbitrageParams> | undefined,
+      base as TariffArbitrageParams,
+    );
+  }
+  return sanitizeSurplusParams(
+    p as Partial<SolarSurplusPrecoolParams> | undefined,
+    base as SolarSurplusPrecoolParams,
+  );
+}
+
 export function createAutomation(body: Partial<Automation>): unknown {
   const type: Automation['type'] =
-    body.type === 'solar_surplus_preheat' ? 'solar_surplus_preheat' : 'solar_surplus_precool';
-  // Both directions carry the full param shape (so a save never drops the other side's
-  // target); the coordinator reads only its own direction. Cooling triggers warm 25→23°C,
-  // heating triggers cold 19→21°C.
-  const base: SolarSurplusPrecoolParams = {
+    body.type === 'tariff_arbitrage'
+      ? 'tariff_arbitrage'
+      : body.type === 'solar_surplus_preheat'
+        ? 'solar_surplus_preheat'
+        : 'solar_surplus_precool';
+  // Per-type base param shape. Surplus rules carry the full climate shape (so a save never
+  // drops the other direction's target); the tariff-arbitrage rule carries the battery shape.
+  const surplusBase: SolarSurplusPrecoolParams = {
     roomTempLimitC: 25,
     targetSetpointC: 23,
     heatRoomFloorC: 19,
@@ -526,14 +581,20 @@ export function createAutomation(body: Partial<Automation>): unknown {
     exitBand: 'P1',
     startThresholdW: 800,
   };
+  const base: AutomationParams =
+    type === 'tariff_arbitrage' ? defaultTariffArbitrageParams() : surplusBase;
+  const defaultName =
+    type === 'tariff_arbitrage'
+      ? 'Tariff arbitrage'
+      : type === 'solar_surplus_preheat'
+        ? 'Solar-surplus heating'
+        : 'Solar-surplus cooling';
   const a: Automation = {
     id: newId('auto'),
-    name:
-      body.name?.trim() ||
-      (type === 'solar_surplus_preheat' ? 'Solar-surplus heating' : 'Solar-surplus cooling'),
+    name: body.name?.trim() || defaultName,
     enabled: body.enabled ?? false,
     type,
-    params: sanitizeParams(body.params, base),
+    params: sanitizeParams(type, body.params, base),
     lastEval: null,
   };
   store.update((st) => {
@@ -547,11 +608,13 @@ export function updateAutomation(id: string, body: Partial<Automation>): unknown
     const idx = st.automations.findIndex((x) => x.id === id);
     if (idx < 0) return null;
     const cur = st.automations[idx];
+    // Sanitize against the EXISTING type (type is immutable post-create), so a climate
+    // rule's params can never be coerced into the battery shape or vice-versa.
     const merged: Automation = {
       ...cur,
       name: body.name ?? cur.name,
       enabled: body.enabled ?? cur.enabled,
-      params: sanitizeParams(body.params, cur.params),
+      params: sanitizeParams(cur.type, body.params, cur.params),
     };
     st.automations[idx] = merged;
     return merged;
