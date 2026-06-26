@@ -16,6 +16,8 @@ export function AutomationRow({
   onSave,
   subtitle = 'Automation · climate',
   dim = false,
+  icon = 'zap',
+  iconColor = 'var(--battery)',
 }: {
   automation: Automation;
   canWrite: boolean;
@@ -23,6 +25,10 @@ export function AutomationRow({
   subtitle?: string;
   /** Visually de-emphasise when control is disarmed (the rule can't act). */
   dim?: boolean;
+  /** Leading solar-surplus glyph — the bolt (`zap`). Caller picks per type. */
+  icon?: string;
+  /** Bolt hue — blue (`--battery`) = pre-cool, orange (`--grid`) = pre-heat. */
+  iconColor?: string;
 }) {
   const { name, authority, enabled } = automation;
   const authBtn = (active: boolean, solid: boolean) =>
@@ -39,7 +45,7 @@ export function AutomationRow({
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, opacity: dim ? 0.6 : 1 }}>
-      <Icon name="zap" size={19} color="var(--solar)" />
+      <Icon name={icon} size={19} color={iconColor} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{subtitle}</div>

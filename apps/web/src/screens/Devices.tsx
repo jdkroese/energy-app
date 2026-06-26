@@ -188,7 +188,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {/* AUTOPILOT ROW — shared automation object (read/write here and on Automations) */}
       {automation && (
         <Card padded style={{ padding: '13px 15px' }}>
-          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Automation · cooling" dim={!armed} />
+          <AutomationRow automation={automation} canWrite={isAdmin} onSave={saveAuto} subtitle="Automation · cooling" dim={!armed} icon="zap" iconColor="var(--battery)" />
           {!armed && (
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
               <Icon name="shield-off" size={13} color="var(--grid)" />
