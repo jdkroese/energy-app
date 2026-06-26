@@ -333,19 +333,34 @@ export interface Schedule {
   condition: RunCondition;
 }
 
+// solar_surplus_precool is now the unified "solar climate" automation: it drives the
+// HVAC fleet in BOTH directions (cool when warm / heat when cold) on surplus.
+// solar_surplus_preheat is retained ONLY so legacy persisted rules still parse — it is
+// no longer seeded and the coordinator treats it as an inert no-op (Airzone underfloor
+// is no longer surplus-eligible).
 export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat';
 
 /**
- * Shared params for the two solar-surplus comfort automations. The semantics of
- * `roomTempLimitC`/`targetSetpointC` flip with the automation type:
- *  - precool: act while room is ABOVE the limit, cool DOWN to the target.
- *  - preheat: act while room is BELOW the limit, heat UP to the target.
+ * Params for the unified solar-surplus "solar climate" automation. One enrollment per
+ * HVAC covers both directions:
+ *  - COOL while room is ABOVE roomTempLimitC, down toward targetSetpointC.
+ *  - HEAT while room is BELOW heatRoomFloorC, up toward heatTargetSetpointC.
+ * A cool↔heat deadband (in the coordinator) keeps a unit from flipping direction
+ * within a window.
  */
 export interface SolarSurplusPrecoolParams {
-  /** Comfort limit (°C): cooling runs while room > limit; heating while room < limit. */
+  /** Cooling comfort ceiling (°C): cooling runs while room > this limit. */
   roomTempLimitC: number;
-  /** Target setpoint to drive the room toward (°C). */
+  /** Cooling target setpoint to drive the room down toward (°C). */
   targetSetpointC: number;
+  /**
+   * Heating comfort floor (°C): heating runs while room < this floor. Optional so
+   * legacy precool-only rules keep working; the coordinator defaults it when absent.
+   * Part of the unified "solar climate" automation (cool when warm / heat when cold).
+   */
+  heatRoomFloorC?: number;
+  /** Heating target setpoint to drive the room up toward (°C). Defaults when absent. */
+  heatTargetSetpointC?: number;
   /** Stop only after surplus has cleared for this long (s). */
   surplusClearSec: number;
   /** Whether the tariff-band stand-down applies at all. Default true (undefined ⇒ on). */
@@ -397,6 +412,15 @@ export interface DevicesState {
   guardrails: ClimateGuardrails;
   /** deviceId → epoch ms until which automation defers to a manual command. */
   manualOverrides: Record<string, number>;
+  /**
+   * Sticky, PERSISTED manual-ON ownership: deviceId → true once the user manually
+   * powers a unit ON, cleared on a manual power OFF. Distinct from the timed
+   * `manualOverrides` hold (which expires): while a unit is `manualOn`, the surplus
+   * automation treats it as user-owned and will never power it off or retune its
+   * mode/setpoint. A unit is "auto-owned" iff it is NOT manualOn — so auto-ownership
+   * is derivable and survives a restart. Manual ON → manual OFF only.
+   */
+  manualOn: Record<string, boolean>;
 }
 
 // ---- Lights: scenes + schedules --------------------------------------------
@@ -570,36 +594,26 @@ export function defaultDevices(): DevicesState {
       manualOverrideMin: 120,
     },
     manualOverrides: {},
+    manualOn: {},
   };
 }
 
-/** The flagship automations, seeded disabled so they never act until enabled + armed. */
+/** The flagship automation, seeded disabled so it never acts until enabled + armed.
+ *  One unified "solar climate" rule drives the HVAC fleet both ways on surplus:
+ *  cool above 25→23°C, heat below 19→21°C. (The former Airzone pre-heat rule is gone —
+ *  underfloor is no longer surplus-eligible.) */
 export function defaultAutomations(): Automation[] {
   return [
     {
       id: 'solar-surplus-precool',
-      name: 'Solar-surplus pre-cool',
+      name: 'Solar-surplus climate',
       enabled: false,
       type: 'solar_surplus_precool',
       params: {
         roomTempLimitC: 25,
         targetSetpointC: 23,
-        surplusClearSec: 120,
-        bandRestrictionEnabled: true,
-        exitBand: 'P1',
-        startThresholdW: 800,
-      },
-      lastEval: null,
-    },
-    {
-      id: 'solar-surplus-preheat',
-      name: 'Solar-surplus pre-heat',
-      enabled: false,
-      type: 'solar_surplus_preheat',
-      params: {
-        // Heat a heating zone while it's BELOW 19°C, up to a 21°C target.
-        roomTempLimitC: 19,
-        targetSetpointC: 21,
+        heatRoomFloorC: 19,
+        heatTargetSetpointC: 21,
         surplusClearSec: 120,
         bandRestrictionEnabled: true,
         exitBand: 'P1',
@@ -889,6 +903,13 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
     },
     manualOverrides:
       p.manualOverrides && typeof p.manualOverrides === 'object' ? p.manualOverrides : {},
+    // Sticky manual-ON ownership persists across restarts so auto-ownership (NOT
+    // manualOn) is restored on boot — an auto-started unit stays auto-managed, a
+    // user-switched-on unit stays hands-off — without re-deriving from volatile memory.
+    manualOn:
+      p.manualOn && typeof p.manualOn === 'object'
+        ? Object.fromEntries(Object.entries(p.manualOn).filter(([, v]) => v === true))
+        : {},
   };
 }
 
