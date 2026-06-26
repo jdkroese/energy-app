@@ -3,8 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { DeviceType, DeviceView, DevicesResponse, Schedule, SchedulesResponse, LightSchedule, LightScene, LightSchedulesResponse, ScenesResponse, BlindsResponse } from '../lib/types';
-import { Icon, Button, Eyebrow, SegmentedControl, Switch } from '../components/ui';
-import { MobileHeader, Avatar, StaleBanner } from './_shared';
+import { Icon, Button, SegmentedControl, Switch } from '../components/ui';
+import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
@@ -13,7 +13,8 @@ import { EditRuleOverlay, type RulePeer } from '../components/schedules/EditRule
 import { newRuleDraft, TYPE_LABEL } from '../lib/scheduleRules';
 
 /* ============================================================================
- * Schedules (/schedules) — one UnitScheduleBox per unit (or group) that holds
+ * Schedules — rendered under the "Schedules" tab on the Automations screen
+ * (/automations?tab=schedules). One UnitScheduleBox per unit (or group) that holds
  * rules, grouped/sorted by device type, behind an All/Cooling/Heating/Lighting/
  * Circuits filter. Rules are created/edited through the shared EditRuleOverlay.
  * "New schedule" reveals every unit so a rule can be added to any of them.
@@ -32,7 +33,13 @@ const TYPE_ORDER: DeviceType[] = ['cooling', 'heating', 'lighting', 'blinds', 'c
 /** Minimal schedulable-unit shape — climate devices and Tuya blinds both map to this. */
 interface SchedUnit { id: string; name: string; type: DeviceType }
 
-export function Schedules({ ctx }: { ctx: ShellContext }) {
+/**
+ * SchedulesPanel — the Schedules screen body without page chrome (no page title /
+ * MobileHeader). Rendered under the "Schedules" tab on the Automations screen. The
+ * "New schedule" toggle button is rendered inline at the top of the panel so it
+ * works identically on desktop and mobile.
+ */
+export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
   const canConfig = user?.role === 'admin';
   const wide = ctx.desktop;
@@ -56,18 +63,29 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
   const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
   const unitName = (id: string) => unitById.get(id)?.name || id;
 
+  // Strip only the deep-link keys, preserving anything else (e.g. ?tab=schedules
+  // when this panel is hosted inside the Automations screen).
+  const clearDeepLink = () => {
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('new');
+      next.delete('edit');
+      return next;
+    }, { replace: true });
+  };
+
   // Deep-link from a device page: ?new=<deviceId> opens a fresh rule for that unit.
   useEffect(() => {
     const newFor = params.get('new');
     if (newFor && unitById.has(newFor)) {
       const u = unitById.get(newFor)!;
       setEditing({ rule: newRuleDraft({ type: u.type, deviceId: u.id, name: u.name }), isNew: true });
-      setParams({}, { replace: true });
+      clearDeepLink();
     }
     const editId = params.get('edit');
     if (editId) {
       const s = schedules.find((x) => x.id === editId);
-      if (s) { setEditing({ rule: s, isNew: false }); setParams({}, { replace: true }); }
+      if (s) { setEditing({ rule: s, isNew: false }); clearDeepLink(); }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params, schedules.length, units.length]);
@@ -174,21 +192,9 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
   );
 
   return (
-    <>
-      {wide ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, margin: '0 auto', width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-            <div><Eyebrow>Automation</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Schedules</h1></div>
-            {newBtn}
-          </div>
-          {list}
-        </div>
-      ) : (
-        <>
-          <MobileHeader eyebrow="Automation" title="Schedules" right={<Avatar />} />
-          <div style={{ padding: '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>{newBtn}{list}</div>
-        </>
-      )}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {newBtn && <div style={{ display: 'flex', justifyContent: wide ? 'flex-end' : 'flex-start' }}>{newBtn}</div>}
+      {list}
 
       {editing && (
         <EditRuleOverlay
@@ -203,7 +209,7 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
           onDelete={() => deleteRule(editing.rule)}
         />
       )}
-    </>
+    </div>
   );
 }
 

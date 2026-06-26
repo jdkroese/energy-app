@@ -18,7 +18,7 @@ export const NAV: NavItem[] = [
 export const NAV_MORE: NavItem[] = [
   { to: '/scenarios', label: 'Scenarios', icon: 'sliders-horizontal' },
   { to: '/brain', label: 'Autopilot', icon: 'sparkles' },
-  { to: '/schedules', label: 'Schedules', icon: 'calendar-clock' },
+  // Schedules folded into Automations (two tabs); /schedules redirects there.
   { to: '/automations', label: 'Automations', icon: 'workflow' },
 ];
 

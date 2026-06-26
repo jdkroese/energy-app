@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
@@ -11,6 +11,7 @@ import { isTariffArbitrage } from '../lib/types';
 import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
 import { AutomationRow } from '../components/AutomationRow';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
+import { SchedulesPanel } from './Schedules';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import type { ReactNode } from 'react';
@@ -553,10 +554,24 @@ function SoakRuleCard({ rule, live, canWrite, onSave }: {
   );
 }
 
+type AutoTab = 'schedules' | 'rules';
+
 export function Automations({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
   const canWrite = user?.role === 'admin';
   const wide = ctx.desktop;
+  const [params, setParams] = useSearchParams();
+  // Selected tab persists in the URL (?tab=schedules / ?tab=rules) so deep-links
+  // and the /schedules → /automations?tab=schedules redirect land correctly.
+  const tab: AutoTab = params.get('tab') === 'schedules' ? 'schedules' : 'rules';
+  const setTab = (next: AutoTab) => {
+    setParams((prev) => {
+      const p = new URLSearchParams(prev);
+      if (next === 'rules') p.delete('tab');
+      else p.set('tab', next);
+      return p;
+    }, { replace: true });
+  };
   const { data, stale, updatedAt, refetch } = usePolling<AutomationsResponse>(api.automations.list, 0);
   const { data: status, refetch: refetchStatus } = usePolling<DevicesStatus>(api.devices.status, 20_000);
   const { data: devData } = usePolling<DevicesResponse>(api.devices.list, 20_000);
@@ -631,6 +646,27 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, margin: '0 auto', width: '100%' }}><div><Eyebrow>Power</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Automations</h1></div>{list}</div>;
-  return (<><MobileHeader eyebrow="Power" title="Automations" right={<Avatar />} /><div style={{ padding: '8px 14px 22px' }}>{list}</div></>);
+  // Two-tab switcher: Schedules (time-based windows) and Smart Rules (the rule
+  // cards above). Selection is persisted in the URL (?tab=…).
+  const tabBar = (
+    <SegmentedControl
+      block
+      options={[
+        { value: 'schedules', label: 'Schedules' },
+        { value: 'rules', label: 'Smart Rules' },
+      ]}
+      value={tab}
+      onChange={(v) => setTab(v as AutoTab)}
+    />
+  );
+
+  const body = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {tabBar}
+      {tab === 'schedules' ? <SchedulesPanel ctx={ctx} /> : list}
+    </div>
+  );
+
+  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, margin: '0 auto', width: '100%' }}><div><Eyebrow>Power</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Automations</h1></div>{body}</div>;
+  return (<><MobileHeader eyebrow="Power" title="Automations" right={<Avatar />} /><div style={{ padding: '8px 14px 22px' }}>{body}</div></>);
 }
