@@ -194,6 +194,33 @@ export interface ControlGuardrails {
   gridImportCapKw: number;
 }
 
+// ---- Battery-priority rules -------------------------------------------------
+// Two coordinator policies that decide WHICH battery acts first, so the Tesla
+// (the only one with a backup feature) is kept full for outages:
+//   • dischargeSonnenFirst — cover the house from Sonnen first; hold Tesla until
+//     Sonnen is depleted OR grid import exceeds the throughput cap.
+//   • chargeTeslaFirst — when both are low, fill Tesla first to restore backup;
+//     hold Sonnen until Tesla is full OR surplus exceeds the throughput cap.
+// Each has its own enable + authority (shadow logs only / auto writes) and a
+// throughput cap (kW) beyond which the OTHER battery is allowed to join in.
+
+export type BatteryPriorityAuthority = 'shadow' | 'auto';
+
+export interface BatteryPriorityRule {
+  enabled: boolean;
+  /** shadow = compute + log intended action, write nothing; auto = issue commands. */
+  authority: BatteryPriorityAuthority;
+  /** Throughput (kW) the priority battery handles alone; beyond it the other joins. */
+  throughputKw: number;
+}
+
+export interface BatteryPriority {
+  /** Discharge Sonnen first; keep Tesla full for backup (Sonnen has no backup mode). */
+  dischargeSonnenFirst: BatteryPriorityRule;
+  /** Charge Tesla first when both depleted; restore backup capacity before Sonnen. */
+  chargeTeslaFirst: BatteryPriorityRule;
+}
+
 export interface ControlState {
   /** Master safety switch — DISARMED by default; nothing is ever written until armed. */
   armed: boolean;
@@ -203,6 +230,8 @@ export interface ControlState {
   /** Ring buffer of the last 100 control actions. */
   log: ControlLogEntry[];
   guardrails: ControlGuardrails;
+  /** Sonnen-first / Tesla-first battery-priority rules. */
+  batteryPriority: BatteryPriority;
 }
 
 // ---- Devices / Climate ------------------------------------------------------
@@ -457,6 +486,16 @@ export function defaultControl(): ControlState {
       sonnenMaxW: 4600,
       gridImportCapKw: 14,
     },
+    batteryPriority: defaultBatteryPriority(),
+  };
+}
+
+/** Sonnen-first / Tesla-first defaults — ENABLED but SHADOW, so they log
+ *  intended actions and write nothing until promoted to 'auto' in the UI. */
+export function defaultBatteryPriority(): BatteryPriority {
+  return {
+    dischargeSonnenFirst: { enabled: true, authority: 'shadow', throughputKw: 3.0 },
+    chargeTeslaFirst: { enabled: true, authority: 'shadow', throughputKw: 3.0 },
   };
 }
 
@@ -766,6 +805,30 @@ function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState
     lastError: typeof p.lastError === 'string' ? p.lastError : null,
     log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
     guardrails: { ...base.guardrails, ...(p.guardrails ?? {}) },
+    batteryPriority: hydrateBatteryPriority(p.batteryPriority, base.batteryPriority),
+  };
+}
+
+function hydrateRule(
+  p: Partial<BatteryPriorityRule> | undefined,
+  base: BatteryPriorityRule,
+): BatteryPriorityRule {
+  if (!p || typeof p !== 'object') return base;
+  return {
+    enabled: typeof p.enabled === 'boolean' ? p.enabled : base.enabled,
+    authority: p.authority === 'auto' || p.authority === 'shadow' ? p.authority : base.authority,
+    throughputKw: typeof p.throughputKw === 'number' ? p.throughputKw : base.throughputKw,
+  };
+}
+
+function hydrateBatteryPriority(
+  p: Partial<BatteryPriority> | undefined,
+  base: BatteryPriority,
+): BatteryPriority {
+  if (!p || typeof p !== 'object') return base;
+  return {
+    dischargeSonnenFirst: hydrateRule(p.dischargeSonnenFirst, base.dischargeSonnenFirst),
+    chargeTeslaFirst: hydrateRule(p.chargeTeslaFirst, base.chargeTeslaFirst),
   };
 }
 

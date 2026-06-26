@@ -1,11 +1,13 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
   Automation, AutomationsResponse, DevicesResponse, DevicesStatus,
   LiveResponse, SolarSurplusPrecoolParams,
+  ControlStatus, BatteryPriorityKey, BatteryPriorityRule,
 } from '../lib/types';
-import { Card, Icon, Button, SegmentedControl, Slider, Eyebrow } from '../components/ui';
+import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
 import { AutomationRow } from '../components/AutomationRow';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -186,6 +188,127 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
   );
 }
 
+/* ============================================================================
+ * Battery-priority rules — Sonnen-first discharge / Tesla-first charge. These are
+ * battery-control policies (persisted in control state), so they ACT only when the
+ * battery Autopilot is armed in Auto (on the Autopilot screen), independent of the
+ * climate arm above. Each rule has its own enable + Shadow/Auto authority + a
+ * throughput cap beyond which the OTHER battery is allowed to join in.
+ * ==========================================================================*/
+
+interface BatRuleMeta {
+  key: BatteryPriorityKey;
+  kind: 'discharge' | 'charge';
+  title: string;
+  icon: string;
+  tone: string;
+  wash: string;
+}
+const BAT_RULES: BatRuleMeta[] = [
+  { key: 'dischargeSonnenFirst', kind: 'discharge', title: 'Discharge — Sonnen first', icon: 'battery-low', tone: 'var(--battery)', wash: 'var(--battery-wash)' },
+  { key: 'chargeTeslaFirst', kind: 'charge', title: 'Charge — Tesla first', icon: 'battery-charging', tone: 'var(--solar)', wash: 'var(--solar-wash)' },
+];
+
+function BatteryRuleCard({ meta, rule, live, socFloorPct, canWrite, onSave }: {
+  meta: BatRuleMeta; rule: BatteryPriorityRule; live: LiveResponse | null;
+  socFloorPct: number; canWrite: boolean; onSave: (patch: Partial<BatteryPriorityRule>) => void;
+}) {
+  const [enabled, setEnabled] = useState(rule.enabled);
+  const [authority, setAuthority] = useState(rule.authority);
+  const [thr, setThr] = useState(rule.throughputKw);
+  const [editing, setEditing] = useState(false);
+
+  const setAuthAndSave = (next: 'shadow' | 'auto') => { setAuthority(next); onSave({ authority: next }); };
+  const toggleEnabled = (on: boolean) => { setEnabled(on); onSave({ enabled: on }); };
+  const saveThr = () => { onSave({ throughputKw: thr }); setEditing(false); };
+
+  const sonnenSoc = live ? Math.round(live.sonnen.soc) : null;
+  const teslaSoc = live ? Math.round(live.tesla.soc) : null;
+  const importKw = live && live.grid.dir === 'importing' ? Math.round(live.grid.kw * 10) / 10 : 0;
+  const exportKw = live && live.grid.dir === 'exporting' ? Math.round(live.grid.kw * 10) / 10 : 0;
+
+  // Live preview — mirror the coordinator's decision so the UI shows what WOULD happen.
+  let preview = 'Connecting to live data…';
+  let active = false;
+  if (live && sonnenSoc != null && teslaSoc != null) {
+    if (meta.kind === 'discharge') {
+      if (exportKw > 0.2) preview = `Solar surplus now (+${exportKw} kW) — discharge priority idle.`;
+      else if (sonnenSoc <= socFloorPct) preview = `Sonnen ${sonnenSoc}% at floor — Tesla released to share the load.`;
+      else if (importKw > thr) preview = `Grid import ${importKw} kW > ${thr} kW — Tesla joins in.`;
+      else { active = true; preview = `Would hold Tesla at ~${teslaSoc}% — Sonnen covers the house first.`; }
+    } else {
+      if (exportKw <= 0.2) preview = 'No solar surplus now — charge priority idle.';
+      else if (teslaSoc >= 100) preview = 'Tesla full — Sonnen free to charge.';
+      else if (exportKw > thr) preview = `Surplus ${exportKw} kW > ${thr} kW — Sonnen joins in.`;
+      else { active = true; preview = `Would idle Sonnen — Tesla charges first (${teslaSoc}%).`; }
+    }
+  }
+
+  const whenDo = meta.kind === 'discharge'
+    ? { when: <><Tok>house drawing</Tok><span style={{ color: 'var(--text-3)' }}>and</span><Tok>Sonnen &gt; floor</Tok></>,
+        doIt: <>discharge <Tok color="var(--battery)">Sonnen</Tok> first · keep <Tok color="var(--ev)">Tesla</Tok> full for backup</>,
+        until: <>grid import <span style={{ color: 'var(--text-3)' }}>&gt;</span> <Tok>{thr} kW</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> Sonnen hits floor <span style={{ color: 'var(--text-3)' }}>→</span> Tesla joins</> }
+    : { when: <><Tok>solar surplus</Tok><span style={{ color: 'var(--text-3)' }}>and</span><Tok>Tesla not full</Tok></>,
+        doIt: <>charge <Tok color="var(--ev)">Tesla</Tok> first · restore backup capacity</>,
+        until: <>surplus <span style={{ color: 'var(--text-3)' }}>&gt;</span> <Tok>{thr} kW</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> Tesla full <span style={{ color: 'var(--text-3)' }}>→</span> Sonnen joins</> };
+
+  return (
+    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Icon name={meta.icon} size={19} color={meta.tone} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{meta.title}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Automation · battery</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button type="button" disabled={!canWrite} onClick={() => setAuthAndSave('shadow')} style={{ fontSize: 11, padding: '5px 11px', borderRadius: 8, cursor: canWrite ? 'pointer' : 'default', border: '1px solid var(--border-1)', background: authority === 'shadow' ? 'var(--surface-3)' : 'transparent', color: authority === 'shadow' ? 'var(--text-1)' : 'var(--text-3)', fontWeight: 600 }}>Shadow</button>
+          <button type="button" disabled={!canWrite} onClick={() => setAuthAndSave('auto')} style={{ fontSize: 11, padding: '5px 11px', borderRadius: 8, cursor: canWrite ? 'pointer' : 'default', border: 'none', background: authority === 'auto' ? 'var(--solar)' : 'var(--surface-3)', color: authority === 'auto' ? '#06090b' : 'var(--text-3)', fontWeight: 600 }}>Auto</button>
+          <Switch checked={enabled} disabled={!canWrite} onChange={(e) => toggleEnabled(e.target.checked)} />
+        </div>
+      </div>
+
+      {/* WHEN / DO / UNTIL */}
+      <Block label="When" color="var(--battery)" wash="var(--battery-wash)">{whenDo.when}</Block>
+      <Block label="Do" color={meta.tone} wash={meta.wash}>{whenDo.doIt}</Block>
+      <Block label="Until" color="var(--home)" wash="var(--home-wash)">{whenDo.until}</Block>
+
+      {/* LIVE PREVIEW */}
+      <div style={{ background: 'var(--surface-2)', border: `1px solid ${active ? meta.tone : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <span className="pwr-eyebrow" style={{ color: active ? meta.tone : 'var(--text-3)' }}>Live preview · right now</span>
+          <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>
+            {meta.kind === 'discharge' ? (importKw > 0 ? `import ${importKw} kW` : 'no import') : (exportKw > 0 ? `+${exportKw} kW` : 'no surplus')}
+            {sonnenSoc != null ? ` · S ${sonnenSoc}%` : ''}{teslaSoc != null ? ` · T ${teslaSoc}%` : ''}
+          </span>
+        </div>
+        <div style={{ fontSize: 12.5, color: active ? 'var(--text-1)' : 'var(--text-2)' }}>{preview}</div>
+      </div>
+
+      {/* EDIT */}
+      {canWrite && (
+        <button type="button" onClick={() => setEditing((v) => !v)} style={{ alignSelf: 'flex-start', fontSize: 11.5, color: 'var(--text-2)', background: 'none', border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name={editing ? 'chevron-up' : 'sliders-horizontal'} size={14} /> {editing ? 'Hide settings' : 'Edit rule'}
+        </button>
+      )}
+      {editing && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4, borderTop: '1px solid var(--border-1)' }}>
+          <Slider label={meta.kind === 'discharge' ? 'Sonnen-only until grid import exceeds' : 'Tesla-only until surplus exceeds'} unit=" kW" min={0} max={14} step={0.5} value={thr} onChange={(v) => setThr(v)} />
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            {meta.kind === 'discharge'
+              ? `The Sonnen carries the house alone; once grid import climbs past ${thr} kW (it can't keep up) the Tesla joins to discharge.`
+              : `The Tesla absorbs the surplus alone; once surplus exceeds ${thr} kW (it can't keep up) the Sonnen joins to charge.`}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant="primary" disabled={thr === rule.throughputKw} onClick={saveThr}>Save</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setThr(rule.throughputKw); setEditing(false); }}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function Automations({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
   const canWrite = user?.role === 'admin';
@@ -194,9 +317,13 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
   const { data: status, refetch: refetchStatus } = usePolling<DevicesStatus>(api.devices.status, 20_000);
   const { data: devData } = usePolling<DevicesResponse>(api.devices.list, 20_000);
   const { data: live } = usePolling<LiveResponse>(api.live, 20_000);
+  const { data: ctrl, refetch: refetchCtrl } = usePolling<ControlStatus>(api.control.status, 20_000);
   const [busy, setBusy] = useState(false);
 
   const automations = data?.automations ?? [];
+  const bp = ctrl?.batteryPriority ?? null;
+  const socFloorPct = ctrl?.guardrails.socFloorPct ?? 10;
+  const batteryArmedAuto = !!ctrl?.armed && ctrl.mode === 'auto';
 
   const onArm = async (armed: boolean, mode: 'auto' | 'manual') => {
     setBusy(true);
@@ -205,10 +332,36 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
   const saveAuto = async (id: string, patch: Partial<Automation>) => { await api.automations.update(id, patch); refetch(); };
   const addAuto = async () => { await api.automations.create({ name: 'Solar-surplus pre-cool', type: 'solar_surplus_precool' }); refetch(); };
   const removeAuto = async (id: string) => { await api.automations.remove(id); refetch(); };
+  const saveBatteryRule = async (key: BatteryPriorityKey, patch: Partial<BatteryPriorityRule>) => {
+    try { await api.control.batteryPriority(key, patch); } catch { /* ignore */ } finally { refetchCtrl(); }
+  };
 
   const list = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
+
+      {/* ---- Battery priority ---- */}
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginTop: 2 }}>
+        <Eyebrow>Battery</Eyebrow>
+        <span style={{ fontSize: 11, color: batteryArmedAuto ? 'var(--solar)' : 'var(--text-3)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name={batteryArmedAuto ? 'shield-check' : 'shield-off'} size={13} />
+          {batteryArmedAuto ? 'Autopilot armed · Auto' : 'Acts when Autopilot is in Auto'}
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--battery-wash)', border: '1px solid rgba(64,160,255,0.18)', borderRadius: 'var(--radius-md)', padding: '9px 13px' }}>
+        <Icon name="info" size={15} color="var(--battery)" />
+        <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+          The Tesla is kept full for backup (the Sonnen has no backup mode). These rules run in the battery coordinator — <strong style={{ color: 'var(--text-1)' }}>Shadow</strong> only logs intended actions; flip to <strong style={{ color: 'var(--text-1)' }}>Auto</strong> and arm <Link to="/brain" style={{ color: 'var(--battery)' }}>Autopilot</Link> (Auto) to let them act.
+        </span>
+      </div>
+      {bp
+        ? BAT_RULES.map((m) => (
+            <BatteryRuleCard key={m.key} meta={m} rule={bp[m.key]} live={live ?? null} socFloorPct={socFloorPct} canWrite={!!canWrite} onSave={(patch) => void saveBatteryRule(m.key, patch)} />
+          ))
+        : <Card padded style={{ color: 'var(--text-3)', fontSize: 12.5 }}>Connecting to the battery control plane…</Card>}
+
+      {/* ---- Climate ---- */}
+      <Eyebrow>Climate</Eyebrow>
       <ArmCard status={status ?? null} canWrite={!!canWrite} onArm={(a, m) => void onArm(a, m)} busy={busy} />
       {devData && !devData.connected && (
         <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
@@ -223,6 +376,6 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, margin: '0 auto', width: '100%' }}><div><Eyebrow>Climate</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Automations</h1></div>{list}</div>;
-  return (<><MobileHeader eyebrow="Climate" title="Automations" right={<Avatar />} /><div style={{ padding: '8px 14px 22px' }}>{list}</div></>);
+  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, margin: '0 auto', width: '100%' }}><div><Eyebrow>Power</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Automations</h1></div>{list}</div>;
+  return (<><MobileHeader eyebrow="Power" title="Automations" right={<Avatar />} /><div style={{ padding: '8px 14px 22px' }}>{list}</div></>);
 }

@@ -9,6 +9,8 @@ import { bandFor } from '../tariff';
 import type { ControlSnapshot } from './guardrails';
 
 export interface RichSnapshot extends ControlSnapshot {
+  /** Grid export in kW (+export, i.e. surplus to the grid). 0 when importing. */
+  gridExportKw: number;
   /** Raw normalized device views (null when offline) for the coordinator logic. */
   sonnen: sonnen.SonnenNormalized | null;
   tesla: tesla.TeslaNormalized | null;
@@ -33,10 +35,17 @@ export async function takeSnapshot(): Promise<RichSnapshot> {
   const anyLive = s !== null || t !== null;
   const ageMs = anyLive ? Date.now() - t0 : Number.POSITIVE_INFINITY;
 
-  // Grid import in kW (+import). Prefer Tesla's grid meter; fall back to Sonnen.
+  // Grid import/export in kW. Prefer Tesla's grid meter (+import); fall back to
+  // Sonnen (GridFeedIn_W: + export / - import). Only one of import/export is >0.
   let gridImportKw = 0;
-  if (t) gridImportKw = Math.max(0, t.gridKw);
-  else if (s) gridImportKw = Math.max(0, -s.gridFeedInW / 1000); // GridFeedIn_W: + export / - import
+  let gridExportKw = 0;
+  if (t) {
+    gridImportKw = Math.max(0, t.gridKw);
+    gridExportKw = Math.max(0, -t.gridKw);
+  } else if (s) {
+    gridImportKw = Math.max(0, -s.gridFeedInW / 1000);
+    gridExportKw = Math.max(0, s.gridFeedInW / 1000);
+  }
 
   return {
     ageMs,
@@ -45,6 +54,7 @@ export async function takeSnapshot(): Promise<RichSnapshot> {
     teslaSoc: t ? t.soc : null,
     teslaReservePct: t ? t.reservePct : store.get().control.guardrails.teslaReserveMinPct,
     gridImportKw,
+    gridExportKw,
     scenario,
     sonnen: s,
     tesla: t,

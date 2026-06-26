@@ -8,8 +8,10 @@
 // manual setpoint.
 
 import * as store from '../store';
+import type { ControlDevice } from '../store';
 import { issue, _resetRateLimits } from './execute';
 import { takeSnapshot, type RichSnapshot } from './snapshot';
+import { planBatteryPriority, type PriorityPlan } from './battery-priority';
 
 const TICK_MS = 90_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -18,6 +20,15 @@ let timer: ReturnType<typeof setInterval> | null = null;
 function favoursArbitrage(scenario: store.ScenarioDef): boolean {
   const w = scenario.weights;
   return w.save >= 0.5 || scenario.gridCharge;
+}
+
+/** Append a SHADOW decision to the control log (intended action, no write). */
+function logShadow(device: ControlDevice, lever: string, reason: string, detail: string): void {
+  store.update((s) => {
+    s.control.log.push({ ts: Date.now(), device, lever, from: null, to: null, reason, ok: true, detail });
+    if (s.control.log.length > 100) s.control.log = s.control.log.slice(-100);
+    s.control.updatedAt = Date.now();
+  });
 }
 
 /**
@@ -30,12 +41,30 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   const scenario = snap.scenario;
   const band = snap.band;
 
+  // Battery-priority plan (Sonnen-first discharge / Tesla-first charge). It only
+  // ever RAISES the Tesla reserve (to hold it) or idles the Sonnen — and only in
+  // 'auto' authority; 'shadow' rules just log what they would have done.
+  const baseReserve = Math.max(scenario.reserve, gr.teslaReserveMinPct);
+  const plan = planBatteryPriority(snap, store.get().control.batteryPriority, baseReserve, gr.socFloorPct);
+
   // ---- Tesla (policy layer) ----
   const teslaMode = favoursArbitrage(scenario) ? 'autonomous' : 'self_consumption';
   await issue('tesla', 'mode', teslaMode, `${reason}: scenario favours ${teslaMode}`, snap);
 
-  const teslaReserve = Math.max(scenario.reserve, gr.teslaReserveMinPct);
-  await issue('tesla', 'reserve', teslaReserve, `${reason}: scenario reserve floor`, snap);
+  // Discharge-priority may HOLD the Tesla by raising its reserve to its SoC so the
+  // Sonnen discharges first. In shadow we log the intended hold but issue the base.
+  let teslaReserve = baseReserve;
+  let reserveReason = `${reason}: scenario reserve floor`;
+  const dp = plan.discharge;
+  if (dp.active && dp.holdTesla && dp.reserveHoldPct !== null) {
+    if (dp.authority === 'auto') {
+      teslaReserve = dp.reserveHoldPct;
+      reserveReason = `${reason}: discharge-priority — ${dp.reason}`;
+    } else {
+      logShadow('tesla', 'reserve', `discharge-priority (shadow): ${dp.reason}`, `would hold reserve at ${dp.reserveHoldPct}% (issuing base ${baseReserve}%)`);
+    }
+  }
+  await issue('tesla', 'reserve', teslaReserve, reserveReason, snap);
 
   const enableGridCharge = scenario.gridCharge && band === 'P3';
   await issue(
@@ -47,17 +76,18 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   );
 
   // ---- Sonnen (fast valve) ----
-  await coordinateSonnen(snap, reason);
+  await coordinateSonnen(snap, reason, plan);
 }
 
 /**
- * Sonnen logic — CONSERVATIVE first-version: mode changes only, no autonomous
- * manual setpoints (those are available via manual UI control + a later refinement).
+ * Sonnen logic.
  *  • Stuck-at-100 bug: charging from the grid while full → force self-consumption.
- *  • Otherwise → self-consumption, which discharges to power the house (the actual
- *    fix for "Sonnen stuck at 100%"). Stable, non-flapping, fully guardrailed.
+ *  • Charge-priority (Tesla-first): while there's surplus and the Tesla isn't full
+ *    (within the throughput cap), IDLE the Sonnen in manual (0 W) so all surplus
+ *    charges the Tesla first. 'shadow' just logs the intended idle.
+ *  • Otherwise → self-consumption, which discharges to cover the house load.
  */
-async function coordinateSonnen(snap: RichSnapshot, reason: string): Promise<void> {
+async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: PriorityPlan): Promise<void> {
   const s = snap.sonnen;
   if (!s) return; // offline — nothing to do
 
@@ -65,6 +95,17 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string): Promise<voi
   if (s.gridFeedInW < -50 && s.soc >= 95 && s.dir === 'charging') {
     await issue('sonnen', 'mode', '2', `${reason}: stop grid-charging a full battery (SoC ${s.soc}%)`, snap);
     return;
+  }
+
+  const cp = plan.charge;
+  if (cp.active && cp.holdSonnen) {
+    if (cp.authority === 'auto') {
+      // Manual mode + 0 W setpoint = Sonnen idle, so the Tesla absorbs the surplus.
+      await issue('sonnen', 'mode', '1', `${reason}: charge-priority — ${cp.reason}`, snap);
+      await issue('sonnen', 'charge', 0, `${reason}: charge-priority idle (Tesla charges first)`, snap);
+      return;
+    }
+    logShadow('sonnen', 'mode', `charge-priority (shadow): ${cp.reason}`, 'would idle Sonnen (manual 0 W) so Tesla charges first');
   }
 
   // Keep Sonnen in self-consumption — it discharges to cover the house load.

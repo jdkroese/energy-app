@@ -43,8 +43,29 @@ export async function getStatus(): Promise<unknown> {
       sonnen: s ? { mode: s.mode } : { offline: true },
     },
     guardrails: ctrl.guardrails,
+    batteryPriority: ctrl.batteryPriority,
     log: ctrl.log.slice(-100),
   };
+}
+
+/** Update one battery-priority rule (admin). Returns the full control status. */
+export async function setBatteryPriority(
+  rule: 'dischargeSonnenFirst' | 'chargeTeslaFirst',
+  patch: Partial<store.BatteryPriorityRule>,
+): Promise<unknown> {
+  if (rule !== 'dischargeSonnenFirst' && rule !== 'chargeTeslaFirst') {
+    throw badInput('rule must be dischargeSonnenFirst|chargeTeslaFirst');
+  }
+  store.update((st) => {
+    const r = st.control.batteryPriority[rule];
+    if (typeof patch.enabled === 'boolean') r.enabled = patch.enabled;
+    if (patch.authority === 'auto' || patch.authority === 'shadow') r.authority = patch.authority;
+    if (typeof patch.throughputKw === 'number' && Number.isFinite(patch.throughputKw)) {
+      r.throughputKw = Math.min(14, Math.max(0, patch.throughputKw));
+    }
+    st.control.updatedAt = Date.now();
+  });
+  return getStatus();
 }
 
 /** Set arm state. Disarming (or mode->'off') triggers revert-to-safe. */

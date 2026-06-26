@@ -294,12 +294,27 @@ export interface ControlLogEntry {
   detail?: string | null;
 }
 
+/** A single battery-priority rule (Sonnen-first discharge / Tesla-first charge). */
+export type BatteryPriorityAuthority = 'shadow' | 'auto';
+export interface BatteryPriorityRule {
+  enabled: boolean;
+  authority: BatteryPriorityAuthority;
+  /** Throughput (kW) the priority battery handles alone; beyond it the other joins. */
+  throughputKw: number;
+}
+export interface BatteryPriority {
+  dischargeSonnenFirst: BatteryPriorityRule;
+  chargeTeslaFirst: BatteryPriorityRule;
+}
+export type BatteryPriorityKey = keyof BatteryPriority;
+
 export interface ControlStatus {
   armed: boolean;
   mode: ControlMode;
   lastError: string | null;
   current: ControlCurrent;
   guardrails: ControlGuardrails;
+  batteryPriority: BatteryPriority;
   log: ControlLogEntry[];
 }
 
