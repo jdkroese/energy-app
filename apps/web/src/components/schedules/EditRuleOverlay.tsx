@@ -19,6 +19,12 @@ const MODES: { value: ClimateMode; label: string }[] = [
   { value: 'dry', label: 'Dry' },
   { value: 'fan', label: 'Fan' },
 ];
+// Underfloor (Airzone) heating supports cool / heat / auto only — no dry/fan.
+const HEATING_MODES: { value: ClimateMode; label: string }[] = [
+  { value: 'cool', label: 'Cool' },
+  { value: 'heat', label: 'Heat' },
+  { value: 'auto', label: 'Auto' },
+];
 const DAY_ABBR = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 const ROW_TO_STORE = [1, 2, 3, 4, 5, 6, 0];
 
@@ -60,6 +66,7 @@ export function EditRuleOverlay({
   const [err, setErr] = useState<string | null>(null);
 
   const hideFanVanes = rule.type === 'heating'; // underfloor has no fan/vanes
+  const modeOptions = rule.type === 'heating' ? HEATING_MODES : MODES; // heat: cool/heat/auto only
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
@@ -120,7 +127,7 @@ export function EditRuleOverlay({
       {/* OPERATION */}
       <Field title="Operation to run">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 12 }}>
-          <SegRow options={MODES} value={action.mode} onChange={(m) => setAct({ mode: m as ClimateMode })} />
+          <SegRow options={modeOptions} value={action.mode} onChange={(m) => setAct({ mode: m as ClimateMode })} />
           <div style={{ display: 'grid', gridTemplateColumns: hideFanVanes ? '1fr' : '1fr 1fr', gap: 10 }}>
             <Stepper label="Setpoint" value={action.setpointC} suffix="°" min={16} max={30} step={0.5} onChange={(v) => setAct({ setpointC: v })} />
             {!hideFanVanes && <FanVaneSelect title="Fan" value={action.fan} onChange={(v) => setAct({ fan: v as FanSetting })} />}
