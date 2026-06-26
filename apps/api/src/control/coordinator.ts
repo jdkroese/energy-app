@@ -10,6 +10,7 @@
 import * as store from '../store';
 import type { ControlDevice } from '../store';
 import { issue, _resetRateLimits } from './execute';
+import { checkSonnenWatts } from './guardrails';
 import { takeSnapshot, type RichSnapshot } from './snapshot';
 import { planBatteryPriority, type PriorityPlan } from './battery-priority';
 
@@ -79,9 +80,28 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   await coordinateSonnen(snap, reason, plan);
 }
 
+// ---- Force-charge-to-soak-export thresholds (hysteresis deadband) -----------
+// When solar is exporting to the grid (worth ~nothing in Spain), force-charge the
+// Sonnen to absorb the would-be-export BEFORE it spills to the grid. The Sonnen's
+// own self-consumption firmware ('2') only offsets house load — it does NOT chase
+// net grid export — so without this the surplus is wasted.
+//
+// A hysteresis deadband (START_W high / STOP_W low) prevents flapping between
+// manual ('1') and self-consumption ('2') when export hovers near the threshold.
+const FC_START_W = 400; // engage/continue force-charge once export exceeds this
+const FC_STOP_W = 150; // revert to self-consumption once export drops below this
+const FC_SOC_CEILING = 98; // don't force-charge an (almost) full battery
+
 /**
  * Sonnen logic.
  *  • Stuck-at-100 bug: charging from the grid while full → force self-consumption.
+ *  • Force-charge-to-soak-export (NEW): when there's net grid export, put the Sonnen
+ *    in manual ('1') and force-charge at the would-be-export (clamped to 4600 W) so
+ *    the surplus is absorbed instead of spilled to the grid. Re-evaluated every tick
+ *    so the setpoint tracks live export. A hysteresis deadband + a hard revert to
+ *    self-consumption guard against a surplus collapse leaving a stale manual charge
+ *    importing from the grid. This SUPERSEDES the Tesla-first 0 W idle in the export
+ *    case (owner's preference: never waste surplus to grid).
  *  • Charge-priority (Tesla-first): while there's surplus and the Tesla isn't full
  *    (within the throughput cap), IDLE the Sonnen in manual (0 W) so all surplus
  *    charges the Tesla first. 'shadow' just logs the intended idle.
@@ -95,6 +115,47 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
   if (s.gridFeedInW < -50 && s.soc >= 95 && s.dir === 'charging') {
     await issue('sonnen', 'mode', '2', `${reason}: stop grid-charging a full battery (SoC ${s.soc}%)`, snap);
     return;
+  }
+
+  // ---- Force-charge-to-soak-export ------------------------------------------
+  // Only acts in armed+auto (the coordinator/tick is already self-gated on that,
+  // and issue() refuses when !armed, so the manual "apply scenario" endpoint can
+  // never leave the Sonnen in a stale manual charge either).
+  const ctrl = store.get().control;
+  if (ctrl.armed && ctrl.mode === 'auto') {
+    const exportW = Math.max(0, snap.gridExportKw * 1000);
+    const socPct = s.soc;
+    const inManual = s.mode === 'manual'; // currently force-charging?
+
+    // REVERT (safety-critical): export collapsed OR battery (near-)full → hand
+    // control back to self-consumption firmware. Manual mode disables firmware
+    // self-consumption, so a stale manual charge during a cloud-driven surplus
+    // collapse would IMPORT from the grid — the revert must always be able to fire,
+    // so it bypasses the per-lever rate-limit (priority).
+    if (inManual && (exportW <= FC_STOP_W || socPct >= FC_SOC_CEILING)) {
+      const why = socPct >= FC_SOC_CEILING ? `SoC ${socPct}% ≥ ceiling` : `export ${Math.round(exportW)}W ≤ ${FC_STOP_W}W`;
+      await issue('sonnen', 'mode', '2', `${reason}: end soak-export (${why}) — back to self-consumption`, snap, {
+        priority: true,
+      });
+      return;
+    }
+
+    // ENGAGE / CONTINUE (hysteresis): battery has headroom (SoC < ceiling) AND
+    //   • not yet charging → engage only once export clears the HIGH threshold; or
+    //   • already charging → keep charging until export drops below the LOW one
+    //     (the revert above handles the < FC_STOP_W case), tracking live export.
+    // So within the deadband we hold whatever state we're in — no flapping.
+    // Issue the mode FIRST (the charge setpoint is rejected unless the Sonnen
+    // reports manual). checkSonnenWatts clamps to [0, sonnenMaxW=4600].
+    const engageThreshold = inManual ? FC_STOP_W : FC_START_W;
+    if (exportW > engageThreshold && socPct < FC_SOC_CEILING) {
+      const watt = checkSonnenWatts(Math.min(exportW, store.get().control.guardrails.sonnenMaxW), 'charge', snap);
+      await issue('sonnen', 'mode', '1', `${reason}: soak-export — absorb surplus before it spills to grid`, snap);
+      await issue('sonnen', 'charge', watt.value, `${reason}: soak-export ${watt.value}W (export ${Math.round(exportW)}W, SoC ${socPct}%)`, snap);
+      return;
+    }
+    // Below FC_START_W and NOT already charging (or at the ceiling): fall through
+    // to the existing self-consumption / Tesla-first idle logic below.
   }
 
   const cp = plan.charge;

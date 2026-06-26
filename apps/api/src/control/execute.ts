@@ -86,6 +86,17 @@ function noop(
 }
 
 /**
+ * Per-call options.
+ *  - priority: bypass the per-lever rate-limit for THIS write. Reserved for SAFETY
+ *    reverts that must always be able to fire (e.g. handing the Sonnen back to
+ *    self-consumption when a solar surplus collapses, so a stale manual setpoint
+ *    can never keep importing from the grid). It does NOT bypass any guardrail.
+ */
+export interface IssueOpts {
+  priority?: boolean;
+}
+
+/**
  * Issue ONE guardrailed command. Returns an IssueResult; never throws.
  * `snap` is the current live snapshot (must be fresh).
  */
@@ -95,6 +106,7 @@ export async function issue(
   value: IssueValue,
   reason: string,
   snap: ControlSnapshot,
+  opts: IssueOpts = {},
 ): Promise<IssueResult> {
   try {
     // (1) Armed + not off + fresh data.
@@ -106,8 +118,8 @@ export async function issue(
     if (!fresh.ok) return reject(device, lever, null, fresh.reason);
 
     // (2+3+4+5+6) dispatch per device/lever.
-    if (device === 'tesla') return await issueTesla(lever, value, reason, snap);
-    if (device === 'sonnen') return await issueSonnen(lever, value, reason, snap);
+    if (device === 'tesla') return await issueTesla(lever, value, reason, snap, opts);
+    if (device === 'sonnen') return await issueSonnen(lever, value, reason, snap, opts);
     return reject(device, lever, null, `unknown device '${device}'`);
   } catch (e) {
     const detail = (e as Error).message;
@@ -132,6 +144,7 @@ async function issueTesla(
   value: IssueValue,
   reason: string,
   snap: ControlSnapshot,
+  _opts: IssueOpts = {},
 ): Promise<IssueResult> {
   const cur = await tesla.readControlConfig();
 
@@ -198,6 +211,7 @@ async function issueSonnen(
   value: IssueValue,
   reason: string,
   snap: ControlSnapshot,
+  opts: IssueOpts = {},
 ): Promise<IssueResult> {
   const cur = await sonnen.readControlConfig();
 
@@ -206,7 +220,8 @@ async function issueSonnen(
     if (!guard.ok) return reject('sonnen', lever, cur.mode, guard.reason);
     const to = guard.value as '1' | '2' | '10';
     if (cur.mode === to) return noop('sonnen', lever, to);
-    if (rateLimited('sonnen', lever)) return reject('sonnen', lever, cur.mode, 'rate-limited (<60s)');
+    // SAFETY reverts (opts.priority) must always be able to fire — never rate-limit them.
+    if (!opts.priority && rateLimited('sonnen', lever)) return reject('sonnen', lever, cur.mode, 'rate-limited (<60s)');
     await sonnen.setOperatingMode(to);
     markWritten('sonnen', lever);
     const after = await sonnen.readControlConfig();
