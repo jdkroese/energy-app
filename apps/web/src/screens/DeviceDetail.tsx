@@ -244,7 +244,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
     <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* HEADER */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: wide ? 0 : 8 }}>
-        <IconButton variant="solid" aria-label="Back" onClick={() => nav('/devices')}><Icon name="chevron-left" size={18} /></IconButton>
+        <IconButton variant="solid" aria-label="Back" onClick={() => nav(`/devices?type=${dev.type}`)}><Icon name="chevron-left" size={18} /></IconButton>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>{dev.name}</h1>
           <div style={{ fontSize: 11.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

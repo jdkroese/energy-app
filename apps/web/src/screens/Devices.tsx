@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
@@ -268,17 +268,34 @@ function PowerToggle({ on, disabled, syncing, onToggle }: { on: boolean; disable
   );
 }
 
-/** Solar bolt — three states: lit (free surplus), dim (on paid energy), faint (not pre-heating).
- *  Orange (--grid) = pre-heat; matches the unified surplus-bolt icon system (cool = blue bolt). */
-function SolarBolt({ enrolled, demand, exporting }: { enrolled: boolean; demand: boolean; exporting: boolean }) {
+/** Solar bolt — three states: lit (free surplus), dim (on paid energy), faint (not enrolled).
+ *  Orange (--grid) = pre-heat; matches the unified surplus-bolt icon system (cool = blue bolt).
+ *  Clickable (admin) to toggle this device's enrolment in surplus pre-heat. */
+function SolarBolt({ enrolled, demand, exporting, canToggle, onToggle }: {
+  enrolled: boolean; demand: boolean; exporting: boolean; canToggle?: boolean; onToggle?: () => void;
+}) {
   const lit = enrolled && demand && exporting;
   const dim = enrolled && demand && !exporting;
-  const color = lit ? 'var(--grid)' : dim ? 'var(--grid)' : 'var(--text-3)';
-  const opacity = lit ? 1 : dim ? 0.32 : 0.25;
+  const color = enrolled ? 'var(--grid)' : 'var(--text-3)';
+  const opacity = lit ? 1 : enrolled ? 0.5 : 0.25;
+  const title = !enrolled ? 'Not in solar pre-heat — tap to enrol'
+    : lit ? 'Heating on free solar surplus — tap to remove'
+    : 'Pre-heat enrolled (on paid energy now) — tap to remove';
+  const inner = <Icon name="zap" size={16} color={color} />;
+  if (!canToggle) {
+    return <span title={title} style={{ display: 'inline-flex', filter: lit ? 'drop-shadow(0 0 5px var(--grid))' : 'none', opacity }}>{inner}</span>;
+  }
   return (
-    <span title={lit ? 'Heating on free solar surplus' : dim ? 'Pre-heat enrolled — on paid energy now' : 'Not in solar pre-heat'} style={{ display: 'inline-flex', filter: lit ? 'drop-shadow(0 0 5px var(--grid))' : 'none', opacity }}>
-      <Icon name="zap" size={16} color={color} />
-    </span>
+    <button
+      type="button"
+      aria-label={enrolled ? 'Remove from solar pre-heat' : 'Enrol in solar pre-heat'}
+      aria-pressed={enrolled}
+      title={title}
+      onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
+      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', padding: 4, margin: -4, cursor: 'pointer', filter: lit ? 'drop-shadow(0 0 5px var(--grid))' : 'none', opacity }}
+    >
+      {inner}
+    </button>
   );
 }
 
@@ -294,10 +311,11 @@ function nextMode(cur: string, available: string[]): string {
   return pool[(i + 1) % pool.length];
 }
 
-function HeatRow({ d, wide, canWrite, exporting, pending, sendLever, onOpen }: {
-  d: DeviceView; wide: boolean; canWrite: boolean; exporting: boolean;
+function HeatRow({ d, wide, canWrite, canConfig, exporting, pending, sendLever, onToggleSurplus, onOpen }: {
+  d: DeviceView; wide: boolean; canWrite: boolean; canConfig: boolean; exporting: boolean;
   pending: Partial<Record<ClimateLever, number | boolean | string>>;
   sendLever: (id: string, lever: ClimateLever, value: number | boolean | string, debounceMs?: number) => void;
+  onToggleSurplus: (id: string, next: boolean) => void;
   onOpen: () => void;
 }) {
   const power = (pending.power as boolean | undefined) ?? d.power;
@@ -328,7 +346,7 @@ function HeatRow({ d, wide, canWrite, exporting, pending, sendLever, onOpen }: {
   const cycleMode = () => sendLever(d.id, 'mode', nextMode(mode, available), 0);
   const togglePower = () => sendLever(d.id, 'power', !power, 0);
 
-  const bolt = <SolarBolt enrolled={d.automationEnabled} demand={demand} exporting={exporting} />;
+  const bolt = <SolarBolt enrolled={d.automationEnabled} demand={demand} exporting={exporting} canToggle={canConfig} onToggle={() => onToggleSurplus(d.id, !d.automationEnabled)} />;
 
   if (!wide) {
     return (
@@ -426,7 +444,16 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const { data: status } = usePolling<DevicesStatus>(api.devices.status, 20_000);
   const { data: autoData, refetch: refetchAuto } = usePolling<AutomationsResponse>(api.automations.list, 0);
   const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 20_000);
-  const [activeType, setActiveType] = useState<DeviceType>('cooling');
+  // Active tab persists in the URL (?type=) so returning from a unit detail
+  // restores the tab the device lives on (e.g. back from a heating zone → Heating).
+  const [params, setParams] = useSearchParams();
+  const paramType = params.get('type');
+  const initialType: DeviceType = DEVICE_TYPES.some((m) => m.type === paramType) ? (paramType as DeviceType) : 'cooling';
+  const [activeType, setActiveType] = useState<DeviceType>(initialType);
+  const selectType = (t: DeviceType) => {
+    setActiveType(t);
+    setParams((prev) => { const n = new URLSearchParams(prev); n.set('type', t); return n; }, { replace: true });
+  };
 
   const d = data;
   const armed = status?.armed ?? false;
@@ -454,7 +481,14 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const coldestCold = coldest != null && coldest < 19;
 
   const heatCmds = useLeverCommands(heating, refetch);
-  const canWrite = isAdmin && armed;
+  // Manual row commands (power/mode/setpoint) are NOT arm-gated server-side (issueClimate
+  // { manual: true }, commit 0c41458) — same as the unit detail. Only admin is required;
+  // the disarmed note below explains that the *automation* won't act.
+  const canWrite = isAdmin;
+  // Per-device solar-surplus enrolment is a config setting (admin), independent of arm.
+  const toggleSurplus = (id: string, next: boolean) => {
+    void api.devices.setSettings(id, { automationEnabled: next }).then(() => refetch());
+  };
 
   const automation: Automation | null = autoData?.automations?.[0] ?? null;
   const saveAuto = (patch: Partial<Automation>) => {
@@ -555,7 +589,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {heating.map((dev, i) => (
               <div key={dev.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
-                <HeatRow d={dev} wide={wide} canWrite={canWrite} exporting={exporting} pending={heatCmds.pendingFor(dev.id)} sendLever={heatCmds.sendLever} onOpen={() => nav(`/devices/${dev.id}`)} />
+                <HeatRow d={dev} wide={wide} canWrite={canWrite} canConfig={isAdmin} exporting={exporting} pending={heatCmds.pendingFor(dev.id)} sendLever={heatCmds.sendLever} onToggleSurplus={toggleSurplus} onOpen={() => nav(`/devices/${dev.id}`)} />
               </div>
             ))}
           </div>
@@ -583,7 +617,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {!d && loading && <Card padded style={{ color: 'var(--text-3)', fontSize: 13 }}>Loading devices…</Card>}
       {d && (
         <>
-          <TypeTabs active={activeType} counts={counts} wide={wide} onSelect={setActiveType} />
+          <TypeTabs active={activeType} counts={counts} wide={wide} onSelect={selectType} />
           {content(activeType)}
         </>
       )}
