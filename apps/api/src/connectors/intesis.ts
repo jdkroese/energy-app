@@ -329,14 +329,14 @@ function writeOverSocket(
       fn();
     };
 
-    // The stream concatenates JSON objects; parse greedily on each chunk.
+    // The stream concatenates JSON objects; parse greedily on each chunk and keep
+    // any unparsed tail so a message split across TCP packets (e.g. the set_ack)
+    // survives into the next chunk instead of being dropped.
     socket.on('data', (chunk) => {
       buf += chunk.toString('utf8');
-      for (const obj of drainJson(() => {
-        const r = buf;
-        buf = '';
-        return r;
-      })) {
+      const { objects, rest } = drainJson(buf);
+      buf = rest;
+      for (const obj of objects) {
         const cmd = (obj as { command?: string }).command;
         if (cmd === 'connect_rsp') {
           // Authenticated — now issue the set.
@@ -364,35 +364,45 @@ function writeOverSocket(
 
 /**
  * Parse a possibly-concatenated JSON stream into objects. Tolerant of multiple
- * objects per chunk and of trailing partial data (which it leaves unparsed).
+ * objects per chunk; returns any trailing INCOMPLETE object as `rest` so the
+ * caller can prepend it to the next chunk — a set_ack split across TCP packets
+ * must not be dropped. Brace counting is string/escape aware so braces inside
+ * JSON string values can't desync the scanner. A complete-but-malformed object
+ * is consumed (dropped) rather than retained, so the buffer can't grow unbounded.
  */
-function drainJson(takeBuffer: () => string): unknown[] {
+function drainJson(raw: string): { objects: unknown[]; rest: string } {
   const out: unknown[] = [];
-  const raw = takeBuffer();
   let depth = 0;
   let start = -1;
   let consumed = 0;
+  let inStr = false;
+  let esc = false;
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i];
-    if (ch === '{') {
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+    } else if (ch === '{') {
       if (depth === 0) start = i;
       depth++;
-    } else if (ch === '}') {
+    } else if (ch === '}' && depth > 0) {
       depth--;
       if (depth === 0 && start >= 0) {
-        const slice = raw.slice(start, i + 1);
         try {
-          out.push(JSON.parse(slice));
-          consumed = i + 1;
+          out.push(JSON.parse(raw.slice(start, i + 1)));
         } catch {
-          /* keep scanning */
+          /* complete but malformed — drop it */
         }
+        consumed = i + 1; // this complete object is fully handled either way
         start = -1;
       }
     }
   }
-  // Note: any unparsed tail (consumed..end) is dropped here for simplicity; a set
-  // only needs the first ack and we open a fresh socket per command.
-  void consumed;
-  return out;
+  // Retain only a genuinely incomplete trailing object for the next chunk.
+  return { objects: out, rest: raw.slice(consumed) };
 }
