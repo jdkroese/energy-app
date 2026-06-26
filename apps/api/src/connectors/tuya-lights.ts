@@ -12,8 +12,10 @@
 
 import type { TuyaDevice, TuyaStatusItem } from './tuya';
 
-/** Tuya category codes that are "lights" for this category screen. */
-const LIGHT_CATEGORIES = new Set(['dj', 'dd', 'dc', 'fwd', 'xdd', 'fsd', 'tgq', 'tyndj']);
+/** Tuya category codes that are "lights" for this category screen. NOTE: 'fsd'
+ *  (ceiling-fan light) is intentionally EXCLUDED — a fan-with-light is a fan, not
+ *  a light; it belongs to the (future) fan category, not the Lighting list. */
+const LIGHT_CATEGORIES = new Set(['dj', 'dd', 'dc', 'fwd', 'xdd', 'tgq', 'tyndj']);
 
 export function isLight(d: TuyaDevice): boolean {
   return LIGHT_CATEGORIES.has(d.category);
@@ -106,8 +108,9 @@ function parseColour(raw: unknown): { h: number; s: number; v: number } | null {
   return null;
 }
 
-/** Normalize a Tuya light device into the app's LightUnit shape. */
-export function normalizeLight(d: TuyaDevice, roomOverride?: string): LightUnit {
+/** Normalize a Tuya light device into the app's LightUnit shape. `nameOverride`
+ *  is the user's custom name (from deviceSettings); falls back to the Tuya name. */
+export function normalizeLight(d: TuyaDevice, nameOverride?: string): LightUnit {
   const dp = statusMap(d.status);
   const switchCode = pick(dp, SWITCH_CODES);
   const brightCode = pick(dp, BRIGHT_CODES);
@@ -128,10 +131,11 @@ export function normalizeLight(d: TuyaDevice, roomOverride?: string): LightUnit 
     ? { h: clamp(Math.round(rawColour.h), 0, 360), s: pctFromRaw(rawColour.s, 0, SAT_MAX), v: pctFromRaw(rawColour.v, 0, VAL_MAX) }
     : null;
 
+  const name = nameOverride?.trim() || d.name;
   return {
     id: d.id,
-    name: d.name,
-    room: roomOverride ?? d.name,
+    name,
+    room: name,
     category: d.category,
     online: d.online,
     power: switchCode ? Boolean(dp[switchCode]) : false,

@@ -6,6 +6,7 @@ import type {
   ScenesResponse, LightSchedulesResponse,
 } from '../../lib/types';
 import { Card, Icon, Button, Switch, Slider, SegmentedControl, Input, Select } from '../ui';
+import { DayTrack, barsForWindow } from '../schedules/DayTrack';
 
 /* ============================================================================
  * Scenes + light schedules — the two management blocks under the Devices →
@@ -152,11 +153,21 @@ export function ScenesSection({ lights, canControl }: { lights: LightUnit[]; can
   const { data, refetch } = usePolling<ScenesResponse>(api.lights.scenes, 0);
   const scenes = data?.scenes ?? [];
   const [editing, setEditing] = useState<LightScene | null | undefined>(undefined); // undefined=closed, null=new
-  const [applying, setApplying] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const byId = useMemo(() => new Map(lights.map((l) => [l.id, l])), [lights]);
 
-  const apply = async (id: string) => {
-    setApplying(id);
-    try { await api.lights.applyScene(id); } catch { /* ignore */ } finally { setApplying(null); refetch(); }
+  // A scene reads as "on" when all of its on-members are currently on.
+  const isOn = (s: LightScene) => {
+    const onMembers = s.members.filter((m) => m.on);
+    return onMembers.length > 0 && onMembers.every((m) => byId.get(m.lightId)?.power);
+  };
+  const apply = async (id: string, on: boolean) => {
+    setBusyId(id);
+    try { await api.lights.applyScene(id, on); } catch { /* ignore */ } finally { setBusyId(null); setTimeout(refetch, 1200); }
+  };
+  const del = async (id: string) => {
+    setBusyId(id);
+    try { await api.lights.deleteScene(id); } catch { /* ignore */ } finally { setBusyId(null); refetch(); }
   };
 
   return (
@@ -169,18 +180,24 @@ export function ScenesSection({ lights, canControl }: { lights: LightUnit[]; can
       {scenes.length === 0 ? (
         <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No scenes yet. {canControl ? 'Create one to set several lights at once.' : ''}</div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
-          {scenes.map((s) => (
-            <div key={s.id} style={{ border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: 11, display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--surface-1)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Icon name={s.icon || 'sparkles'} size={15} color="var(--solar)" />
-                <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
-                {canControl && <button type="button" onClick={() => setEditing(s)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2 }}><Icon name="pencil" size={13} /></button>}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
+          {scenes.map((s) => {
+            const on = isOn(s);
+            return (
+              <div key={s.id} style={{ border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: 11, display: 'flex', flexDirection: 'column', gap: 9, background: 'var(--surface-1)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Icon name={s.icon || 'sparkles'} size={15} color={on ? 'var(--solar)' : 'var(--text-3)'} />
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                  {canControl && <button type="button" aria-label="Edit scene" onClick={() => setEditing(s)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2 }}><Icon name="pencil" size={13} /></button>}
+                  {canControl && <button type="button" aria-label="Delete scene" onClick={() => void del(s.id)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2 }}><Icon name="trash-2" size={13} /></button>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: 1, fontSize: 11.5, color: on ? 'var(--solar)' : 'var(--text-3)', fontWeight: 600 }}>{on ? 'On' : 'Off'} · {s.members.length} light{s.members.length === 1 ? '' : 's'}</span>
+                  <Switch checked={on} disabled={!canControl || busyId === s.id} onChange={(e) => void apply(s.id, e.target.checked)} />
+                </div>
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.members.length} light{s.members.length === 1 ? '' : 's'}</div>
-              <Button size="sm" variant="secondary" block disabled={!canControl} loading={applying === s.id} iconLeft={<Icon name="play" size={13} />} onClick={() => void apply(s.id)}>Apply</Button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       {editing !== undefined && <SceneEditor lights={lights} scene={editing} onClose={() => setEditing(undefined)} onSaved={refetch} />}
@@ -279,6 +296,7 @@ export function LightSchedulesSection({ lights, scenes, canControl }: { lights: 
   const [editing, setEditing] = useState<LightSchedule | null | undefined>(undefined);
 
   const toggle = (s: LightSchedule, enabled: boolean) => { void api.lights.updateSchedule(s.id, { enabled }).then(refetch); };
+  const del = (s: LightSchedule) => { void api.lights.deleteSchedule(s.id).then(refetch); };
 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -292,13 +310,17 @@ export function LightSchedulesSection({ lights, scenes, canControl }: { lights: 
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {schedules.map((s, i) => (
-            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 2px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{summarize(s, scenes)}</div>
+            <div key={s.id} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 2px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{summarize(s, scenes)}</div>
+                </div>
+                {canControl && <button type="button" aria-label="Edit schedule" onClick={() => setEditing(s)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}><Icon name="pencil" size={14} /></button>}
+                {canControl && <button type="button" aria-label="Delete schedule" onClick={() => del(s)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}><Icon name="trash-2" size={14} /></button>}
+                <Switch checked={s.enabled} disabled={!canControl} onChange={(e) => toggle(s, e.target.checked)} />
               </div>
-              {canControl && <button type="button" onClick={() => setEditing(s)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}><Icon name="pencil" size={14} /></button>}
-              <Switch checked={s.enabled} disabled={!canControl} onChange={(e) => toggle(s, e.target.checked)} />
+              <DayTrack bars={barsForWindow(s.onTime, s.offTime)} dim={!s.enabled} title={summarize(s, scenes)} height={16} />
             </div>
           ))}
         </div>

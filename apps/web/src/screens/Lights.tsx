@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { LightUnit, LightsResponse, LightLever, LightHsv, ScenesResponse } from '../lib/types';
@@ -21,6 +21,12 @@ import { ScenesSection, LightSchedulesSection } from '../components/lights/Scene
 /** Warm→cool gradient for the colour-temperature track preview. */
 const TEMP_GRADIENT = 'linear-gradient(90deg, #ffb15e, #fff4e3 50%, #cfe5ff)';
 
+function colorEq(a: unknown, b: LightHsv | null): boolean {
+  if (!b || !a || typeof a !== 'object') return false;
+  const x = a as LightHsv;
+  return x.h === b.h && x.s === b.s && x.v === b.v;
+}
+
 function hsvToCss({ h, s, v }: LightHsv): string {
   // s,v are 0–100 percent here; HSL is close enough for a swatch preview.
   const l = (v / 100) * (1 - s / 200) * 100;
@@ -32,13 +38,17 @@ function LightCard({
   wide,
   canControl,
   onCmd,
+  onRename,
 }: {
   d: LightUnit;
   wide: boolean;
   canControl: boolean;
   onCmd: (lever: LightLever, value: boolean | number | LightHsv) => void;
+  onRename: (name: string) => void;
 }) {
   const on = d.power;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(d.name);
   const tint = on
     ? d.workMode === 'colour' && d.color
       ? hsvToCss(d.color)
@@ -50,10 +60,15 @@ function LightCard({
     ...(d.dimmable || d.tunable ? [{ value: 'white', label: 'White' }] : []),
     ...(d.colorable ? [{ value: 'colour', label: 'Colour' }] : []),
   ];
+  const saveName = () => {
+    const n = draft.trim();
+    if (n && n !== d.name) onRename(n);
+    setEditing(false);
+  };
 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12, opacity: d.online ? 1 : 0.6 }}>
-      {/* Header: icon · name/room · power */}
+      {/* Header: icon · name (editable) · power */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
         <span
           style={{
@@ -65,10 +80,29 @@ function LightCard({
           <Icon name="lightbulb" size={19} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-            {d.online ? (d.room && d.room !== d.name ? d.room : on ? 'on' : 'off') : 'offline'}
-          </div>
+          {editing ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditing(false); }}
+                onBlur={saveName}
+                style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, color: 'var(--text-1)', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '3px 7px', outline: 'none' }}
+              />
+              <button type="button" aria-label="Save name" onMouseDown={(e) => e.preventDefault()} onClick={saveName} style={{ background: 'none', border: 'none', color: 'var(--solar)', cursor: 'pointer', padding: 2 }}><Icon name="check" size={15} /></button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <div title={d.name} style={{ fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</div>
+              {canControl && (
+                <button type="button" aria-label="Rename" onClick={() => { setDraft(d.name); setEditing(true); }} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2, flex: 'none' }}><Icon name="pencil" size={12} /></button>
+              )}
+            </div>
+          )}
+          {!editing && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{d.online ? (on ? 'on' : 'off') : 'offline'}</div>
+          )}
         </div>
         <Switch
           checked={on}
@@ -77,7 +111,19 @@ function LightCard({
         />
       </div>
 
-      {/* Controls — only when on */}
+      {/* Brightness — shown whenever dimmable, even when off (presets the level) */}
+      {d.online && showWhite && d.dimmable && d.brightnessPct != null && (
+        <Slider
+          label="Brightness"
+          min={1}
+          max={100}
+          value={d.brightnessPct}
+          unit="%"
+          onChange={(v) => canControl && onCmd('brightness', v)}
+        />
+      )}
+
+      {/* Colour-mode + temperature controls — only when on */}
       {on && d.online && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {modeOptions.length > 1 && (
@@ -92,17 +138,6 @@ function LightCard({
                   ? onCmd('color', d.color ?? { h: 30, s: 100, v: 100 })
                   : onCmd('colorTemp', d.colorTempPct ?? 50))
               }
-            />
-          )}
-
-          {showWhite && d.dimmable && d.brightnessPct != null && (
-            <Slider
-              label="Brightness"
-              min={1}
-              max={100}
-              value={d.brightnessPct}
-              unit="%"
-              onChange={(v) => canControl && onCmd('brightness', v)}
             />
           )}
 
@@ -154,31 +189,65 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
   const { data, loading, stale, updatedAt, refetch } = usePolling<LightsResponse>(api.lights.list, 15_000);
 
-  // Optimistic overrides keyed by `${id}:${lever}` so a dragged slider feels live
-  // while the debounced command is in flight; cleared on the next server refresh.
+  // Optimistic overrides keyed by `${id}:${lever}`: the UI reflects the change
+  // instantly and the override is held (NOT cleared on send) until a later poll
+  // shows the device has caught up — which avoids the brief "snap back" while the
+  // Tuya cloud read lags the write. A failed command drops its override (reverts).
   const [override, setOverride] = useState<Record<string, boolean | number | LightHsv>>({});
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const send = (id: string, lever: LightLever, value: boolean | number | LightHsv) => {
-    setOverride((o) => ({ ...o, [`${id}:${lever}`]: value }));
     const key = `${id}:${lever}`;
+    setOverride((o) => ({ ...o, [key]: value }));
     clearTimeout(timers.current[key]);
-    // Booleans fire immediately; continuous sliders debounce to spare the cloud API.
-    const delay = typeof value === 'boolean' ? 0 : 300;
-    timers.current[key] = setTimeout(() => {
+    const fire = () => {
       api.lights
         .command(id, lever, value)
-        .catch(() => undefined)
-        .finally(() => {
+        .then(() => setTimeout(() => refetch(), 1200)) // pull the real state back in soon
+        .catch(() =>
           setOverride((o) => {
-            const next = { ...o };
-            delete next[key];
-            return next;
-          });
-          refetch();
-        });
-    }, delay);
+            const n = { ...o };
+            delete n[key];
+            return n;
+          }),
+        );
+    };
+    // Power/colour-mode toggles fire immediately; continuous sliders (brightness,
+    // temp, hue) coalesce for 150ms so a drag doesn't flood the cloud — the thumb
+    // and bulb still move instantly via the optimistic override above.
+    if (typeof value === 'number' || typeof value === 'object') {
+      timers.current[key] = setTimeout(fire, 150);
+    } else {
+      fire();
+    }
   };
+
+  // Reconcile: once a poll shows the device matches an optimistic value, drop it.
+  useEffect(() => {
+    if (!data) return;
+    setOverride((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      const next = { ...prev };
+      let changed = false;
+      for (const dev of data.devices) {
+        const drop = (lever: LightLever, serverVal: unknown) => {
+          const k = `${dev.id}:${lever}`;
+          if (!(k in next)) return;
+          const ov = next[k];
+          const eq = lever === 'color' ? colorEq(ov, serverVal as LightHsv | null) : ov === serverVal;
+          if (eq) {
+            delete next[k];
+            changed = true;
+          }
+        };
+        drop('power', dev.power);
+        drop('brightness', dev.brightnessPct);
+        drop('colorTemp', dev.colorTempPct);
+        drop('color', dev.color);
+      }
+      return changed ? next : prev;
+    });
+  }, [data]);
 
   /** Merge any in-flight optimistic overrides onto the server view of a light. */
   const withOverrides = (d: LightUnit): LightUnit => {
@@ -236,6 +305,7 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
                     wide={wide}
                     canControl={canControl}
                     onCmd={(lever, value) => send(dev.id, lever, value)}
+                    onRename={(name) => { void api.lights.rename(dev.id, name).then(refetch); }}
                   />
                 );
               })}

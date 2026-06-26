@@ -22,7 +22,7 @@ async function getLightFleet(): Promise<{ units: LightUnit[]; error: string | nu
     const all = await tuya.getDevices();
     const units = all
       .filter((d) => lights.isLight(d))
-      .map((d) => lights.normalizeLight(d, settings[d.id]?.room));
+      .map((d) => lights.normalizeLight(d, settings[d.id]?.name));
     return { units, error: null };
   } catch (e) {
     return { units: [], error: (e as Error).message };
@@ -273,12 +273,25 @@ async function applyMembers(members: store.LightSceneMember[]): Promise<{ applie
   return { applied, failed };
 }
 
-export async function applyScene(id: string): Promise<unknown> {
+export async function applyScene(id: string, on = true): Promise<unknown> {
   const scene = store.get().lightScenes.find((x) => x.id === id);
   if (!scene) throw badInput(`scene ${id} not found`);
   if (!tuya.isConfigured()) throw badInput('Tuya not connected');
-  const res = await applyMembers(scene.members);
-  return { ts: new Date().toISOString(), id, ...res };
+  // on=true → apply the scene's saved states; on=false → switch its lights off.
+  const members = on ? scene.members : scene.members.map((m) => ({ ...m, on: false }));
+  const res = await applyMembers(members);
+  return { ts: new Date().toISOString(), id, on, ...res };
+}
+
+/** Set a custom display name for a light (stored in deviceSettings). */
+export function renameLight(id: string, nameRaw: unknown): unknown {
+  const name = String(nameRaw ?? '').trim();
+  store.update((s) => {
+    const existing = s.deviceSettings[id] ?? { automationEnabled: false };
+    s.deviceSettings[id] = { ...existing, name: name || undefined };
+  });
+  tuya.invalidateFleet();
+  return { ts: new Date().toISOString(), id, name };
 }
 
 // ---- Light schedules --------------------------------------------------------

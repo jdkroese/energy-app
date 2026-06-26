@@ -74,6 +74,7 @@ import {
   getLight,
   commandLight,
   bulkCommandLights,
+  renameLight,
   getTuyaIntegration,
   setTuyaIntegration,
   disconnectTuyaIntegration,
@@ -307,7 +308,10 @@ app.get('/api/lights/scenes', wrap(() => listScenes()));
 app.post('/api/lights/scenes', requireAdmin, wrap((req) => createScene((req.body ?? {}) as never)));
 app.put('/api/lights/scenes/:id', requireAdmin, wrap((req) => updateScene(String(req.params.id), (req.body ?? {}) as never)));
 app.delete('/api/lights/scenes/:id', requireAdmin, wrap((req) => deleteScene(String(req.params.id))));
-app.post('/api/lights/scenes/:id/apply', requireAdmin, wrap((req) => applyScene(String(req.params.id))));
+app.post('/api/lights/scenes/:id/apply', requireAdmin, wrap((req) => {
+  const body = (req.body ?? {}) as { on?: boolean };
+  return applyScene(String(req.params.id), body.on !== false);
+}));
 app.get('/api/lights/schedules', wrap(() => listLightSchedules()));
 app.post('/api/lights/schedules', requireAdmin, wrap((req) => createLightSchedule((req.body ?? {}) as never)));
 app.put('/api/lights/schedules/:id', requireAdmin, wrap((req) => updateLightSchedule(String(req.params.id), (req.body ?? {}) as never)));
@@ -329,6 +333,11 @@ app.post(
     const body = (req.body ?? {}) as { lever?: string; value?: unknown };
     return commandLight(String(req.params.id), body.lever as LightLever, body.value);
   }),
+);
+app.put(
+  '/api/lights/:id/name',
+  requireAdmin,
+  wrap((req) => renameLight(String(req.params.id), (req.body ?? {}).name)),
 );
 
 // ---- Blinds / curtains (Tuya) — reads any-authed; commands admin-gated ----

@@ -260,6 +260,8 @@ export interface IntegrationsState {
 export interface DeviceSettings {
   /** Friendly room override (falls back to the device's reported zone/name). */
   room?: string;
+  /** Custom display name override (lights; falls back to the device's reported name). */
+  name?: string;
   /** Whether automations may command this device. */
   automationEnabled: boolean;
   /** Hard comfort bounds for automations (°C). */

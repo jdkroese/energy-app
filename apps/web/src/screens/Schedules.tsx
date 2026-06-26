@@ -8,6 +8,7 @@ import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
+import { DayTrack, barsForWindow } from '../components/schedules/DayTrack';
 import { EditRuleOverlay, type RulePeer } from '../components/schedules/EditRuleOverlay';
 import { newRuleDraft, TYPE_LABEL } from '../lib/scheduleRules';
 
@@ -218,6 +219,7 @@ function LightingSchedulesCard({ canConfig }: { canConfig: boolean }) {
   const scenes = scenesData?.scenes ?? [];
   if (schedules.length === 0) return null;
   const toggle = (s: LightSchedule, enabled: boolean) => { void api.lights.updateSchedule(s.id, { enabled }).then(refetch); };
+  const del = (s: LightSchedule) => { void api.lights.deleteSchedule(s.id).then(refetch); };
   return (
     <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 14px', borderBottom: '1px solid var(--border-1)' }}>
@@ -227,12 +229,16 @@ function LightingSchedulesCard({ canConfig }: { canConfig: boolean }) {
         <span style={{ fontSize: 11, color: 'var(--text-3)' }}>edit in Devices → Lighting</span>
       </div>
       {schedules.map((s, i) => (
-        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 14px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{lightSummary(s, scenes)}</div>
+        <div key={s.id} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 14px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{lightSummary(s, scenes)}</div>
+            </div>
+            {canConfig && <button type="button" aria-label="Delete schedule" onClick={() => del(s)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}><Icon name="trash-2" size={14} /></button>}
+            <Switch checked={s.enabled} disabled={!canConfig} onChange={(e) => toggle(s, e.target.checked)} />
           </div>
-          <Switch checked={s.enabled} disabled={!canConfig} onChange={(e) => toggle(s, e.target.checked)} />
+          <DayTrack bars={barsForWindow(s.onTime, s.offTime)} dim={!s.enabled} title={lightSummary(s, scenes)} height={16} />
         </div>
       ))}
     </div>
