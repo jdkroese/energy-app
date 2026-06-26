@@ -45,6 +45,15 @@ const MODES: { value: string; label: string; icon: string }[] = [
   { value: 'fan', label: 'Fan', icon: 'fan' },
 ];
 
+// Underfloor (Airzone) modes — no Dry, plus an explicit Stop. No fan-steps / vanes.
+const HEATING_MODES: { value: string; label: string; icon: string }[] = [
+  { value: 'auto', label: 'Auto', icon: '_a' },
+  { value: 'heat', label: 'Heat', icon: 'flame' },
+  { value: 'cool', label: 'Cool', icon: 'snowflake' },
+  { value: 'fan', label: 'Fan', icon: 'fan' },
+  { value: 'stop', label: 'Stop', icon: 'power' },
+];
+
 const WARMTH_COLOR: Record<DeviceWarmth, string> = {
   cold: 'var(--battery)', cool: 'var(--battery)', comfortable: 'var(--text-1)',
   warm: 'var(--grid)', hot: 'var(--danger)', unknown: 'var(--text-3)',
@@ -181,6 +190,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   }
 
   const ac = dev as DeviceView & AcExtras;
+  const isHeating = dev.type === 'heating'; // Airzone underfloor — no fan-steps / vanes
+  const modeList = isHeating ? HEATING_MODES : MODES;
   const canConfig = isAdmin;   // schedule / solar / settings toggles
   const canWrite = isAdmin;    // live device commands
 
@@ -196,7 +207,9 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const curMode = pMode ?? dev.mode;
   const stateOn = pPow ?? dev.power;
   const accent = accentFor(curMode);
-  const lo = Math.max(16, dev.minSetpointC ?? 16, dev.comfortFloorC ?? 16);
+  // Cooling clamps to a hard 16–30 floor; underfloor zones can report a lower min (≈15).
+  const hardLo = isHeating ? 10 : 16;
+  const lo = Math.max(hardLo, dev.minSetpointC ?? hardLo, dev.comfortFloorC ?? hardLo);
   const hi = Math.min(30, dev.maxSetpointC ?? 30, dev.comfortCeilingC ?? 30);
   const setpoint = pSet ?? dev.setpointC ?? 24;
   const clampSet = (v: number) => Math.min(hi, Math.max(lo, Math.round(v * 2) / 2));
@@ -236,7 +249,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <h1 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>{dev.name}</h1>
           <div style={{ fontSize: 11.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            Panasonic Etherea{dev.installation ? ` · ${dev.installation}` : ''} · {modeWord(curMode, stateOn)}
+            {isHeating ? 'Airzone underfloor' : 'Panasonic Etherea'}{dev.installation ? ` · ${dev.installation}` : ''} · {modeWord(curMode, stateOn)}
           </div>
         </div>
         <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (curMode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateOn ? accent : 'var(--text-3)' }}>{stateLabel}</span>
@@ -303,8 +316,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
 
       {/* MODE */}
       <Section title="Mode" right={syncing('mode') ? <SyncDot /> : undefined}>
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${MODES.length}, 1fr)`, gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 6 }}>
-          {MODES.map((m) => {
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${modeList.length}, 1fr)`, gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 6 }}>
+          {modeList.map((m) => {
             const on = curMode === m.value;
             return (
               <button key={m.value} type="button" disabled={!canWrite} onClick={() => setMode(m.value)}
@@ -317,7 +330,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         </div>
       </Section>
 
-      {/* FAN SPEED */}
+      {/* FAN SPEED — cooling only (underfloor has no fan) */}
+      {!isHeating && (
       <Section title="Fan speed" right={<span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{syncing('fan') && <SyncDot />}<span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{fanLevel == null ? 'auto' : fanLevel === 0 ? 'auto' : `manual · ${fanLevel}/${fanSteps}`}</span></span>}>
         <div style={{ display: 'flex', gap: 10 }}>
           <div style={{ flex: 1, display: 'flex', gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 8 }}>
@@ -336,12 +350,35 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
           </button>
         </div>
       </Section>
+      )}
 
-      {/* VANES */}
+      {/* VANES — cooling only (underfloor has none) */}
+      {!isHeating && (
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <VaneCard title="Up / down vanes" value={vUD} syncing={syncing('vaneUpDown')} disabled={!canWrite} onSelect={(n) => setVane('vaneUpDown', n)} />
         <VaneCard title="Left / right vanes" value={vLR} syncing={syncing('vaneLeftRight')} disabled={!canWrite} onSelect={(n) => setVane('vaneLeftRight', n)} />
       </div>
+      )}
+
+      {/* HEATING READOUTS — underfloor-only signals Cooling lacks */}
+      {isHeating && (
+        <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(3, 1fr)' : '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '11px 13px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--text-2)' }}><Icon name="flame" size={14} color={dev.floorDemand ? 'var(--grid)' : 'var(--text-3)'} />Floor demand</span>
+            <span className="pwr-mono" style={{ fontSize: 12.5, fontWeight: 600, color: dev.floorDemand ? 'var(--grid)' : 'var(--text-3)' }}>{dev.floorDemand ? 'Calling' : 'Idle'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '11px 13px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--text-2)' }}><Icon name="droplet" size={14} color="var(--battery)" />Humidity</span>
+            <span className="pwr-mono" style={{ fontSize: 12.5, fontWeight: 600, color: dev.humidity != null ? 'var(--text-1)' : 'var(--text-3)' }}>{dev.humidity != null ? `${Math.round(dev.humidity)}%` : '—'}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '11px 13px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--text-2)' }}><Icon name={dev.wireless ? 'radio' : 'cable'} size={14} color="var(--text-2)" />Thermostat</span>
+            <span className="pwr-mono" style={{ fontSize: 12, fontWeight: 600, color: dev.lowBattery ? 'var(--grid)' : 'var(--text-1)' }}>
+              {dev.wireless ? (dev.lowBattery ? 'Radio · low batt' : 'Radio') : 'Wired'}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* MANUAL HOLD */}
       {holdMins > 0 && (
@@ -352,12 +389,12 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
         </Banner>
       )}
 
-      {/* SOLAR-SURPLUS COOLING — per-unit opt-in for surplus-driven pre-cooling */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'rgba(46,230,160,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
-        <Icon name="zap" size={17} color={dev.automationEnabled ? 'var(--solar)' : 'var(--text-3)'} />
+      {/* SOLAR-SURPLUS PRE-HEAT / PRE-COOL — per-unit opt-in for surplus-driven runs */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? (isHeating ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? (isHeating ? 'rgba(245,165,36,0.2)' : 'rgba(46,230,160,0.2)') : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
+        <Icon name={isHeating ? 'flame' : 'zap'} size={17} color={dev.automationEnabled ? (isHeating ? 'var(--grid)' : 'var(--solar)') : 'var(--text-3)'} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>Solar-surplus cooling</div>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{dev.automationEnabled ? 'Uses excess solar to pre-cool this unit' : 'This unit is excluded from surplus cooling'}</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{isHeating ? 'Solar-surplus pre-heat' : 'Solar-surplus cooling'}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{dev.automationEnabled ? (isHeating ? 'Uses excess solar to pre-heat this room' : 'Uses excess solar to pre-cool this unit') : (isHeating ? 'This room is excluded from surplus pre-heat' : 'This unit is excluded from surplus cooling')}</div>
         </div>
         <Switch checked={dev.automationEnabled} disabled={!canConfig || busy} onChange={(e) => toggleAutomation(e.target.checked)} />
       </div>
@@ -377,6 +414,8 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
 
       {/* CONFIG & SERVICE */}
       <div style={{ ...eyebrow, marginTop: 4 }}>Config &amp; service</div>
+      {/* filter + maintenance — AC only (underfloor has no air filter) */}
+      {!isHeating && (
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         {/* filter */}
         <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -406,10 +445,11 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
           <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{ac.maintenanceEveryMonths != null ? `Reminder every ${ac.maintenanceEveryMonths} mo · ${ac.maintenanceEnabled ? 'on' : 'disabled'}` : 'No reminder set'}</div>
         </Card>
       </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         <MetaTile label="Temp limit" value={`${dev.minSetpointC ?? 16}–${dev.maxSetpointC ?? 30}°`} />
         <MetaTile label="Comfort band" value={`${dev.comfortFloorC ?? 16}–${dev.comfortCeilingC ?? 30}°`} />
-        <MetaTile label="Installation" value={dev.installation ?? 'Intesis'} />
+        <MetaTile label="Installation" value={dev.installation ?? (isHeating ? 'Airzone' : 'Intesis')} />
         <MetaTile label="Signal" value={ac.signal ? cap(ac.signal) : (dev.online ? 'Online' : '—')} valueColor={ac.signal === 'weak' ? 'var(--grid)' : dev.online ? 'var(--solar)' : 'var(--text-3)'} />
       </div>
 

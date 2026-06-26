@@ -194,6 +194,15 @@ export interface ClimateUnit {
   /** Vane positions: 0 = auto (A), 1..5 = fixed, 10 = swing. null if not reported. */
   vaneUpDown?: number | null;
   vaneLeftRight?: number | null;
+  /** Heating (Airzone underfloor) read fields; null/absent for AC (Intesis) units. */
+  /** Room is actively calling for heat (underfloor loop open) → drives the flame. */
+  floorDemand?: boolean | null;
+  /** Relative humidity (%). */
+  humidity?: number | null;
+  /** Radio (wireless) thermostat. */
+  wireless?: boolean | null;
+  /** Radio thermostat reporting a low battery. */
+  lowBattery?: boolean | null;
 }
 
 /** Tenths-of-°C -> °C, tolerating units that already report whole degrees. */

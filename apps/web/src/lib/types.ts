@@ -472,6 +472,15 @@ export interface DeviceView {
   /** Vane positions: 0 = auto (A), 1..5 = fixed, 10 = swing. null if not reported. */
   vaneUpDown?: number | null;
   vaneLeftRight?: number | null;
+  /** Heating (Airzone) read fields; null/absent for cooling (Intesis) units. */
+  /** Room is actively calling for heat (underfloor loop open) → drives the flame. */
+  floorDemand?: boolean | null;
+  /** Relative humidity (%), shown on the detail page. */
+  humidity?: number | null;
+  /** Radio (wireless) thermostat. */
+  wireless?: boolean | null;
+  /** Radio thermostat reporting a low battery. */
+  lowBattery?: boolean | null;
   room: string;
   automationEnabled: boolean;
   /** Epoch ms a manual-control hold expires on this unit, or null if none active. */
@@ -588,8 +597,6 @@ export interface SchedulesResponse {
   schedules: Schedule[];
 }
 
-export type AutomationAuthority = 'shadow' | 'auto';
-
 export interface SolarSurplusPrecoolParams {
   roomTempLimitC: number;
   targetSetpointC: number;
@@ -605,7 +612,6 @@ export interface Automation {
   name: string;
   enabled: boolean;
   type: 'solar_surplus_precool';
-  authority: AutomationAuthority;
   params: SolarSurplusPrecoolParams;
   lastEval: number | null;
 }
