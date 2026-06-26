@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceType, DeviceView, DevicesResponse, Schedule, SchedulesResponse, LightSchedule, LightScene, LightSchedulesResponse, ScenesResponse } from '../lib/types';
+import type { DeviceType, DeviceView, DevicesResponse, Schedule, SchedulesResponse, LightSchedule, LightScene, LightSchedulesResponse, ScenesResponse, BlindsResponse } from '../lib/types';
 import { Icon, Button, Eyebrow, SegmentedControl, Switch } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -24,9 +24,13 @@ const FILTERS: { value: 'all' | DeviceType; label: string }[] = [
   { value: 'cooling', label: 'Cool' },
   { value: 'heating', label: 'Heat' },
   { value: 'lighting', label: 'Light' },
+  { value: 'blinds', label: 'Blinds' },
   { value: 'circuit', label: 'Circ' },
 ];
-const TYPE_ORDER: DeviceType[] = ['cooling', 'heating', 'lighting', 'circuit'];
+const TYPE_ORDER: DeviceType[] = ['cooling', 'heating', 'lighting', 'blinds', 'circuit'];
+
+/** Minimal schedulable-unit shape — climate devices and Tuya blinds both map to this. */
+interface SchedUnit { id: string; name: string; type: DeviceType }
 
 export function Schedules({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
@@ -34,6 +38,7 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
   const { data, stale, updatedAt, refetch } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const { data: devData } = usePolling<DevicesResponse>(api.devices.list, 0);
+  const { data: blindsData } = usePolling<BlindsResponse>(api.blinds.list, 0);
   const [filter, setFilter] = useState<'all' | DeviceType>('all');
   const [showAll, setShowAll] = useState(false);
   const [editing, setEditing] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
@@ -41,16 +46,22 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
   const [params, setParams] = useSearchParams();
 
   const schedules = useMemo(() => data?.schedules ?? [], [data]);
-  const devices = useMemo(() => devData?.devices ?? [], [devData]);
-  const deviceById = useMemo(() => new Map(devices.map((d) => [d.id, d])), [devices]);
-  const unitName = (id: string) => deviceById.get(id)?.room || deviceById.get(id)?.name || id;
+  // Schedulable units = the climate fleet + the Tuya blinds fleet, mapped to a
+  // common {id, name, type} shape so the screen treats them identically.
+  const units = useMemo<SchedUnit[]>(() => {
+    const climate: SchedUnit[] = (devData?.devices ?? []).map((d) => ({ id: d.id, name: d.room || d.name, type: d.type }));
+    const blinds: SchedUnit[] = (blindsData?.devices ?? []).map((b) => ({ id: b.id, name: b.room || b.name, type: 'blinds' as DeviceType }));
+    return [...climate, ...blinds];
+  }, [devData, blindsData]);
+  const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
+  const unitName = (id: string) => unitById.get(id)?.name || id;
 
   // Deep-link from a device page: ?new=<deviceId> opens a fresh rule for that unit.
   useEffect(() => {
     const newFor = params.get('new');
-    if (newFor && deviceById.has(newFor)) {
-      const dev = deviceById.get(newFor)!;
-      setEditing({ rule: newRuleDraft({ type: dev.type, deviceId: dev.id, name: dev.room || dev.name }), isNew: true });
+    if (newFor && unitById.has(newFor)) {
+      const u = unitById.get(newFor)!;
+      setEditing({ rule: newRuleDraft({ type: u.type, deviceId: u.id, name: u.name }), isNew: true });
       setParams({}, { replace: true });
     }
     const editId = params.get('edit');
@@ -59,7 +70,7 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
       if (s) { setEditing({ rule: s, isNew: false }); setParams({}, { replace: true }); }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params, schedules.length, devices.length]);
+  }, [params, schedules.length, units.length]);
 
   // Rules per unit (unit-scoped only); group-scoped rules render under their group id.
   const rulesByUnit = useMemo(() => {
@@ -76,15 +87,15 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
   // Which units to render as boxes: those with rules, or every device when "New schedule".
   const unitBoxes = useMemo(() => {
     const ids = new Set<string>();
-    if (showAll) devices.forEach((d) => ids.add(d.id));
+    if (showAll) units.forEach((u) => ids.add(u.id));
     for (const s of schedules) if (s.scope.kind === 'unit') ids.add(s.scope.deviceId);
     const list = [...ids]
-      .map((id) => ({ id, dev: deviceById.get(id), rules: rulesByUnit.get(id) ?? [] }))
-      .filter((u): u is { id: string; dev: DeviceView; rules: Schedule[] } => !!u.dev)
-      .filter((u) => filter === 'all' || u.dev.type === filter)
-      .sort((a, b) => TYPE_ORDER.indexOf(a.dev.type) - TYPE_ORDER.indexOf(b.dev.type) || a.dev.type.localeCompare(b.dev.type));
+      .map((id) => ({ id, unit: unitById.get(id), rules: rulesByUnit.get(id) ?? [] }))
+      .filter((u): u is { id: string; unit: SchedUnit; rules: Schedule[] } => !!u.unit)
+      .filter((u) => filter === 'all' || u.unit.type === filter)
+      .sort((a, b) => TYPE_ORDER.indexOf(a.unit.type) - TYPE_ORDER.indexOf(b.unit.type) || a.unit.type.localeCompare(b.unit.type));
     return list;
-  }, [showAll, devices, schedules, deviceById, rulesByUnit, filter]);
+  }, [showAll, units, schedules, unitById, rulesByUnit, filter]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -95,8 +106,8 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
     const days = s.days.includes(day) ? s.days.filter((x) => x !== day) : [...s.days, day].sort();
     return run(() => api.schedules.update(s.id, { days }));
   };
-  const openAdd = (dev: DeviceView) =>
-    setEditing({ rule: newRuleDraft({ type: dev.type, deviceId: dev.id, name: dev.room || dev.name }), isNew: true });
+  const openAdd = (u: SchedUnit) =>
+    setEditing({ rule: newRuleDraft({ type: u.type, deviceId: u.id, name: u.name }), isNew: true });
 
   const saveRule = async (rule: Schedule, copyTo: string[]) => {
     const { id: _id, ...payload } = rule;
@@ -113,7 +124,7 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
 
   const peersFor = (rule: Schedule): RulePeer[] => {
     const ownId = rule.scope.kind === 'unit' ? rule.scope.deviceId : '';
-    return devices.filter((d) => d.type === rule.type && d.id !== ownId).map((d) => ({ id: d.id, name: d.room || d.name }));
+    return units.filter((u) => u.type === rule.type && u.id !== ownId).map((u) => ({ id: u.id, name: u.name }));
   };
 
   const list = (
@@ -126,18 +137,18 @@ export function Schedules({ ctx }: { ctx: ShellContext }) {
 
       {unitBoxes.length === 0 ? (
         <div style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 13, padding: 24, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)' }}>
-          {devices.length === 0 ? 'Connect a climate integration to schedule units.' : `No ${filter === 'all' ? '' : TYPE_LABEL[filter].toLowerCase() + ' '}rules yet — add one to a unit.`}
+          {units.length === 0 ? 'Connect a climate or Tuya integration to schedule units.' : `No ${filter === 'all' ? '' : TYPE_LABEL[filter].toLowerCase() + ' '}rules yet — add one to a unit.`}
         </div>
       ) : (
         unitBoxes.map((u) => (
           <UnitScheduleBox
             key={u.id}
             name={unitName(u.id)}
-            type={u.dev.type}
+            type={u.unit.type}
             rules={u.rules}
             canConfig={!!canConfig}
             busy={busy}
-            onAddRule={() => openAdd(u.dev)}
+            onAddRule={() => openAdd(u.unit)}
             onEditRule={(s) => setEditing({ rule: s, isNew: false })}
             onToggleEnabled={toggleEnabled}
             onToggleDay={toggleDay}

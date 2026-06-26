@@ -61,6 +61,16 @@ export function ScheduleRuleObject({
   const tag = conditionTag(s.condition);
   const bars = barsFor(s.windows);
   const tagColor = tag?.tone === 'warm' ? 'var(--grid)' : 'var(--battery)';
+  // Blinds: tint the window bars by direction (open = ev/violet, close = muted),
+  // so the 24h track reads as "open here / closed here" at a glance.
+  const isBlind = s.type === 'blinds';
+  const opening = isBlind && (s.action.positionPct ?? 0) >= 50;
+  const barColor = isBlind ? (opening ? 'var(--ev)' : 'var(--text-3)') : 'var(--solar)';
+  const barGlow = isBlind
+    ? opening
+      ? '0 0 8px rgba(139,140,255,0.55)'
+      : 'none'
+    : '0 0 8px rgba(46,230,160,0.55)';
 
   const dayCell = (on: boolean): CSSProperties => ({
     width: 26,
@@ -93,7 +103,7 @@ export function ScheduleRuleObject({
             <Icon name="pencil" size={11} color="var(--text-3)" />
           </div>
           <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {windowsSummary(s.windows)} · <span style={{ color: 'var(--solar-dim)' }}>{actionSummary(s.action)}</span>
+            {windowsSummary(s.windows)} · <span style={{ color: 'var(--solar-dim)' }}>{actionSummary(s)}</span>
             {tag && <span style={{ color: tagColor }}> · {tag.text}</span>}
           </div>
         </button>
@@ -134,8 +144,8 @@ export function ScheduleRuleObject({
               left: `${bar.left}%`,
               width: `${Math.max(0.7, bar.width)}%`,
               borderRadius: 3,
-              background: 'var(--solar)',
-              boxShadow: '0 0 8px rgba(46,230,160,0.55)',
+              background: barColor,
+              boxShadow: barGlow,
             }}
           />
         ))}

@@ -20,6 +20,7 @@ import type { Automation, SolarSurplusPrecoolParams } from '../store';
 import { issueClimate, _resetClimateRateLimits } from './climate-execute';
 import { takeClimateSnapshot, type RichClimateSnapshot } from './climate-snapshot';
 import { COMPRESSOR_START_KW } from './climate-guardrails';
+import { evaluateBlindSchedules } from './blinds-coordinator';
 
 const TICK_MS = 45_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -384,6 +385,11 @@ async function tick(): Promise<void> {
   try {
     const dev = store.get().devices;
     if (!dev.armed || dev.mode !== 'auto') return; // self-gated: inert unless armed+auto
+
+    // Blinds schedules (Tuya) run independently of the climate fleet — do them
+    // first so they still fire when no AC/underfloor integration is configured.
+    await evaluateBlindSchedules();
+
     if (!intesis.isConfigured() && !airzone.isConfigured()) return;
 
     const automations = store.get().automations.filter((a) => a.enabled);

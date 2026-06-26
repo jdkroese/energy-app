@@ -452,7 +452,7 @@ export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan' | 'vaneUpDown' 
 export type DeviceWarmth = 'cold' | 'cool' | 'comfortable' | 'warm' | 'hot' | 'unknown';
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit';
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds';
 
 export interface DeviceView {
   id: string;
@@ -557,6 +557,8 @@ export interface Action {
   fan: FanSetting;
   vaneUpDown: VaneSetting;
   vaneLeftRight: VaneSetting;
+  /** Blinds only: target position 0 = closed … 100 = open. */
+  positionPct?: number;
 }
 
 export interface ScheduleWindow {

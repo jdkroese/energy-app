@@ -65,6 +65,7 @@ export function EditRuleOverlay({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const isBlind = rule.type === 'blinds';
   const hideFanVanes = rule.type === 'heating'; // underfloor has no fan/vanes
   const modeOptions = rule.type === 'heating' ? HEATING_MODES : MODES; // heat: cool/heat/auto only
 
@@ -125,20 +126,29 @@ export function EditRuleOverlay({
       </div>
 
       {/* OPERATION */}
-      <Field title="Operation to run">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 12 }}>
-          <SegRow options={modeOptions} value={action.mode} onChange={(m) => setAct({ mode: m as ClimateMode })} />
-          <div style={{ display: 'grid', gridTemplateColumns: hideFanVanes ? '1fr' : '1fr 1fr', gap: 10 }}>
-            <Stepper label="Setpoint" value={action.setpointC} suffix="°" min={16} max={30} step={0.5} onChange={(v) => setAct({ setpointC: v })} />
-            {!hideFanVanes && <FanVaneSelect title="Fan" value={action.fan} onChange={(v) => setAct({ fan: v as FanSetting })} />}
+      <Field title={isBlind ? 'Move the blind to' : 'Operation to run'}>
+        {isBlind ? (
+          <SegRow
+            options={[{ value: 'close', label: 'Close' }, { value: 'open', label: 'Open' }]}
+            value={(action.positionPct ?? 0) >= 50 ? 'open' : 'close'}
+            onChange={(v) => setAct({ positionPct: v === 'open' ? 100 : 0 })}
+            activeColor="var(--ev)"
+          />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 12 }}>
+            <SegRow options={modeOptions} value={action.mode} onChange={(m) => setAct({ mode: m as ClimateMode })} />
+            <div style={{ display: 'grid', gridTemplateColumns: hideFanVanes ? '1fr' : '1fr 1fr', gap: 10 }}>
+              <Stepper label="Setpoint" value={action.setpointC} suffix="°" min={16} max={30} step={0.5} onChange={(v) => setAct({ setpointC: v })} />
+              {!hideFanVanes && <FanVaneSelect title="Fan" value={action.fan} onChange={(v) => setAct({ fan: v as FanSetting })} />}
+            </div>
+            {!hideFanVanes && (
+              <>
+                <FanVaneSelect title="Up / down" value={action.vaneUpDown} onChange={(v) => setAct({ vaneUpDown: v as VaneSetting })} />
+                <FanVaneSelect title="Left / right" value={action.vaneLeftRight} onChange={(v) => setAct({ vaneLeftRight: v as VaneSetting })} />
+              </>
+            )}
           </div>
-          {!hideFanVanes && (
-            <>
-              <FanVaneSelect title="Up / down" value={action.vaneUpDown} onChange={(v) => setAct({ vaneUpDown: v as VaneSetting })} />
-              <FanVaneSelect title="Left / right" value={action.vaneLeftRight} onChange={(v) => setAct({ vaneLeftRight: v as VaneSetting })} />
-            </>
-          )}
-        </div>
+        )}
       </Field>
 
       {/* DAYS */}
@@ -185,7 +195,8 @@ export function EditRuleOverlay({
         </div>
       </Field>
 
-      {/* RUN CONDITION */}
+      {/* RUN CONDITION (climate only — blinds run purely on the time windows) */}
+      {!isBlind && (
       <Field title="Run condition">
         <SegRow
           options={[{ value: 'always', label: 'Always' }, { value: 'warmerThan', label: 'Only if warmer than' }, { value: 'coolerThan', label: 'Only if cooler than' }]}
@@ -202,6 +213,7 @@ export function EditRuleOverlay({
           </div>
         )}
       </Field>
+      )}
 
       {/* COPY TO UNITS */}
       {peers.length > 0 && (

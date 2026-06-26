@@ -35,9 +35,24 @@ which way their raw `percent` runs (many report 0 = open / 100 = closed). The pe
 flips the read and write so the slider matches reality. Open/close use the unambiguous
 `control` enum when present, so they work regardless of invert.
 
-## Phase 2 (next)
-Scheduling: a "Blinds" rule that opens or closes at set times, shown on a 24 h / 30-min
-section bar (simpler than the climate setpoint timeline). Will extend the schedule schema
-to a polymorphic action + generalize the coordinator to drive blind positions, gated on
-the device-automation arm. See [21-battery-priority.md](21-battery-priority.md) for the
-guarded-coordinator pattern.
+## Phase 2 — scheduling (shipped)
+Blinds are now schedulable on the **Schedules** screen alongside cooling/heating, with a
+deliberately simple operation: each rule just **opens or closes** during its time windows.
+
+- **Schema**: `DeviceType += 'blinds'`; `Action.positionPct?` (0 = closed … 100 = open) —
+  blinds rules carry the existing climate fields too but ignore them, so no schema fork.
+- **Editor** (`EditRuleOverlay`): for blinds the operation is a single **Close / Open**
+  toggle (→ positionPct 0 / 100); fan/vanes/setpoint and the temperature run-condition are
+  hidden. Days + time windows are shared with climate, so the existing **24 h / 30-min
+  section bar** (`ScheduleRuleObject`) renders the rule — bars tinted violet (open) / muted
+  (close).
+- **Units**: the Schedules screen merges the Tuya blinds fleet (`/api/blinds`) into the
+  schedulable unit list, so blinds get their own boxes + a "Blinds" filter.
+- **Coordinator** (`control/blinds-coordinator.ts`): `evaluateBlindSchedules()` runs in the
+  devices tick (gated `armed && mode==='auto'`), independent of the Intesis fleet. For each
+  active-window rule it drives the blind to the target position via the Tuya write path —
+  skips when already there (±3%), rate-limits to ≥60 s/blind, respects a manual-override
+  hold (a manual move via the card pauses the schedule), and logs to `devices.log`.
+
+Guarded like the rest of device automation: boots disarmed after a deploy; nothing moves
+until the device Autopilot is armed in Auto. See [21-battery-priority.md](21-battery-priority.md).

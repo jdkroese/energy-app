@@ -275,13 +275,15 @@ export interface DeviceSettings {
 export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit';
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds';
 
 /** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
 export type FanSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
 export type VaneSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
 
-/** The device action a rule applies during its windows. Type-adaptive; cooling shown. */
+/** The device action a rule applies during its windows. Type-adaptive: climate
+ *  units read mode/setpoint/fan/vanes; blinds read only positionPct (the climate
+ *  fields are present-but-ignored on a blinds rule). */
 export interface Action {
   power: boolean;
   mode: ClimateMode;
@@ -289,6 +291,8 @@ export interface Action {
   fan: FanSetting;
   vaneUpDown: VaneSetting;
   vaneLeftRight: VaneSetting;
+  /** Blinds only: target position 0 = closed … 100 = open. */
+  positionPct?: number;
 }
 
 export interface ScheduleWindow {
@@ -693,6 +697,9 @@ function coerceAction(raw: unknown): Action {
     fan: coerceFan(a.fan),
     vaneUpDown: coerceVane(a.vaneUpDown),
     vaneLeftRight: coerceVane(a.vaneLeftRight),
+    ...(typeof a.positionPct === 'number'
+      ? { positionPct: Math.min(100, Math.max(0, Math.round(a.positionPct))) }
+      : {}),
   };
 }
 function coerceCondition(raw: unknown): RunCondition {
@@ -759,7 +766,7 @@ function coerceSchedule(s: Record<string, unknown>): Schedule | null {
   if (rawScope?.kind === 'group' && typeof rawScope.groupId === 'string') scope = { kind: 'group', groupId: rawScope.groupId };
   else if (rawScope?.kind === 'unit' && typeof rawScope.deviceId === 'string') scope = { kind: 'unit', deviceId: rawScope.deviceId };
   else return null;
-  const type = s.type === 'heating' || s.type === 'lighting' || s.type === 'circuit' ? s.type : 'cooling';
+  const type = s.type === 'heating' || s.type === 'lighting' || s.type === 'circuit' || s.type === 'blinds' ? s.type : 'cooling';
   return {
     id: typeof s.id === 'string' ? s.id : genId('sched'),
     name: typeof s.name === 'string' ? s.name : 'Rule',
