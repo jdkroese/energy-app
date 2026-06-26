@@ -343,30 +343,34 @@ export interface Schedule {
   condition: RunCondition;
 }
 
-// solar_surplus_precool is now the unified "solar climate" automation: it drives the
-// HVAC fleet in BOTH directions (cool when warm / heat when cold) on surplus.
-// solar_surplus_preheat is retained ONLY so legacy persisted rules still parse — it is
-// no longer seeded and the coordinator treats it as an inert no-op (Airzone underfloor
-// is no longer surplus-eligible).
+// The solar-surplus automation is SPLIT into two single-direction rules:
+//   • solar_surplus_precool — COOLING ONLY: cool an enrolled HVAC when its room is warm.
+//   • solar_surplus_preheat — HEATING ONLY: heat an enrolled HVAC when its room is cold.
+// Each is independently enabled and gated on its own per-unit enrolment flag
+// (solarCoolEnabled / solarHeatEnabled). Airzone underfloor (`air-*`) is NOT eligible for
+// either. The two rules share ONE param shape (below) to minimise churn: a cooling rule
+// reads the cooling fields (roomTempLimitC → targetSetpointC) and a heating rule reads the
+// heating fields (heatRoomFloorC → heatTargetSetpointC).
 export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat';
 
 /**
- * Params for the unified solar-surplus "solar climate" automation. One enrollment per
- * HVAC covers both directions:
- *  - COOL while room is ABOVE roomTempLimitC, down toward targetSetpointC.
- *  - HEAT while room is BELOW heatRoomFloorC, up toward heatTargetSetpointC.
- * A cool↔heat deadband (in the coordinator) keeps a unit from flipping direction
- * within a window.
+ * Params shared by both single-direction solar-surplus rules. A rule reads only the
+ * fields for its own direction:
+ *  - COOLING rule (solar_surplus_precool): COOL while room is ABOVE roomTempLimitC,
+ *    down toward targetSetpointC.
+ *  - HEATING rule (solar_surplus_preheat): HEAT while room is BELOW heatRoomFloorC,
+ *    up toward heatTargetSetpointC.
+ * (The shape carries both directions so the API/serialisation and a migrated legacy
+ * unified rule never drop a target; the coordinator only consults its own direction.)
  */
 export interface SolarSurplusPrecoolParams {
-  /** Cooling comfort ceiling (°C): cooling runs while room > this limit. */
+  /** Cooling trigger (°C): cooling runs while room > this limit. */
   roomTempLimitC: number;
   /** Cooling target setpoint to drive the room down toward (°C). */
   targetSetpointC: number;
   /**
-   * Heating comfort floor (°C): heating runs while room < this floor. Optional so
-   * legacy precool-only rules keep working; the coordinator defaults it when absent.
-   * Part of the unified "solar climate" automation (cool when warm / heat when cold).
+   * Heating trigger (°C): heating runs while room < this floor. Optional so legacy
+   * cooling-only rules keep parsing; the coordinator/heat rule defaults it when absent.
    */
   heatRoomFloorC?: number;
   /** Heating target setpoint to drive the room up toward (°C). Defaults when absent. */
@@ -392,12 +396,15 @@ export interface Automation {
 }
 
 /**
- * STABLE canonical id for the seeded solar-surplus "solar climate" default. Pinned so
- * future relabels/retargets of the default never drift its id — the dismissal +
- * de-dupe logic keys off this. Older installs may carry a different persisted id for
- * the same rule; the de-dupe collapses by `type` so those are treated as the same rule.
+ * STABLE canonical ids for the two seeded solar-surplus defaults — one per direction.
+ * Pinned so future relabels/retargets never drift the id; the dismissal + de-dupe logic
+ * keys off these. Older installs may carry a different persisted id for the same rule;
+ * the de-dupe collapses by `type` so a relabeled instance is treated as the same rule.
  */
-export const SOLAR_SURPLUS_AUTOMATION_ID = 'solar-surplus-precool';
+export const SOLAR_SURPLUS_COOL_AUTOMATION_ID = 'solar-surplus-cool';
+export const SOLAR_SURPLUS_HEAT_AUTOMATION_ID = 'solar-surplus-heat';
+/** @deprecated kept for back-compat with any importers of the pre-split single id. */
+export const SOLAR_SURPLUS_AUTOMATION_ID = SOLAR_SURPLUS_COOL_AUTOMATION_ID;
 
 export interface ClimateGuardrails {
   setpointMinC: number;
@@ -626,17 +633,37 @@ export function defaultDevices(): DevicesState {
   };
 }
 
-/** The flagship automation, seeded disabled so it never acts until enabled + armed.
- *  One unified "solar climate" rule drives the HVAC fleet both ways on surplus:
- *  cool above 25→23°C, heat below 19→21°C. (The former Airzone pre-heat rule is gone —
- *  underfloor is no longer surplus-eligible.) */
+/** The two flagship solar-surplus automations — one per direction — seeded DISABLED so
+ *  neither acts until enabled + armed:
+ *   • Solar-surplus cooling — cool an enrolled HVAC when its room is warm > 25 → to 23°C.
+ *   • Solar-surplus heating — heat an enrolled HVAC when its room is cold < 19 → to 21°C.
+ *  (Airzone underfloor is excluded from both — it is no longer surplus-eligible.) Both
+ *  carry the full param shape so the migration of a legacy unified rule preserves every
+ *  target; each rule's coordinator only consults its own direction's fields. */
 export function defaultAutomations(): Automation[] {
   return [
     {
-      id: SOLAR_SURPLUS_AUTOMATION_ID,
-      name: 'Solar-surplus climate',
+      id: SOLAR_SURPLUS_COOL_AUTOMATION_ID,
+      name: 'Solar-surplus cooling',
       enabled: false,
       type: 'solar_surplus_precool',
+      params: {
+        roomTempLimitC: 25,
+        targetSetpointC: 23,
+        heatRoomFloorC: 19,
+        heatTargetSetpointC: 21,
+        surplusClearSec: 120,
+        bandRestrictionEnabled: true,
+        exitBand: 'P1',
+        startThresholdW: 800,
+      },
+      lastEval: null,
+    },
+    {
+      id: SOLAR_SURPLUS_HEAT_AUTOMATION_ID,
+      name: 'Solar-surplus heating',
+      enabled: false,
+      type: 'solar_surplus_preheat',
       params: {
         roomTempLimitC: 25,
         targetSetpointC: 23,
@@ -849,6 +876,45 @@ function sameRuleAsDefault(a: Automation, b: Automation): boolean {
   return a.id === b.id || a.type === b.type;
 }
 
+/** The old (pre-split) unified canonical id. A persisted rule under this id is the former
+ *  bidirectional "solar climate" automation and is migrated into the two split rules. */
+const LEGACY_UNIFIED_AUTOMATION_ID = 'solar-surplus-precool';
+
+/**
+ * MIGRATION (split): convert a legacy persisted UNIFIED solar-surplus rule — the old
+ * single `solar_surplus_precool` that drove BOTH directions — into the two new
+ * single-direction rules (cooling `solar-surplus-cool` + heating `solar-surplus-heat`),
+ * preserving the original `enabled` state and all four targets. A rule is treated as the
+ * legacy unified one iff it is a `solar_surplus_precool` carrying the old unified id
+ * (`solar-surplus-precool`); already-split installs (whose precool is `solar-surplus-cool`
+ * and/or already have a `solar_surplus_preheat`) are left untouched. Returns the input
+ * unchanged when there's nothing to migrate.
+ */
+function migrateSplitSurplus(persisted: Automation[]): Automation[] {
+  const hasPreheat = persisted.some((a) => a.type === 'solar_surplus_preheat');
+  const out: Automation[] = [];
+  for (const a of persisted) {
+    const isLegacyUnified =
+      a.type === 'solar_surplus_precool' && a.id === LEGACY_UNIFIED_AUTOMATION_ID && !hasPreheat;
+    if (!isLegacyUnified) {
+      out.push(a);
+      continue;
+    }
+    // Split: re-key the cooling half to the new canonical cool id, and add a heating half
+    // (same params + enabled state) so the prior bidirectional behaviour is preserved.
+    out.push({ ...a, id: SOLAR_SURPLUS_COOL_AUTOMATION_ID, name: 'Solar-surplus cooling', type: 'solar_surplus_precool' });
+    out.push({
+      ...a,
+      id: SOLAR_SURPLUS_HEAT_AUTOMATION_ID,
+      name: 'Solar-surplus heating',
+      type: 'solar_surplus_preheat',
+      params: { ...a.params },
+      lastEval: null,
+    });
+  }
+  return out;
+}
+
 /**
  * Reconcile persisted automations with the seeded defaults:
  *  1. DE-DUPE migration — collapse multiple instances of the same `type` (e.g. two
@@ -861,8 +927,16 @@ function sameRuleAsDefault(a: Automation, b: Automation): boolean {
  *     existing installs (seeded disabled, so a re-appearing card never acts on its own).
  */
 function mergeAutomations(raw: unknown, base: Automation[], dismissed: string[]): Automation[] {
-  const persisted = Array.isArray(raw) ? (raw as Automation[]) : [];
+  // 0. SPLIT migration — convert a legacy unified precool into the two split rules first,
+  //    so de-dupe/re-seed below see the post-split shape.
+  const persisted = migrateSplitSurplus(Array.isArray(raw) ? (raw as Automation[]) : []);
   const dismissedSet = new Set(dismissed);
+  // A dismissed LEGACY unified id suppresses BOTH split defaults — dismissing the old
+  // single card keeps the split pair gone too (don't resurrect it as two new cards).
+  if (dismissedSet.has(LEGACY_UNIFIED_AUTOMATION_ID)) {
+    dismissedSet.add(SOLAR_SURPLUS_COOL_AUTOMATION_ID);
+    dismissedSet.add(SOLAR_SURPLUS_HEAT_AUTOMATION_ID);
+  }
 
   // 1. De-dupe persisted instances by type. Within each type-group, prefer an enabled
   //    instance, then the canonical-default id, then the first seen.
