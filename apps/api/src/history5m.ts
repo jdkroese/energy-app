@@ -12,6 +12,15 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Portable module directory for BOTH the esbuild CJS bundle and tsx's ESM dev
+// runner — mirrors store.ts. In the CJS bundle `__dirname` is defined; under
+// tsx ESM it is undefined, so we fall back to import.meta.url. The `typeof`
+// guard keeps the import.meta branch dead in CJS (where esbuild empties it) and
+// avoids a ReferenceError on bare `__dirname` in ESM.
+const here =
+  typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
 
 // ---- Series ----------------------------------------------------------------
 
@@ -61,8 +70,8 @@ function historyPath(): string {
   // and doesn't exist there — writing it failed silently, losing all history.)
   if (process.env.STATE_FILE) return resolve(dirname(process.env.STATE_FILE), 'history-5m.json');
   if (process.env.NODE_ENV === 'production') return '/opt/energy/history-5m.json';
-  // repoRoot = two levels up from apps/api/src.
-  const repoRoot = resolve(__dirname, '..', '..', '..');
+  // repoRoot = three levels up from apps/api/src (or apps/api/dist).
+  const repoRoot = resolve(here, '..', '..', '..');
   return resolve(repoRoot, '.data', 'history-5m.json');
 }
 

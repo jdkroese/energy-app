@@ -10,7 +10,18 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Band } from './tariff';
+
+// Portable module directory for BOTH the esbuild CJS bundle and tsx's ESM dev
+// runner. In the CJS bundle `__dirname` is defined (points at apps/api/dist);
+// under tsx ESM it is undefined — which crashed dev state-path resolution — so
+// we fall back to import.meta.url (points at apps/api/src). esbuild empties
+// import.meta in CJS output, but the `typeof` guard keeps that branch dead
+// there (a bare `__dirname` would be a ReferenceError in ESM, so guard both).
+// Either source sits exactly three levels below the repo root.
+const here =
+  typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
 
 // ---- Types --------------------------------------------------------------
 
@@ -654,8 +665,8 @@ export function defaultAuth(): AuthState {
 function statePath(): string {
   if (process.env.STATE_FILE) return process.env.STATE_FILE;
   if (process.env.NODE_ENV === 'production') return '/opt/energy/state.json';
-  // repoRoot = two levels up from apps/api/src.
-  const repoRoot = resolve(__dirname, '..', '..', '..');
+  // repoRoot = three levels up from apps/api/src (or apps/api/dist).
+  const repoRoot = resolve(here, '..', '..', '..');
   return resolve(repoRoot, '.data', 'state.json');
 }
 
