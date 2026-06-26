@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { AppShell, type ShellContext } from './components/shell/AppShell';
 import { Live } from './screens/Live';
 import { Reports } from './screens/Reports';
-import { Alerts } from './screens/Alerts';
 import { Settings } from './screens/Settings';
 import { Scenarios } from './screens/Scenarios';
 import { Brain } from './screens/Brain';
@@ -40,7 +39,8 @@ function AppRoutes() {
         <Routes>
           <Route path="/" element={<Live ctx={ctx} />} />
           <Route path="/reports" element={<Reports ctx={ctx} />} />
-          <Route path="/alerts" element={<Alerts />} />
+          {/* /alerts removed — notifications live on Live; rules + channels in Settings */}
+          <Route path="/alerts" element={<Navigate to="/" replace />} />
           <Route path="/settings" element={<Settings ctx={ctx} />} />
           <Route path="/scenarios" element={<Scenarios />} />
           <Route path="/brain" element={<Brain ctx={ctx} />} />

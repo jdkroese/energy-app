@@ -8,6 +8,7 @@ import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
 import { TariffBand, DEFAULT_TARIFF_24 } from '../components/energy/TariffBand';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
+import { NotificationsWidget } from '../components/Notifications';
 import type { ShellContext } from '../components/shell/AppShell';
 
 const fmtKw = (kw: number) => (Math.abs(kw) >= 10 ? Math.abs(kw).toFixed(1) : Math.abs(kw).toFixed(1));
@@ -279,6 +280,9 @@ export function Live({ ctx }: { ctx: ShellContext }) {
           );
         })()}
 
+        {/* notifications */}
+        <NotificationsWidget />
+
         {/* day chart */}
         <DayChartCard height={190} subtitle="5-min · kW left · SoC % right" />
       </div>
@@ -386,6 +390,8 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         </Card>
         <InsightCard live={live} />
       </div>
+
+      <NotificationsWidget />
 
       <DayChartCard height={240} subtitle="5-min · kW left · SoC % right" />
     </div>

@@ -11,7 +11,6 @@ export const NAV: NavItem[] = [
   { to: '/reports', label: 'Reports', icon: 'chart-column' },
   { to: '/batteries', label: 'Batteries', icon: 'battery-charging' },
   { to: '/devices', label: 'Devices', icon: 'thermometer' },
-  { to: '/alerts', label: 'Alerts', icon: 'bell' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
 
@@ -29,7 +28,7 @@ export const NAV_MORE: NavItem[] = [
  * NAV + NAV_MORE so the mobile nav can never silently drop a page the desktop
  * rail exposes — add a destination once and it shows up in both.
  */
-const MOBILE_PRIMARY_PATHS = ['/', '/reports', '/batteries', '/alerts'];
+const MOBILE_PRIMARY_PATHS = ['/', '/reports', '/batteries', '/devices'];
 export const MOBILE_TABS: NavItem[] = MOBILE_PRIMARY_PATHS.map(
   (p) => NAV.find((n) => n.to === p)!,
 ).filter(Boolean);
