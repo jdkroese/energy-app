@@ -6,6 +6,7 @@ import * as intesis from '../connectors/intesis';
 import type { ClimateUnit } from '../connectors/intesis';
 import * as airzone from '../connectors/airzone';
 import * as store from '../store';
+import { defaultAutomations } from '../store';
 import type {
   Action,
   Automation,
@@ -26,9 +27,8 @@ import {
   markManualOverride,
   clearManualOverride,
   manualOverrideUntil,
-  setManualOn,
-  clearManualOn,
-  isManualOn,
+  dropSurplusStarted,
+  surplusOwns,
 } from '../control/climate-coordinator';
 import { bandFor } from '../tariff';
 import { checkRuleOverlap } from '../schedule-rules';
@@ -98,7 +98,10 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
     room: withPrefix(ds?.room ?? u.zone ?? u.name),
     automationEnabled: ds?.automationEnabled ?? false,
     manualOverrideUntil: manualOverrideUntil(u.id),
-    manualOn: isManualOn(u.id),
+    // Provenance-derived: a powered-on unit the surplus rule did NOT start (dashboard,
+    // physical remote, or schedule) is manual and shows the hand marker; a rule-started
+    // unit does not. Single source of truth = devices.surplusStartedIds.
+    manualOn: u.power === true && !surplusOwns(u.id),
     comfortCeilingC: ds?.comfortCeilingC ?? null,
     comfortFloorC: ds?.comfortFloorC ?? null,
     warmth: warmthOf(u.currentTempC),
@@ -207,13 +210,12 @@ export async function commandDevice(id: string, lever: ClimateLever, rawValue: u
   const result = await issueClimate(u, lever, value, 'manual command', snap, { manual: true });
   // Manual control wins: hold automation off this unit for a while.
   if (result.ok) {
-    markManualOverride(id);
-    // Sticky manual-ON ownership: a manual power ON makes the unit user-owned (the
-    // surplus rule won't auto-stop or retune it); a manual power OFF hands it back.
-    if (lever === 'power') {
-      if (value === true) setManualOn(id);
-      else clearManualOn(id);
-    }
+    markManualOverride(id); // also drops the unit from rule provenance
+    // Provenance is now the single source of truth for manual-vs-rule. Powering a unit
+    // ON by hand makes it manual automatically (on + not rule-started). On a manual
+    // power OFF, drop it from provenance so a later remote-on is correctly seen as
+    // manual rather than mistaken for a stale rule-started unit.
+    if (lever === 'power' && value === false) dropSurplusStarted(id);
   }
   return { ts: new Date().toISOString(), result };
 }
@@ -238,12 +240,10 @@ export async function bulkCommand(ids: string[], lever: ClimateLever, rawValue: 
     const r = await issueClimate(u, lever, value, 'bulk command', { ...snap, pendingImportKw }, { manual: true });
     results.push({ id, ok: r.ok, reason: r.reason });
     if (r.ok) {
-      markManualOverride(id); // manual control wins — hold automation off
-      // Sticky manual-ON ownership mirrors commandDevice (ON owns / OFF releases).
-      if (lever === 'power') {
-        if (value === true) setManualOn(id);
-        else clearManualOn(id);
-      }
+      markManualOverride(id); // manual control wins — also drops rule provenance
+      // Provenance mirrors commandDevice: ON-by-hand is manual automatically; on OFF,
+      // drop from provenance so a later remote-on reads as manual.
+      if (lever === 'power' && value === false) dropSurplusStarted(id);
     }
     if (lever === 'power' && value === true && r.ok && !u.power) pendingImportKw += 1.2;
   }
@@ -522,7 +522,19 @@ export function updateAutomation(id: string, body: Partial<Automation>): unknown
 
 export function deleteAutomation(id: string): unknown {
   store.update((st) => {
+    const removed = st.automations.find((x) => x.id === id);
     st.automations = st.automations.filter((x) => x.id !== id);
+    // If the deleted rule is a SEEDED DEFAULT (matched by canonical id, or by sharing a
+    // default's type so a relabeled/retargeted instance still counts), remember the
+    // dismissal so mergeAutomations never re-seeds it — deleting a default keeps it gone
+    // across restarts/deploys. Non-default user automations just delete as before.
+    if (removed) {
+      const defaults = defaultAutomations();
+      const matchedDefault = defaults.find((d) => d.id === id || d.type === removed.type);
+      if (matchedDefault && !st.dismissedDefaultAutomationIds.includes(matchedDefault.id)) {
+        st.dismissedDefaultAutomationIds.push(matchedDefault.id);
+      }
+    }
   });
   return { ts: new Date().toISOString(), ok: true };
 }
