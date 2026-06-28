@@ -506,9 +506,10 @@ function GenericGroup({ devices, wide, canWrite, onWrite, onOpen, emptyMeta }: {
   emptyMeta: { label: string; icon: string; hue: string };
 }) {
   if (devices.length === 0) return <ComingSoon meta={emptyMeta} />;
+  const sorted = [...devices].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   return (
     <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(2, 1fr)' : '1fr', gap: 10 }}>
-      {devices.map((d) => (
+      {sorted.map((d) => (
         <GenericDeviceCard
           key={d.id}
           d={d}
@@ -597,8 +598,8 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const writeCap = (id: string, dp: string, kind: Capability['kind'], value: unknown) =>
     api.devices.commandCap(id, dp, kind, value).finally(() => refetchConfigured());
 
-  const cooling = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'cooling');
-  const heating = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'heating');
+  const cooling = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'cooling').sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  const heating = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'heating').sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   const coolingNow = cooling.filter((x) => x.power && x.mode === 'cool').length;
   const warmest = cooling.reduce<number | null>((m, x) => (x.currentTempC != null && x.currentTempC > (m ?? -Infinity) ? x.currentTempC : m), null);
   const warmestHot = warmest != null && warmest >= 28;
