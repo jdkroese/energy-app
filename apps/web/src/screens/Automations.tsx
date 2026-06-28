@@ -13,6 +13,7 @@ import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '.
 import { AutomationRow } from '../components/AutomationRow';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { SchedulesPanel } from './Schedules';
+import { Autopilot, type TabKey as AutopilotTabKey } from './Autopilot';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import type { ReactNode } from 'react';
@@ -338,7 +339,7 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
         <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{preview}</div>
         {!ctrlArmedAuto && (
           <div style={{ fontSize: 11, color: 'var(--grid)', marginTop: 6 }}>
-            Acts only when <Link to="/brain" style={{ color: 'var(--battery)' }}>Autopilot</Link> is armed in Auto.
+            Acts only when <Link to="/automations?tab=settings" style={{ color: 'var(--battery)' }}>Autopilot</Link> is armed in Auto.
           </div>
         )}
       </div>
@@ -702,20 +703,26 @@ function SoakRuleCard({ rule, live, canWrite, onSave }: {
   );
 }
 
-type AutoTab = 'schedules' | 'rules';
+// Merged screen: Autopilot's tabs (Summary · Events · Status · Settings) + the two
+// Automations tabs (Schedules · Smart Rules), in the approved strip order below.
+type AutoTab = 'summary' | 'schedules' | 'rules' | 'events' | 'status' | 'settings';
+const AUTO_TABS: readonly AutoTab[] = ['summary', 'schedules', 'rules', 'events', 'status', 'settings'];
+// Tabs hosted by the embedded Autopilot — their keys line up 1:1 with its TabKey.
+const AUTOPILOT_TABS: readonly AutoTab[] = ['summary', 'events', 'status', 'settings'];
 
 export function Automations({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
   const canWrite = user?.role === 'admin';
   const wide = ctx.desktop;
   const [params, setParams] = useSearchParams();
-  // Selected tab persists in the URL (?tab=schedules / ?tab=rules) so deep-links
-  // and the /schedules → /automations?tab=schedules redirect land correctly.
-  const tab: AutoTab = params.get('tab') === 'schedules' ? 'schedules' : 'rules';
+  // Selected tab persists in the URL (?tab=…) so deep-links and the
+  // /schedules → ?tab=schedules and /brain → /automations redirects all land.
+  const paramTab = params.get('tab');
+  const tab: AutoTab = (AUTO_TABS as readonly string[]).includes(paramTab ?? '') ? (paramTab as AutoTab) : 'summary';
   const setTab = (next: AutoTab) => {
     setParams((prev) => {
       const p = new URLSearchParams(prev);
-      if (next === 'rules') p.delete('tab');
+      if (next === 'summary') p.delete('tab');
       else p.set('tab', next);
       return p;
     }, { replace: true });
@@ -763,7 +770,7 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--battery-wash)', border: '1px solid rgba(64,160,255,0.18)', borderRadius: 'var(--radius-md)', padding: '9px 13px' }}>
         <Icon name="info" size={15} color="var(--battery)" />
         <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
-          The Tesla is kept full for backup (the Sonnen has no backup mode). These rules run in the battery coordinator — <strong style={{ color: 'var(--text-1)' }}>Shadow</strong> only logs intended actions; flip to <strong style={{ color: 'var(--text-1)' }}>Auto</strong> and arm <Link to="/brain" style={{ color: 'var(--battery)' }}>Autopilot</Link> (Auto) to let them act.
+          The Tesla is kept full for backup (the Sonnen has no backup mode). These rules run in the battery coordinator — <strong style={{ color: 'var(--text-1)' }}>Shadow</strong> only logs intended actions; flip to <strong style={{ color: 'var(--text-1)' }}>Auto</strong> and arm <Link to="/automations?tab=settings" style={{ color: 'var(--battery)' }}>Autopilot</Link> (Auto) to let them act.
         </span>
       </div>
       {bp
@@ -797,27 +804,47 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  // Two-tab switcher: Schedules (time-based windows) and Smart Rules (the rule
-  // cards above). Selection is persisted in the URL (?tab=…).
-  const tabBar = (
-    <SegmentedControl
-      block
-      options={[
-        { value: 'schedules', label: 'Schedules' },
-        { value: 'rules', label: 'Smart Rules' },
-      ]}
-      value={tab}
-      onChange={(v) => setTab(v as AutoTab)}
-    />
+  // Six-tab switcher in the approved order: Summary · Schedules · Smart Rules ·
+  // Events · Status · Settings. Selection is persisted in the URL (?tab=…).
+  // Six segments are too many to sit comfortably in one block row at ~360px, so on
+  // mobile we split into two stacked rows of three; desktop keeps the single block.
+  const tabOptions: { value: AutoTab; label: string }[] = [
+    { value: 'summary', label: 'Summary' },
+    { value: 'schedules', label: 'Schedules' },
+    { value: 'rules', label: 'Smart Rules' },
+    { value: 'events', label: 'Events' },
+    { value: 'status', label: 'Status' },
+    { value: 'settings', label: 'Settings' },
+  ];
+  const tabBar = wide ? (
+    <SegmentedControl block options={tabOptions} value={tab} onChange={(v) => setTab(v as AutoTab)} />
+  ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <SegmentedControl block options={tabOptions.slice(0, 3)} value={tab} onChange={(v) => setTab(v as AutoTab)} />
+      <SegmentedControl block options={tabOptions.slice(3)} value={tab} onChange={(v) => setTab(v as AutoTab)} />
+    </div>
+  );
+
+  // One uniform width for the WHOLE screen — header, the 6-tab strip, and every
+  // panel share the same edges. The embedded Autopilot fills this host (its own
+  // 1100 wrapper is dropped when embedded), and Schedules / Smart Rules fill it too.
+  const panel = AUTOPILOT_TABS.includes(tab) ? (
+    <Autopilot ctx={ctx} embedded tab={tab as AutopilotTabKey} />
+  ) : tab === 'schedules' ? (
+    <SchedulesPanel ctx={ctx} />
+  ) : (
+    list
   );
 
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {tabBar}
-      {tab === 'schedules' ? <SchedulesPanel ctx={ctx} /> : list}
+      {panel}
     </div>
   );
 
-  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760, margin: '0 auto', width: '100%' }}><div><Eyebrow>Power</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Automations</h1></div>{body}</div>;
+  // Shared desktop max-width — wide enough for Summary's plan timeline + 5-KPI row,
+  // tight enough that the rules/schedules cards don't sprawl. ~960px reads well for both.
+  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 960, margin: '0 auto', width: '100%' }}><div><Eyebrow>Power</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Automations</h1></div>{body}</div>;
   return (<><MobileHeader eyebrow="Power" title="Automations" right={<Avatar />} /><div style={{ padding: '8px 14px 22px' }}>{body}</div></>);
 }

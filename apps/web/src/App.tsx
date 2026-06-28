@@ -4,7 +4,6 @@ import { Live } from './screens/Live';
 import { Reports } from './screens/Reports';
 import { Settings } from './screens/Settings';
 import { Scenarios } from './screens/Scenarios';
-import { Brain } from './screens/Brain';
 import { Batteries } from './screens/Batteries';
 import { BatteryDetail } from './screens/BatteryDetail';
 import { Devices } from './screens/Devices';
@@ -43,7 +42,8 @@ function AppRoutes() {
           <Route path="/alerts" element={<Navigate to="/" replace />} />
           <Route path="/settings" element={<Settings ctx={ctx} />} />
           <Route path="/scenarios" element={<Scenarios />} />
-          <Route path="/brain" element={<Brain ctx={ctx} />} />
+          {/* Autopilot folded into Automations — /brain redirects to the merged screen. */}
+          <Route path="/brain" element={<Navigate to="/automations" replace />} />
           <Route path="/batteries" element={<Batteries ctx={ctx} />} />
           <Route path="/batteries/:id" element={<BatteryDetail ctx={ctx} />} />
           <Route path="/devices" element={<Devices ctx={ctx} />} />
