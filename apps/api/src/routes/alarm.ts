@@ -95,6 +95,9 @@ export function setAlarmConfig(body: unknown): unknown {
       lightIds: b.lightIds !== undefined ? strArr(b.lightIds, cur.lightIds) : cur.lightIds,
       blinkMs: typeof b.blinkMs === 'number' ? Math.max(store.ALARM_BLINK_FLOOR_MS, Math.round(b.blinkMs)) : cur.blinkMs,
       autoStopSec: typeof b.autoStopSec === 'number' && b.autoStopSec >= 0 ? Math.round(b.autoStopSec) : cur.autoStopSec,
+      // Preserve the one-time volume-bump migration flag (and treat any owner save as
+      // past the migration) so saving config can never re-arm the 70→80 bump.
+      volumeBumpedTo80: true,
     };
     return s.alarmConfig;
   });
