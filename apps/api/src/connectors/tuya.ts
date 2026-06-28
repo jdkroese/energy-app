@@ -273,7 +273,7 @@ export function getSpecifications(id: string): Promise<TuyaSpec> {
 export const CATEGORY_LABELS: Record<string, string> = {
   // Lights
   dj: 'Lights', dd: 'Light strips', dc: 'Light strings', fwd: 'Ambiance lights',
-  xdd: 'Ceiling lights', fsd: 'Fan lights', tgq: 'Dimmers', tyndj: 'Solar lights',
+  xdd: 'Ceiling lights', fsd: 'Fan lights', tgq: 'Dimmers', tgkg: 'Dimmer switches', tyndj: 'Solar lights',
   // Switches / sockets / breakers
   kg: 'Switches', cz: 'Sockets', pc: 'Power strips', tdq: 'Breakers', wkcz: 'Sockets',
   // Covers
@@ -306,6 +306,7 @@ const CATEGORY_TYPES: Record<string, ProposedType> = {
   fwd: { label: 'Light', icon: 'lightbulb' },
   xdd: { label: 'Light', icon: 'lightbulb' },
   tgq: { label: 'Dimmer', icon: 'lightbulb' },
+  tgkg: { label: 'Dimmer', icon: 'lightbulb' },
   tyndj: { label: 'Light', icon: 'lightbulb' },
   fsd: { label: 'Fan light', icon: 'fan' },
   // Blinds / curtains
