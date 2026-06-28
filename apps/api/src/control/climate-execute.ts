@@ -26,6 +26,9 @@ export type { ClimateLever } from './climate-guardrails';
 const RATE_LIMIT_MS = 30_000;
 const lastWriteAt = new Map<string, number>();
 
+/** Detail string stamped on a no-op (value already in place). Used to coalesce/identify them. */
+export const NOOP_DETAIL = 'unchanged — no write';
+
 export interface ClimateIssueResult {
   ok: boolean;
   skipped: boolean;
@@ -78,7 +81,17 @@ function noop(
   value: string | number,
   reason = 'unchanged',
 ): ClimateIssueResult {
-  logEntry(deviceId, lever, value, value, reason, true, 'unchanged — no write');
+  // Keep only the LATEST no-op per device+lever so steady-state ticks don't flood the 100-entry
+  // ring and evict real writes/errors. See execute.ts noop() for the full rationale. updatedAt
+  // still advances so the device heartbeat keeps ticking.
+  store.update((s) => {
+    s.devices.log = s.devices.log.filter(
+      (e) => !(e.deviceId === deviceId && e.lever === lever && e.detail === NOOP_DETAIL),
+    );
+    s.devices.log.push({ ts: Date.now(), deviceId, lever, from: value, to: value, reason, ok: true, detail: NOOP_DETAIL });
+    if (s.devices.log.length > 100) s.devices.log = s.devices.log.slice(-100);
+    s.devices.updatedAt = Date.now();
+  });
   return { ok: true, skipped: true, reason, from: value, to: value };
 }
 
