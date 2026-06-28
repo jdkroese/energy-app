@@ -74,3 +74,25 @@ export function secondaryCapabilities(caps: Capability[]): Capability[] {
   const primary = new Set(primaryCapabilities(caps));
   return caps.filter((c) => !primary.has(c));
 }
+
+/**
+ * The power on/off switch for a device: a primary-power switch DP if present, else
+ * the first switch cap, else null. Mirrors the server's powerCapOf so the breaker
+ * card drives the same DP the scheduler does.
+ */
+export function powerCap(caps: Capability[]): Capability | null {
+  return (
+    caps.find((c) => c.kind === 'switch' && PRIMARY_SWITCH_DPS.has(c.dp)) ??
+    caps.find((c) => c.kind === 'switch') ??
+    null
+  );
+}
+
+/**
+ * The first measure capability whose dp (lowercased) contains `needle` —
+ * e.g. findMeasure(caps, 'current') → cur_current, findMeasure(caps, 'voltage') → cur_voltage.
+ */
+export function findMeasure(caps: Capability[], needle: string): Capability | null {
+  const n = needle.toLowerCase();
+  return caps.find((c) => c.kind === 'measure' && c.dp.toLowerCase().includes(n)) ?? null;
+}

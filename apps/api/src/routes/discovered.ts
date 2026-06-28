@@ -156,6 +156,21 @@ export async function setupDevice(id: string, body: unknown): Promise<unknown> {
   return { ts: new Date().toISOString(), id: deviceId, configured };
 }
 
+/** PUT /api/devices/:id/name — rename a configured (set-up) device in place. */
+export function renameConfiguredDevice(id: string, body: unknown): unknown {
+  const deviceId = String(id ?? '').trim();
+  if (!deviceId) throw badInput('device id required');
+  const name = String(((body ?? {}) as { name?: unknown }).name ?? '').trim();
+  if (!name) throw badInput('name required');
+  let found = false;
+  store.update((s) => {
+    const c = s.deviceOnboarding.configured[deviceId];
+    if (c) { c.name = name; found = true; }
+  });
+  if (!found) throw badInput(`device ${deviceId} is not set up`);
+  return { ts: new Date().toISOString(), id: deviceId, name };
+}
+
 /** POST /api/devices/:id/unsetup — return a configured device to the inbox (re-classify). */
 export function unsetupDevice(id: string): unknown {
   const deviceId = String(id ?? '').trim();

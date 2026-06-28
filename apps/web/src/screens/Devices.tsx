@@ -6,14 +6,15 @@ import type {
   DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse, SpeakersResponse,
   ConfiguredResponse, ConfiguredDeviceView, Capability,
 } from '../lib/types';
-import { Card, Icon } from '../components/ui';
+import { Card, Icon, Switch, Button } from '../components/ui';
+import { Gauge } from '../components/Gauge';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { DEVICE_TYPES, classifyDevice, resolveTypeMeta, type DeviceType } from '../lib/deviceTypes';
 import { AutomationRow } from '../components/AutomationRow';
 import { GenericControl } from '../components/GenericControl';
-import { primaryCapabilities } from '../lib/capabilities';
+import { primaryCapabilities, powerCap, findMeasure } from '../lib/capabilities';
 import { LightsPanel } from './Lights';
 import { BlindsPanel } from './Blinds';
 import { SpeakersPanel } from './Speakers';
@@ -499,27 +500,159 @@ function GenericDeviceCard({ d, wide, canWrite, onWrite, onOpen }: {
   );
 }
 
+/** A clean card for one configured circuit breaker / switch: inline-editable name,
+ *  one On/Off switch, two live gauges (Current + Voltage) and a Schedule shortcut.
+ *  The full datapoint list stays on the detail page. */
+function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, onRenamed }: {
+  d: ConfiguredDeviceView; wide: boolean; canWrite: boolean;
+  onWrite: (dp: string, kind: Capability['kind'], value: unknown) => Promise<unknown> | void;
+  onOpen: () => void;
+  onSchedule: () => void;
+  onRenamed: () => void;
+}) {
+  void wide;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(d.name);
+  const [saving, setSaving] = useState(false);
+
+  const sw = powerCap(d.capabilities);
+  const cur = findMeasure(d.capabilities, 'current');
+  const volt = findMeasure(d.capabilities, 'voltage');
+  const on = sw ? Boolean(d.values[sw.dp]) : false;
+
+  const startEdit = () => { setDraft(d.name); setEditing(true); };
+  const save = async () => {
+    const name = draft.trim();
+    if (!name || name === d.name) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      await api.devices.rename(d.id, name);
+      onRenamed();
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const numFrom = (dp?: string): number | null => {
+    if (!dp) return null;
+    const v = d.values[dp];
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
+
+  return (
+    <Card padded style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Header: name (inline-editable for admins) + chevron to detail */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {editing ? (
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') setEditing(false); }}
+              disabled={saving}
+              style={{
+                flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-1)',
+                background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 8,
+                padding: '5px 8px', outline: 'none',
+              }}
+            />
+            <button type="button" aria-label="Save name" onClick={() => void save()} disabled={saving}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>
+              <Icon name="check" size={16} color="var(--solar)" />
+            </button>
+            <button type="button" aria-label="Cancel rename" onClick={() => setEditing(false)} disabled={saving}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>
+              <Icon name="x" size={16} color="var(--text-3)" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <button type="button" onClick={onOpen} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
+              <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 1 }}>
+                Tuya · {d.category || '?'}{!d.online ? ' · offline' : ''}
+              </div>
+            </button>
+            {canWrite && (
+              <button type="button" aria-label="Rename" onClick={startEdit} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2 }}>
+                <Icon name="pencil" size={15} color="var(--text-3)" />
+              </button>
+            )}
+            <button type="button" onClick={onOpen} aria-label="Open detail" style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2 }}>
+              <Icon name="chevron-right" size={16} color="var(--text-3)" />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* On/Off row */}
+      {sw && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Power</span>
+          <Switch
+            checked={on}
+            disabled={!canWrite}
+            onChange={(e) => onWrite(sw.dp, 'switch', e.target.checked)}
+          />
+        </div>
+      )}
+
+      {/* Gauges row — Current + Voltage */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, placeItems: 'center' }}>
+        <Gauge label="Current" value={numFrom(cur?.dp)} unit={cur?.unit ?? 'mA'} accent="var(--ev)" nominalFloor={1000} size={124} />
+        <Gauge label="Voltage" value={numFrom(volt?.dp)} unit={volt?.unit ?? 'V'} accent="var(--grid)" nominalFloor={250} size={124} />
+      </div>
+
+      {/* Footer — Schedule shortcut */}
+      <div>
+        <Button size="sm" variant="secondary" onClick={onSchedule} iconLeft={<Icon name="calendar-clock" size={14} />}>
+          Schedule
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 /** The content for a type tab populated by configured generic devices (Switching /
  *  custom / any type a set-up device landed in). */
-function GenericGroup({ devices, wide, canWrite, onWrite, onOpen, emptyMeta }: {
+function GenericGroup({ devices, wide, canWrite, onWrite, onOpen, emptyMeta, breaker, onSchedule, onRenamed }: {
   devices: ConfiguredDeviceView[]; wide: boolean; canWrite: boolean;
   onWrite: (id: string, dp: string, kind: Capability['kind'], value: unknown) => Promise<unknown> | void;
   onOpen: (id: string) => void;
   emptyMeta: { label: string; icon: string; hue: string };
+  /** Render the clean CircuitBreakerCard instead of the generic card (Switching tab). */
+  breaker?: boolean;
+  onSchedule?: (id: string) => void;
+  onRenamed?: () => void;
 }) {
   if (devices.length === 0) return <ComingSoon meta={emptyMeta} />;
   const sorted = [...devices].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   return (
     <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(2, 1fr)' : '1fr', gap: 10 }}>
       {sorted.map((d) => (
-        <GenericDeviceCard
-          key={d.id}
-          d={d}
-          wide={wide}
-          canWrite={canWrite}
-          onWrite={(dp, kind, value) => onWrite(d.id, dp, kind, value)}
-          onOpen={() => onOpen(d.id)}
-        />
+        breaker ? (
+          <CircuitBreakerCard
+            key={d.id}
+            d={d}
+            wide={wide}
+            canWrite={canWrite}
+            onWrite={(dp, kind, value) => onWrite(d.id, dp, kind, value)}
+            onOpen={() => onOpen(d.id)}
+            onSchedule={() => onSchedule?.(d.id)}
+            onRenamed={() => onRenamed?.()}
+          />
+        ) : (
+          <GenericDeviceCard
+            key={d.id}
+            d={d}
+            wide={wide}
+            canWrite={canWrite}
+            onWrite={(dp, kind, value) => onWrite(d.id, dp, kind, value)}
+            onOpen={() => onOpen(d.id)}
+          />
+        )
       ))}
     </div>
   );
@@ -800,6 +933,9 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
         onWrite={writeCap}
         onOpen={(id) => nav(`/devices/generic/${id}`)}
         emptyMeta={{ label: meta.label, icon: meta.icon, hue: meta.hue }}
+        breaker={t === 'switching'}
+        onSchedule={(id) => nav(`/automations?tab=schedules&new=${id}`)}
+        onRenamed={refetchConfigured}
       />
     );
   };

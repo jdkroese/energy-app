@@ -33,6 +33,22 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
   const { data: schedData, refetch: refetchSchedules } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const [reclassify, setReclassify] = useState(false);
   const [editingRule, setEditingRule] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [savingName, setSavingName] = useState(false);
+
+  const saveName = async (deviceId: string, current: string) => {
+    const name = nameDraft.trim();
+    if (!name || name === current) { setEditingName(false); return; }
+    setSavingName(true);
+    try {
+      await api.devices.rename(deviceId, name);
+      refetch();
+      setEditingName(false);
+    } finally {
+      setSavingName(false);
+    }
+  };
 
   const device = data?.devices.find((x) => x.id === id) ?? null;
   const customTypes = data?.customDeviceTypes ?? [];
@@ -80,7 +96,36 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
                 <Icon name={meta.icon} size={21} />
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text-1)' }}>{device.name}</div>
+                {editingName ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input
+                      autoFocus
+                      value={nameDraft}
+                      onChange={(e) => setNameDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void saveName(device.id, device.name); if (e.key === 'Escape') setEditingName(false); }}
+                      disabled={savingName}
+                      style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: 600, color: 'var(--text-1)', background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 8, padding: '5px 8px', outline: 'none' }}
+                    />
+                    <button type="button" aria-label="Save name" onClick={() => void saveName(device.id, device.name)} disabled={savingName}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>
+                      <Icon name="check" size={17} color="var(--solar)" />
+                    </button>
+                    <button type="button" aria-label="Cancel rename" onClick={() => setEditingName(false)} disabled={savingName}
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>
+                      <Icon name="x" size={17} color="var(--text-3)" />
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{device.name}</div>
+                    {isAdmin && (
+                      <button type="button" aria-label="Rename" onClick={() => { setNameDraft(device.name); setEditingName(true); }}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, flex: 'none' }}>
+                        <Icon name="pencil" size={14} color="var(--text-3)" />
+                      </button>
+                    )}
+                  </div>
+                )}
                 <div className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>
                   {meta.label} · Tuya · {device.category || '?'}{!device.online ? ' · offline' : ''}
                 </div>
