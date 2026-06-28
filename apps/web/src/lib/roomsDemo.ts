@@ -38,7 +38,9 @@ export function roomsDemoResponse(): RoomsResponse {
   const counts: Record<string, number> = { 'r-living': 3, 'r-kitchen': 2, 'r-bedroom': 1 };
   return {
     ts: new Date().toISOString(),
-    rooms: ROOMS.map((r) => ({ ...r, deviceCount: counts[r.id] ?? 0 })),
+    // Always alphabetical by name, matching the live API's room ordering.
+    rooms: ROOMS.map((r) => ({ ...r, deviceCount: counts[r.id] ?? 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })),
     unassignedCount: 2,
     deviceCount: 8,
     fleetError: null,

@@ -12,7 +12,7 @@ import { roomsListFetcher } from '../lib/roomsDemo';
 import { RoomPicker } from '../components/RoomPicker';
 
 /* ============================================================================
- * Manage rooms — create / rename / reorder / delete rooms (+ icon pick), plus a
+ * Manage rooms — create / rename / delete rooms (+ icon pick), plus a
  * quick-bin "Unassigned" list with one-tap "Assign to…" per device. Reachable from
  * Settings → Rooms AND the "Manage" affordance on the By-room lens. Both viewports.
  * ==========================================================================*/
@@ -50,9 +50,10 @@ function IconPicker({ value, onPick }: { value: string; onPick: (icon: string) =
   );
 }
 
-/** One editable room row: icon, (inline-editable) name, up/down reorder, delete. */
-function RoomRow({ room, first, last, canEdit, onMove, onChanged }: {
-  room: RoomWithCount; first: boolean; last: boolean; canEdit: boolean; onMove: (dir: -1 | 1) => void; onChanged: () => void;
+/** One editable room row: icon, (inline-editable) name, delete. Rooms always render
+ *  alphabetically, so there's no manual reorder. */
+function RoomRow({ room, first, canEdit, onChanged }: {
+  room: RoomWithCount; first: boolean; canEdit: boolean; onChanged: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(room.name);
@@ -60,11 +61,10 @@ function RoomRow({ room, first, last, canEdit, onMove, onChanged }: {
   const [confirmDel, setConfirmDel] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const save = (patch: { name?: string; icon?: string; order?: number }) => {
+  const save = (patch: { name?: string; icon?: string }) => {
     setBusy(true);
     void api.rooms.update(room.id, patch).then(onChanged).finally(() => setBusy(false));
   };
-  const move = (dir: -1 | 1) => onMove(dir);
   const del = () => { setBusy(true); void api.rooms.remove(room.id).then(onChanged).finally(() => setBusy(false)); };
 
   return (
@@ -91,8 +91,6 @@ function RoomRow({ room, first, last, canEdit, onMove, onChanged }: {
 
         {canEdit && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, opacity: busy ? 0.5 : 1 }}>
-            <button type="button" aria-label="Move up" disabled={first} onClick={() => move(-1)} style={iconBtn(first)}><Icon name="chevron-up" size={16} /></button>
-            <button type="button" aria-label="Move down" disabled={last} onClick={() => move(1)} style={iconBtn(last)}><Icon name="chevron-down" size={16} /></button>
             {confirmDel ? (
               <span style={{ display: 'inline-flex', gap: 4 }}>
                 <button type="button" aria-label="Confirm delete" onClick={del} style={{ ...iconBtn(false), border: '1px solid var(--danger)', color: 'var(--danger)' }}><Icon name="check" size={16} /></button>
@@ -159,17 +157,6 @@ export function RoomsManage({ ctx }: { ctx: ShellContext }) {
 
   const onChanged = () => { refetch(); refetchDevices(); };
 
-  // Reorder by swapping the `order` value with the adjacent room, then refetch.
-  const moveRoom = (idx: number, dir: -1 | 1) => {
-    const a = rooms[idx];
-    const b = rooms[idx + dir];
-    if (!a || !b) return;
-    void Promise.all([
-      api.rooms.update(a.id, { order: b.order }),
-      api.rooms.update(b.id, { order: a.order }),
-    ]).then(onChanged);
-  };
-
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
@@ -183,7 +170,7 @@ export function RoomsManage({ ctx }: { ctx: ShellContext }) {
           </div>
         ) : (
           rooms.map((r, i) => (
-            <RoomRow key={r.id} room={r} first={i === 0} last={i === rooms.length - 1} canEdit={isAdmin} onMove={(dir) => moveRoom(i, dir)} onChanged={onChanged} />
+            <RoomRow key={r.id} room={r} first={i === 0} canEdit={isAdmin} onChanged={onChanged} />
           ))
         )}
       </Card>

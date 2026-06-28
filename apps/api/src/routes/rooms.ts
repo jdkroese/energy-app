@@ -31,9 +31,11 @@ function newId(): string {
   return `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-/** Rooms in display order (by `order`, then name). */
+/** Rooms in display order — always alphabetical by name (numeric-aware, case-insensitive),
+ *  matching how every other device list in the app is ordered. */
 function orderedRooms(): Room[] {
-  return Object.values(store.get().rooms).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  return Object.values(store.get().rooms).sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
 /**
