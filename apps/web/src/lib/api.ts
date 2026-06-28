@@ -23,6 +23,7 @@ import type {
   DeviceDetailResponse,
   DevicesResponse,
   DevicesStatus,
+  DiscoveredResponse,
   HistoryDayResponse,
   HistoryResponse,
   IntegrationsConfig,
@@ -194,6 +195,11 @@ export const api = {
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
     release: (id: string) =>
       postJSON<{ ts: string; id: string; released: boolean }>(`/api/devices/${enc(id)}/release`, {}),
+
+    // Onboarding inbox — discovered (not-yet-set-up) Tuya devices + triage (admin writes).
+    discovered: () => getJSON<DiscoveredResponse>('/api/devices/discovered'),
+    ignore: (id: string) => postJSON<{ ts: string; id: string; ignored: boolean }>(`/api/devices/${enc(id)}/ignore`, {}),
+    keep: (id: string) => postJSON<{ ts: string; id: string; ignored: boolean }>(`/api/devices/${enc(id)}/keep`, {}),
   },
 
   /* ---- Lights (Tuya); command/bulk are admin ---- */

@@ -93,6 +93,7 @@ import {
 import { startLightCoordinator } from './control/light-coordinator';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
+import { getDiscovered, ignoreDiscovered, keepDiscovered } from './routes/discovered';
 import type { BlindLever } from './connectors/tuya-blinds';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
@@ -253,6 +254,11 @@ app.put(
 // ---- Devices / Climate (REAL device writes; reads are any-authed) ----
 app.get('/api/devices', wrap(() => getDevices()));
 app.get('/api/devices/status', wrap(() => getDevicesStatus()));
+// Onboarding inbox: discovered (not-yet-set-up) Tuya devices + triage. Registered
+// BEFORE /api/devices/:id so the literal path isn't captured as an :id.
+app.get('/api/devices/discovered', wrap(() => getDiscovered()));
+app.post('/api/devices/:id/ignore', requireAdmin, wrap((req) => ignoreDiscovered(String(req.params.id))));
+app.post('/api/devices/:id/keep', requireAdmin, wrap((req) => keepDiscovered(String(req.params.id))));
 app.get('/api/devices/:id', wrap((req) => getDevice(String(req.params.id))));
 app.post(
   '/api/devices/arm',
