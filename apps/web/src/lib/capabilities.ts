@@ -22,12 +22,15 @@ function isPrimarySwitch(c: Capability): boolean {
   return c.kind === 'switch' && PRIMARY_SWITCH_DPS.has(c.dp);
 }
 
-/** DPs that count as a power ON/OFF switch for scheduling (light is power-like too). */
-const POWER_SWITCH_DPS = PRIMARY_SWITCH_DPS;
-
-/** Does this device have a power on/off switch (so it's schedulable as a circuit)? */
+/**
+ * Does this device have a power on/off switch (so it's schedulable as a circuit)?
+ * ANY controllable (writable) switch capability qualifies — a relay/plug whose
+ * on/off DP is non-standard (not in the curated primary set) must NOT be excluded
+ * from scheduling. The schedule coordinator's `powerCapOf` still PREFERS a curated
+ * primary-power DP and falls back to the first switch, so the right lever is driven.
+ */
 export function hasPowerSwitch(caps: Capability[]): boolean {
-  return caps.some((c) => c.kind === 'switch' && POWER_SWITCH_DPS.has(c.dp));
+  return caps.some((c) => c.kind === 'switch' && !c.readOnly);
 }
 
 /** Is this capability a main LEVEL range (fan speed / brightness / position / dimmer)? */
