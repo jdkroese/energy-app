@@ -45,7 +45,8 @@ interface SeriesDef {
     | 'sonnenSoc'
     | 'teslaSoc';
   label: string;
-  color: string;
+  /** CSS custom property (without var()) that holds this series' colour. */
+  colorVar: string;
   axis: 'power' | 'soc';
   kind: 'area' | 'line';
   dash?: boolean;
@@ -53,23 +54,49 @@ interface SeriesDef {
 }
 
 const SERIES: SeriesDef[] = [
-  { key: 'production', field: 'solarKw', label: 'Production', color: '#2ee6a0', axis: 'power', kind: 'area', defaultOn: true },
-  { key: 'consumption', field: 'homeKw', label: 'Consumption', color: '#c4a6ff', axis: 'power', kind: 'line', defaultOn: true },
-  { key: 'charge', field: 'chargeKw', label: 'Charging', color: '#38d9f5', axis: 'power', kind: 'line', defaultOn: true },
-  { key: 'discharge', field: 'dischargeKw', label: 'Discharging', color: '#f5736b', axis: 'power', kind: 'line', defaultOn: false },
-  { key: 'gridExport', field: 'gridExportKw', label: 'Grid feed-in', color: '#f5a524', axis: 'power', kind: 'line', defaultOn: false },
-  { key: 'gridImport', field: 'gridImportKw', label: 'Grid buy', color: '#ff6b8a', axis: 'power', kind: 'line', defaultOn: false },
-  { key: 'socCombined', field: 'combinedSoc', label: 'SoC · combined', color: '#2dd4bf', axis: 'soc', kind: 'line', defaultOn: true },
-  { key: 'socSonnen', field: 'sonnenSoc', label: 'SoC · Sonnen', color: '#8bd450', axis: 'soc', kind: 'line', dash: true, defaultOn: false },
-  { key: 'socTesla', field: 'teslaSoc', label: 'SoC · Tesla', color: '#5ac8fa', axis: 'soc', kind: 'line', dash: true, defaultOn: false },
+  { key: 'production', field: 'solarKw', label: 'Production', colorVar: '--series-production', axis: 'power', kind: 'area', defaultOn: true },
+  { key: 'consumption', field: 'homeKw', label: 'Consumption', colorVar: '--series-consumption', axis: 'power', kind: 'line', defaultOn: true },
+  { key: 'charge', field: 'chargeKw', label: 'Charging', colorVar: '--series-charge', axis: 'power', kind: 'line', defaultOn: true },
+  { key: 'discharge', field: 'dischargeKw', label: 'Discharging', colorVar: '--series-discharge', axis: 'power', kind: 'line', defaultOn: false },
+  { key: 'gridExport', field: 'gridExportKw', label: 'Grid feed-in', colorVar: '--series-grid-export', axis: 'power', kind: 'line', defaultOn: false },
+  { key: 'gridImport', field: 'gridImportKw', label: 'Grid buy', colorVar: '--series-grid-import', axis: 'power', kind: 'line', defaultOn: false },
+  { key: 'socCombined', field: 'combinedSoc', label: 'SoC · combined', colorVar: '--series-soc-combined', axis: 'soc', kind: 'line', defaultOn: true },
+  { key: 'socSonnen', field: 'sonnenSoc', label: 'SoC · Sonnen', colorVar: '--series-soc-sonnen', axis: 'soc', kind: 'line', dash: true, defaultOn: false },
+  { key: 'socTesla', field: 'teslaSoc', label: 'SoC · Tesla', colorVar: '--series-soc-tesla', axis: 'soc', kind: 'line', dash: true, defaultOn: false },
 ];
 
-const BAND_COLOR: Record<string, string> = {
-  P1: '#f5a524',
-  P2: '#5f7672',
-  P3: '#2ee6a0',
+const BAND_VAR: Record<string, string> = {
+  P1: '--band-p1',
+  P2: '--band-p2',
+  P3: '--band-p3',
 };
 const BAND_LABEL: Record<string, string> = { P1: 'peak', P2: 'shoulder', P3: 'valley' };
+
+/* Series/band colours live as CSS vars (so a future light theme can override
+ * them). SVG needs concrete values, so resolve the tokens to hex via
+ * getComputedStyle. Fallbacks keep dark-theme output identical if a var is
+ * missing (e.g. during SSR/first paint). */
+const COLOR_FALLBACK: Record<string, string> = {
+  '--series-production': '#2ee6a0',
+  '--series-consumption': '#c4a6ff',
+  '--series-charge': '#38d9f5',
+  '--series-discharge': '#f5736b',
+  '--series-grid-export': '#f5a524',
+  '--series-grid-import': '#ff6b8a',
+  '--series-soc-combined': '#2dd4bf',
+  '--series-soc-sonnen': '#8bd450',
+  '--series-soc-tesla': '#5ac8fa',
+  '--band-p1': '#f5a524',
+  '--band-p2': '#5f7672',
+  '--band-p3': '#2ee6a0',
+};
+
+function resolveToken(name: string): string {
+  const fallback = COLOR_FALLBACK[name] ?? '#5f7672';
+  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -108,6 +135,23 @@ export function DayChart({
 }) {
   const uid = 'd' + useId().replace(/:/g, '');
   const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // Resolve series/band CSS tokens to concrete colours for the SVG. Memoized;
+  // a future theme switch can bump a key here to re-read on theme change.
+  const colorOf = useMemo(() => {
+    const m = new Map<SeriesKey, string>();
+    for (const s of SERIES) m.set(s.key, resolveToken(s.colorVar));
+    return m;
+  }, []);
+  const bandColor = useMemo(
+    () => ({
+      P1: resolveToken(BAND_VAR.P1),
+      P2: resolveToken(BAND_VAR.P2),
+      P3: resolveToken(BAND_VAR.P3),
+    } as Record<string, string>),
+    [],
+  );
+  const productionColor = colorOf.get('production') ?? COLOR_FALLBACK['--series-production'];
 
   const [hidden, setHidden] = useState<Set<SeriesKey>>(
     () => new Set(SERIES.filter((s) => !s.defaultOn).map((s) => s.key)),
@@ -251,7 +295,7 @@ export function DayChart({
             return {
               key: s.key,
               label: s.label,
-              color: s.color,
+              color: colorOf.get(s.key) ?? COLOR_FALLBACK[s.colorVar],
               text: s.axis === 'soc' ? `${Math.round(v)}%` : `${v.toFixed(2)} kW`,
             };
           })
@@ -290,6 +334,7 @@ export function DayChart({
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 12 }}>
         {SERIES.map((s) => {
           const off = hidden.has(s.key);
+          const c = colorOf.get(s.key) ?? COLOR_FALLBACK[s.colorVar];
           return (
             <button
               key={s.key}
@@ -307,9 +352,9 @@ export function DayChart({
                   borderRadius: s.kind === 'area' ? 3 : 2,
                   background: s.dash
                     ? undefined
-                    : s.color,
+                    : c,
                   backgroundImage: s.dash
-                    ? `repeating-linear-gradient(90deg, ${s.color} 0 4px, transparent 4px 7px)`
+                    ? `repeating-linear-gradient(90deg, ${c} 0 4px, transparent 4px 7px)`
                     : undefined,
                 }}
               />
@@ -337,8 +382,8 @@ export function DayChart({
               .filter((s) => s.kind === 'area')
               .map((s) => (
                 <linearGradient key={s.key} id={`${uid}-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={s.color} stopOpacity="0.24" />
-                  <stop offset="100%" stopColor={s.color} stopOpacity="0" />
+                  <stop offset="0%" stopColor={colorOf.get(s.key)} stopOpacity="0.24" />
+                  <stop offset="100%" stopColor={colorOf.get(s.key)} stopOpacity="0" />
                 </linearGradient>
               ))}
           </defs>
@@ -375,6 +420,7 @@ export function DayChart({
           {/* series (measured solid + forecast dashed) */}
           {drawOrder.map((s) => {
             const { measLine, fcLine, area } = paths(s);
+            const c = colorOf.get(s.key);
             return (
               <g key={s.key}>
                 {s.kind === 'area' && area && <path d={area} fill={`url(#${uid}-${s.key})`} />}
@@ -382,7 +428,7 @@ export function DayChart({
                   <path
                     d={measLine}
                     fill="none"
-                    stroke={s.color}
+                    stroke={c}
                     strokeWidth={s.dash ? 1.8 : 2.2}
                     strokeDasharray={s.dash ? '5 5' : undefined}
                     strokeLinejoin="round"
@@ -394,7 +440,7 @@ export function DayChart({
                   <path
                     d={fcLine}
                     fill="none"
-                    stroke={s.color}
+                    stroke={c}
                     strokeWidth={1.8}
                     strokeDasharray="4 4"
                     strokeOpacity={0.85}
@@ -410,7 +456,7 @@ export function DayChart({
           {/* peak-production marker */}
           {peak && !hidden.has('production') && (
             <g>
-              <circle cx={x(peak.i)} cy={yOf(SERIES[0], peak.v)} r="3.2" fill="#2ee6a0" stroke="var(--bg-1, #06090b)" strokeWidth="1.5" />
+              <circle cx={x(peak.i)} cy={yOf(SERIES[0], peak.v)} r="3.2" fill={productionColor} stroke="var(--bg-1, #06090b)" strokeWidth="1.5" />
             </g>
           )}
 
@@ -435,14 +481,14 @@ export function DayChart({
               {visible.map((s) => {
                 const v = merged.get(s.key)?.[hoverIdx];
                 if (typeof v !== 'number') return null;
-                return <circle key={s.key} cx={hoverX} cy={yOf(s, v)} r="2.8" fill={s.color} stroke="var(--bg-1, #06090b)" strokeWidth="1.2" />;
+                return <circle key={s.key} cx={hoverX} cy={yOf(s, v)} r="2.8" fill={colorOf.get(s.key)} stroke="var(--bg-1, #06090b)" strokeWidth="1.2" />;
               })}
             </g>
           )}
 
           {/* tariff strip along the bottom of the plot */}
           {day.tariffBands.map((seg, i) => (
-            <TariffSeg key={i} seg={seg} y={plotBottom + 4} h={stripH} />
+            <TariffSeg key={i} seg={seg} y={plotBottom + 4} h={stripH} fill={bandColor[seg.band] ?? bandColor.P2} />
           ))}
 
           {/* x axis (hours) */}
@@ -514,7 +560,7 @@ export function DayChart({
               fontFamily: 'var(--font-mono)',
               fontSize: 10.5,
               fontWeight: 600,
-              color: '#2ee6a0',
+              color: 'var(--series-production)',
               whiteSpace: 'nowrap',
               pointerEvents: 'none',
             }}
@@ -551,7 +597,7 @@ export function DayChart({
                   fontWeight: 700,
                   letterSpacing: 0.6,
                   textTransform: 'uppercase',
-                  color: hoverIsForecast ? '#f5a524' : 'var(--text-3)',
+                  color: hoverIsForecast ? 'var(--grid)' : 'var(--text-3)',
                 }}
               >
                 {hoverIsForecast ? 'forecast' : 'measured'}
@@ -577,7 +623,7 @@ export function DayChart({
 
 // ---- Small pieces ----------------------------------------------------------
 
-function TariffSeg({ seg, y, h }: { seg: TariffBandSegment; y: number; h: number }) {
+function TariffSeg({ seg, y, h, fill }: { seg: TariffBandSegment; y: number; h: number; fill: string }) {
   const x0 = (seg.startH / 24) * W;
   const x1 = (seg.endH / 24) * W;
   return (
@@ -587,7 +633,7 @@ function TariffSeg({ seg, y, h }: { seg: TariffBandSegment; y: number; h: number
       width={Math.max(0, x1 - x0)}
       height={h}
       rx={1.5}
-      fill={BAND_COLOR[seg.band] ?? '#5f7672'}
+      fill={fill}
       fillOpacity={0.28}
     >
       <title>{`${seg.band} · ${BAND_LABEL[seg.band] ?? ''} ${String(seg.startH).padStart(2, '0')}:00–${String(seg.endH).padStart(2, '0')}:00`}</title>

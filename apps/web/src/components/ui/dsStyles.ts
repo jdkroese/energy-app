@@ -113,13 +113,13 @@ const CSS = `
 .pwr-btn--lg{ --_h:var(--control-lg); padding:0 22px; font-size:var(--fs-body); }
 .pwr-btn--block{ display:flex; width:100%; }
 .pwr-btn--primary{ background:var(--accent); color:var(--accent-contrast); box-shadow:var(--glow-soft); }
-.pwr-btn--primary:hover{ background:#48f0b1; box-shadow:var(--glow-solar); }
+.pwr-btn--primary:hover{ background:var(--accent-bright); box-shadow:var(--glow-solar); }
 .pwr-btn--secondary{ background:var(--surface-2); color:var(--text-1); border-color:var(--border-2); }
 .pwr-btn--secondary:hover{ background:var(--surface-3); border-color:var(--border-3); }
 .pwr-btn--ghost{ background:transparent; color:var(--text-2); }
 .pwr-btn--ghost:hover{ background:var(--surface-2); color:var(--text-1); }
 .pwr-btn--danger{ background:var(--danger); color:#fff; }
-.pwr-btn--danger:hover{ background:#ff7575; }
+.pwr-btn--danger:hover{ background:var(--danger-bright); }
 .pwr-btn__spin{ width:14px;height:14px;border-radius:50%; border:2px solid currentColor;border-right-color:transparent;animation:pwr-btn-spin .7s linear infinite; }
 @keyframes pwr-btn-spin{ to{ transform:rotate(360deg); } }
 .pwr-btn__ic{ display:inline-flex; }
@@ -141,7 +141,7 @@ const CSS = `
 .pwr-iconbtn--solid{ background:var(--surface-2); border-color:var(--border-2); }
 .pwr-iconbtn--solid:hover{ background:var(--surface-3); border-color:var(--border-3); }
 .pwr-iconbtn--accent{ background:var(--accent); color:var(--accent-contrast); box-shadow:var(--glow-soft); }
-.pwr-iconbtn--accent:hover{ background:#48f0b1; box-shadow:var(--glow-solar); }
+.pwr-iconbtn--accent:hover{ background:var(--accent-bright); box-shadow:var(--glow-solar); }
 
 /* ---- Switch ---- */
 .pwr-switch{ display:inline-flex; align-items:center; gap:10px; cursor:pointer; user-select:none; }
@@ -166,8 +166,8 @@ const CSS = `
 .pwr-slider__input::-webkit-slider-runnable-track{ height:6px; border-radius:var(--radius-pill); background:linear-gradient(to right, var(--accent) var(--_pct,50%), var(--surface-4) var(--_pct,50%)); }
 .pwr-slider__input::-moz-range-track{ height:6px; border-radius:var(--radius-pill); background:var(--surface-4); }
 .pwr-slider__input::-moz-range-progress{ height:6px; border-radius:var(--radius-pill); background:var(--accent); }
-.pwr-slider__input::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:16px; height:16px; margin-top:-5px; border-radius:50%; background:#eafff6; border:3px solid var(--accent); box-shadow:var(--glow-soft); transition:transform var(--dur-fast) var(--ease-out); }
-.pwr-slider__input::-moz-range-thumb{ width:16px; height:16px; border-radius:50%; background:#eafff6; border:3px solid var(--accent); box-shadow:var(--glow-soft); }
+.pwr-slider__input::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:16px; height:16px; margin-top:-5px; border-radius:50%; background:var(--slider-thumb); border:3px solid var(--accent); box-shadow:var(--glow-soft); transition:transform var(--dur-fast) var(--ease-out); }
+.pwr-slider__input::-moz-range-thumb{ width:16px; height:16px; border-radius:50%; background:var(--slider-thumb); border:3px solid var(--accent); box-shadow:var(--glow-soft); }
 .pwr-slider__input:active::-webkit-slider-thumb{ transform:scale(1.18); }
 .pwr-slider__input:focus-visible{ outline:none; }
 .pwr-slider__input:focus-visible::-webkit-slider-thumb{ box-shadow:var(--focus-ring); }
@@ -206,7 +206,7 @@ const CSS = `
 @keyframes pwr2move{ from{stroke-dashoffset:11;} to{stroke-dashoffset:0;} }
 .pwr2__node{ position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:3px; width:88px; text-align:center; }
 .pwr2__chip{ display:flex; align-items:center; justify-content:center; width:46px; height:46px; border-radius:14px;
-  background:var(--surface-2); border:1px solid var(--border-2); color:var(--_c, var(--text-3)); box-shadow:var(--shadow-1), var(--hairline-top); transition:box-shadow .2s,border-color .2s,color .2s; }
+  background:var(--surface-2); border:1px solid var(--border-2); color:var(--_c, var(--text-3)); box-shadow:var(--shadow-1), var(--hairline-top); transition:box-shadow var(--dur) var(--ease-out),border-color var(--dur) var(--ease-out),color var(--dur) var(--ease-out); }
 .pwr2__chip svg{ width:20px; height:20px; }
 .pwr2__node--active .pwr2__chip{ border-color:var(--_c); box-shadow:0 0 0 1px var(--_c), 0 0 16px color-mix(in srgb, var(--_c) 45%, transparent); }
 .pwr2__name{ font-size:9px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-2); }
