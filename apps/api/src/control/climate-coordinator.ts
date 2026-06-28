@@ -264,7 +264,10 @@ async function evaluateSurplusDirection(
 
     // Demand for THIS direction, with start hysteresis so a unit doesn't chatter at the
     // trigger: cool only when room > limit + ½ band; heat only when room < floor − ½ band.
-    const surplusOk = !inExitBand && snap.surplusW > startThreshold && room !== null;
+    // Incomplete battery data ⇒ headroom is under-counted ⇒ surplus may be overstated, so
+    // refuse to START (stops are unaffected below — stopping is always safe).
+    const surplusOk =
+      !inExitBand && snap.batteryDataComplete && snap.surplusW > startThreshold && room !== null;
     const wantAction =
       surplusOk && (dir === 'cool' ? room! > triggerC + half : room! < triggerC - half);
 
