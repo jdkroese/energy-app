@@ -20,6 +20,7 @@ import { LightsPanel } from './Lights';
 import { BlindsPanel } from './Blinds';
 import { SpeakersPanel } from './Speakers';
 import { DiscoveredInbox, useDiscoveredCount } from './DiscoveredInbox';
+import { DevicesByRoom } from './DevicesByRoom';
 
 /* ============================================================================
  * Devices — the typed-device hub. A segmented type bar (Cooling · Heating ·
@@ -736,6 +737,17 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const needsSetupCount = useDiscoveredCount();
   const inboxView = activeType === 'needs-setup';
 
+  // Lens: By type (the typed hub) vs By room (the room-grouped view). Remember-last via
+  // localStorage so returning to Devices restores the chosen lens.
+  const LENS_KEY = 'power.devices.lens';
+  const [lens, setLens] = useState<'type' | 'room'>(() => {
+    try { return localStorage.getItem(LENS_KEY) === 'room' ? 'room' : 'type'; } catch { return 'type'; }
+  });
+  const selectLens = (l: 'type' | 'room') => {
+    setLens(l);
+    try { localStorage.setItem(LENS_KEY, l); } catch { /* ignore */ }
+  };
+
   const d = data;
   const armed = status?.armed ?? false;
 
@@ -1014,6 +1026,21 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     </Card>
   );
 
+  // By type / By room lens toggle — the same control on both viewports.
+  const lensToggle = (
+    <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-pill)', padding: 4, alignSelf: wide ? 'flex-start' : 'stretch' }}>
+      {([['type', 'By type', 'layers'], ['room', 'By room', 'layout-grid']] as const).map(([id, label, icon]) => {
+        const on = lens === id;
+        return (
+          <button key={id} type="button" onClick={() => selectLens(id)} aria-pressed={on}
+            style={{ flex: wide ? 'none' : 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '7px 14px', borderRadius: 'var(--radius-pill)', border: 'none', cursor: 'pointer', background: on ? 'var(--surface-3)' : 'transparent', color: on ? 'var(--text-1)' : 'var(--text-2)', fontSize: 12.5, fontWeight: 600 }}>
+            <Icon name={icon} size={14} color={on ? 'var(--solar)' : 'var(--text-3)'} /> {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
@@ -1021,8 +1048,15 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {d && (
         <>
           {inboxPrompt}
-          <TypeTabs active={activeType} tabs={tabs} needsSetup={needsSetupCount} wide={wide} onSelect={selectType} />
-          {content(activeType)}
+          {lensToggle}
+          {lens === 'room' ? (
+            <DevicesByRoom wide={wide} canEdit={isAdmin} />
+          ) : (
+            <>
+              <TypeTabs active={activeType} tabs={tabs} needsSetup={needsSetupCount} wide={wide} onSelect={selectType} />
+              {content(activeType)}
+            </>
+          )}
         </>
       )}
     </div>

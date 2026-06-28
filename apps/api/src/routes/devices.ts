@@ -8,6 +8,7 @@ import * as airzone from '../connectors/airzone';
 import * as panasonic from '../connectors/panasonic';
 import * as store from '../store';
 import { defaultAutomations, defaultTariffArbitrageParams } from '../store';
+import { resolveRoomId } from '../rooms';
 import type {
   Action,
   Automation,
@@ -49,6 +50,10 @@ export interface DeviceView extends ClimateUnit {
   /** Device category — drives which controls/rules apply (Airzone = heating). */
   type: DeviceType;
   room: string;
+  /** First-class Rooms model: the assigned room id, or null when Unassigned. */
+  roomId: string | null;
+  /** Resolved assigned-room name (null when Unassigned) — same value across By-type/By-room. */
+  roomName: string | null;
   /** LEGACY: true iff EITHER direction is enrolled (back-compat for old clients). */
   automationEnabled: boolean;
   /** Solar-surplus COOLING enrolment (independent per-direction flag). */
@@ -95,6 +100,9 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
   // whole system (list, detail, schedules, mobile). Idempotent — never double-prefixes.
   const prefix = type === 'heating' ? 'Heating - ' : 'AC Unit - ';
   const withPrefix = (s: string) => (s.startsWith(prefix) ? s : `${prefix}${s}`);
+  // First-class Rooms model: resolve the assigned room (null when Unassigned / deleted).
+  const roomId = resolveRoomId(u.id);
+  const roomName = roomId ? store.get().rooms[roomId]?.name ?? null : null;
   return {
     ...u,
     type,
@@ -104,7 +112,11 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
     humidity: u.humidity ?? null,
     wireless: u.wireless ?? null,
     lowBattery: u.lowBattery ?? null,
-    room: withPrefix(ds?.room ?? u.zone ?? u.name),
+    roomId,
+    roomName,
+    // `room` (display) prefers the assigned room name; falls back to the legacy zone/name
+    // string with the type prefix so existing readers keep working.
+    room: roomName ?? withPrefix(ds?.room ?? u.zone ?? u.name),
     // Per-direction flags. Migration safety: fall back to the legacy single flag when a
     // record predates the split (hydrateDeviceSettings already migrates persisted state,
     // but be defensive for any in-flight record).
@@ -333,6 +345,8 @@ export function setDeviceSettings(id: string, patch: Partial<DeviceSettings>): u
       // Keep the legacy field in sync (true iff either direction is on) for old readers.
       automationEnabled: solarCoolEnabled || solarHeatEnabled,
       room: patch.room ?? existing.room,
+      // Rooms model: a roomId patch (null clears to Unassigned) wins; else preserve existing.
+      roomId: patch.roomId !== undefined ? patch.roomId : existing.roomId,
       comfortCeilingC: patch.comfortCeilingC ?? existing.comfortCeilingC,
       comfortFloorC: patch.comfortFloorC ?? existing.comfortFloorC,
       invertPosition: patch.invertPosition ?? existing.invertPosition,

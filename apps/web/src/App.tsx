@@ -9,6 +9,7 @@ import { BatteryDetail } from './screens/BatteryDetail';
 import { Devices } from './screens/Devices';
 import { DeviceDetail } from './screens/DeviceDetail';
 import { GenericDeviceDetail } from './screens/GenericDeviceDetail';
+import { RoomsManage } from './screens/RoomsManage';
 import { Automations } from './screens/Automations';
 import { AlarmScreen, AlarmActiveBanner } from './screens/Speakers';
 import { Login } from './screens/auth/Login';
@@ -50,6 +51,7 @@ function AppRoutes() {
           <Route path="/batteries" element={<Batteries ctx={ctx} />} />
           <Route path="/batteries/:id" element={<BatteryDetail ctx={ctx} />} />
           <Route path="/devices" element={<Devices ctx={ctx} />} />
+          <Route path="/rooms" element={<RoomsManage ctx={ctx} />} />
           <Route path="/devices/generic/:id" element={<GenericDeviceDetail ctx={ctx} />} />
           <Route path="/devices/:id" element={<DeviceDetail ctx={ctx} />} />
           {/* /schedules folded into Automations behind a tab — keep the path as a

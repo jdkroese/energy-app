@@ -32,6 +32,10 @@ export interface BlindUnit {
   id: string;
   name: string;
   room: string;
+  /** First-class Rooms model: assigned room id (null = Unassigned) + resolved name. Set at
+   *  the route layer from the rooms store (the connector doesn't know about rooms). */
+  roomId?: string | null;
+  roomName?: string | null;
   category: string;
   online: boolean;
   /** Current position, 0 = fully closed, 100 = fully open (invert already applied). */

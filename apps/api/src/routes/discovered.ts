@@ -25,6 +25,13 @@ import { buildGenericCommands, readLiveValue, type GenericCommandInput } from '.
 import { resolveConfiguredLightCaps } from '../connectors/tuya-configured-lights';
 import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import * as store from '../store';
+import { resolveRoomId } from '../rooms';
+
+/** Resolve the first-class Rooms fields (assigned id + name) for a device id. */
+function roomFor(id: string): { roomId: string | null; roomName: string | null } {
+  const roomId = resolveRoomId(id);
+  return { roomId, roomName: roomId ? store.get().rooms[roomId]?.name ?? null : null };
+}
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -216,6 +223,9 @@ export interface ConfiguredDeviceView {
   /** dp → current app-facing value (override-applied scaling). */
   values: Record<string, unknown>;
   roomGuess: string | null;
+  /** First-class Rooms model: assigned room id (null = Unassigned) + resolved name. */
+  roomId: string | null;
+  roomName: string | null;
   setupAt: string;
 }
 
@@ -243,7 +253,7 @@ export async function getConfigured(): Promise<unknown> {
       const d = byId.get(id);
       if (!d) {
         // Configured but the fleet no longer reports it (offline project / removed device).
-        return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, setupAt: cfg.setupAt };
+        return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, ...roomFor(id), setupAt: cfg.setupAt };
       }
       const spec = await specFor(id);
       const caps = applyOverrides(deriveCapabilities(d, spec), cfg.capOverrides);
@@ -254,7 +264,7 @@ export async function getConfigured(): Promise<unknown> {
       }
       return {
         id, name: cfg.name, typeId: cfg.typeId, category: d.category, online: d.online,
-        capabilities: caps, values, roomGuess: toDiscovered(d, spec).roomGuess, setupAt: cfg.setupAt,
+        capabilities: caps, values, roomGuess: toDiscovered(d, spec).roomGuess, ...roomFor(id), setupAt: cfg.setupAt,
       };
     }),
   );

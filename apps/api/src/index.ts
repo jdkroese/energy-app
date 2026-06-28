@@ -112,6 +112,14 @@ import {
 } from './routes/discovered';
 import type { BlindLever } from './connectors/tuya-blinds';
 import {
+  getRooms,
+  createRoom,
+  updateRoom,
+  deleteRoom,
+  assignDeviceRoom,
+  roomAllOff,
+} from './routes/rooms';
+import {
   getSpeakers,
   setSpeakerVolume,
   testSpeaker,
@@ -367,6 +375,12 @@ app.post(
   requireAdmin,
   wrap((req) => releaseDevice(String(req.params.id))),
 );
+// Assign / clear a device's room (cross-cutting Rooms model). Admin-gated.
+app.post(
+  '/api/devices/:id/room',
+  requireAdmin,
+  wrap((req) => assignDeviceRoom(String(req.params.id), req.body)),
+);
 
 // ---- AC Cloud integration ----
 app.get('/api/integrations/intesis', wrap(() => getIntegration()));
@@ -547,6 +561,14 @@ app.get('/api/automations', wrap(() => listAutomations()));
 app.post('/api/automations', requireAdmin, wrap((req) => createAutomation((req.body ?? {}) as never)));
 app.put('/api/automations/:id', requireAdmin, wrap((req) => updateAutomation(String(req.params.id), (req.body ?? {}) as never)));
 app.delete('/api/automations/:id', requireAdmin, wrap((req) => deleteAutomation(String(req.params.id))));
+
+// ---- Rooms (cross-cutting) — reads any-authed; writes admin-gated ----
+app.get('/api/rooms', wrap(() => getRooms()));
+app.post('/api/rooms', requireAdmin, wrap((req) => createRoom(req.body)));
+// Literal sub-path registered before the bare :id so it isn't shadowed.
+app.post('/api/rooms/:id/all-off', requireAdmin, wrap((req) => roomAllOff(String(req.params.id), req.body)));
+app.patch('/api/rooms/:id', requireAdmin, wrap((req) => updateRoom(String(req.params.id), req.body)));
+app.delete('/api/rooms/:id', requireAdmin, wrap((req) => deleteRoom(String(req.params.id))));
 
 // Ensure VAPID keys exist on boot (generate + persist if missing).
 try {

@@ -6,6 +6,8 @@ import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, Devi
 import { Card, Icon, Button, IconButton, Switch } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
+import { RoomPicker } from '../components/RoomPicker';
+import type { RoomsResponse } from '../lib/types';
 import type { ShellContext } from '../components/shell/AppShell';
 import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
 import { EditRuleOverlay, type RulePeer } from '../components/schedules/EditRuleOverlay';
@@ -75,6 +77,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   // Fleet + all rules feed the rule overlay's "copy to units" + cross-unit overlap checks.
   const { data: fleetData } = usePolling<DevicesResponse>(api.devices.list, 0);
   const { data: schedData, refetch: refetchSchedules } = usePolling<SchedulesResponse>(api.schedules.list, 0);
+  const { data: roomsData, refetch: refetchRooms } = usePolling<RoomsResponse>(api.rooms.list, 0);
   const [busy, setBusy] = useState(false);
   const [cmdErr, setCmdErr] = useState<string | null>(null);
   const [editingRule, setEditingRule] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
@@ -265,6 +268,13 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
           <span>Couldn&apos;t send — {cmdErr}.</span>
         </div>
       )}
+
+      {/* ROOM — cross-cutting Rooms assignment (picker with + New room). */}
+      <Card padded style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px' }}>
+        <Icon name="layout-grid" size={16} color="var(--text-3)" />
+        <span style={{ fontSize: 13, color: 'var(--text-2)', flex: 1 }}>Room</span>
+        <RoomPicker deviceId={dev.id} value={dev.roomId ?? null} rooms={roomsData?.rooms ?? []} disabled={!canConfig} onChanged={() => { refetch(); refetchRooms(); }} />
+      </Card>
 
       {/* SETPOINT + AMBIENT */}
       <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1.1fr' : '1fr', gap: 12 }}>

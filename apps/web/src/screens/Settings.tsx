@@ -1515,8 +1515,9 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
           </Card>
 
           <Card title="My system" style={{ padding: 0 }}>
-            {s.assets.map((a, i) => (
-              <LinkRow key={a.name} first={i === 0} icon={a.icon} tone={a.tone} name={a.name} detail={a.detail} right={<Chev />} />
+            <LinkRow first icon="layout-grid" tone="solar" name="Rooms" detail="Organize devices by room" onClick={() => navigate('/rooms')} right={<Chev />} />
+            {s.assets.map((a) => (
+              <LinkRow key={a.name} icon={a.icon} tone={a.tone} name={a.name} detail={a.detail} right={<Chev />} />
             ))}
           </Card>
 

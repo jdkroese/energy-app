@@ -59,6 +59,9 @@ import type {
   ScenariosResponse,
   Schedule,
   SchedulesResponse,
+  Room,
+  RoomsResponse,
+  RoomAllOffResponse,
   SessionsResponse,
   SettingsResponse,
   UserRole,
@@ -211,8 +214,11 @@ export const api = {
       postJSON<{ ts: string; results: unknown[] }>('/api/devices/bulk-command', { ids, lever, value }),
     setSettings: (
       id: string,
-      patch: { room?: string; automationEnabled?: boolean; solarCoolEnabled?: boolean; solarHeatEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number; invertPosition?: boolean },
+      patch: { room?: string; roomId?: string | null; automationEnabled?: boolean; solarCoolEnabled?: boolean; solarHeatEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number; invertPosition?: boolean },
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
+    // Assign / clear a device's room (cross-cutting Rooms model). null = Unassigned.
+    setRoom: (id: string, roomId: string | null) =>
+      postJSON<{ ts: string; id: string; roomId: string | null }>(`/api/devices/${enc(id)}/room`, { roomId }),
     release: (id: string) =>
       postJSON<{ ts: string; id: string; released: boolean }>(`/api/devices/${enc(id)}/release`, {}),
 
@@ -342,6 +348,17 @@ export const api = {
     create: (a: Partial<Automation>) => postJSON<{ automation: Automation }>('/api/automations', a),
     update: (id: string, a: Partial<Automation>) => putJSON<{ automation: Automation }>(`/api/automations/${enc(id)}`, a),
     remove: (id: string) => delJSON<{ ok: boolean }>(`/api/automations/${enc(id)}`),
+  },
+
+  /* ---- Rooms (cross-cutting); create/rename/reorder/delete/all-off are admin ---- */
+  rooms: {
+    list: () => getJSON<RoomsResponse>('/api/rooms'),
+    create: (name: string, icon: string) => postJSON<{ room: Room }>('/api/rooms', { name, icon }),
+    update: (id: string, patch: Partial<Pick<Room, 'name' | 'icon' | 'order'>>) =>
+      patchJSON<{ room: Room }>(`/api/rooms/${enc(id)}`, patch),
+    remove: (id: string) => delJSON<{ ok: boolean }>(`/api/rooms/${enc(id)}`),
+    allOff: (id: string, scope: 'all' | 'lights' = 'all') =>
+      postJSON<RoomAllOffResponse>(`/api/rooms/${enc(id)}/all-off`, { scope }),
   },
 };
 

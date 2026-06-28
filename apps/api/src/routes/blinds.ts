@@ -8,6 +8,14 @@ import * as blinds from '../connectors/tuya-blinds';
 import type { BlindLever, BlindUnit } from '../connectors/tuya-blinds';
 import * as store from '../store';
 import { markManualOverride } from '../control/climate-coordinator';
+import { resolveRoomId } from '../rooms';
+
+/** Attach the first-class Rooms fields (roomId + resolved name) to a normalized unit. */
+function withRoom<T extends { id: string }>(u: T): T & { roomId: string | null; roomName: string | null } {
+  const roomId = resolveRoomId(u.id);
+  const roomName = roomId ? store.get().rooms[roomId]?.name ?? null : null;
+  return { ...u, roomId, roomName };
+}
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -27,7 +35,8 @@ async function getBlindFleet(): Promise<{ units: BlindUnit[]; error: string | nu
           room: settings[d.id]?.room,
           invert: settings[d.id]?.invertPosition ?? false,
         }),
-      );
+      )
+      .map(withRoom);
     return { units, error: null };
   } catch (e) {
     return { units: [], error: (e as Error).message };
