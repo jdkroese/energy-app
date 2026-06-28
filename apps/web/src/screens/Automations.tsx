@@ -835,9 +835,9 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  // One uniform width for the WHOLE screen — header, the 6-tab strip, and every
-  // panel share the same edges. The embedded Autopilot fills this host (its own
-  // 1100 wrapper is dropped when embedded), and Schedules / Smart Rules fill it too.
+  // Full-width like every other page — the tab strip, graphs, and every panel use the
+  // whole content area. The embedded Autopilot fills the host (its own 1100 wrapper is
+  // dropped when embedded), and Schedules / Smart Rules fill it too.
   const panel = AUTOPILOT_TABS.includes(tab) ? (
     <Autopilot ctx={ctx} embedded tab={tab as AutopilotTabKey} />
   ) : tab === 'schedules' ? (
@@ -853,8 +853,8 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  // Shared desktop max-width — wide enough for Summary's plan timeline + 5-KPI row,
-  // tight enough that the rules/schedules cards don't sprawl. ~960px reads well for both.
-  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 960, margin: '0 auto', width: '100%' }}><div><Eyebrow>Power</Eyebrow><h1 style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }}>Automations</h1></div>{body}</div>;
+  // Desktop: full-width like every other page; the page title comes from the AppShell
+  // TopBar (META['/automations']) rather than an in-body heading.
+  if (wide) return body;
   return (<><MobileHeader eyebrow="Power" title="Automations" right={<Avatar />} /><div style={{ padding: '8px 14px 22px' }}>{body}</div></>);
 }
