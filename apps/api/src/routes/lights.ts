@@ -340,6 +340,12 @@ function sanitizeSchedule(body: Partial<store.LightSchedule>, base?: store.Light
     result.offAnchor = body.offAnchor;
     result.offOffsetMin = typeof body.offOffsetMin === 'number' ? Math.round(body.offOffsetMin) : 0;
   }
+  if (typeof body.onVariationMin === 'number' && body.onVariationMin > 0) {
+    result.onVariationMin = Math.min(60, Math.round(body.onVariationMin));
+  }
+  if (typeof body.offVariationMin === 'number' && body.offVariationMin > 0) {
+    result.offVariationMin = Math.min(60, Math.round(body.offVariationMin));
+  }
 
   return result;
 }

@@ -36,6 +36,19 @@ function resolveTimeMin(
   return (anchor === 'sunrise' ? sunriseMin : sunsetMin) + offsetMin;
 }
 
+/** Deterministic per-day offset for schedule variation using FNV-1a hash. */
+function dayVariation(id: string, windowMin: number): number {
+  const now = new Date();
+  const key = `${id}:${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  // FNV-1a hash for a stable, per-day offset
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return (h % (windowMin + 1)) - Math.floor(windowMin / 2);
+}
+
 /** Did a scheduled (weekday, minute) fall in the half-open interval (prev, now]? */
 function crossed(
   prev: { day: number; min: number },
@@ -68,9 +81,11 @@ async function tick(): Promise<void> {
     const { sunriseMin, sunsetMin } = sunriseSunsetMin(config.site.lat, config.site.lon, new Date());
     const schedules = store.get().lightSchedules.filter((s) => s.enabled);
     for (const s of schedules) {
-      const onMin = resolveTimeMin(s.onTime, s.onAnchor, s.onOffsetMin ?? 0, sunriseMin, sunsetMin);
+      const onMin = resolveTimeMin(s.onTime, s.onAnchor, s.onOffsetMin ?? 0, sunriseMin, sunsetMin)
+        + (s.onVariationMin ? dayVariation(s.id, s.onVariationMin) : 0);
       const resolvedOffMin = s.offTime
         ? resolveTimeMin(s.offTime, s.offAnchor, s.offOffsetMin ?? 0, sunriseMin, sunsetMin)
+          + (s.offVariationMin ? dayVariation(s.id + ':off', s.offVariationMin) : 0)
         : null;
       for (const day of s.days) {
         if (crossed(last, now, day, onMin)) await applyScheduleOn(s);
