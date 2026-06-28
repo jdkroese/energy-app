@@ -123,10 +123,20 @@ const CONTROL_MATCHERS: Matcher[] = [
   // action, and must fall through to the range matcher below.
   { kind: 'action', test: (c) => c === 'control' || c === 'mach_operate', label: () => 'Open / stop', readOnly: false },
   { kind: 'action', test: has('trigger', 'reset', 'factory_reset'), label: (c) => prettify(c), readOnly: false },
+  // Fan direction (summer/winter, forward/reverse). Caught BEFORE the generic
+  // `_mode`/`mode` enum matchers so its options come straight off the spec range.
+  { kind: 'enum', test: has('fan_direction', 'fan_horizontal', 'fan_vertical'), label: () => 'Direction', readOnly: false },
   { kind: 'enum', test: has('work_mode', 'mode', 'level'), label: (c) => prettify(c), readOnly: false },
   { kind: 'enum', test: (c) => c.endsWith('_mode'), label: (c) => prettify(c), readOnly: false },
+  // Fan power: `fan_switch` is the on/off lever but doesn't START with `switch`,
+  // so catch it explicitly. Keep the generic `switch*` and `led_switch` matchers.
+  { kind: 'switch', test: has('fan_switch'), label: () => 'Power', readOnly: false },
   { kind: 'switch', test: starts('switch'), label: (c) => prettify(c), readOnly: false },
   { kind: 'switch', test: has('led_switch'), label: () => 'Switch', readOnly: false },
+  // A bare `light` / `switch_led` boolean is a fan light. The colour/bright
+  // matchers above already claimed `colour_data*` and `bright_value*`, so these
+  // only catch the plain on/off light toggle.
+  { kind: 'switch', test: (c) => c === 'light' || c === 'switch_led', label: () => 'Light', readOnly: false },
   { kind: 'range', test: starts('bright_value', 'temp_value', 'percent_control', 'position', 'fan_speed', 'temp_set'), label: (c) => prettify(c), readOnly: false },
   { kind: 'range', test: (c) => c.endsWith('_set'), label: (c) => prettify(c), readOnly: false },
 ];
@@ -156,6 +166,27 @@ function isSensitiveAction(category: string, code: string): boolean {
   return SENSITIVE_CATEGORIES.has(category) || SENSITIVE_DP(code);
 }
 
+/** Parse a Tuya spec DP's JSON `values` blob into its bounds/options. Returns an
+ *  empty object for an absent or non-JSON blob. */
+function parseSpecValues(values?: string): { min?: number; max?: number; unit?: string; range?: string[] } {
+  if (!values) return {};
+  try {
+    const v = JSON.parse(values) as { min?: number; max?: number; unit?: string; range?: string[] };
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {}; // non-JSON values blob — ignore
+  }
+}
+
+/** Copy bounds / unit / options from a parsed spec `values` blob onto a capability. */
+function applySpecValues(cap: Capability, values?: string): void {
+  const v = parseSpecValues(values);
+  if (typeof v.min === 'number') cap.min = v.min;
+  if (typeof v.max === 'number') cap.max = v.max;
+  if (!cap.unit && typeof v.unit === 'string' && v.unit) cap.unit = v.unit;
+  if (Array.isArray(v.range) && v.range.length) cap.options = v.range;
+}
+
 /** Classify one DP code into a capability, or null if nothing recognizes it.
  *  `category` (when known) lets `action` capabilities be flagged `sensitive`. */
 function classify(code: string, spec?: { type?: string; values?: string }, category = ''): Capability | null {
@@ -172,20 +203,35 @@ function classify(code: string, spec?: { type?: string; values?: string }, categ
     // Flag safety-critical actions so the generic renderer confirms before firing.
     if (m.kind === 'action' && isSensitiveAction(category, code)) cap.sensitive = true;
     // Pull bounds / options off the spec's JSON `values` blob when present.
-    if (spec?.values) {
-      try {
-        const v = JSON.parse(spec.values) as { min?: number; max?: number; unit?: string; range?: string[] };
-        if (typeof v.min === 'number') cap.min = v.min;
-        if (typeof v.max === 'number') cap.max = v.max;
-        if (!cap.unit && typeof v.unit === 'string' && v.unit) cap.unit = v.unit;
-        if (Array.isArray(v.range) && v.range.length) cap.options = v.range;
-      } catch {
-        /* non-JSON values blob — ignore */
-      }
-    }
+    applySpecValues(cap, spec?.values);
     return cap;
   }
   return null;
+}
+
+/**
+ * LAST-RESORT synthesis for a DP that no matcher recognized, using the Tuya spec
+ * `type` string. This is the "never drop a DP" guarantee — every datapoint a
+ * device reports becomes a (relabelable, hideable) capability rather than silently
+ * vanishing. `writable` reflects where the spec listed the DP (functions = true,
+ * status = false); a non-writable DP is always read-only.
+ */
+function synthesizeFromSpec(code: string, type: string | undefined, writable: boolean): Capability {
+  const t = (type ?? '').toLowerCase();
+  const base = { key: code, label: prettify(code), dp: code };
+  if (writable) {
+    if (t === 'boolean') return { ...base, kind: 'switch', readOnly: false };
+    if (t === 'enum') {
+      const cap: Capability = { ...base, kind: 'enum', readOnly: false };
+      return cap; // options filled in by applySpecValues at the call site
+    }
+    if (t === 'integer' || t === 'value') return { ...base, kind: 'range', readOnly: false };
+    // String / Json / Raw / anything opaque → visible but read-only status.
+    return { ...base, kind: 'status', readOnly: true };
+  }
+  // READ-ONLY (spec.status): numeric → measure, everything else → status flag.
+  if (t === 'integer' || t === 'value') return { ...base, kind: 'measure', readOnly: true };
+  return { ...base, kind: 'status', readOnly: true };
 }
 
 /**
@@ -208,19 +254,45 @@ export function deriveCapabilities(d: TuyaDevice, spec?: TuyaSpec | null): Capab
   if (spec && (spec.functions.length || spec.status.length)) {
     for (const f of spec.functions) {
       const cap = classify(f.code, f, category);
-      // A DP that the spec lists under `functions` is writable — if our matcher
-      // tagged it read-only (rare), trust the spec and keep it writable.
-      add(cap && cap.readOnly && !isInherentlyReadOnly(f.code) ? { ...cap, readOnly: false } : cap);
+      if (cap) {
+        // A DP that the spec lists under `functions` is writable — if our matcher
+        // tagged it read-only (rare), trust the spec and keep it writable.
+        add(cap.readOnly && !isInherentlyReadOnly(f.code) ? { ...cap, readOnly: false } : cap);
+      } else {
+        // No matcher recognized this writable DP — synthesize from its spec type
+        // so it is never dropped. Boolean→switch, Enum→enum, Integer/Value→range,
+        // anything opaque→read-only status.
+        const syn = synthesizeFromSpec(f.code, f.type, true);
+        applySpecValues(syn, f.values);
+        add(syn);
+      }
     }
     for (const s of spec.status) {
       if (spec.functions.some((f) => f.code === s.code)) continue; // already added as writable
-      add(classify(s.code, s, category));
+      const cap = classify(s.code, s, category);
+      if (cap) {
+        add(cap);
+      } else {
+        // Unrecognized READ-ONLY DP — synthesize a measure (numeric) or status flag.
+        const syn = synthesizeFromSpec(s.code, s.type, false);
+        applySpecValues(syn, s.values);
+        add(syn);
+      }
     }
   }
   // Always also fold in live status codes (covers devices with no spec, and any
   // DP the spec omitted but the device actually reports).
   for (const s of d.status) {
-    if (!byDp.has(s.code)) add(classify(s.code, undefined, category));
+    if (byDp.has(s.code)) continue;
+    const cap = classify(s.code, undefined, category);
+    if (cap) {
+      add(cap);
+    } else {
+      // No spec to lean on — infer read-only kind from the live JS value type so
+      // the DP is at least visible and relabelable. Number→measure, else status.
+      const kind: CapabilityKind = typeof s.value === 'number' ? 'measure' : 'status';
+      add({ kind, key: s.code, label: prettify(s.code), dp: s.code, readOnly: true });
+    }
   }
   return [...byDp.values()];
 }
