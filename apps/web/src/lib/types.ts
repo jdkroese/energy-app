@@ -210,6 +210,38 @@ export interface VoltageHistoryResponse {
   breaker: { id: string; name: string } | null;
 }
 
+// ---- Circuit-breaker usage metering (docs/28) ------------------------------
+
+export type BreakerUsageGranularity = 'raw' | 'hour' | 'day';
+
+/** One point in a per-breaker usage series. `ts` is unix SECONDS. */
+export interface BreakerUsagePoint {
+  ts: number;
+  energyWh: number;
+  powerAvgW: number | null;
+  powerMaxW?: number | null;
+  voltageAvgV?: number | null;
+  samples?: number;
+}
+
+/** GET /api/breakers/:id/usage — per-breaker time-series + total kWh. */
+export interface BreakerUsageResponse {
+  breaker: { id: string; name: string };
+  granularity: BreakerUsageGranularity;
+  /** False when metering is disabled/unavailable (UI empty-states gracefully). */
+  available: boolean;
+  points: BreakerUsagePoint[];
+  totalKwh: number;
+}
+
+/** GET /api/breakers/usage/summary — per-breaker kWh + share for a period. */
+export interface BreakerUsageSummaryResponse {
+  period: 'today' | 'week' | 'month';
+  available: boolean;
+  breakers: Array<{ id: string; name: string; kwh: number; sharePct: number }>;
+  totalKwh: number;
+}
+
 export interface SettingsResponse {
   ts: string;
   connections: { name: string; icon: string; tone: string; status: string; detail: string }[];

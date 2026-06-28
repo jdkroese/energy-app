@@ -96,3 +96,23 @@ export function findMeasure(caps: Capability[], needle: string): Capability | nu
   const n = needle.toLowerCase();
   return caps.find((c) => c.kind === 'measure' && c.dp.toLowerCase().includes(n)) ?? null;
 }
+
+/**
+ * Whether a device is a METERED breaker — i.e. it exposes electrical measurement
+ * (current / voltage / power or a forward-energy counter). Mirrors the API
+ * sampler's notion of "metered" (cur_power / cur_voltage / cur_current / add_ele).
+ * Used to gate the per-breaker Usage section: non-metering breakers get none.
+ */
+export function isMeteredBreaker(caps: Capability[]): boolean {
+  return caps.some((c) => {
+    const dp = c.dp.toLowerCase();
+    return (
+      dp.includes('cur_power') ||
+      dp.includes('cur_voltage') ||
+      dp.includes('cur_current') ||
+      dp.includes('add_ele') ||
+      dp.includes('forward_energy') ||
+      dp.includes('energy_forward')
+    );
+  });
+}
