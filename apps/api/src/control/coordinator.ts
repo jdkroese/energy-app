@@ -82,7 +82,7 @@ function favoursArbitrage(scenario: store.ScenarioDef): boolean {
 function logShadow(device: ControlDevice, lever: string, reason: string, detail: string): void {
   store.update((s) => {
     s.control.log.push({ ts: Date.now(), device, lever, from: null, to: null, reason, ok: true, detail });
-    if (s.control.log.length > 100) s.control.log = s.control.log.slice(-100);
+    s.control.log = store.pruneLog(s.control.log);
     s.control.updatedAt = Date.now();
   });
 }

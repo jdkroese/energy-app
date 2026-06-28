@@ -260,6 +260,22 @@ export interface ControlState {
 /** Max in-state arbitrage events kept (the JSONL file is the unbounded durable record). */
 export const ARBITRAGE_LOG_RING_MAX = 200;
 
+/**
+ * Command/device log retention. The battery command log (control.log) and the device/climate log
+ * (devices.log) are kept by TIME, not count: entries from the last 48h are retained, the rest are
+ * dropped on each write (and on load). LOG_MAX_ENTRIES is a safety ceiling so a pathological
+ * error-storm can't bloat state.json beyond a bounded size even inside the 48h window.
+ */
+export const LOG_RETENTION_MS = 48 * 60 * 60 * 1000;
+export const LOG_MAX_ENTRIES = 5000;
+
+/** Prune a ts-stamped log to the 48h retention window, with a hard safety ceiling on count. */
+export function pruneLog<T extends { ts: number }>(log: T[], now: number = Date.now()): T[] {
+  const cutoff = now - LOG_RETENTION_MS;
+  const recent = log.filter((e) => e.ts >= cutoff);
+  return recent.length > LOG_MAX_ENTRIES ? recent.slice(-LOG_MAX_ENTRIES) : recent;
+}
+
 // ---- Devices / Climate ------------------------------------------------------
 // A generic devices layer; AC (Intesis/Panasonic Etherea) is the first type. The
 // store holds: integration creds, per-device user settings, schedules, automations,
@@ -1414,7 +1430,7 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
     mode: FORCE_DISARM_ON_BOOT ? 'off' : isControlMode(p.mode) ? p.mode : base.mode,
     updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
     lastError: typeof p.lastError === 'string' ? p.lastError : null,
-    log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
+    log: Array.isArray(p.log) ? pruneLog(p.log) : base.log,
     guardrails: {
       ...base.guardrails,
       ...(p.guardrails ?? {}),
@@ -1444,7 +1460,7 @@ function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState
     mode: FORCE_DISARM_ON_BOOT ? 'off' : isControlMode(p.mode) ? p.mode : base.mode,
     updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
     lastError: typeof p.lastError === 'string' ? p.lastError : null,
-    log: Array.isArray(p.log) ? p.log.slice(-100) : base.log,
+    log: Array.isArray(p.log) ? pruneLog(p.log) : base.log,
     guardrails: { ...base.guardrails, ...(p.guardrails ?? {}) },
     batteryPriority: hydrateBatteryPriority(p.batteryPriority, base.batteryPriority),
     soakExport: hydrateSoakExport(p.soakExport, base.soakExport),

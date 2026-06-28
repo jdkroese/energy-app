@@ -66,7 +66,7 @@ function logBlind(
 ): void {
   store.update((st) => {
     st.devices.log.push({ ts: Date.now(), deviceId, lever: 'position', from, to, reason, ok, detail });
-    if (st.devices.log.length > 100) st.devices.log = st.devices.log.slice(-100);
+    st.devices.log = store.pruneLog(st.devices.log);
     st.devices.updatedAt = Date.now();
     if (!ok) st.devices.lastError = `blind ${deviceId}: ${detail}`;
   });

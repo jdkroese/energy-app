@@ -45,7 +45,7 @@ export async function getStatus(): Promise<unknown> {
     guardrails: ctrl.guardrails,
     batteryPriority: ctrl.batteryPriority,
     soakExport: ctrl.soakExport,
-    log: ctrl.log.slice(-100),
+    log: ctrl.log,
     // Tariff-arbitrage effectiveness: cumulative headline stats + recent events (the durable
     // unbounded record is the JSONL file; this is the in-state ring for the UI history).
     arbitrageStats: ctrl.arbitrageStats,

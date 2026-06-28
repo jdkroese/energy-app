@@ -63,7 +63,7 @@ function logEntry(
 ): void {
   store.update((s) => {
     s.control.log.push({ ts: Date.now(), device, lever, from, to, reason, ok, detail });
-    if (s.control.log.length > 100) s.control.log = s.control.log.slice(-100);
+    s.control.log = store.pruneLog(s.control.log);
     s.control.updatedAt = Date.now();
     if (!ok) s.control.lastError = `${device}.${lever}: ${detail}`;
   });
@@ -86,17 +86,16 @@ function noop(
   reason = 'unchanged',
 ): IssueResult {
   // A no-op re-asserts the value already in place — it fires EVERY steady-state tick. Persisting
-  // one row per tick floods the 100-entry ring and evicts real commands within ~25 min, so the
-  // command log degrades into endless "unchanged" noise. Instead keep only the LATEST no-op per
-  // lever: drop any prior no-op for this device+lever, then push a fresh one. Real changes and
-  // errors are never pruned, so they survive far longer in the buffer. updatedAt still advances,
-  // so the heartbeat keeps ticking even on a steady-state run.
+  // one row per tick would bury real commands in "unchanged" noise. Instead keep only the LATEST
+  // no-op per lever: drop any prior no-op for this device+lever, then push a fresh one. The log is
+  // then pruned to the 48h retention window. updatedAt still advances, so the heartbeat keeps
+  // ticking even on a steady-state run.
   store.update((s) => {
     s.control.log = s.control.log.filter(
       (e) => !(e.device === device && e.lever === lever && e.detail === NOOP_DETAIL),
     );
     s.control.log.push({ ts: Date.now(), device, lever, from: value, to: value, reason, ok: true, detail: NOOP_DETAIL });
-    if (s.control.log.length > 100) s.control.log = s.control.log.slice(-100);
+    s.control.log = store.pruneLog(s.control.log);
     s.control.updatedAt = Date.now();
   });
   return { ok: true, skipped: true, reason, from: value, to: value };

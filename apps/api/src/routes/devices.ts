@@ -290,7 +290,7 @@ export function getDevicesStatus(): unknown {
     mode: dev.mode,
     lastError: dev.lastError,
     guardrails: dev.guardrails,
-    log: dev.log.slice(-100),
+    log: dev.log,
   };
 }
 
