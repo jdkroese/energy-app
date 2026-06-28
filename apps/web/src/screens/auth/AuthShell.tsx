@@ -33,7 +33,7 @@ export function AuthShell({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'radial-gradient(120% 80% at 50% -10%, rgba(46,230,160,0.08), transparent 60%), var(--bg-0)',
+        background: 'radial-gradient(120% 80% at 50% -10%, var(--auth-bg-glow), transparent 60%), var(--bg-0)',
         padding: '24px 16px calc(24px + env(safe-area-inset-bottom))',
       }}
     >
@@ -91,7 +91,7 @@ export function AuthError({ children }: { children: ReactNode }) {
         fontSize: 12.5,
         color: 'var(--danger)',
         background: 'var(--danger-wash)',
-        border: '1px solid rgba(255,93,93,0.25)',
+        border: '1px solid var(--border-danger)',
         borderRadius: 'var(--radius-md)',
         padding: '9px 12px',
         lineHeight: 1.45,

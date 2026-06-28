@@ -97,7 +97,7 @@ export function PeriodNav({ range, offset, hasPrev, hasNext, onChange, desktop =
           style={{
             position: 'absolute', top: 36, left: '50%', transform: 'translateX(-50%)', zIndex: 30,
             minWidth: desktop ? 196 : 168, maxHeight: 264, overflowY: 'auto',
-            background: '#060c0e', border: '1px solid rgba(233,245,242,0.14)', borderRadius: 11,
+            background: 'var(--surface-pop)', border: '1px solid var(--border-2)', borderRadius: 11,
             padding: 5, boxShadow: '0 16px 40px rgba(0,0,0,.6)',
           }}
         >

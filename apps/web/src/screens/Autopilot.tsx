@@ -456,7 +456,7 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
               wide={wide}
             />
             <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-2)', flexWrap: 'wrap', marginTop: 10 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 12, height: 8, borderRadius: 2, background: 'linear-gradient(#ffe27a,#f5c518)' }} /> Sun intensity</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 12, height: 8, borderRadius: 2, background: 'linear-gradient(var(--sun-lit-3),var(--sun-lit-1))' }} /> Sun intensity</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--solar)' }} /> Solar (cloud-adjusted)</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--home)' }} /> House load</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--battery)' }} /> Battery SoC</span>
