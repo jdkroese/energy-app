@@ -96,6 +96,8 @@ import { startLightCoordinator } from './control/light-coordinator';
 import { startRadioCoordinator } from './control/radio-coordinator';
 import { startDeviceScheduleCoordinator } from './control/device-schedule-coordinator';
 import { startBreakerMetering } from './control/breaker-metering';
+import { startEnergyHistory } from './control/energy-history';
+import { runEnergyBackfill } from './control/energy-backfill';
 import { getBreakerUsage, getUsageSummary } from './routes/breaker-usage';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
@@ -673,6 +675,21 @@ try {
 } catch (e) {
   console.error('[energy-api] breaker metering init failed (metering disabled, API unaffected):', (e as Error).message);
 }
+
+// Start the whole-house energy-history rollup/retention loop (additive + READ-ONLY:
+// shares the same fail-soft SQLite store; no control authority). The 5m recorder is
+// driven by the live-sample path (recordEnergySample). Then kick the one-time JSON
+// import + Tesla calendar_history backfill in the BACKGROUND — idempotent, never
+// blocks boot or the control loop. Both guarded so they can't throw into startup.
+try {
+  startEnergyHistory();
+} catch (e) {
+  console.error('[energy-api] energy-history init failed (history disabled, API unaffected):', (e as Error).message);
+}
+setTimeout(
+  () => void runEnergyBackfill().catch((e) => console.error('[energy-backfill] run failed:', (e as Error).message)),
+  12_000,
+);
 
 // Resume a still-active house alarm after a restart (siren + light-blink). If the
 // persisted duration already elapsed it stops + restores instead. No-op when idle.

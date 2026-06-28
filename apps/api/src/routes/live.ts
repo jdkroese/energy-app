@@ -4,6 +4,7 @@ import { bandInfo } from '../tariff';
 import { config } from '../config';
 import * as history5m from '../history5m';
 import * as voltageHistory from '../voltage-history';
+import { recordEnergySample } from '../control/energy-history';
 import { climateSurplusW } from '../control/climate-snapshot';
 import { getMonitoredBreaker } from '../connectors/tuya-voltage';
 
@@ -226,6 +227,10 @@ export async function getLive(): Promise<unknown> {
   recordSample(sample);
   // Persistent 5-minute history (its own file) — fills as /api/live is polled.
   history5m.record(sample);
+  // Durable tiered SQLite energy history (90d 5m / 3y hourly / forever daily).
+  // Additive + fail-soft: a null DB / any error no-ops, and history5m's JSON above
+  // remains the DayChart fallback. Never throws into the control loop.
+  recordEnergySample(sample);
   // Persistent 5-minute grid-voltage history (its own file) — only when the
   // breaker reported a real voltage; the 5-min bucketing dedupes the 10s polls.
   if (breaker && breaker.voltageV > 0) {

@@ -57,7 +57,7 @@ export type MeteringDb = {
   close: () => void;
 };
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 let initTried = false;
 let disabledReason: string | null = null;
@@ -74,7 +74,17 @@ function dbPath(): string {
   return resolve(repoRoot, '.data', 'metering.db');
 }
 
-/** Create the schema (idempotent) + bump the version row. Spec docs/28 §3. */
+/**
+ * Create the schema (idempotent) + bump the version row.
+ *  - cb_* tables: circuit-breaker metering (spec docs/28 §3).
+ *  - energy_* tables: whole-house energy history (spec docs/31) — the same one
+ *    DB / one handle / one fail-soft path. v2 adds these; all CREATE … IF NOT
+ *    EXISTS so re-running on an existing v1 store just adds the new tables.
+ *
+ * energy_* series mirror HISTORY_SERIES (history5m.ts): power kW
+ * (solar/home/charge/discharge/gridImport/gridExport) + SoC %
+ * (sonnen/tesla/combined). Hourly/daily integrate kW→kWh and aggregate SoC.
+ */
 function migrate(handle: MeteringDb): void {
   handle.exec(`
     CREATE TABLE IF NOT EXISTS cb_meta (k TEXT PRIMARY KEY, v TEXT);
@@ -114,6 +124,69 @@ function migrate(handle: MeteringDb): void {
       voltage_max_v REAL,
       samples       INTEGER NOT NULL,
       PRIMARY KEY (breaker_id, day)
+    );
+
+    -- ---- Whole-house energy history (spec docs/31) -------------------------
+    -- Raw 5-minute samples: kW for power series, % for SoC. Retention 90 days.
+    CREATE TABLE IF NOT EXISTS energy_5m (
+      ts              INTEGER PRIMARY KEY,   -- unix seconds, 5-min aligned
+      solar_kw        REAL,
+      home_kw         REAL,
+      charge_kw       REAL,
+      discharge_kw    REAL,
+      grid_import_kw  REAL,
+      grid_export_kw  REAL,
+      sonnen_soc      REAL,
+      tesla_soc       REAL,
+      combined_soc    REAL,
+      samples         INTEGER NOT NULL
+    ) WITHOUT ROWID;
+
+    -- Hourly: power series integrated to kWh over the bucket; SoC avg/min/max.
+    -- bucket_ts = hour start (unix seconds). Retention 3 years.
+    -- src marks provenance: 'live' (rolled from 5m) or 'tesla-backfill'.
+    CREATE TABLE IF NOT EXISTS energy_hourly (
+      bucket_ts        INTEGER PRIMARY KEY,
+      solar_kwh        REAL,
+      home_kwh         REAL,
+      charge_kwh       REAL,
+      discharge_kwh    REAL,
+      grid_import_kwh  REAL,
+      grid_export_kwh  REAL,
+      sonnen_soc_avg   REAL,
+      sonnen_soc_min   REAL,
+      sonnen_soc_max   REAL,
+      tesla_soc_avg    REAL,
+      tesla_soc_min    REAL,
+      tesla_soc_max    REAL,
+      combined_soc_avg REAL,
+      combined_soc_min REAL,
+      combined_soc_max REAL,
+      samples          INTEGER NOT NULL,
+      src              TEXT
+    ) WITHOUT ROWID;
+
+    -- Daily: kWh totals per series + SoC avg/min/max. day = Madrid YYYY-MM-DD.
+    -- Retention forever.
+    CREATE TABLE IF NOT EXISTS energy_daily (
+      day              TEXT PRIMARY KEY,
+      solar_kwh        REAL,
+      home_kwh         REAL,
+      charge_kwh       REAL,
+      discharge_kwh    REAL,
+      grid_import_kwh  REAL,
+      grid_export_kwh  REAL,
+      sonnen_soc_avg   REAL,
+      sonnen_soc_min   REAL,
+      sonnen_soc_max   REAL,
+      tesla_soc_avg    REAL,
+      tesla_soc_min    REAL,
+      tesla_soc_max    REAL,
+      combined_soc_avg REAL,
+      combined_soc_min REAL,
+      combined_soc_max REAL,
+      samples          INTEGER NOT NULL,
+      src              TEXT
     );
   `);
   handle

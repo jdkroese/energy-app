@@ -221,6 +221,63 @@ export function availableDayKeys(): string[] {
   return Object.keys(load().days).sort();
 }
 
+/** One persisted 5-min bucket: unix-second ts + per-series value (null if unseen). */
+export interface RawBucketSample {
+  ts: number; // unix seconds — bucket START in Madrid local time
+  values: Record<HistorySeriesKey, number | null>;
+  samples: number;
+}
+
+/**
+ * Yield every SEEN 5-min bucket across all retained days as a raw sample with its
+ * unix-second start instant — for the one-time SQLite import (energy-backfill).
+ * Only buckets with seen>0 are emitted; nulls (unseen SoC) are preserved. The ts
+ * is the bucket start in Madrid local time, derived from the day key + bucket idx.
+ */
+export function rawBuckets(): RawBucketSample[] {
+  const state = load();
+  const out: RawBucketSample[] = [];
+  for (const key of Object.keys(state.days).sort()) {
+    const day = state.days[key];
+    for (let i = 0; i < BUCKETS_PER_DAY; i++) {
+      const seen = day.seen[i] ?? 0;
+      if (seen <= 0) continue;
+      const ts = madridBucketStartTs(key, i);
+      if (ts == null) continue;
+      const values = {} as Record<HistorySeriesKey, number | null>;
+      for (const k of HISTORY_SERIES) {
+        const v = day.series[k][i];
+        values[k] = typeof v === 'number' && Number.isFinite(v) ? v : null;
+      }
+      out.push({ ts, values, samples: seen });
+    }
+  }
+  return out;
+}
+
+/**
+ * Unix-seconds start of bucket `idx` (0..287) on Madrid day `dateKey`. Computed by
+ * finding the UTC instant whose Madrid local time equals dateKey @ hh:mm. We probe
+ * the day's UTC midnight ± offset; DST shifts are within the search so the wall
+ * clock matches. Returns null if the date can't be parsed.
+ */
+function madridBucketStartTs(dateKey: string, idx: number): number | null {
+  const baseMs = Date.parse(`${dateKey}T00:00:00Z`);
+  if (Number.isNaN(baseMs)) return null;
+  const hh = Math.floor(idx / 12);
+  const mm = (idx % 12) * 5;
+  // Madrid is UTC+1/+2; subtract the offset so the resulting wall clock lands on
+  // dateKey hh:mm. Probe candidate offsets and pick the one whose Madrid-rendered
+  // day+bucket matches, so DST days resolve correctly.
+  for (const offH of [2, 1, 0]) {
+    const cand = baseMs + (hh - offH) * 3600_000 + mm * 60_000;
+    const d = new Date(cand);
+    if (madridDateKey(d) === dateKey && madridBucketIndex(d) === idx) return Math.floor(cand / 1000);
+  }
+  // Fallback: assume +1 (standard) — close enough for a one-time import.
+  return Math.floor((baseMs + (hh - 1) * 3600_000 + mm * 60_000) / 1000);
+}
+
 /**
  * Measured 288-bucket series for a day key, or null if we have no data for it.
  * Power series are rounded kW (0 before seen); SoC series are rounded % (null
