@@ -35,21 +35,40 @@ function rawFromPct(pct: number, min: number, max: number): number {
   return Math.round(min + ((max - min) * clamp(pct, 0, 100)) / 100);
 }
 
+/** Parse a spec function/status DP's JSON `values` blob, or null when absent/non-JSON. */
+function specValues(
+  spec: TuyaSpec | null | undefined,
+  dp: string,
+): { min?: number; max?: number; range?: string[]; scale?: number } | null {
+  if (!spec) return null;
+  const fn = spec.functions.find((f) => f.code === dp) ?? spec.status.find((s) => s.code === dp);
+  if (!fn?.values) return null;
+  try {
+    return JSON.parse(fn.values) as { min?: number; max?: number; range?: string[]; scale?: number };
+  } catch {
+    return null;
+  }
+}
+
 /** Pull {min,max,range} bounds off a spec function's JSON `values` blob. */
 function specBounds(spec: TuyaSpec | null | undefined, dp: string): { min?: number; max?: number; range?: string[] } {
-  if (!spec) return {};
-  const fn = spec.functions.find((f) => f.code === dp) ?? spec.status.find((s) => s.code === dp);
-  if (!fn?.values) return {};
-  try {
-    const v = JSON.parse(fn.values) as { min?: number; max?: number; range?: string[] };
-    return {
-      ...(typeof v.min === 'number' ? { min: v.min } : {}),
-      ...(typeof v.max === 'number' ? { max: v.max } : {}),
-      ...(Array.isArray(v.range) ? { range: v.range } : {}),
-    };
-  } catch {
-    return {};
-  }
+  const v = specValues(spec, dp);
+  if (!v) return {};
+  return {
+    ...(typeof v.min === 'number' ? { min: v.min } : {}),
+    ...(typeof v.max === 'number' ? { max: v.max } : {}),
+    ...(Array.isArray(v.range) ? { range: v.range } : {}),
+  };
+}
+
+/**
+ * The Tuya spec `scale` for a DP (raw / 10^scale → real units), when present.
+ * Breakers report e.g. `cur_voltage` scale 1 (deci-volts), `cur_power` scale 1
+ * (deci-watts), `cur_current` scale 0 (mA). Undefined when the spec omits scale.
+ */
+function specScale(spec: TuyaSpec | null | undefined, dp: string): number | undefined {
+  const v = specValues(spec, dp);
+  return v && typeof v.scale === 'number' && Number.isFinite(v.scale) ? v.scale : undefined;
 }
 
 export interface GenericCommandInput {
@@ -138,16 +157,38 @@ export function readLiveValue(d: TuyaDevice, cap: Capability, spec?: TuyaSpec | 
   if (cap.kind === 'switch') return Boolean(raw);
   if (cap.kind === 'enum' || cap.kind === 'status') return raw;
 
-  if (cap.kind === 'range' || cap.kind === 'measure') {
+  if (cap.kind === 'range') {
     if (typeof raw !== 'number') return raw;
     const bounds = specBounds(spec, cap.dp);
     const explicitBounds = (cap.min ?? bounds.min) !== undefined || (cap.max ?? bounds.max) !== undefined;
-    if (cap.kind === 'range' && !explicitBounds) {
+    if (!explicitBounds) {
       const min = cap.min ?? bounds.min ?? 0;
       const max = cap.max ?? bounds.max ?? 1000;
       return max > min ? clamp(Math.round(((raw - min) / (max - min)) * 100), 0, 100) : 0;
     }
-    return raw; // explicit-bounds range or a measure — report device units verbatim
+    return raw; // explicit-bounds range — report device units verbatim
+  }
+
+  if (cap.kind === 'measure') {
+    // A measure reports raw device units; convert to real units before display.
+    // Coerce numeric strings (some breaker firmwares report numbers as strings),
+    // but pass a genuine non-numeric blob (e.g. a packed `phase_a` string) through.
+    const num = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(num)) return raw;
+    const scale = specScale(spec, cap.dp);
+    let scaled: number;
+    if (scale !== undefined) {
+      scaled = num / 10 ** scale; // spec-driven: raw / 10^scale (e.g. cur_voltage scale 1 → ÷10)
+    } else {
+      // No spec scale — unit heuristic mirroring tuya-voltage's deci-unit detection.
+      const unit = cap.unit;
+      if (unit === 'V' && Math.abs(num) > 1000) scaled = num / 10;
+      else if (unit === 'W' && Math.abs(num) > 100000) scaled = num / 10;
+      else if (unit === '°C' && Math.abs(num) > 80) scaled = num / 10;
+      else if (unit === '%' && num > 100) scaled = num / 10;
+      else scaled = num;
+    }
+    return Math.round(scaled * 10) / 10; // 1 decimal max
   }
 
   if (cap.kind === 'color') {

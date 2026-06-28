@@ -523,6 +523,12 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
   const sw = powerCap(d.capabilities);
   const cur = findMeasure(d.capabilities, 'current');
   const volt = findMeasure(d.capabilities, 'voltage');
+  // Only render gauges the breaker actually exposes — a non-metering breaker
+  // shows no gauges row, and a one-metric breaker shows a single centered gauge.
+  const gauges = [
+    cur && { cap: cur, label: 'Current', unit: cur.unit ?? 'mA', accent: 'var(--ev)', floor: 1000 },
+    volt && { cap: volt, label: 'Voltage', unit: volt.unit ?? 'V', accent: 'var(--grid)', floor: 250 },
+  ].filter(Boolean) as Array<{ cap: Capability; label: string; unit: string; accent: string; floor: number }>;
   const liveOn = sw ? Boolean(d.values[sw.dp]) : false;
   const on = optimisticOn ?? liveOn;
 
@@ -549,7 +555,9 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
   const numFrom = (dp?: string): number | null => {
     if (!dp) return null;
     const v = d.values[dp];
-    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    // Backend now sends scaled numbers; tolerate numeric strings too (resilience).
+    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+    return Number.isFinite(n) ? n : null;
   };
 
   return (
@@ -626,11 +634,16 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
         </div>
       )}
 
-      {/* Gauges row — Current + Voltage */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, placeItems: 'center' }}>
-        <Gauge label="Current" value={numFrom(cur?.dp)} unit={cur?.unit ?? 'mA'} accent="var(--ev)" nominalFloor={1000} size={124} />
-        <Gauge label="Voltage" value={numFrom(volt?.dp)} unit={volt?.unit ?? 'V'} accent="var(--grid)" nominalFloor={250} size={124} />
-      </div>
+      {/* Gauges row — only the metering gauges this breaker actually exposes.
+          Non-metering breakers (e.g. heatpump cut-offs) have neither and show no
+          gauges row at all, instead of two empty "—" gauges that look broken. */}
+      {gauges.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: gauges.length === 1 ? '1fr' : '1fr 1fr', gap: 8, placeItems: 'center' }}>
+          {gauges.map((g) => (
+            <Gauge key={g.label} label={g.label} value={numFrom(g.cap.dp)} unit={g.unit} accent={g.accent} nominalFloor={g.floor} size={124} />
+          ))}
+        </div>
+      )}
 
       {/* Footer — Schedule shortcut */}
       <div>
