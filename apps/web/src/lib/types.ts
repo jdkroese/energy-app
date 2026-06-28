@@ -27,6 +27,12 @@ export interface LiveResponse {
   /** False when a battery's live read is missing — the surplus rule will not START this tick. */
   batteryDataComplete?: boolean;
   tariff: { band: Band; rateEur: number; nextBand: Band; minsToNext: number };
+  /**
+   * Live grid voltage/current/power from the monitored Tuya breaker (category `tdq`),
+   * or null when none is configured/exposing `cur_voltage`. Drives the Live "GRID
+   * VOLTAGE" KPI box. Fluctuates a lot — polled every 10s with /api/live.
+   */
+  breaker?: { id: string; name: string; voltageV: number; currentA: number; powerW: number } | null;
   today: {
     producedKwh: number;
     consumedKwh: number;
@@ -180,9 +186,20 @@ export interface Channels {
 
 export type ChannelType = 'whatsapp' | 'push' | 'email';
 
+/** Grid-voltage band monitor config (Live KPI + `rule-voltage` alert). */
+export interface VoltageMonitor {
+  enabled: boolean;
+  minV: number;
+  maxV: number;
+  /** Auto-picked + persisted breaker id (read-only from the UI's perspective). */
+  breakerId?: string;
+}
+
 export interface SettingsResponse {
   ts: string;
   connections: { name: string; icon: string; tone: string; status: string; detail: string }[];
+  /** Grid-voltage band monitor (present so Settings can seed the band controls). */
+  voltageMonitor?: VoltageMonitor;
   tariff: {
     bands: { band: Band; rate: number }[];
     powerTermEur: number;

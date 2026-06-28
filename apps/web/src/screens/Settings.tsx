@@ -6,7 +6,7 @@ import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpC
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider } from '../components/ui';
 import { StaleBanner } from './_shared';
-import { AlertRulesCard } from '../components/Notifications';
+import { AlertRulesCard, VoltageMonitorCard } from '../components/Notifications';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
 import { InstallSheet } from '../components/InstallSheet';
 import { isStandalone } from '../lib/install';
@@ -1478,6 +1478,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <NotificationsCard channels={ch} onChannels={setChannels} />
           <AlertRulesCard />
+          <VoltageMonitorCard />
         </div>
       )}
 

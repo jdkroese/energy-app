@@ -4,6 +4,7 @@ import { bandInfo } from '../tariff';
 import { config } from '../config';
 import * as history5m from '../history5m';
 import { climateSurplusW } from '../control/climate-snapshot';
+import { getMonitoredBreaker } from '../connectors/tuya-voltage';
 
 const COMBINED_USABLE_KWH = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
 
@@ -150,15 +151,17 @@ async function todayFromHistory(): Promise<{
 }
 
 export async function getLive(): Promise<unknown> {
-  const [sRes, tRes, hRes] = await Promise.allSettled([
+  const [sRes, tRes, hRes, bRes] = await Promise.allSettled([
     sonnen.getNormalized(),
     tesla.getNormalized(),
     todayFromHistory(),
+    getMonitoredBreaker(),
   ]);
 
   const s = sRes.status === 'fulfilled' ? sRes.value : null;
   const t = tRes.status === 'fulfilled' ? tRes.value : null;
   const hist = hRes.status === 'fulfilled' ? hRes.value : null;
+  const breaker = bRes.status === 'fulfilled' ? bRes.value : null;
 
   // Solar: Tesla solar_power is the PW3-metered array (Array B). If Sonnen reports
   // production (Array A), add it. Best-effort A/B split.
@@ -278,6 +281,9 @@ export async function getLive(): Promise<unknown> {
       nextBand: tb.nextBand,
       minsToNext: tb.minsToNext,
     },
+    // Live grid voltage/current/power from the monitored Tuya breaker, or null when
+    // none is configured/exposing cur_voltage (the KPI box empty-states gracefully).
+    breaker,
     today: {
       producedKwh,
       consumedKwh,

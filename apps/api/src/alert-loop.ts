@@ -18,7 +18,9 @@ const RENOTIFY_AFTER_MS = 6 * 3600_000;
 // concurrent requests right after the daemon starts. Require this many consecutive
 // observations before notifying those, so a real outage still fires (~2 ticks ≈
 // 75s) while a one-off blip is ignored.
-const DEBOUNCE_RULES = new Set(['rule-offline', 'rule-outage']);
+// rule-voltage is debounced too: grid voltage fluctuates a lot, so require 2 consecutive
+// observations before notifying so a single spike past the band doesn't fire an alert.
+const DEBOUNCE_RULES = new Set(['rule-offline', 'rule-outage', 'rule-voltage']);
 const DEBOUNCE_MIN_STREAK = 2;
 
 let timer: ReturnType<typeof setInterval> | null = null;

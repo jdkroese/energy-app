@@ -41,6 +41,25 @@ export interface AlertOverride {
   status: AlertStatus;
 }
 
+/**
+ * Grid-voltage monitor config — drives the Live KPI box AND the `rule-voltage`
+ * alert. A Tuya breaker (category `tdq`) exposes `cur_voltage` (V); when the live
+ * voltage leaves [minV, maxV] the alert loop fires a `danger` notification. The
+ * monitored breaker is auto-picked (first configured breaker exposing `cur_voltage`)
+ * and its id persisted here so the choice is stable; a manual `breakerId` is honoured
+ * while that device is still present.
+ */
+export interface VoltageMonitor {
+  /** Master toggle for the band alert (the KPI box always renders when data exists). */
+  enabled: boolean;
+  /** Low voltage threshold (V) — below this the breaker reads as out-of-band. */
+  minV: number;
+  /** High voltage threshold (V) — above this the breaker reads as out-of-band. */
+  maxV: number;
+  /** Tuya device id of the monitored breaker (auto-picked + persisted; manual override honoured). */
+  breakerId?: string;
+}
+
 export interface ScenarioWeights {
   save: number;
   self: number;
@@ -821,6 +840,8 @@ export interface LightSchedule {
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
+  /** Grid-voltage band monitor (Live KPI + `rule-voltage` alert). */
+  voltageMonitor: VoltageMonitor;
   alertOverrides: Record<string, AlertOverride>;
   activeScenario: string;
   scenarios: Record<string, ScenarioDef>;
@@ -914,7 +935,15 @@ export const DEFAULT_RULES: RuleState[] = [
   { id: 'rule-offline', enabled: true },
   { id: 'rule-outage', enabled: true },
   { id: 'rule-export', enabled: false },
+  // The voltage rule's enable-state is owned by voltageMonitor.enabled (its own config),
+  // but it appears in the rules list so it surfaces in the feed/labels like the others.
+  { id: 'rule-voltage', enabled: true },
 ];
+
+/** Grid-voltage monitor defaults — ENABLED, band 190–240 V, breaker auto-picked. */
+export function defaultVoltageMonitor(): VoltageMonitor {
+  return { enabled: true, minV: 190, maxV: 240 };
+}
 
 export const DEFAULT_SCENARIOS: Record<string, ScenarioDef> = {
   balanced: {
@@ -1092,6 +1121,7 @@ function defaults(): StoreSchema {
       email: { address: 'j.kroese@levante.nl', enabled: false },
     },
     rules: DEFAULT_RULES.map((r) => ({ ...r })),
+    voltageMonitor: defaultVoltageMonitor(),
     alertOverrides: {},
     activeScenario: 'balanced',
     scenarios: structuredClone(DEFAULT_SCENARIOS),
@@ -1390,6 +1420,37 @@ function mergeAutomations(raw: unknown, base: Automation[], dismissed: string[])
   return [...deduped, ...toSeed];
 }
 
+/** Keep persisted rule enable-states but append any newly-shipped default rules
+ *  (e.g. `rule-voltage`) that aren't in the persisted list yet, so existing installs
+ *  pick up new rules with their default enable-state. */
+function mergeRules(raw: unknown, base: RuleState[]): RuleState[] {
+  if (!Array.isArray(raw) || raw.length === 0) return base.map((r) => ({ ...r }));
+  const persisted = raw.filter(
+    (r): r is RuleState => !!r && typeof r === 'object' && typeof (r as RuleState).id === 'string',
+  );
+  const have = new Set(persisted.map((r) => r.id));
+  const missing = base.filter((r) => !have.has(r.id)).map((r) => ({ ...r }));
+  return [...persisted, ...missing];
+}
+
+/** Coerce persisted voltage-monitor config, clamping the band to a sane range and
+ *  guaranteeing minV < maxV (falls back to defaults when invalid). */
+function hydrateVoltageMonitor(
+  p: Partial<VoltageMonitor> | undefined,
+  base: VoltageMonitor,
+): VoltageMonitor {
+  if (!p || typeof p !== 'object') return { ...base };
+  const minV = typeof p.minV === 'number' && Number.isFinite(p.minV) ? p.minV : base.minV;
+  const maxV = typeof p.maxV === 'number' && Number.isFinite(p.maxV) ? p.maxV : base.maxV;
+  const valid = minV >= 0 && maxV > minV;
+  return {
+    enabled: typeof p.enabled === 'boolean' ? p.enabled : base.enabled,
+    minV: valid ? minV : base.minV,
+    maxV: valid ? maxV : base.maxV,
+    ...(typeof p.breakerId === 'string' && p.breakerId ? { breakerId: p.breakerId } : {}),
+  };
+}
+
 /** Merge persisted JSON onto defaults so new fields appear with sane values. */
 function hydrate(raw: unknown): StoreSchema {
   const base = defaults();
@@ -1401,7 +1462,8 @@ function hydrate(raw: unknown): StoreSchema {
       push: { ...base.channels.push, ...(p.channels?.push ?? {}) },
       email: { ...base.channels.email, ...(p.channels?.email ?? {}) },
     },
-    rules: Array.isArray(p.rules) && p.rules.length ? p.rules : base.rules,
+    rules: mergeRules(p.rules, base.rules),
+    voltageMonitor: hydrateVoltageMonitor(p.voltageMonitor, base.voltageMonitor),
     alertOverrides: p.alertOverrides ?? base.alertOverrides,
     activeScenario: p.activeScenario ?? base.activeScenario,
     scenarios:

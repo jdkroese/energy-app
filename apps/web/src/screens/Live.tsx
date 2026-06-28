@@ -2,7 +2,7 @@ import { useCallback, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_LIVE, MOCK_HISTORY_DAY } from '../lib/mock';
-import type { HistoryDayResponse, LiveResponse } from '../lib/types';
+import type { HistoryDayResponse, LiveResponse, VoltageMonitor } from '../lib/types';
 import { Card, StatTile, RadialGauge, ProgressBar, Badge, Eyebrow, Icon } from '../components/ui';
 import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
@@ -30,6 +30,51 @@ function bandLabel(b: string) {
 /** Live battery status word from its flow direction (was hardcoded "idle"). */
 function dirLabel(dir: string) {
   return dir === 'charging' ? 'charging' : dir === 'discharging' ? 'discharging' : 'idle';
+}
+
+/**
+ * Live grid voltage KPI — reads `live.breaker` (a monitored Tuya breaker, category `tdq`)
+ * for voltage (V, primary) + current (A) + power (W) in the footnote. Empty-states to "—"
+ * when no breaker exposes cur_voltage. The value turns danger-toned when voltage leaves the
+ * configured band (polled separately; defaults 190–240 V). Rendered in BOTH viewports.
+ */
+function GridVoltageStat({ live, size = 'md' }: { live: LiveResponse; size?: 'sm' | 'md' }) {
+  // Band rarely changes — a slow poll is enough; falls back to the 190–240 V default.
+  const { data } = usePolling<{ voltageMonitor: VoltageMonitor }>(api.voltageMonitor, 60_000);
+  const band = data?.voltageMonitor ?? { enabled: true, minV: 190, maxV: 240 };
+  const b = live.breaker;
+
+  if (!b) {
+    return (
+      <StatTile
+        size={size}
+        label="Grid voltage"
+        value="—"
+        tone="grid"
+        icon={<Icon name="zap" />}
+        footnote="no breaker configured"
+      />
+    );
+  }
+
+  const outOfBand = b.voltageV < band.minV || b.voltageV > band.maxV;
+  const value = outOfBand ? (
+    <span style={{ color: 'var(--danger)' }}>{b.voltageV}</span>
+  ) : (
+    b.voltageV
+  );
+  const detail = `${b.currentA.toFixed(1)} A · ${b.powerW} W`;
+  return (
+    <StatTile
+      size={size}
+      label="Grid voltage"
+      value={value}
+      unit="V"
+      tone="grid"
+      icon={<Icon name="zap" />}
+      footnote={outOfBand ? `${detail} · outside ${band.minV}–${band.maxV} V` : `${detail} · band ${band.minV}–${band.maxV} V`}
+    />
+  );
 }
 
 interface Insight {
@@ -193,6 +238,11 @@ export function Live({ ctx }: { ctx: ShellContext }) {
               <StatTile size="sm" label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
             </Card>
           </div>
+          <div style={{ gridColumn: 'span 2' }}>
+            <Card accent="grid" style={{ padding: 14 }}>
+              <GridVoltageStat live={live} size="sm" />
+            </Card>
+          </div>
         </div>
 
         {/* live flow */}
@@ -324,6 +374,11 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
           <Card accent="home">
             <StatTile label="Home load" value={live.home.kw.toFixed(1)} unit="kW" tone="home" icon={<Icon name="house" />} footnote="all-electric" />
           </Card>
+          <div style={{ gridColumn: 'span 2' }}>
+            <Card accent="grid">
+              <GridVoltageStat live={live} />
+            </Card>
+          </div>
           <div style={{ gridColumn: 'span 2' }}>
             <Card style={{ display: 'flex', flexDirection: 'column' }}>
               <Eyebrow>Tariff · 2.0TD</Eyebrow>
