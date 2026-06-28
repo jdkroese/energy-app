@@ -514,11 +514,22 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(d.name);
   const [saving, setSaving] = useState(false);
+  // Local optimistic overlay for the Power switch: snaps immediately on tap, then
+  // reconciles (drops) once the live /configured read-back catches up (Tuya cloud
+  // read lags a few seconds; the fleet only polls every 20s).
+  const [optimisticOn, setOptimisticOn] = useState<boolean | null>(null);
 
   const sw = powerCap(d.capabilities);
   const cur = findMeasure(d.capabilities, 'current');
   const volt = findMeasure(d.capabilities, 'voltage');
-  const on = sw ? Boolean(d.values[sw.dp]) : false;
+  const liveOn = sw ? Boolean(d.values[sw.dp]) : false;
+  const on = optimisticOn ?? liveOn;
+
+  useEffect(() => {
+    if (optimisticOn !== null && sw && Boolean(d.values[sw.dp]) === optimisticOn) {
+      setOptimisticOn(null);
+    }
+  }, [d.values, sw?.dp, optimisticOn]);
 
   const startEdit = () => { setDraft(d.name); setEditing(true); };
   const save = async () => {
@@ -590,11 +601,26 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
       {/* On/Off row */}
       {sw && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-          <span style={{ fontSize: 13, color: 'var(--text-2)' }}>Power</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-2)' }}>
+            Power
+            {optimisticOn !== null && (
+              <span
+                aria-label="Syncing"
+                title="Syncing — confirming with the unit"
+                style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--grid)', display: 'inline-block', animation: 'pwrSyncPulse 1s ease-in-out infinite' }}
+              >
+                <style>{`@keyframes pwrSyncPulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }`}</style>
+              </span>
+            )}
+          </span>
           <Switch
             checked={on}
             disabled={!canWrite}
-            onChange={(e) => onWrite(sw.dp, 'switch', e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setOptimisticOn(checked);
+              void Promise.resolve(onWrite(sw.dp, 'switch', checked));
+            }}
           />
         </div>
       )}
