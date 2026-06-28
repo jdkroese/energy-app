@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceType, DevicesResponse, Schedule, SchedulesResponse, LightsResponse, ScenesResponse, BlindsResponse } from '../lib/types';
+import type { DeviceType, DevicesResponse, Schedule, SchedulesResponse, LightsResponse, ScenesResponse, BlindsResponse, ConfiguredResponse } from '../lib/types';
 import { Icon, Button, SegmentedControl } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -11,6 +11,7 @@ import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
 import { EditRuleOverlay, type RulePeer } from '../components/schedules/EditRuleOverlay';
 import { LightSchedulesSection } from '../components/lights/ScenesAndSchedules';
 import { newRuleDraft, TYPE_LABEL } from '../lib/scheduleRules';
+import { hasPowerSwitch } from '../lib/capabilities';
 
 /* ============================================================================
  * Schedules — rendered under the "Schedules" tab on the Automations screen
@@ -45,6 +46,7 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
   const { data, stale, updatedAt, refetch } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const { data: devData } = usePolling<DevicesResponse>(api.devices.list, 0);
   const { data: blindsData } = usePolling<BlindsResponse>(api.blinds.list, 0);
+  const { data: configuredData } = usePolling<ConfiguredResponse>(api.devices.configured, 0);
   const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 0);
   const { data: lightScenesData } = usePolling<ScenesResponse>(api.lights.scenes, 0);
   const lights = useMemo(
@@ -59,13 +61,24 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
   const [params, setParams] = useSearchParams();
 
   const schedules = useMemo(() => data?.schedules ?? [], [data]);
-  // Schedulable units = the climate fleet + the Tuya blinds fleet, mapped to a
-  // common {id, name, type} shape so the screen treats them identically.
+  // Configured generic devices that have a power on/off switch are schedulable as
+  // 'circuit' units (fan plugs, ceiling fans, …). Keep a id→capabilities map so the
+  // editor can offer the device's fan speed / direction. Lighting is folded into the
+  // lights fleet (scheduled separately), so skip typeId === 'lighting'.
+  const circuitDevices = useMemo(
+    () => (configuredData?.devices ?? []).filter((d) => d.typeId !== 'lighting' && hasPowerSwitch(d.capabilities)),
+    [configuredData],
+  );
+  const capsById = useMemo(() => new Map(circuitDevices.map((d) => [d.id, d.capabilities])), [circuitDevices]);
+  // Schedulable units = the climate fleet + the Tuya blinds fleet + switchable generic
+  // (circuit) devices, mapped to a common {id, name, type} shape so the screen treats
+  // them identically.
   const units = useMemo<SchedUnit[]>(() => {
     const climate: SchedUnit[] = (devData?.devices ?? []).map((d) => ({ id: d.id, name: d.room || d.name, type: d.type }));
     const blinds: SchedUnit[] = (blindsData?.devices ?? []).map((b) => ({ id: b.id, name: b.room || b.name, type: 'blinds' as DeviceType }));
-    return [...climate, ...blinds].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-  }, [devData, blindsData]);
+    const circuits: SchedUnit[] = circuitDevices.map((d) => ({ id: d.id, name: d.name, type: 'circuit' as DeviceType }));
+    return [...climate, ...blinds, ...circuits].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  }, [devData, blindsData, circuitDevices]);
   const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
   const unitName = (id: string) => unitById.get(id)?.name || id;
 
@@ -211,6 +224,7 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
           wide={wide}
           peers={peersFor(editing.rule)}
           allRules={schedules}
+          capabilities={editing.rule.scope.kind === 'unit' ? capsById.get(editing.rule.scope.deviceId) : undefined}
           canDelete={!!canConfig && !editing.isNew}
           onCancel={() => setEditing(null)}
           onSave={saveRule}

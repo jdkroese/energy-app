@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon, Button, Switch } from '../ui';
-import type { Action, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, TimeAnchor, VaneSetting } from '../../lib/types';
+import type { Action, Capability, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, TimeAnchor, VaneSetting } from '../../lib/types';
 import { checkRuleOverlap, expandSegments, selfOverlaps, wouldOverlapUnit, TYPE_LABEL } from '../../lib/scheduleRules';
 import { AnchorPicker, OffsetStepper } from './TimeAnchorControls';
 
@@ -42,6 +42,7 @@ export function EditRuleOverlay({
   wide,
   peers,
   allRules,
+  capabilities,
   canDelete,
   onCancel,
   onSave,
@@ -52,6 +53,8 @@ export function EditRuleOverlay({
   wide: boolean;
   peers: RulePeer[];
   allRules: Schedule[];
+  /** For a 'circuit' rule: the device's capabilities, to offer fan speed / direction. */
+  capabilities?: Capability[];
   canDelete: boolean;
   onCancel: () => void;
   onSave: (rule: Schedule, copyToDeviceIds: string[]) => Promise<void>;
@@ -67,8 +70,23 @@ export function EditRuleOverlay({
   const [err, setErr] = useState<string | null>(null);
 
   const isBlind = rule.type === 'blinds';
+  const isCircuit = rule.type === 'circuit';
   const hideFanVanes = rule.type === 'heating'; // underfloor has no fan/vanes
   const modeOptions = rule.type === 'heating' ? HEATING_MODES : MODES; // heat: cool/heat/auto only
+
+  // Circuit (generic switchable device) levers, derived from the device's capabilities.
+  const speedCap = useMemo(
+    () => (capabilities ?? []).find((c) => c.kind === 'range' && c.dp === 'fan_speed')
+      ?? (capabilities ?? []).find((c) => c.kind === 'range'),
+    [capabilities],
+  );
+  const directionCap = useMemo(
+    () => (capabilities ?? []).find((c) => c.kind === 'enum' && (c.dp.includes('direction')))
+      ?? (capabilities ?? []).find((c) => c.kind === 'enum'),
+    [capabilities],
+  );
+  const speedMin = speedCap?.min ?? 1;
+  const speedMax = speedCap?.max ?? 6;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
@@ -127,7 +145,7 @@ export function EditRuleOverlay({
       </div>
 
       {/* OPERATION */}
-      <Field title={isBlind ? 'Move the blind to' : 'Operation to run'}>
+      <Field title={isBlind ? 'Move the blind to' : isCircuit ? 'What to do' : 'Operation to run'}>
         {isBlind ? (
           <SegRow
             options={[{ value: 'close', label: 'Close' }, { value: 'open', label: 'Open' }]}
@@ -135,6 +153,43 @@ export function EditRuleOverlay({
             onChange={(v) => setAct({ positionPct: v === 'open' ? 100 : 0 })}
             activeColor="var(--ev)"
           />
+        ) : isCircuit ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 12 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Turns on during the window · off after.</div>
+            {speedCap && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '7px 10px' }}>
+                <span style={{ fontSize: 12, color: 'var(--text-2)' }}>Fan speed</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {/* "—" = leave the device's current speed as-is (action.speed === undefined). */}
+                  <button type="button" aria-label="Decrease speed"
+                    onClick={() => {
+                      const cur = action.speed ?? speedMin;
+                      setAct({ speed: cur <= speedMin ? undefined : cur - 1 });
+                    }}
+                    style={stepBtn}><Icon name="minus" size={13} /></button>
+                  <span className="pwr-mono" style={{ fontSize: 15, fontWeight: 600, color: 'var(--solar)', minWidth: 32, textAlign: 'center' }}>
+                    {action.speed == null ? '—' : action.speed}
+                  </span>
+                  <button type="button" aria-label="Increase speed"
+                    onClick={() => {
+                      const cur = action.speed;
+                      setAct({ speed: cur == null ? speedMin : Math.min(speedMax, cur + 1) });
+                    }}
+                    style={stepBtn}><Icon name="plus" size={13} /></button>
+                </div>
+              </div>
+            )}
+            {directionCap && directionCap.options && directionCap.options.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={label}>Direction</span>
+                <SegRow
+                  options={[{ value: '', label: 'Leave' }, ...directionCap.options.map((o) => ({ value: o, label: o }))]}
+                  value={action.direction ?? ''}
+                  onChange={(v) => setAct({ direction: v || undefined })}
+                />
+              </div>
+            )}
+          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 12 }}>
             <SegRow options={modeOptions} value={action.mode} onChange={(m) => setAct({ mode: m as ClimateMode })} />
@@ -229,8 +284,8 @@ export function EditRuleOverlay({
         </div>
       </Field>
 
-      {/* RUN CONDITION (climate only — blinds run purely on the time windows) */}
-      {!isBlind && (
+      {/* RUN CONDITION (climate only — blinds + circuits run purely on the time windows) */}
+      {!isBlind && !isCircuit && (
       <Field title="Run condition">
         <SegRow
           options={[{ value: 'always', label: 'Always' }, { value: 'warmerThan', label: 'Only if warmer than' }, { value: 'coolerThan', label: 'Only if cooler than' }]}

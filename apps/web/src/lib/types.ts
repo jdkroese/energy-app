@@ -646,6 +646,12 @@ export interface Action {
   vaneLeftRight: VaneSetting;
   /** Blinds only: target position 0 = closed … 100 = open. */
   positionPct?: number;
+  /** Circuit (generic switchable device) only: fan speed in DEVICE units to set at
+   *  ON. Omit = leave the device's current speed as-is. */
+  speed?: number;
+  /** Circuit only: direction enum value (e.g. 'forward'/'reverse') to set at ON.
+   *  Omit = leave as-is. */
+  direction?: string;
 }
 
 export type TimeAnchor = 'fixed' | 'sunrise' | 'sunset';

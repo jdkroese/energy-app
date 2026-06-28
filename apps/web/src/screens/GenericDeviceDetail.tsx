@@ -2,13 +2,17 @@ import { useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { Capability, ConfiguredResponse, DeviceDiagnosticsResponse } from '../lib/types';
+import type { Capability, ConfiguredResponse, DeviceDiagnosticsResponse, Schedule, SchedulesResponse } from '../lib/types';
 import { Card, Icon, Button } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { GenericControl } from '../components/GenericControl';
+import { primaryCapabilities, secondaryCapabilities, hasPowerSwitch } from '../lib/capabilities';
 import { resolveTypeMeta } from '../lib/deviceTypes';
+import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
+import { EditRuleOverlay } from '../components/schedules/EditRuleOverlay';
+import { newRuleDraft } from '../lib/scheduleRules';
 import { SetupSheet } from './SetupSheet';
 import type { DiscoveredDevice } from '../lib/types';
 
@@ -26,13 +30,39 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
   const isAdmin = user?.role === 'admin';
   const wide = ctx.desktop;
   const { data, stale, updatedAt, refetch } = usePolling<ConfiguredResponse>(api.devices.configured, 15_000);
+  const { data: schedData, refetch: refetchSchedules } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const [reclassify, setReclassify] = useState(false);
+  const [editingRule, setEditingRule] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
 
   const device = data?.devices.find((x) => x.id === id) ?? null;
   const customTypes = data?.customDeviceTypes ?? [];
 
   const writeCap = (dp: string, kind: Capability['kind'], value: unknown) =>
     api.devices.commandCap(id ?? '', dp, kind, value).finally(() => refetch());
+
+  // ---- Schedule (rule) editing — same overlay/box as the climate device page ----
+  const allRules = schedData?.schedules ?? [];
+  const unitRules = id ? allRules.filter((s) => s.scope.kind === 'unit' && s.scope.deviceId === id) : [];
+  const refetchSched = () => refetchSchedules();
+  const toggleRuleEnabled = (s: Schedule, enabled: boolean) =>
+    api.schedules.update(s.id, { enabled }).finally(refetchSched);
+  const toggleRuleDay = (s: Schedule, day: number) => {
+    const days = s.days.includes(day) ? s.days.filter((x) => x !== day) : [...s.days, day].sort();
+    return api.schedules.update(s.id, { days }).finally(refetchSched);
+  };
+  const saveRule = async (rule: Schedule, copyTo: string[]) => {
+    const { id: _rid, ...payload } = rule;
+    if (rule.id) await api.schedules.update(rule.id, payload);
+    else await api.schedules.create(payload);
+    for (const deviceId of copyTo) await api.schedules.create({ ...payload, scope: { kind: 'unit', deviceId } });
+    setEditingRule(null);
+    refetchSched();
+  };
+  const deleteRule = (s: Schedule) => { setEditingRule(null); void api.schedules.remove(s.id).finally(refetchSched); };
+  const openAddRule = () => {
+    if (!device) return;
+    setEditingRule({ rule: newRuleDraft({ type: 'circuit', deviceId: device.id, name: device.name }), isNew: true });
+  };
 
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -59,10 +89,48 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
 
             <Card padded style={{ padding: 16 }}>
               <div className="pwr-eyebrow" style={{ marginBottom: 10 }}>Controls</div>
-              <GenericControl capabilities={device.capabilities} values={device.values} onWrite={writeCap} disabled={!isAdmin} variant="detail" />
+              <GenericControl capabilities={primaryCapabilities(device.capabilities)} values={device.values} onWrite={writeCap} disabled={!isAdmin} variant="detail" />
             </Card>
 
+            <MoreControlsSection
+              caps={secondaryCapabilities(device.capabilities)}
+              values={device.values}
+              onWrite={writeCap}
+              disabled={!isAdmin}
+            />
+
+            {/* SCHEDULE — switchable devices only: on/off windows (+ speed/direction),
+                the same UnitScheduleBox + overlay as the climate device page. */}
+            {hasPowerSwitch(device.capabilities) && (
+              <UnitScheduleBox
+                name={device.name}
+                type="circuit"
+                rules={unitRules}
+                canConfig={isAdmin}
+                busy={false}
+                onAddRule={openAddRule}
+                onEditRule={(s) => setEditingRule({ rule: s, isNew: false })}
+                onToggleEnabled={toggleRuleEnabled}
+                onToggleDay={toggleRuleDay}
+              />
+            )}
+
             <DiagnosticsSection id={device.id} />
+
+            {editingRule && (
+              <EditRuleOverlay
+                rule={editingRule.rule}
+                unitName={device.name}
+                wide={wide}
+                peers={[]}
+                allRules={allRules}
+                capabilities={device.capabilities}
+                canDelete={isAdmin && !editingRule.isNew}
+                onCancel={() => setEditingRule(null)}
+                onSave={saveRule}
+                onDelete={() => deleteRule(editingRule.rule)}
+              />
+            )}
 
             {isAdmin && (
               <div style={{ display: 'flex', gap: 8 }}>
@@ -111,6 +179,35 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
         {body}
       </div>
     </>
+  );
+}
+
+/* ---- More controls & configuration (the long tail, collapsed) ------------- *
+ * Everything that isn't an everyday primary lever (countdown, mode, direction,
+ * measures, statuses, actions). Collapsed by default; same GenericControl renderer
+ * + writeCap path as the primary Controls card. Only rendered when there ARE
+ * secondary caps (the caller passes secondaryCapabilities(...)). */
+function MoreControlsSection({ caps, values, onWrite, disabled }: {
+  caps: Capability[];
+  values: Record<string, unknown>;
+  onWrite: (dp: string, kind: Capability['kind'], value: unknown) => Promise<unknown> | void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (caps.length === 0) return null;
+  return (
+    <Card padded style={{ padding: 16 }}>
+      <button type="button" onClick={() => setOpen((v) => !v)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+        <span className="pwr-eyebrow" style={{ flex: 1, textAlign: 'left' }}>More controls &amp; configuration</span>
+        <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{caps.length}</span>
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={16} color="var(--text-3)" />
+      </button>
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <GenericControl capabilities={caps} values={values} onWrite={onWrite} disabled={disabled} variant="detail" />
+        </div>
+      )}
+    </Card>
   );
 }
 

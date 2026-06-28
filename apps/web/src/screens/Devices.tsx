@@ -13,6 +13,7 @@ import type { ShellContext } from '../components/shell/AppShell';
 import { DEVICE_TYPES, classifyDevice, resolveTypeMeta, type DeviceType } from '../lib/deviceTypes';
 import { AutomationRow } from '../components/AutomationRow';
 import { GenericControl } from '../components/GenericControl';
+import { primaryCapabilities } from '../lib/capabilities';
 import { LightsPanel } from './Lights';
 import { BlindsPanel } from './Blinds';
 import { DiscoveredInbox, useDiscoveredCount } from './DiscoveredInbox';
@@ -492,7 +493,7 @@ function GenericDeviceCard({ d, wide, canWrite, onWrite, onOpen }: {
           <Icon name="chevron-right" size={16} color="var(--text-3)" />
         </button>
       </div>
-      <GenericControl capabilities={d.capabilities} values={d.values} onWrite={onWrite} disabled={!canWrite} variant="card" />
+      <GenericControl capabilities={primaryCapabilities(d.capabilities)} values={d.values} onWrite={onWrite} disabled={!canWrite} variant="card" />
     </Card>
   );
 }
