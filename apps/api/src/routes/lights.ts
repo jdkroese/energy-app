@@ -321,7 +321,8 @@ function sanitizeSchedule(body: Partial<store.LightSchedule>, base?: store.Light
       : typeof offRaw === 'string' && HHMM_RE.test(offRaw)
         ? offRaw
         : base?.offTime ?? null;
-  return {
+
+  const result: store.LightSchedule = {
     id: base?.id ?? newId('lsched'),
     name: body.name?.trim() || base?.name || 'New light schedule',
     enabled: typeof body.enabled === 'boolean' ? body.enabled : base?.enabled ?? true,
@@ -330,6 +331,17 @@ function sanitizeSchedule(body: Partial<store.LightSchedule>, base?: store.Light
     offTime,
     target: body.target !== undefined ? sanitizeTarget(body.target) : base?.target ?? { kind: 'lights', members: [] },
   };
+
+  if (body.onAnchor === 'sunrise' || body.onAnchor === 'sunset') {
+    result.onAnchor = body.onAnchor;
+    result.onOffsetMin = typeof body.onOffsetMin === 'number' ? Math.round(body.onOffsetMin) : 0;
+  }
+  if (offTime !== null && (body.offAnchor === 'sunrise' || body.offAnchor === 'sunset')) {
+    result.offAnchor = body.offAnchor;
+    result.offOffsetMin = typeof body.offOffsetMin === 'number' ? Math.round(body.offOffsetMin) : 0;
+  }
+
+  return result;
 }
 
 export function listLightSchedules(): unknown {

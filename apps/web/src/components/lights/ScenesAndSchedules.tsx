@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
 import type {
-  LightUnit, LightScene, LightSceneMember, LightSchedule, LightScheduleTarget,
+  LightUnit, LightScene, LightSceneMember, LightSchedule, LightScheduleTarget, TimeAnchor,
   ScenesResponse, LightSchedulesResponse,
 } from '../../lib/types';
 import { Card, Icon, Button, Switch, Slider, SegmentedControl, Input, Select } from '../ui';
 import { DayTrack, barsForWindow } from '../schedules/DayTrack';
+import { AnchorPicker, OffsetStepper, anchorLabel } from '../schedules/TimeAnchorControls';
 
 /* ============================================================================
  * Scenes + light schedules — the two management blocks under the Devices →
@@ -218,7 +219,8 @@ function summarize(s: LightSchedule, scenes: LightScene[]): string {
   } else {
     tgt = `${s.target.members.length} lights`;
   }
-  const win = s.offTime ? `${s.onTime}–${s.offTime}` : `at ${s.onTime}`;
+  const onLabel = anchorLabel(s.onTime, s.onAnchor, s.onOffsetMin);
+  const win = s.offTime ? `${onLabel}–${anchorLabel(s.offTime, s.offAnchor, s.offOffsetMin)}` : `at ${onLabel}`;
   return `${days} · ${win} · ${tgt}`;
 }
 
@@ -226,8 +228,12 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
   const [name, setName] = useState(sched?.name ?? '');
   const [days, setDays] = useState<number[]>(sched?.days ?? [1, 2, 3, 4, 5]);
   const [onTime, setOnTime] = useState(sched?.onTime ?? '18:00');
+  const [onAnchor, setOnAnchor] = useState<TimeAnchor>(sched?.onAnchor ?? 'fixed');
+  const [onOffsetMin, setOnOffsetMin] = useState(sched?.onOffsetMin ?? 0);
   const [autoOff, setAutoOff] = useState<boolean>(!!sched?.offTime);
   const [offTime, setOffTime] = useState(sched?.offTime ?? '23:00');
+  const [offAnchor, setOffAnchor] = useState<TimeAnchor>(sched?.offAnchor ?? 'fixed');
+  const [offOffsetMin, setOffOffsetMin] = useState(sched?.offOffsetMin ?? 0);
   const [kind, setKind] = useState<LightScheduleTarget['kind']>(sched?.target.kind ?? (scenes.length ? 'scene' : 'lights'));
   const [sceneId, setSceneId] = useState(sched?.target.kind === 'scene' ? sched.target.sceneId : scenes[0]?.id ?? '');
   const [draft, setDraft] = useState<Draft>(() => membersToDraft(lights, sched?.target.kind === 'lights' ? sched.target.members : []));
@@ -240,7 +246,18 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
     setBusy(true);
     try {
       const target: LightScheduleTarget = kind === 'scene' ? { kind: 'scene', sceneId } : { kind: 'lights', members: draftToMembers(draft, lights) };
-      const payload = { name: name.trim() || 'Light schedule', days, onTime, offTime: autoOff ? offTime : null, target, enabled: sched?.enabled ?? true };
+      const payload = {
+        name: name.trim() || 'Light schedule',
+        days,
+        onTime,
+        onAnchor: onAnchor !== 'fixed' ? onAnchor : undefined,
+        onOffsetMin: onAnchor !== 'fixed' ? onOffsetMin : undefined,
+        offTime: autoOff ? offTime : null,
+        offAnchor: autoOff && offAnchor !== 'fixed' ? offAnchor : undefined,
+        offOffsetMin: autoOff && offAnchor !== 'fixed' ? offOffsetMin : undefined,
+        target,
+        enabled: sched?.enabled ?? true,
+      };
       if (sched) await api.lights.updateSchedule(sched.id, payload);
       else await api.lights.createSchedule(payload);
       onSaved(); onClose();
@@ -261,18 +278,38 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
         <div className="pwr-eyebrow" style={{ marginBottom: 7 }}>Days</div>
         <DaysPicker days={days} onToggle={toggleDay} />
       </div>
-      <div style={{ display: 'flex', gap: 12 }}>
-        <div style={{ flex: 1 }}>
-          <div className="pwr-eyebrow" style={{ marginBottom: 7 }}>Turn on at</div>
-          <Input type="time" value={onTime} onChange={(e) => setOnTime(e.target.value)} />
+      <div>
+        <div className="pwr-eyebrow" style={{ marginBottom: 7 }}>Turn on at</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}>
+          <AnchorPicker value={onAnchor} onChange={(a) => {
+            setOnAnchor(a);
+            if (a === 'sunrise') setOnTime('07:00');
+            if (a === 'sunset') setOnTime('20:30');
+          }} />
+          {onAnchor === 'fixed'
+            ? <Input type="time" value={onTime} onChange={(e) => setOnTime(e.target.value)} />
+            : <OffsetStepper value={onOffsetMin} onChange={setOnOffsetMin} />
+          }
         </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
-            <span className="pwr-eyebrow">Turn off at</span>
-            <Switch checked={autoOff} onChange={(e) => setAutoOff(e.target.checked)} />
+      </div>
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+          <span className="pwr-eyebrow">Turn off at</span>
+          <Switch checked={autoOff} onChange={(e) => setAutoOff(e.target.checked)} />
+        </div>
+        {autoOff && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}>
+            <AnchorPicker value={offAnchor} onChange={(a) => {
+              setOffAnchor(a);
+              if (a === 'sunrise') setOffTime('07:00');
+              if (a === 'sunset') setOffTime('20:30');
+            }} />
+            {offAnchor === 'fixed'
+              ? <Input type="time" value={offTime} onChange={(e) => setOffTime(e.target.value)} />
+              : <OffsetStepper value={offOffsetMin} onChange={setOffOffsetMin} />
+            }
           </div>
-          <Input type="time" value={offTime} disabled={!autoOff} onChange={(e) => setOffTime(e.target.value)} />
-        </div>
+        )}
       </div>
       <div>
         <div className="pwr-eyebrow" style={{ marginBottom: 7 }}>Apply</div>

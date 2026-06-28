@@ -8,6 +8,8 @@
 import * as store from '../store';
 import * as tuya from '../connectors/tuya';
 import { applyScheduleOn, applyScheduleOff } from '../routes/lights';
+import { sunriseSunsetMin } from '../solar-model';
+import { config } from '../config';
 
 const TICK_MS = 30_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -21,6 +23,17 @@ function nowDM(): { day: number; min: number } {
 function hhmmToMin(s: string): number {
   const [h, m] = s.split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
+}
+
+function resolveTimeMin(
+  hhmm: string,
+  anchor: store.TimeAnchor | undefined,
+  offsetMin: number,
+  sunriseMin: number,
+  sunsetMin: number,
+): number {
+  if (!anchor || anchor === 'fixed') return hhmmToMin(hhmm);
+  return (anchor === 'sunrise' ? sunriseMin : sunsetMin) + offsetMin;
 }
 
 /** Did a scheduled (weekday, minute) fall in the half-open interval (prev, now]? */
@@ -52,11 +65,16 @@ async function tick(): Promise<void> {
       last = now; // first tick establishes a baseline; never fire on boot
       return;
     }
+    const { sunriseMin, sunsetMin } = sunriseSunsetMin(config.site.lat, config.site.lon, new Date());
     const schedules = store.get().lightSchedules.filter((s) => s.enabled);
     for (const s of schedules) {
+      const onMin = resolveTimeMin(s.onTime, s.onAnchor, s.onOffsetMin ?? 0, sunriseMin, sunsetMin);
+      const resolvedOffMin = s.offTime
+        ? resolveTimeMin(s.offTime, s.offAnchor, s.offOffsetMin ?? 0, sunriseMin, sunsetMin)
+        : null;
       for (const day of s.days) {
-        if (crossed(last, now, day, hhmmToMin(s.onTime))) await applyScheduleOn(s);
-        if (s.offTime && crossed(last, now, day, hhmmToMin(s.offTime))) await applyScheduleOff(s);
+        if (crossed(last, now, day, onMin)) await applyScheduleOn(s);
+        if (resolvedOffMin !== null && crossed(last, now, day, resolvedOffMin)) await applyScheduleOff(s);
       }
     }
     last = now;

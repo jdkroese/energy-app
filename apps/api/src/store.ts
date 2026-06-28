@@ -579,10 +579,18 @@ export interface LightSchedule {
   enabled: boolean;
   /** Days of week the schedule runs on (0=Sun..6=Sat). */
   days: number[];
-  /** Local "HH:MM" — apply the target (turn on / apply scene). */
+  /** Local "HH:MM" fallback — used when onAnchor is 'fixed' or as display fallback. */
   onTime: string;
+  /** Anchor for turn-on time. Default 'fixed' = use onTime directly. */
+  onAnchor?: TimeAnchor;
+  /** Minutes offset from the solar anchor (±). Default 0. */
+  onOffsetMin?: number;
   /** Optional local "HH:MM" — switch the target's lights off. null = no auto-off. */
   offTime?: string | null;
+  /** Anchor for turn-off time. Default 'fixed' = use offTime directly. */
+  offAnchor?: TimeAnchor;
+  /** Minutes offset from the solar anchor (±). Default 0. */
+  offOffsetMin?: number;
   target: LightScheduleTarget;
 }
 
