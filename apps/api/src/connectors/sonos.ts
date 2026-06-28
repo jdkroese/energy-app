@@ -367,32 +367,51 @@ export async function playSiren(opts: SirenOptions, overallBudgetSec: number | n
 // stream and plays, then sets each member's volume. Owner-validated facts:
 //   • A station plays via the `x-rincon-mp3radio://` URI scheme with the http(s):// prefix
 //     STRIPPED. A plain http:// URL is rejected by Sonos (UPnPError 714 Illegal MIME-Type).
-//   • DIDL metadata gives the now-playing a station title; empty metadata also plays.
+//   • Metadata MUST be empty — a DIDL metadata string makes Sonos reject the play with
+//     UPnPError 402 (Invalid args). https-only hosts that 701 when the scheme is stripped
+//     play via the scheme-preserving variant (see startRadioStream).
 
 /** Build the Sonos radio URI from a stream URL (strip the http(s):// prefix). */
 function radioUri(streamUrl: string): string {
   return 'x-rincon-mp3radio://' + streamUrl.replace(/^https?:\/\//i, '');
 }
 
-/** Minimal DIDL-Lite metadata so the now-playing shows the station name. */
-function radioDidl(stationName: string): string {
-  const safe = stationName.replace(/[<>&]/g, (c) => (c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;'));
-  return (
-    '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" ' +
-    'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" ' +
-    'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">' +
-    '<item id="R:0/0/0" parentID="R:0/0" restricted="true">' +
-    `<dc:title>${safe}</dc:title>` +
-    '<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>' +
-    '<desc id="cdudn" nameSpace="urn:schemas-rinconnetworks-com:metadata-1-0/">SA_RINCON65031_</desc>' +
-    '</item></DIDL-Lite>'
-  );
+/** The scheme-preserving variant: prepend x-rincon-mp3radio:// WITHOUT stripping, so the
+ *  original https:// is kept for TLS-only hosts (e.g. icecast on :8443) that 701 when the
+ *  scheme is dropped to plain http. */
+function radioUriKeep(streamUrl: string): string {
+  return 'x-rincon-mp3radio://' + streamUrl;
+}
+
+/** Start a radio stream on a coordinator, robust across stream types (owner-validated live).
+ *  EMPTY metadata is used DELIBERATELY — passing a DIDL metadata string makes Sonos reject
+ *  the call with UPnPError 402 (Invalid args) on EVERY play. Do not "add a title" here.
+ *  Strategy: try the stripped URI first (works for most http/https MP3 + many AAC/HLS), then
+ *  fall back to the scheme-preserving URI for https-only hosts. Confirms the transport
+ *  actually started (PLAYING/TRANSITIONING) rather than trusting SetAVTransportURI's return. */
+async function startRadioStream(coordinator: SonosDevice, streamUrl: string): Promise<void> {
+  const candidates = [radioUri(streamUrl)];
+  const keep = radioUriKeep(streamUrl);
+  if (keep !== candidates[0]) candidates.push(keep);
+  let lastErr: unknown = null;
+  for (const uri of candidates) {
+    try {
+      await coordinator.AVTransportService.SetAVTransportURI({ InstanceID: 0, CurrentURI: uri, CurrentURIMetaData: '' });
+      await coordinator.AVTransportService.Play({ InstanceID: 0, Speed: '1' });
+      const info = await coordinator.AVTransportService.GetTransportInfo({ InstanceID: 0 });
+      if (info.CurrentTransportState === 'PLAYING' || info.CurrentTransportState === 'TRANSITIONING') return;
+      lastErr = new Error(`stream did not start (${info.CurrentTransportState})`);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error(`could not start stream: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
 }
 
 export interface PlayStationOptions {
   /** The HTTP(S) stream URL of the station. */
   streamUrl: string;
-  /** Station name (shown as the now-playing title via DIDL). */
+  /** Station name (label only — used for logging/UI; not sent as Sonos metadata, see above). */
   name: string;
   /** Speaker UUIDs to play on. Empty = ALL discovered speakers (whole house). */
   speakerIds?: string[];
@@ -432,14 +451,8 @@ export async function playStation(opts: PlayStationOptions): Promise<{ playedOn:
     }
   }
 
-  // Point the coordinator at the radio stream and play.
-  const uri = radioUri(opts.streamUrl);
-  await coordinator.AVTransportService.SetAVTransportURI({
-    InstanceID: 0,
-    CurrentURI: uri,
-    CurrentURIMetaData: radioDidl(opts.name),
-  });
-  await coordinator.AVTransportService.Play({ InstanceID: 0, Speed: '1' });
+  // Point the coordinator at the radio stream and play (empty metadata + strip→keep fallback).
+  await startRadioStream(coordinator, opts.streamUrl);
 
   // Set volume on every target (best-effort per speaker).
   await Promise.all(
