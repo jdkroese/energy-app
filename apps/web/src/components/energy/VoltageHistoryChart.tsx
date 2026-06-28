@@ -1,12 +1,14 @@
-import { useId } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { VoltageSample } from '../../lib/types';
 
 /* ============================================================================
  * VoltageHistoryChart — hand-rolled SVG line chart of the last 48h of grid
  * voltage (5-min buckets). Draws the voltage line in --grid, dashed band lines
  * at minV/maxV, tints out-of-band segments --danger, and labels a few x-axis
- * time ticks. Empty/too-few-points → a tidy "Collecting data…" state. Used in
- * both viewports (desktop modal + mobile sheet). Model: AreaChart/DayChart.
+ * time ticks. Hover/drag (pointer events → mouse + touch) reveals a crosshair,
+ * a dot on the nearest sample, and a tooltip with the value + date/time.
+ * Empty/too-few-points → a tidy "Collecting data…" state. Used in both
+ * viewports (desktop modal + mobile sheet). Model: AreaChart/DayChart.
  * ==========================================================================*/
 
 type Props = {
@@ -20,8 +22,17 @@ function hhmm(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** Localized "Sun 28 Jun · 22:15" for the hover tooltip. */
+function whenLabel(ts: number): string {
+  const d = new Date(ts);
+  const day = d.toLocaleDateString([], { weekday: 'short', day: '2-digit', month: 'short' });
+  return `${day} · ${hhmm(ts)}`;
+}
+
 export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
   const id = 'v' + useId().replace(/:/g, '');
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
 
   // Collecting / empty state — need ≥2 points to draw a line.
   if (samples.length < 2) {
@@ -95,7 +106,41 @@ export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
   // Horizontal value gridlines (3) for orientation.
   const grids = [0, 0.5, 1];
 
+  // ---- Hover: map pointer x → nearest sample (by time) -----------------------
+  const vbH = h + 24; // svg viewBox height
+  function onMove(e: React.PointerEvent<HTMLDivElement>) {
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    const fx = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const tt = t0 + fx * tSpan;
+    let idx = 0;
+    let best = Infinity;
+    for (let i = 0; i < samples.length; i++) {
+      const dd = Math.abs(samples[i].ts - tt);
+      if (dd < best) {
+        best = dd;
+        idx = i;
+      }
+    }
+    setHover(idx);
+  }
+
+  const hp = hover != null ? pts[hover] : null;
+  const hs = hover != null ? samples[hover] : null;
+  const hBad = hs ? outOfBand(hs.voltageV) : false;
+  // Tooltip horizontal anchor — flip near the edges so it never clips.
+  const fracX = hp ? hp.x / w : 0;
+  const anchor = fracX < 0.16 ? 'translateX(0)' : fracX > 0.84 ? 'translateX(-100%)' : 'translateX(-50%)';
+
   return (
+    <div
+      ref={wrapRef}
+      onPointerMove={onMove}
+      onPointerDown={onMove}
+      onPointerUp={() => setHover(null)}
+      onPointerLeave={() => setHover(null)}
+      style={{ position: 'relative', touchAction: 'none', cursor: 'crosshair' }}
+    >
     <svg
       viewBox={`0 0 ${w} ${h + 24}`}
       width="100%"
@@ -190,6 +235,69 @@ export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
           {tk.label}
         </text>
       ))}
+
+      {/* hover crosshair (vertical) */}
+      {hp && (
+        <line
+          x1={hp.x}
+          y1={padY}
+          x2={hp.x}
+          y2={h - padY}
+          stroke="var(--text-2)"
+          strokeWidth="1"
+          strokeDasharray="4 4"
+          strokeOpacity="0.55"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
     </svg>
+
+      {/* hover dot — HTML overlay so it stays round under the stretched SVG */}
+      {hp && (
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute',
+            left: `${(hp.x / w) * 100}%`,
+            top: `${(hp.y / vbH) * 100}%`,
+            width: 9,
+            height: 9,
+            borderRadius: '50%',
+            background: hBad ? 'var(--danger)' : 'var(--grid)',
+            boxShadow: '0 0 0 3px var(--surface-1)',
+            transform: 'translate(-50%, -50%)',
+            transition: 'left .07s ease-out, top .07s ease-out',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+
+      {/* hover tooltip — value + date/time */}
+      {hp && hs && (
+        <div
+          style={{
+            position: 'absolute',
+            left: `${fracX * 100}%`,
+            top: 2,
+            transform: anchor,
+            pointerEvents: 'none',
+            background: 'var(--surface-2, #141d21)',
+            border: '1px solid var(--border-2)',
+            borderRadius: 8,
+            padding: '5px 9px',
+            whiteSpace: 'nowrap',
+            boxShadow: '0 6px 18px rgba(0,0,0,.45)',
+            transition: 'left .07s ease-out',
+          }}
+        >
+          <span style={{ font: '600 15px var(--font-mono)', color: hBad ? 'var(--danger)' : 'var(--grid)' }}>
+            {hs.voltageV} V
+          </span>
+          <span style={{ font: '500 11px var(--font-sans, inherit)', color: 'var(--text-3)', marginLeft: 8 }}>
+            {whenLabel(hs.ts)}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
