@@ -348,7 +348,7 @@ export function DiscoveredInbox({ wide, canTriage, onSetupDone }: DiscoveredInbo
         />
       )}
       {toast && (
-        <div role="status" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 1100,
+        <div role="status" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 1020,
           background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text-1)', borderRadius: 'var(--radius-pill)',
           padding: '9px 16px', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
           <Icon name="check" size={15} color="var(--solar)" /> {toast}

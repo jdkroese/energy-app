@@ -34,7 +34,7 @@ import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion';
 
 export type ModalSize = 'sm' | 'md' | 'lg' | 'xl';
 export type ModalZLayer = 'overlay' | 'nested' | 'toast';
-export type ModalTone = 'default' | 'danger' | 'solar' | 'battery';
+export type ModalTone = 'default' | 'danger' | 'solar' | 'battery' | 'grid';
 export type ModalPlacement = 'center' | 'sheet';
 
 const Z_INDEX: Record<ModalZLayer, number> = {
@@ -55,6 +55,7 @@ const TONE_WASH: Record<ModalTone, { wash: string; fg: string }> = {
   danger: { wash: 'var(--danger-wash)', fg: 'var(--danger)' },
   solar: { wash: 'var(--solar-wash)', fg: 'var(--solar)' },
   battery: { wash: 'var(--battery-wash)', fg: 'var(--battery)' },
+  grid: { wash: 'var(--grid-wash)', fg: 'var(--grid)' },
 };
 
 export interface ModalProps {
@@ -286,7 +287,6 @@ export function Modal({
             <button
               type="button"
               aria-label="Close"
-              data-autofocus
               onClick={onClose}
               style={{
                 display: 'grid',

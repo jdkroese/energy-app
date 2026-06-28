@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Capability, CapabilityKind, CapabilityOverride, CustomDeviceType, DiscoveredDevice } from '../lib/types';
-import { Button, Icon, Input, Select } from '../components/ui';
+import { Button, Icon, Input, Select, Modal } from '../components/ui';
 import { GenericControl } from '../components/GenericControl';
 import { SETUP_BUILTIN_TYPES } from '../lib/deviceTypes';
 import { api } from '../lib/api';
@@ -238,20 +238,11 @@ export function SetupSheet({ device, wide, customTypes, initialName, initialType
     </div>
   );
 
-  // Desktop = right-side panel; mobile = bottom sheet.
+  // Desktop = right-side rail; mobile = bottom sheet — via the shared <Modal>.
   return (
-    <div onClick={onClose}
-      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(3px)',
-        display: 'flex', alignItems: wide ? 'stretch' : 'flex-end', justifyContent: wide ? 'flex-end' : 'center', animation: 'setupFade var(--dur) var(--ease-out)' }}>
-      <style>{`@keyframes setupFade { from { opacity: 0 } to { opacity: 1 } }`}</style>
-      <div onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: wide ? 440 : 560, maxHeight: wide ? '100%' : '92vh', overflowY: 'auto',
-          background: 'var(--surface-2)', borderLeft: wide ? '1px solid var(--border-2)' : 'none',
-          borderRadius: wide ? 0 : '18px 18px 0 0', padding: wide ? '20px 18px' : '8px 16px 20px' }}>
-        {!wide && <div style={{ width: 38, height: 4, borderRadius: 999, background: 'var(--border-3)', margin: '6px auto 12px' }} />}
-        {body}
-      </div>
-    </div>
+    <Modal open onClose={onClose} placement="sheet" wideViewport={wide} ariaLabel="Set up device">
+      <div style={{ padding: wide ? '20px 18px' : '8px 16px 20px' }}>{body}</div>
+    </Modal>
   );
 }
 
