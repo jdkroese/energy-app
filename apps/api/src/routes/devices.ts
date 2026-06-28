@@ -5,6 +5,7 @@
 import * as intesis from '../connectors/intesis';
 import type { ClimateUnit } from '../connectors/intesis';
 import * as airzone from '../connectors/airzone';
+import * as panasonic from '../connectors/panasonic';
 import * as store from '../store';
 import { defaultAutomations, defaultTariffArbitrageParams } from '../store';
 import type {
@@ -131,9 +132,9 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
   };
 }
 
-/** Whether ANY climate connector is connected (AC Cloud or Airzone underfloor). */
+/** Whether ANY climate connector is connected. */
 function anyConnected(): boolean {
-  return intesis.isConfigured() || airzone.isConfigured();
+  return intesis.isConfigured() || airzone.isConfigured() || panasonic.isConfigured();
 }
 
 /** Combined, normalized climate fleet across all connectors. Soft-fails per
@@ -153,6 +154,13 @@ async function getAllUnits(): Promise<{ fleet: ClimateUnit[]; error: string | nu
       fleet.push(...(await airzone.getFleet()));
     } catch (e) {
       error = error ?? `Airzone: ${(e as Error).message}`;
+    }
+  }
+  if (panasonic.isConfigured()) {
+    try {
+      fleet.push(...(await panasonic.getFleet()));
+    } catch (e) {
+      error = error ?? `Panasonic CC: ${(e as Error).message}`;
     }
   }
   return { fleet, error };

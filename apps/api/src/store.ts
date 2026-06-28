@@ -273,6 +273,8 @@ export interface IntegrationsState {
   /** Tuya Cloud project (datacenter region + Access ID/Secret). Unlocks the
    *  whole linked device fleet — lights first, more categories to come. */
   tuya?: { region?: string; accessId?: string; accessSecret?: string };
+  /** Panasonic Comfort Cloud — native WiFi AC modules (CS-Z / CS-XZ series). */
+  panasonic?: { username: string; password: string } | null;
 }
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */
@@ -1104,6 +1106,7 @@ function hydrate(raw: unknown): StoreSchema {
       ...(p.integrations?.weather ? { weather: p.integrations.weather } : {}),
       ...(p.integrations?.airzone ? { airzone: p.integrations.airzone } : {}),
       ...(p.integrations?.tuya ? { tuya: p.integrations.tuya } : {}),
+      ...(p.integrations?.panasonic ? { panasonic: p.integrations.panasonic } : {}),
     },
     deviceSettings: hydrateDeviceSettings(p.deviceSettings, base.deviceSettings),
     schedules: migrateSchedules(p.schedules),
