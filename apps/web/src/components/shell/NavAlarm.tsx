@@ -101,7 +101,7 @@ export function RailAlarmButton({ expanded }: { expanded: boolean }) {
           color: active ? '#fff' : 'var(--danger)',
           cursor: busy ? 'default' : 'pointer',
           borderRadius: 'var(--radius-md)',
-          fontSize: 13,
+          fontSize: 'var(--fs-sm)',
           fontWeight: 800,
           letterSpacing: '0.04em',
           justifyContent: expanded ? 'flex-start' : 'center',
