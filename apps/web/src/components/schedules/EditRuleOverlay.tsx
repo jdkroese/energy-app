@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon, Button, Switch } from '../ui';
-import type { Action, ClimateMode, FanSetting, RunCondition, Schedule, VaneSetting } from '../../lib/types';
+import type { Action, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, TimeAnchor, VaneSetting } from '../../lib/types';
 import { checkRuleOverlap, expandSegments, selfOverlaps, wouldOverlapUnit, TYPE_LABEL } from '../../lib/scheduleRules';
 
 /* ============================================================================
@@ -79,7 +79,7 @@ export function EditRuleOverlay({
 
   const setAct = (patch: Partial<Action>) => setAction((a) => ({ ...a, ...patch }));
   const toggleDay = (store: number) => setDays((p) => (p.includes(store) ? p.filter((x) => x !== store) : [...p, store].sort()));
-  const setWindow = (i: number, patch: { start?: string; end?: string }) =>
+  const setWindow = (i: number, patch: Partial<ScheduleWindow>) =>
     setWindows((ws) => ws.map((w, j) => (j === i ? { ...w, ...patch } : w)));
   const addWindow = () => setWindows((ws) => [...ws, { start: '20:00', end: '23:00' }]);
   const removeWindow = (i: number) => setWindows((ws) => (ws.length > 1 ? ws.filter((_, j) => j !== i) : ws));
@@ -178,14 +178,47 @@ export function EditRuleOverlay({
       }>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {windows.map((w, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}>
-              <input type="time" value={w.start} onChange={(e) => setWindow(i, { start: e.target.value })} className="pwr-input" style={{ flex: 1, fontFamily: 'var(--font-mono)' }} />
-              <span style={{ color: 'var(--text-3)' }}>—</span>
-              <input type="time" value={w.end} onChange={(e) => setWindow(i, { end: e.target.value })} className="pwr-input" style={{ flex: 1, fontFamily: 'var(--font-mono)' }} />
-              <button type="button" aria-label="Remove window" disabled={windows.length <= 1} onClick={() => removeWindow(i)}
-                style={{ display: 'grid', placeItems: 'center', width: 30, height: 30, flex: 'none', borderRadius: 7, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: windows.length <= 1 ? 'var(--text-disabled)' : 'var(--text-2)', cursor: windows.length <= 1 ? 'default' : 'pointer' }}>
-                <Icon name="trash-2" size={13} />
-              </button>
+            <div key={i} style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Start */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 10.5, color: 'var(--text-3)', width: 28, flex: 'none' }}>from</span>
+                <AnchorPicker
+                  value={w.startAnchor ?? 'fixed'}
+                  onChange={(a) => {
+                    const patch: Partial<ScheduleWindow> = { startAnchor: a };
+                    if (a === 'sunrise') patch.start = '07:00';
+                    if (a === 'sunset') patch.start = '20:30';
+                    setWindow(i, patch);
+                  }}
+                />
+                {(!w.startAnchor || w.startAnchor === 'fixed') ? (
+                  <input type="time" value={w.start} onChange={(e) => setWindow(i, { start: e.target.value })} className="pwr-input" style={{ flex: 1, fontFamily: 'var(--font-mono)' }} />
+                ) : (
+                  <OffsetStepper value={w.startOffsetMin ?? 0} onChange={(v) => setWindow(i, { startOffsetMin: v })} />
+                )}
+              </div>
+              {/* End */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 10.5, color: 'var(--text-3)', width: 28, flex: 'none' }}>to</span>
+                <AnchorPicker
+                  value={w.endAnchor ?? 'fixed'}
+                  onChange={(a) => {
+                    const patch: Partial<ScheduleWindow> = { endAnchor: a };
+                    if (a === 'sunrise') patch.end = '07:00';
+                    if (a === 'sunset') patch.end = '20:30';
+                    setWindow(i, patch);
+                  }}
+                />
+                {(!w.endAnchor || w.endAnchor === 'fixed') ? (
+                  <input type="time" value={w.end} onChange={(e) => setWindow(i, { end: e.target.value })} className="pwr-input" style={{ flex: 1, fontFamily: 'var(--font-mono)' }} />
+                ) : (
+                  <OffsetStepper value={w.endOffsetMin ?? 0} onChange={(v) => setWindow(i, { endOffsetMin: v })} />
+                )}
+                <button type="button" aria-label="Remove window" disabled={windows.length <= 1} onClick={() => removeWindow(i)}
+                  style={{ display: 'grid', placeItems: 'center', width: 30, height: 30, flex: 'none', borderRadius: 7, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: windows.length <= 1 ? 'var(--text-disabled)' : 'var(--text-2)', cursor: windows.length <= 1 ? 'default' : 'pointer' }}>
+                  <Icon name="trash-2" size={13} />
+                </button>
+              </div>
             </div>
           ))}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: windowsOverlap ? 'var(--grid)' : 'var(--solar-dim)' }}>
@@ -355,6 +388,40 @@ function FanVaneSelect({ title, value, onChange }: { title: string; value: FanSe
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function AnchorPicker({ value, onChange }: { value: TimeAnchor; onChange: (a: TimeAnchor) => void }) {
+  const opts: { v: TimeAnchor; label: string }[] = [
+    { v: 'fixed', label: 'Time' },
+    { v: 'sunrise', label: 'Sunrise' },
+    { v: 'sunset', label: 'Sunset' },
+  ];
+  return (
+    <div style={{ display: 'flex', gap: 3, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 8, padding: 3 }}>
+      {opts.map((o) => {
+        const on = value === o.v;
+        return (
+          <button key={o.v} type="button" onClick={() => onChange(o.v)}
+            style={{ padding: '4px 7px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: on ? 700 : 500, background: on ? 'var(--surface-3)' : 'transparent', color: on ? 'var(--solar)' : 'var(--text-3)', whiteSpace: 'nowrap' }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OffsetStepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const STEP = 5, MIN = -180, MAX = 180;
+  const clamp = (v: number) => Math.min(MAX, Math.max(MIN, Math.round(v / STEP) * STEP));
+  const disp = value === 0 ? '± 0 min' : value > 0 ? `+ ${value} min` : `− ${Math.abs(value)} min`;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+      <button type="button" aria-label="Decrease offset" onClick={() => onChange(clamp(value - STEP))} style={stepBtn}><Icon name="minus" size={13} /></button>
+      <span className="pwr-mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', flex: 1, textAlign: 'center' }}>{disp}</span>
+      <button type="button" aria-label="Increase offset" onClick={() => onChange(clamp(value + STEP))} style={stepBtn}><Icon name="plus" size={13} /></button>
     </div>
   );
 }

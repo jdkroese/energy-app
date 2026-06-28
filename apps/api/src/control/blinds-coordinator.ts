@@ -9,6 +9,8 @@ import * as store from '../store';
 import * as tuya from '../connectors/tuya';
 import * as blinds from '../connectors/tuya-blinds';
 import { isManualOverrideActive } from './climate-coordinator';
+import { sunriseSunsetMin } from '../solar-model';
+import { config } from '../config';
 
 /** ≥60s between scheduled writes to the SAME blind (motors are slow; avoid spam). */
 const WRITE_COOLDOWN_MS = 60_000;
@@ -22,15 +24,30 @@ function hhmmToMin(s: string): number {
   return (h || 0) * 60 + (m || 0);
 }
 
+function resolveAnchorMin(
+  fixedHHMM: string,
+  anchor: store.TimeAnchor | undefined,
+  offsetMin: number,
+  sunriseMin: number,
+  sunsetMin: number,
+): number {
+  if (!anchor || anchor === 'fixed') return hhmmToMin(fixedHHMM);
+  return (anchor === 'sunrise' ? sunriseMin : sunsetMin) + offsetMin;
+}
+
 /** Is ONE window active now (local time)? Handles overnight wrap. Mirrors the climate helper. */
 function windowActiveNow(w: store.ScheduleWindow, days: number[], now: Date): boolean {
   const cur = now.getHours() * 60 + now.getMinutes();
-  const a = hhmmToMin(w.start);
-  const b = hhmmToMin(w.end);
+  const { sunriseMin, sunsetMin } = sunriseSunsetMin(config.site.lat, config.site.lon, now);
+  const a = resolveAnchorMin(w.start, w.startAnchor, w.startOffsetMin ?? 0, sunriseMin, sunsetMin);
+  const b = resolveAnchorMin(w.end, w.endAnchor, w.endOffsetMin ?? 0, sunriseMin, sunsetMin);
+  // normalise resolved times to [0, 1440)
+  const aN = ((Math.round(a) % 1440) + 1440) % 1440;
+  const bN = ((Math.round(b) % 1440) + 1440) % 1440;
   const dow = now.getDay();
-  if (a < b) return cur >= a && cur < b && days.includes(dow);
-  if (cur >= a) return days.includes(dow);
-  if (cur < b) return days.includes((dow + 6) % 7);
+  if (aN < bN) return cur >= aN && cur < bN && days.includes(dow);
+  if (cur >= aN) return days.includes(dow);
+  if (cur < bN) return days.includes((dow + 6) % 7);
   return false;
 }
 

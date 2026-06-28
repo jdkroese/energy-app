@@ -101,6 +101,44 @@ export function haurwitzGHI(elevationDeg: number): number {
 }
 
 /**
+ * Compute sunrise and sunset for a location and date.
+ * Returns minutes-since-local-midnight (system timezone, which is Europe/Madrid).
+ * NOAA algorithm, accurate to ±2 minutes.
+ */
+export function sunriseSunsetMin(
+  lat: number,
+  lon: number,
+  date: Date,
+): { sunriseMin: number; sunsetMin: number } {
+  const JD = date.getTime() / 86400000 + 2440587.5;
+  const n = JD - 2451545.0;
+  const L = ((280.46 + 0.9856474 * n) % 360 + 360) % 360;
+  const g = ((357.528 + 0.9856003 * n) % 360 + 360) % 360;
+  const gR = g * DEG;
+  const lam = (L + 1.915 * Math.sin(gR) + 0.02 * Math.sin(2 * gR)) * DEG;
+  const eps = 23.439 * DEG;
+  const decl = Math.asin(Math.sin(eps) * Math.sin(lam));
+  const RA = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
+  let eqT = L * DEG - RA;
+  while (eqT > Math.PI) eqT -= 2 * Math.PI;
+  while (eqT < -Math.PI) eqT += 2 * Math.PI;
+  const eqTMin = (eqT * 180) / Math.PI / 15 * 60; // minutes
+  const solarNoonUTC = 720 - lon * 4 - eqTMin;
+  const latR = lat * DEG;
+  const cosHA =
+    (Math.sin(-0.833 * DEG) - Math.sin(latR) * Math.sin(decl)) /
+    (Math.cos(latR) * Math.cos(decl));
+  if (cosHA < -1) return { sunriseMin: 0, sunsetMin: 1440 };
+  if (cosHA > 1) return { sunriseMin: 720, sunsetMin: 720 };
+  const HA = (Math.acos(cosHA) * 180) / Math.PI * 4; // → minutes of arc-time
+  const utcOffMin = -date.getTimezoneOffset();
+  return {
+    sunriseMin: Math.round(solarNoonUTC - HA + utcOffMin),
+    sunsetMin: Math.round(solarNoonUTC + HA + utcOffMin),
+  };
+}
+
+/**
  * 24-length hourly sun-intensity (%) for a day, from MEASURED shortwave radiation
  * vs the Haurwitz clear-sky reference. 0 below the horizon; clamped 0..100.
  */

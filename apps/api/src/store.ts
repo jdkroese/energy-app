@@ -325,10 +325,20 @@ export interface Action {
   positionPct?: number;
 }
 
+export type TimeAnchor = 'fixed' | 'sunrise' | 'sunset';
+
 export interface ScheduleWindow {
-  /** Local "HH:MM". `end <= start` ⇒ the window wraps past midnight. */
+  /** Local "HH:MM". Used when anchor is 'fixed'; kept as display/fallback for solar anchors. */
   start: string;
   end: string;
+  /** Anchor for start time. 'fixed' (default) uses `start` HH:MM directly. */
+  startAnchor?: TimeAnchor;
+  /** Minutes added to solar anchor (negative = before). Default 0. */
+  startOffsetMin?: number;
+  /** Anchor for end time. 'fixed' (default) uses `end` HH:MM directly. */
+  endAnchor?: TimeAnchor;
+  /** Minutes added to solar anchor (negative = before). Default 0. */
+  endOffsetMin?: number;
   /** Optional per-window override; inherits the rule's `action`. */
   action?: Partial<Action>;
 }
@@ -902,7 +912,20 @@ function coerceWindows(v: unknown): ScheduleWindow[] {
   const out: ScheduleWindow[] = [];
   for (const w of list) {
     if (w && typeof w.start === 'string' && typeof w.end === 'string') {
-      out.push({ start: w.start, end: w.end, ...(w.action ? { action: w.action as Partial<Action> } : {}) });
+      const win: ScheduleWindow = {
+        start: w.start,
+        end: w.end,
+        ...(w.action ? { action: w.action as Partial<Action> } : {}),
+      };
+      if (w.startAnchor === 'sunrise' || w.startAnchor === 'sunset') {
+        win.startAnchor = w.startAnchor;
+        win.startOffsetMin = typeof w.startOffsetMin === 'number' ? Math.round(w.startOffsetMin) : 0;
+      }
+      if (w.endAnchor === 'sunrise' || w.endAnchor === 'sunset') {
+        win.endAnchor = w.endAnchor;
+        win.endOffsetMin = typeof w.endOffsetMin === 'number' ? Math.round(w.endOffsetMin) : 0;
+      }
+      out.push(win);
     }
   }
   return out.length ? out : [{ start: '08:00', end: '22:00' }];

@@ -31,6 +31,8 @@ import { issueClimate, _resetClimateRateLimits } from './climate-execute';
 import { takeClimateSnapshot, type RichClimateSnapshot } from './climate-snapshot';
 import { COMPRESSOR_START_KW } from './climate-guardrails';
 import { evaluateBlindSchedules } from './blinds-coordinator';
+import { sunriseSunsetMin } from '../solar-model';
+import { config } from '../config';
 
 const TICK_MS = 45_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -366,19 +368,34 @@ function levelOf(v: store.FanSetting | store.VaneSetting): number {
   return v === 'auto' ? 0 : v;
 }
 
+function resolveAnchorMin(
+  fixedHHMM: string,
+  anchor: store.TimeAnchor | undefined,
+  offsetMin: number,
+  sunriseMin: number,
+  sunsetMin: number,
+): number {
+  if (!anchor || anchor === 'fixed') return hhmmToMin(fixedHHMM);
+  return (anchor === 'sunrise' ? sunriseMin : sunsetMin) + offsetMin;
+}
+
 /**
  * Is ONE window active right now (local time)? Handles overnight wrap. `days` are
  * the RULE's weekdays; the active "day" of a wrapped window is when it started.
  */
 function windowActiveNow(w: store.ScheduleWindow, days: number[], now: Date): boolean {
   const cur = now.getHours() * 60 + now.getMinutes();
-  const a = hhmmToMin(w.start);
-  const b = hhmmToMin(w.end);
+  const { sunriseMin, sunsetMin } = sunriseSunsetMin(config.site.lat, config.site.lon, now);
+  const a = resolveAnchorMin(w.start, w.startAnchor, w.startOffsetMin ?? 0, sunriseMin, sunsetMin);
+  const b = resolveAnchorMin(w.end, w.endAnchor, w.endOffsetMin ?? 0, sunriseMin, sunsetMin);
+  // normalise resolved times to [0, 1440)
+  const aN = ((Math.round(a) % 1440) + 1440) % 1440;
+  const bN = ((Math.round(b) % 1440) + 1440) % 1440;
   const dow = now.getDay(); // 0=Sun..6=Sat (local)
-  if (a < b) return cur >= a && cur < b && days.includes(dow);
-  // wraps past midnight (e.g. 22:00→07:00, or end===start meaning all-day):
-  if (cur >= a) return days.includes(dow); // evening part — started today
-  if (cur < b) return days.includes((dow + 6) % 7); // morning part — started yesterday
+  if (aN < bN) return cur >= aN && cur < bN && days.includes(dow);
+  // overnight wrap (or degenerate aN===bN = all-day)
+  if (cur >= aN) return days.includes(dow); // evening part — started today
+  if (cur < bN) return days.includes((dow + 6) % 7); // morning part — started yesterday
   return false;
 }
 

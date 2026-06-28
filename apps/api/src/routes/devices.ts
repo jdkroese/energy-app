@@ -421,7 +421,20 @@ function buildWindows(raw: unknown): ScheduleWindow[] {
   const out: ScheduleWindow[] = [];
   for (const w of list) {
     if (w && typeof w.start === 'string' && typeof w.end === 'string') {
-      out.push({ start: w.start, end: w.end, ...(w.action ? { action: buildAction(w.action) } : {}) });
+      const win: ScheduleWindow = {
+        start: w.start,
+        end: w.end,
+        ...(w.action ? { action: buildAction(w.action) } : {}),
+      };
+      if (w.startAnchor === 'sunrise' || w.startAnchor === 'sunset') {
+        win.startAnchor = w.startAnchor;
+        win.startOffsetMin = typeof w.startOffsetMin === 'number' ? Math.round(w.startOffsetMin) : 0;
+      }
+      if (w.endAnchor === 'sunrise' || w.endAnchor === 'sunset') {
+        win.endAnchor = w.endAnchor;
+        win.endOffsetMin = typeof w.endOffsetMin === 'number' ? Math.round(w.endOffsetMin) : 0;
+      }
+      out.push(win);
     }
   }
   return out.length ? out : [{ start: '08:00', end: '22:00' }];
