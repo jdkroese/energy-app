@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { Icon, Button, Switch } from '../ui';
 import type { Action, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, TimeAnchor, VaneSetting } from '../../lib/types';
 import { checkRuleOverlap, expandSegments, selfOverlaps, wouldOverlapUnit, TYPE_LABEL } from '../../lib/scheduleRules';
+import { AnchorPicker, OffsetStepper } from './TimeAnchorControls';
 
 /* ============================================================================
  * EditRuleOverlay — single source of truth for creating/editing a rule. Opens
@@ -392,36 +393,3 @@ function FanVaneSelect({ title, value, onChange }: { title: string; value: FanSe
   );
 }
 
-function AnchorPicker({ value, onChange }: { value: TimeAnchor; onChange: (a: TimeAnchor) => void }) {
-  const opts: { v: TimeAnchor; label: string }[] = [
-    { v: 'fixed', label: 'Time' },
-    { v: 'sunrise', label: 'Sunrise' },
-    { v: 'sunset', label: 'Sunset' },
-  ];
-  return (
-    <div style={{ display: 'flex', gap: 3, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 8, padding: 3 }}>
-      {opts.map((o) => {
-        const on = value === o.v;
-        return (
-          <button key={o.v} type="button" onClick={() => onChange(o.v)}
-            style={{ padding: '4px 7px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: on ? 700 : 500, background: on ? 'var(--surface-3)' : 'transparent', color: on ? 'var(--solar)' : 'var(--text-3)', whiteSpace: 'nowrap' }}>
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function OffsetStepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const STEP = 5, MIN = -180, MAX = 180;
-  const clamp = (v: number) => Math.min(MAX, Math.max(MIN, Math.round(v / STEP) * STEP));
-  const disp = value === 0 ? '± 0 min' : value > 0 ? `+ ${value} min` : `− ${Math.abs(value)} min`;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-      <button type="button" aria-label="Decrease offset" onClick={() => onChange(clamp(value - STEP))} style={stepBtn}><Icon name="minus" size={13} /></button>
-      <span className="pwr-mono" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', flex: 1, textAlign: 'center' }}>{disp}</span>
-      <button type="button" aria-label="Increase offset" onClick={() => onChange(clamp(value + STEP))} style={stepBtn}><Icon name="plus" size={13} /></button>
-    </div>
-  );
-}

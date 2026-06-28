@@ -915,7 +915,11 @@ export interface LightSchedule {
   enabled: boolean;
   days: number[];
   onTime: string;
+  onAnchor?: TimeAnchor;
+  onOffsetMin?: number;
   offTime?: string | null;
+  offAnchor?: TimeAnchor;
+  offOffsetMin?: number;
   target: LightScheduleTarget;
 }
 
