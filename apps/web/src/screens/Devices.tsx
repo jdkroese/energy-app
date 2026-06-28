@@ -360,9 +360,12 @@ function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, se
   const active = isHeat ? Boolean(d.floorDemand) : power;
   const st = climateState(power, mode, active, isHeat);
 
+  const accSetRef = useRef<number | null>(null);
+  useEffect(() => { if (pending.setpoint === undefined) accSetRef.current = null; }, [pending.setpoint]);
   const clampStep = (delta: number) => {
-    const base = setpoint ?? lo;
+    const base = accSetRef.current ?? setpoint ?? lo;
     const v = Math.min(hi, Math.max(lo, Math.round((base + delta) * 2) / 2));
+    accSetRef.current = v;
     sendLever(d.id, 'setpoint', v, 500);
   };
   const cycleMode = () => sendLever(d.id, 'mode', nextMode(mode, available), 0);
