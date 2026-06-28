@@ -257,6 +257,12 @@ const CSS = `
 .pwr-splash{ min-height:100dvh; display:grid; place-items:center; background:var(--bg-0); }
 .pwr-splash__mark{ animation:pwr-splash-pulse 1.6s var(--ease-out) infinite; }
 @keyframes pwr-splash-pulse{ 0%,100%{ opacity:0.45; transform:scale(0.97); } 50%{ opacity:1; transform:scale(1); } }
+
+/* ---- Clickable grid-voltage tile (opens the 48h history overlay) ---- */
+.pwr-voltage-tile{ transition:background-color var(--dur) var(--ease-out); }
+.pwr-voltage-tile:hover{ background:var(--surface-2); }
+.pwr-voltage-tile:hover .pwr-voltage-tile__chart{ opacity:1; color:var(--grid); }
+.pwr-voltage-tile:focus-visible{ outline:2px solid var(--grid); outline-offset:2px; }
 `;
 
 let injected = false;
