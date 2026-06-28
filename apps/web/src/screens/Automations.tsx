@@ -393,8 +393,15 @@ function fmtClock(ts: number): string {
 
 function ArbitrageEffectivenessCard({ stats, events }: { stats?: ArbitrageStats; events?: ArbitrageEvent[] }) {
   const tone = 'var(--ev)';
-  const recent = (events ?? []).slice(-8).reverse();
-  const hasData = !!stats && (stats.engagementsActive + stats.engagementsAdvisory > 0 || recent.length > 0);
+  const [showTicks, setShowTicks] = useState(false);
+  const all = events ?? [];
+  // A `plan` event is a re-plan tick — nothing engaged, nothing changed. These dominate the log
+  // (especially in Advisory) and are non-events, so hide them by default; the meaningful events
+  // are engage/revert/stand-down/deviation. A toggle reveals the plan ticks when wanted.
+  const meaningful = all.filter((e) => e.type !== 'plan');
+  const planCount = all.length - meaningful.length;
+  const recent = (showTicks ? all : meaningful).slice(-8).reverse();
+  const hasData = !!stats && (stats.engagementsActive + stats.engagementsAdvisory > 0 || all.length > 0);
 
   const Stat = ({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) => (
     <div style={{ flex: 1, minWidth: 110, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
@@ -433,10 +440,22 @@ function ArbitrageEffectivenessCard({ stats, events }: { stats?: ArbitrageStats;
             Savings are a MODELLED estimate — each shifted kWh is assumed to displace a peak (P1) import at the live P1−P3 spread.
           </div>
 
-          {/* Recent events */}
-          {recent.length > 0 && (
+          {/* Recent events — plan ticks hidden by default (toggle to reveal) */}
+          {(recent.length > 0 || planCount > 0) && (
             <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: '10px 12px' }}>
-              <div className="pwr-eyebrow" style={{ marginBottom: 8 }}>Recent events</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+                <div className="pwr-eyebrow">Recent events</div>
+                {planCount > 0 && (
+                  <button onClick={() => setShowTicks((v) => !v)} style={{ marginLeft: 'auto', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-3)', textDecoration: 'underline', fontSize: 11 }}>
+                    {showTicks ? 'hide' : 'show'} {planCount} plan tick{planCount === 1 ? '' : 's'}
+                  </button>
+                )}
+              </div>
+              {recent.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                  No engagements yet — only plan ticks so far. {showTicks ? '' : 'Tap “show” above to see them.'}
+                </div>
+              ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {recent.map((e, i) => {
                   const m = ARB_TYPE_META[e.type] ?? ARB_TYPE_META.plan;
@@ -453,6 +472,7 @@ function ArbitrageEffectivenessCard({ stats, events }: { stats?: ArbitrageStats;
                   );
                 })}
               </div>
+              )}
             </div>
           )}
         </>

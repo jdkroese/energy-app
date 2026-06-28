@@ -8,6 +8,7 @@ import type {
   ControlCommandValue,
   ControlDevice,
   ControlLever,
+  ControlLogEntry,
   ControlMode,
   ControlStatus,
 } from '../lib/types';
@@ -150,7 +151,7 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [pending, setPending] = useState<string | null>(null);
   const [reserveDraft, setReserveDraft] = useState<number | null>(null);
-  const [logFilter, setLogFilter] = useState<'all' | 'errors'>('all');
+  const [logFilter, setLogFilter] = useState<'changes' | 'all' | 'errors'>('changes');
   const toastId = useRef(0);
 
   const { data: planData, stale: planStale, updatedAt: planAt } = usePolling<BrainPlanResponse>(api.brainPlan, 60_000);
@@ -545,32 +546,55 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
             <Icon name="history" size={16} color="var(--text-3)" />
             <span style={{ fontSize: 14, fontWeight: 600 }}>Command log</span>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-              {(['all', 'errors'] as const).map((f) => (
+              {(['changes', 'all', 'errors'] as const).map((f) => (
                 <button key={f} onClick={() => setLogFilter(f)} style={{ fontSize: 11.5, padding: '4px 10px', borderRadius: 999, border: '1px solid var(--border-2)', cursor: 'pointer', textTransform: 'capitalize', background: logFilter === f ? 'var(--surface-3)' : 'transparent', color: logFilter === f ? 'var(--text-1)' : 'var(--text-3)' }}>{f}</button>
               ))}
             </div>
           </div>
           {(() => {
-            const rows = status.log.filter((r) => (logFilter === 'all' ? true : !r.ok));
+            // A no-op re-asserts the value already in place ("reserve 80 → 80, unchanged"). These
+            // fire every steady-state tick and are pure clutter, so the default "Changes" view
+            // hides them; "All" reveals the latest per-lever check, "Errors" only rejections.
+            const isNoop = (r: ControlLogEntry) => r.ok && String(r.from) === String(r.to);
+            const hiddenNoops = status.log.filter(isNoop).length;
+            const rows = status.log.filter((r) =>
+              logFilter === 'all' ? true : logFilter === 'errors' ? !r.ok : !isNoop(r),
+            );
             if (rows.length === 0) {
-              return <div style={{ padding: '14px 0', fontSize: 12.5, color: 'var(--text-3)' }}>{logFilter === 'errors' ? 'No rejected commands — clean run.' : 'No commands yet — nothing has been sent to your batteries.'}</div>;
+              const empty =
+                logFilter === 'errors'
+                  ? 'No rejected commands — clean run.'
+                  : logFilter === 'changes' && hiddenNoops > 0
+                    ? 'No changes yet — Autopilot is holding steady (every command so far was a no-op). Switch to All to see the latest per-lever check.'
+                    : 'No commands yet — nothing has been sent to your batteries.';
+              return <div style={{ padding: '14px 0', fontSize: 12.5, color: 'var(--text-3)' }}>{empty}</div>;
             }
-            return rows.map((row, i) => (
-              <div key={`${row.ts}-${i}`} style={{ display: 'flex', gap: 11, padding: '11px 0', borderTop: '1px solid var(--border-1)', alignItems: 'flex-start' }}>
-                <span title={row.ok ? 'ok' : 'failed'} style={{ width: 22, height: 22, borderRadius: '50%', flex: 'none', display: 'grid', placeItems: 'center', marginTop: 1, background: row.ok ? 'var(--solar-wash)' : 'var(--danger-wash)', color: row.ok ? 'var(--solar)' : 'var(--danger)' }}>
-                  <Icon name={row.ok ? 'check' : 'x'} size={13} />
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-3)' }}>{fmtTime(row.ts)}</span>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{cap(row.device)} · {row.lever}</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{fmtVal(row.from)} → <span style={{ color: 'var(--text-1)' }}>{fmtVal(row.to)}</span></span>
+            return (
+              <>
+                {rows.map((row, i) => (
+                  <div key={`${row.ts}-${i}`} style={{ display: 'flex', gap: 11, padding: '11px 0', borderTop: '1px solid var(--border-1)', alignItems: 'flex-start' }}>
+                    <span title={row.ok ? 'ok' : 'failed'} style={{ width: 22, height: 22, borderRadius: '50%', flex: 'none', display: 'grid', placeItems: 'center', marginTop: 1, background: row.ok ? 'var(--solar-wash)' : 'var(--danger-wash)', color: row.ok ? 'var(--solar)' : 'var(--danger)' }}>
+                      <Icon name={row.ok ? 'check' : 'x'} size={13} />
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-3)' }}>{fmtTime(row.ts)}</span>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>{cap(row.device)} · {row.lever}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{fmtVal(row.from)} → <span style={{ color: 'var(--text-1)' }}>{fmtVal(row.to)}</span></span>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 3, lineHeight: 1.45 }}>{row.reason}</div>
+                      {!row.ok && row.detail && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 3 }}>{row.detail}</div>}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 3, lineHeight: 1.45 }}>{row.reason}</div>
-                  {!row.ok && row.detail && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 3 }}>{row.detail}</div>}
-                </div>
-              </div>
-            ));
+                ))}
+                {logFilter === 'changes' && hiddenNoops > 0 && (
+                  <div style={{ paddingTop: 11, marginTop: 4, borderTop: '1px solid var(--border-1)', fontSize: 11.5, color: 'var(--text-3)' }}>
+                    {hiddenNoops} steady-state no-op{hiddenNoops === 1 ? '' : 's'} hidden ·{' '}
+                    <button onClick={() => setLogFilter('all')} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-2)', textDecoration: 'underline', font: 'inherit' }}>show all</button>
+                  </div>
+                )}
+              </>
+            );
           })()}
         </div>
       ) : connecting)}
