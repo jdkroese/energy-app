@@ -591,6 +591,10 @@ export interface LightSchedule {
   offAnchor?: TimeAnchor;
   /** Minutes offset from the solar anchor (±). Default 0. */
   offOffsetMin?: number;
+  /** Variation window for on-time (minutes); actual offset = ±(onVariationMin/2). */
+  onVariationMin?: number;
+  /** Variation window for off-time (minutes); actual offset = ±(offVariationMin/2). */
+  offVariationMin?: number;
   target: LightScheduleTarget;
 }
 

@@ -219,8 +219,9 @@ function summarize(s: LightSchedule, scenes: LightScene[]): string {
   } else {
     tgt = `${s.target.members.length} lights`;
   }
-  const onLabel = anchorLabel(s.onTime, s.onAnchor, s.onOffsetMin);
-  const win = s.offTime ? `${onLabel}–${anchorLabel(s.offTime, s.offAnchor, s.offOffsetMin)}` : `at ${onLabel}`;
+  const onLabel = anchorLabel(s.onTime, s.onAnchor, s.onOffsetMin) + (s.onVariationMin ? '~' : '');
+  const offLabelRaw = s.offTime ? anchorLabel(s.offTime, s.offAnchor, s.offOffsetMin) + (s.offVariationMin ? '~' : '') : null;
+  const win = offLabelRaw ? `${onLabel}–${offLabelRaw}` : `at ${onLabel}`;
   return `${days} · ${win} · ${tgt}`;
 }
 
@@ -237,6 +238,8 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
   const [kind, setKind] = useState<LightScheduleTarget['kind']>(sched?.target.kind ?? (scenes.length ? 'scene' : 'lights'));
   const [sceneId, setSceneId] = useState(sched?.target.kind === 'scene' ? sched.target.sceneId : scenes[0]?.id ?? '');
   const [draft, setDraft] = useState<Draft>(() => membersToDraft(lights, sched?.target.kind === 'lights' ? sched.target.members : []));
+  const [onVariation, setOnVariation] = useState(!!sched?.onVariationMin);
+  const [offVariation, setOffVariation] = useState(!!sched?.offVariationMin);
   const [busy, setBusy] = useState(false);
 
   const toggleDay = (d: number) => setDays((p) => (p.includes(d) ? p.filter((x) => x !== d) : [...p, d].sort()));
@@ -252,9 +255,11 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
         onTime,
         onAnchor: onAnchor !== 'fixed' ? onAnchor : undefined,
         onOffsetMin: onAnchor !== 'fixed' ? onOffsetMin : undefined,
+        onVariationMin: onVariation ? 20 : undefined,
         offTime: autoOff ? offTime : null,
         offAnchor: autoOff && offAnchor !== 'fixed' ? offAnchor : undefined,
         offOffsetMin: autoOff && offAnchor !== 'fixed' ? offOffsetMin : undefined,
+        offVariationMin: autoOff && offVariation ? 20 : undefined,
         target,
         enabled: sched?.enabled ?? true,
       };
@@ -290,6 +295,10 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
             ? <Input type="time" value={onTime} onChange={(e) => setOnTime(e.target.value)} />
             : <OffsetStepper value={onOffsetMin} onChange={setOnOffsetMin} />
           }
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 2 }}>
+            <Switch checked={onVariation} onChange={(e) => setOnVariation(e.target.checked)} />
+            <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Vary ±10 min daily</span>
+          </label>
         </div>
       </div>
       <div>
@@ -308,6 +317,10 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
               ? <Input type="time" value={offTime} onChange={(e) => setOffTime(e.target.value)} />
               : <OffsetStepper value={offOffsetMin} onChange={setOffOffsetMin} />
             }
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', marginTop: 2 }}>
+              <Switch checked={offVariation} onChange={(e) => setOffVariation(e.target.checked)} />
+              <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Vary ±10 min daily</span>
+            </label>
           </div>
         )}
       </div>
