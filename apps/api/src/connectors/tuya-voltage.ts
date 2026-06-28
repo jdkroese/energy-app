@@ -4,12 +4,14 @@
 // its live electrical values for BOTH the Live KPI box and the `rule-voltage` alert,
 // so the two never disagree. READ-ONLY — it never writes a device.
 //
-// Breaker selection:
+// Breaker selection (every breaker reports voltage, so we never gate on the DP
+// being present in a given snapshot — a poll that momentarily lacks cur_voltage
+// must not blank the KPI):
 //   1. If voltageMonitor.breakerId is set AND that device is still a configured
-//      breaker exposing cur_voltage → use it.
-//   2. Otherwise the FIRST configured breaker exposing cur_voltage → and persist its
-//      id so the choice is stable across restarts.
-//   3. If none → null (the KPI box empty-states, the alert rule no-ops).
+//      breaker → use it.
+//   2. Otherwise the FIRST configured breaker (preferring one already reporting a
+//      voltage in this snapshot) → and persist its id so the choice is stable.
+//   3. If no configured breaker at all → null (KPI empty-states, alert no-ops).
 
 import * as tuya from './tuya';
 import type { TuyaDevice } from './tuya';
@@ -40,9 +42,10 @@ function statusNum(d: TuyaDevice, code: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Whether the device is a configured breaker that reports a numeric `cur_voltage`. */
-function exposesVoltage(d: TuyaDevice): boolean {
-  return isBreaker(d) && statusNum(d, VOLTAGE_DP) !== null;
+/** Whether the breaker is currently reporting a numeric `cur_voltage` (selection
+ * preference only — a breaker that momentarily isn't is still eligible). */
+function reportsVoltage(d: TuyaDevice): boolean {
+  return statusNum(d, VOLTAGE_DP) !== null;
 }
 
 /**
@@ -61,17 +64,18 @@ function toWatts(raw: number): number {
 
 /**
  * Pick the monitored breaker from the fleet, honouring a persisted/manual breakerId
- * when that device is still present + exposing voltage, else the first available.
- * Persists the chosen id (when it changed) so the selection is stable.
+ * when that device is still a configured breaker, else the first configured breaker
+ * (preferring one already reporting voltage in this snapshot). Persists the chosen id
+ * (when it changed) so the selection is stable.
  */
 function pickBreaker(all: TuyaDevice[]): TuyaDevice | null {
   const configuredIds = new Set(Object.keys(store.get().deviceOnboarding.configured));
-  const candidates = all.filter((d) => configuredIds.has(d.id) && exposesVoltage(d));
+  const candidates = all.filter((d) => configuredIds.has(d.id) && isBreaker(d));
   if (candidates.length === 0) return null;
 
   const wantId = store.get().voltageMonitor.breakerId;
   const preferred = wantId ? candidates.find((d) => d.id === wantId) : undefined;
-  const chosen = preferred ?? candidates[0];
+  const chosen = preferred ?? candidates.find(reportsVoltage) ?? candidates[0];
 
   // Persist the auto-pick (or a corrected pick when the saved id vanished) so it sticks.
   if (store.get().voltageMonitor.breakerId !== chosen.id) {
