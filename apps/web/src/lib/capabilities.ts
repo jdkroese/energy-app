@@ -22,6 +22,14 @@ function isPrimarySwitch(c: Capability): boolean {
   return c.kind === 'switch' && PRIMARY_SWITCH_DPS.has(c.dp);
 }
 
+/** DPs that count as a power ON/OFF switch for scheduling (light is power-like too). */
+const POWER_SWITCH_DPS = PRIMARY_SWITCH_DPS;
+
+/** Does this device have a power on/off switch (so it's schedulable as a circuit)? */
+export function hasPowerSwitch(caps: Capability[]): boolean {
+  return caps.some((c) => c.kind === 'switch' && POWER_SWITCH_DPS.has(c.dp));
+}
+
 /** Is this capability a main LEVEL range (fan speed / brightness / position / dimmer)? */
 function isPrimaryRange(c: Capability): boolean {
   if (c.kind !== 'range') return false;

@@ -92,6 +92,11 @@ export function blindTargetLabel(positionPct: number): string {
 /** Short mono action summary, e.g. "cool 24° · fan auto" (or "close" for blinds). */
 export function actionSummary(s: Schedule): string {
   if (s.type === 'blinds') return blindTargetLabel(s.action.positionPct ?? 0);
+  if (s.type === 'circuit') {
+    return 'on'
+      + (s.action.speed != null ? ` · speed ${s.action.speed}` : '')
+      + (s.action.direction ? ` · ${s.action.direction}` : '');
+  }
   const a = s.action;
   if (!a.power) return 'off';
   const parts = [`${a.mode} ${a.setpointC}°`];
@@ -142,7 +147,8 @@ export const TYPE_COLOR: Record<DeviceType, string> = {
 export function newRuleDraft(opts: { type: DeviceType; deviceId: string; name?: string }): Schedule {
   const isHeat = opts.type === 'heating';
   const isBlind = opts.type === 'blinds';
-  // Climate fields are required by Action but ignored on a blinds rule.
+  const isCircuit = opts.type === 'circuit';
+  // Climate fields are required by Action but ignored on blinds / circuit rules.
   const baseClimate = {
     power: true,
     mode: (isHeat ? 'heat' : 'cool') as Action['mode'],
@@ -151,16 +157,22 @@ export function newRuleDraft(opts: { type: DeviceType; deviceId: string; name?: 
     vaneUpDown: 'auto' as const,
     vaneLeftRight: 'auto' as const,
   };
+  const name = opts.name
+    ?? (isBlind ? 'Close at night' : isCircuit ? 'On schedule' : isHeat ? 'Heating rule' : 'Cooling rule');
+  const windows = isBlind
+    ? [{ start: '21:00', end: '07:00' }] // close overnight by default
+    : isCircuit
+      ? [{ start: '18:00', end: '23:00' }] // on in the evening by default
+      : [{ start: isHeat ? '06:00' : '14:00', end: isHeat ? '08:00' : '17:00' }];
   return {
     id: '',
-    name: opts.name ?? (isBlind ? 'Close at night' : isHeat ? 'Heating rule' : 'Cooling rule'),
+    name,
     enabled: true,
     type: opts.type,
     scope: { kind: 'unit', deviceId: opts.deviceId },
     days: [1, 2, 3, 4, 5],
-    windows: isBlind
-      ? [{ start: '21:00', end: '07:00' }] // close overnight by default
-      : [{ start: isHeat ? '06:00' : '14:00', end: isHeat ? '08:00' : '17:00' }],
+    windows,
+    // Circuit: on during the window, off after — no speed/direction set (leave as-is).
     action: isBlind ? { ...baseClimate, positionPct: 0 } : baseClimate,
     condition: { kind: 'always' },
   };

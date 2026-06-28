@@ -413,6 +413,13 @@ function buildAction(raw: Partial<Action> | undefined, base?: Action): Action {
     fan: a.fan !== undefined ? FAN_VANE(a.fan) : b.fan,
     vaneUpDown: a.vaneUpDown !== undefined ? FAN_VANE(a.vaneUpDown) : b.vaneUpDown,
     vaneLeftRight: a.vaneLeftRight !== undefined ? FAN_VANE(a.vaneLeftRight) : b.vaneLeftRight,
+    // Blinds carry positionPct; circuit (generic switchable) rules carry speed/direction.
+    // Pass them through verbatim so a circuit rule round-trips; climate rules omit them.
+    ...(typeof a.positionPct === 'number'
+      ? { positionPct: Math.min(100, Math.max(0, Math.round(a.positionPct))) }
+      : b.positionPct !== undefined ? { positionPct: b.positionPct } : {}),
+    ...(typeof a.speed === 'number' ? { speed: Math.round(a.speed) } : b.speed !== undefined ? { speed: b.speed } : {}),
+    ...(typeof a.direction === 'string' && a.direction ? { direction: a.direction } : b.direction !== undefined ? { direction: b.direction } : {}),
   };
 }
 

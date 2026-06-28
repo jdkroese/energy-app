@@ -92,6 +92,7 @@ import {
   deleteLightSchedule,
 } from './routes/lights';
 import { startLightCoordinator } from './control/light-coordinator';
+import { startDeviceScheduleCoordinator } from './control/device-schedule-coordinator';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
 import {
@@ -521,6 +522,11 @@ startClimateCoordinator();
 // Start the light-schedule coordinator (edge-triggered; applies scenes/lights at
 // their scheduled times). No arm gate — it only acts on enabled light schedules.
 startLightCoordinator();
+
+// Start the generic-device schedule coordinator (edge-triggered; turns configured
+// switchable Tuya devices on/off at their scheduled window edges, optionally at a
+// chosen fan speed/direction). No arm gate — matches the lights coordinator.
+startDeviceScheduleCoordinator();
 
 // Background 5-minute sampler for the Live day chart. getLive() records the live
 // snapshot into history5m, so the day fills continuously even when no client is

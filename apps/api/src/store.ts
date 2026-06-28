@@ -347,6 +347,12 @@ export interface Action {
   vaneLeftRight: VaneSetting;
   /** Blinds only: target position 0 = closed … 100 = open. */
   positionPct?: number;
+  /** Circuit (generic switchable device) only: fan speed in DEVICE units (e.g. 1..5)
+   *  to set at ON. Omit = leave the device's current speed as-is. */
+  speed?: number;
+  /** Circuit only: direction enum value (e.g. 'forward'/'reverse') to set at ON.
+   *  Omit = leave the device's current direction as-is. */
+  direction?: string;
 }
 
 export type TimeAnchor = 'fixed' | 'sunrise' | 'sunset';
@@ -1076,6 +1082,8 @@ function coerceAction(raw: unknown): Action {
     ...(typeof a.positionPct === 'number'
       ? { positionPct: Math.min(100, Math.max(0, Math.round(a.positionPct))) }
       : {}),
+    ...(typeof a.speed === 'number' ? { speed: Math.round(a.speed) } : {}),
+    ...(typeof a.direction === 'string' && a.direction ? { direction: a.direction } : {}),
   };
 }
 function coerceCondition(raw: unknown): RunCondition {
