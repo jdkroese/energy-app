@@ -1,5 +1,6 @@
 import { useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import type { HistoryDayResponse, TariffBandSegment } from '../../lib/types';
+import { useTheme } from '../../lib/ThemeProvider';
 
 /* ============================================================================
  * DayChart — the Live screen's "Production & consumption" day chart.
@@ -136,20 +137,26 @@ export function DayChart({
   const uid = 'd' + useId().replace(/:/g, '');
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  // Resolve series/band CSS tokens to concrete colours for the SVG. Memoized;
-  // a future theme switch can bump a key here to re-read on theme change.
+  // Active resolved theme — drives re-resolution of the CSS-var → hex colours
+  // below, so the SVG re-colours when the user switches dark ⇄ light.
+  const { resolved: theme } = useTheme();
+
+  // Resolve series/band CSS tokens to concrete colours for the SVG. Memoized on
+  // `theme` so a theme switch re-reads the (now light/dark) token values.
   const colorOf = useMemo(() => {
     const m = new Map<SeriesKey, string>();
     for (const s of SERIES) m.set(s.key, resolveToken(s.colorVar));
     return m;
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme]);
   const bandColor = useMemo(
     () => ({
       P1: resolveToken(BAND_VAR.P1),
       P2: resolveToken(BAND_VAR.P2),
       P3: resolveToken(BAND_VAR.P3),
     } as Record<string, string>),
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [theme],
   );
   const productionColor = colorOf.get('production') ?? COLOR_FALLBACK['--series-production'];
 
@@ -395,7 +402,7 @@ export function DayChart({
               y={plotTop}
               width={W - nowX}
               height={plotH}
-              fill="rgba(233,245,242,0.022)"
+              fill="var(--grid-line)"
             />
           )}
 
@@ -404,7 +411,7 @@ export function DayChart({
             const yy = plotTop + g * plotH;
             return (
               <g key={i}>
-                <line x1="0" y1={yy} x2={W} y2={yy} stroke="rgba(233,245,242,0.06)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="0" y1={yy} x2={W} y2={yy} stroke="var(--grid-line)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
                 <text x="4" y={yy - 4} fill="var(--text-3)" style={{ font: '500 13px var(--font-mono)' }}>
                   {Math.round(niceMax * (1 - g))}
                 </text>
@@ -540,7 +547,7 @@ export function DayChart({
               background: 'var(--bg-1, #06090b)',
               padding: '1px 5px',
               borderRadius: 5,
-              border: '1px solid rgba(233,245,242,0.08)',
+              border: '1px solid var(--border-1)',
               whiteSpace: 'nowrap',
               pointerEvents: 'none',
             }}
@@ -579,12 +586,12 @@ export function DayChart({
               transform: `translateX(${hoverPct > 60 ? '-105%' : '5%'})`,
               minWidth: 150,
               background: 'var(--surface-3, #1b262b)',
-              border: '1px solid rgba(233,245,242,0.08)',
+              border: '1px solid var(--border-1)',
               borderRadius: 8,
               padding: '7px 9px',
               pointerEvents: 'none',
               zIndex: 2,
-              boxShadow: '0 6px 18px rgba(0,0,0,0.4)',
+              boxShadow: 'var(--shadow-2)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 5 }}>
@@ -665,7 +672,7 @@ function NavBtn({
         display: 'grid',
         placeItems: 'center',
         borderRadius: 7,
-        border: '1px solid rgba(233,245,242,0.08)',
+        border: '1px solid var(--border-1)',
         background: 'var(--surface-1, #0f1619)',
         color: disabled ? 'var(--text-3)' : 'var(--text-1)',
         cursor: disabled ? 'default' : 'pointer',
@@ -687,7 +694,7 @@ function chip(on: boolean): CSSProperties {
     gap: 6,
     padding: '4px 9px',
     borderRadius: 999,
-    border: '1px solid rgba(233,245,242,0.08)',
+    border: '1px solid var(--border-1)',
     background: on ? 'var(--surface-1, #0f1619)' : 'transparent',
     color: on ? 'var(--text-1)' : 'var(--text-3)',
     fontSize: 12,

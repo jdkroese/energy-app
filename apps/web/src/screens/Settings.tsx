@@ -16,6 +16,8 @@ import { SegmentedControl } from '../components/ui';
 import type { ShellContext } from '../components/shell/AppShell';
 import { settingsTabsFor, type SettingsTabLabel } from '../components/shell/nav';
 import { SiteLocationCard } from '../components/SiteLocationCard';
+import { useTheme } from '../lib/ThemeProvider';
+import type { Theme } from '../lib/theme';
 
 const Chev = () => <Icon name="chevron-right" size={18} color="var(--text-3)" />;
 const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px' };
@@ -65,6 +67,35 @@ function LinkRow({
         {detail && <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{detail}</div>}
       </div>
       {right}
+    </div>
+  );
+}
+
+/** ThemeRow — appearance picker (Dark / Light / System) wired to useTheme. */
+function ThemeRow({ first }: { first?: boolean }) {
+  const { theme, resolved, setTheme } = useTheme();
+  const icon = resolved === 'light' ? 'sun' : 'moon';
+  return (
+    <div style={{ borderTop: first ? 'none' : '1px solid var(--border-1)', padding: '13px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: 'var(--battery)' }}>
+        <Icon name={icon} size={17} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14 }}>Appearance</div>
+        <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+          {theme === 'system' ? `System · ${resolved}` : theme === 'light' ? 'Light' : 'Dark (control-room)'}
+        </div>
+      </div>
+      <SegmentedControl
+        size="sm"
+        value={theme}
+        onChange={(v) => setTheme(v as Theme)}
+        options={[
+          { value: 'dark', label: 'Dark', icon: <Icon name="moon" size={14} /> },
+          { value: 'light', label: 'Light', icon: <Icon name="sun" size={14} /> },
+          { value: 'system', label: 'System', icon: <Icon name="monitor" size={14} /> },
+        ]}
+      />
     </div>
   );
 }
@@ -1545,7 +1576,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
               detail={user?.email || 'Signed in'}
               right={<Button size="sm" variant="ghost" iconLeft={<Icon name="log-out" />} onClick={() => void signOut()}>Sign out</Button>}
             />
-            <LinkRow icon="moon" tone="battery" name="Theme" detail="Dark (control-room)" right={<Chev />} />
+            <ThemeRow />
             <LinkRow icon="info" tone="text-2" name="Version" detail="0.1.0 · energy.hirobo.nl" />
           </Card>
         </>

@@ -180,6 +180,120 @@
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
+/* ============================================================================
+ * LIGHT THEME (Track B) — :root[data-theme="light"] overrides EVERY colour
+ * token the dark :root defines. Same "Power" control-room structure, just light.
+ *
+ * Design rationale:
+ *  - Neutrals: near-white page (#fafbfc), white surfaces stepping UP via faint
+ *    cool greys (light elevation = surfaces get slightly DARKER/greyer as they
+ *    rise, with real drop-shadows doing the lifting). Dark ink text.
+ *  - Energy hues: DARKENED + SATURATED so they pass WCAG on white
+ *    (solar 4.5:1, battery 4.4:1, grid 5.9:1, home 6.2:1, ev 6.0:1, danger 5.2:1
+ *    — see PR notes). Washes = the hue at ~10–12% on white.
+ *  - Glows: neon glow reads as broken on white, so glows degrade to subtle soft
+ *    drop-shadows (a faint coloured ring + a real shadow) for elevation.
+ *  - Borders: light hairlines (dark-on-light alpha) instead of light-on-dark.
+ *
+ * Contrast (on #ffffff): text-1 16.6:1, text-2 5.6:1, text-3 3.8:1 (large/icon).
+ * ==========================================================================*/
+:root[data-theme="light"] {
+  /* base neutrals — page is the lowest, surfaces step up to white-ish */
+  --bg-0: #fafbfc;
+  --bg-1: #f3f5f7;
+  --surface-1: #ffffff;
+  --surface-2: #f6f8fa;
+  --surface-3: #eef1f4;
+  --surface-4: #e5e9ed;
+
+  /* borders & lines — dark hairlines on light */
+  --border-1: rgba(20, 30, 33, 0.10);
+  --border-2: rgba(20, 30, 33, 0.16);
+  --border-3: rgba(20, 30, 33, 0.24);
+  --grid-line: rgba(20, 30, 33, 0.06);
+
+  /* text — dark ink */
+  --text-1: #1a1f23;   /* 16.6:1 on white */
+  --text-2: #566366;   /* 5.9:1  on white */
+  --text-3: #6f8085;   /* 4.0:1  on white (large/non-text + axis labels) */
+  --text-disabled: #9aa7ab;
+  --text-inverse: #ffffff;
+
+  /* energy palette — darkened + saturated to pass on white */
+  --solar: #0a8f63;
+  --solar-dim: #0d7a55;
+  --battery: #0f7fb8;
+  --battery-dim: #11688f;
+  --grid: #8a5a0a;
+  --grid-dim: #6f4908;
+  --home: #6d44d1;
+  --home-dim: #5836aa;
+  --ev: #5152d6;
+  --ev-dim: #4142ac;
+
+  /* brand accent (alias to solar) */
+  --accent: var(--solar);
+  --accent-dim: var(--solar-dim);
+  --accent-contrast: #ffffff;
+  --accent-bright: #0fa873;
+  --slider-thumb: #0a8f63;
+
+  /* semantic */
+  --success: #0a8f63;
+  --warning: #8a5a0a;
+  --danger: #cf2a2a;
+  --danger-dim: #a82222;
+  --danger-bright: #e23b3b;
+  --info: #0f7fb8;
+
+  /* chart series palette — legible on the white plot background */
+  --series-production: #0a8f63;
+  --series-consumption: #6d44d1;
+  --series-charge: #0f7fb8;
+  --series-discharge: #d23b34;
+  --series-grid-export: #8a5a0a;
+  --series-grid-import: #c4275a;
+  --series-soc-combined: #0f8a7e;
+  --series-soc-sonnen: #4f8f1e;
+  --series-soc-tesla: #1f7fb8;
+
+  /* tariff-band fills */
+  --band-p1: #8a5a0a;
+  --band-p2: #6f8085;
+  --band-p3: #0a8f63;
+
+  /* tinted washes — hue at ~10–12% on white */
+  --solar-wash: rgba(10, 143, 99, 0.10);
+  --battery-wash: rgba(15, 127, 184, 0.10);
+  --grid-wash: rgba(138, 90, 10, 0.10);
+  --home-wash: rgba(109, 68, 209, 0.10);
+  --danger-wash: rgba(207, 42, 42, 0.10);
+
+  /* tinted accent borders */
+  --border-grid: rgba(138, 90, 10, 0.30);
+  --border-solar: rgba(10, 143, 99, 0.30);
+
+  /* typography colour aliases inherit from above */
+
+  /* shadows — light theme leans on REAL soft drop-shadows for elevation */
+  --shadow-1: 0 1px 2px rgba(20, 30, 33, 0.08);
+  --shadow-2: 0 6px 18px rgba(20, 30, 33, 0.10);
+  --shadow-card: 0 10px 32px rgba(20, 30, 33, 0.10);
+  --shadow-pop: 0 18px 50px rgba(20, 30, 33, 0.16);
+  --hairline-top: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+
+  /* glows — toned WAY down to a faint coloured ring + soft shadow (no neon) */
+  --glow-solar: 0 0 0 1px rgba(10, 143, 99, 0.22), 0 6px 18px rgba(10, 143, 99, 0.14);
+  --glow-battery: 0 0 0 1px rgba(15, 127, 184, 0.22), 0 6px 18px rgba(15, 127, 184, 0.14);
+  --glow-grid: 0 0 0 1px rgba(138, 90, 10, 0.22), 0 6px 18px rgba(138, 90, 10, 0.14);
+  --glow-soft: 0 4px 16px rgba(20, 30, 33, 0.08);
+
+  --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px rgba(10, 143, 99, 0.6);
+
+  /* glass / blur — light frosted */
+  --glass-fill: rgba(250, 251, 252, 0.72);
+}
+
 /* ---- Tailwind 4 theme map (utilities key off the real tokens) ---- */
 @theme {
   --color-bg-0: var(--bg-0);
@@ -243,7 +357,7 @@ h1, h2, h3, h4, p {
 }
 
 ::selection {
-  background: rgba(46, 230, 160, 0.28);
+  background: var(--solar-wash);
   color: var(--text-1);
 }
 
