@@ -93,7 +93,17 @@ import {
 import { startLightCoordinator } from './control/light-coordinator';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
-import { getDiscovered, ignoreDiscovered, keepDiscovered } from './routes/discovered';
+import {
+  getDiscovered,
+  ignoreDiscovered,
+  keepDiscovered,
+  setupDevice,
+  unsetupDevice,
+  getConfigured,
+  listCustomTypes,
+  createCustomType,
+  commandGeneric,
+} from './routes/discovered';
 import type { BlindLever } from './connectors/tuya-blinds';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
@@ -257,8 +267,15 @@ app.get('/api/devices/status', wrap(() => getDevicesStatus()));
 // Onboarding inbox: discovered (not-yet-set-up) Tuya devices + triage. Registered
 // BEFORE /api/devices/:id so the literal path isn't captured as an :id.
 app.get('/api/devices/discovered', wrap(() => getDiscovered()));
+// Set-up (configured) generic Tuya devices + custom type registry. Literal paths
+// registered BEFORE /api/devices/:id so they aren't captured as an :id.
+app.get('/api/devices/configured', wrap(() => getConfigured()));
+app.get('/api/devices/custom-types', wrap(() => listCustomTypes()));
+app.post('/api/devices/custom-types', requireAdmin, wrap((req) => createCustomType(req.body)));
 app.post('/api/devices/:id/ignore', requireAdmin, wrap((req) => ignoreDiscovered(String(req.params.id))));
 app.post('/api/devices/:id/keep', requireAdmin, wrap((req) => keepDiscovered(String(req.params.id))));
+app.post('/api/devices/:id/setup', requireAdmin, wrap((req) => setupDevice(String(req.params.id), req.body)));
+app.post('/api/devices/:id/unsetup', requireAdmin, wrap((req) => unsetupDevice(String(req.params.id))));
 app.get('/api/devices/:id', wrap((req) => getDevice(String(req.params.id))));
 app.post(
   '/api/devices/arm',
@@ -285,7 +302,12 @@ app.post(
   '/api/devices/:id/command',
   requireAdmin,
   wrap((req) => {
-    const body = (req.body ?? {}) as { lever?: string; value?: unknown };
+    const body = (req.body ?? {}) as { lever?: string; value?: unknown; dp?: string; kind?: string };
+    // A capability-oriented body ({ dp, kind, value }) drives a generic (set-up) Tuya
+    // device; the climate fleet still uses the lever-oriented body ({ lever, value }).
+    if (typeof body.dp === 'string' && body.dp) {
+      return commandGeneric(String(req.params.id), { dp: body.dp, kind: body.kind as never, value: body.value });
+    }
     return commandDevice(String(req.params.id), body.lever as ClimateLever, body.value);
   }),
 );

@@ -864,6 +864,52 @@ export interface Capability {
   max?: number;
   options?: string[];
   readOnly: boolean;
+  /** True for safety-critical `action` capabilities (locks/sirens/gates) — the
+   *  generic renderer requires a confirm tap before firing these. */
+  sensitive?: boolean;
+}
+
+/** A per-DP override from the setup sheet's Advanced datapoints editor. */
+export interface CapabilityOverride {
+  dp: string;
+  kind?: CapabilityKind;
+  label?: string;
+  hidden?: boolean;
+  readOnly?: boolean;
+}
+
+/** A user-minted custom device type (label + icon), store-backed. */
+export interface CustomDeviceType {
+  id: string;
+  label: string;
+  icon: string;
+}
+
+/** A set-up (configured) generic device + its live capability values. */
+export interface ConfiguredDeviceView {
+  id: string;
+  name: string;
+  typeId: string;
+  category: string;
+  online: boolean;
+  capabilities: Capability[];
+  /** dp → current app-facing value. */
+  values: Record<string, unknown>;
+  roomGuess: string | null;
+  setupAt: string;
+}
+
+export interface ConfiguredResponse {
+  ts: string;
+  connected: boolean;
+  fleetError: string | null;
+  devices: ConfiguredDeviceView[];
+  customDeviceTypes: CustomDeviceType[];
+}
+
+export interface CustomTypesResponse {
+  ts: string;
+  customDeviceTypes: CustomDeviceType[];
 }
 
 export type DiscoveredConfidence = 'high' | 'monitor' | 'review';

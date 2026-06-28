@@ -627,10 +627,54 @@ export interface StoreSchema {
   deviceOnboarding: DeviceOnboardingState;
 }
 
+/**
+ * A per-DP override applied on top of inference (the Advanced "datapoints" editor in
+ * the setup sheet). Lets the user correct a misclassified DP: change its capability
+ * kind, relabel it, hide it, or force it read-only. Only the fields the user changed
+ * are stored; everything else falls through to the inferred capability.
+ */
+export interface CapabilityOverride {
+  /** The Tuya DP code this override targets. */
+  dp: string;
+  /** Force a different capability kind (e.g. an `action` the user knows is a `switch`). */
+  kind?: 'switch' | 'range' | 'enum' | 'action' | 'color' | 'measure' | 'status';
+  /** Custom label (replaces the inferred one). */
+  label?: string;
+  /** Hide this capability from the control surface entirely. */
+  hidden?: boolean;
+  /** Force read-only (never write this DP) even if inference thought it writable. */
+  readOnly?: boolean;
+}
+
+/** A device the user has SET UP (graduated from the inbox into its type group). */
+export interface ConfiguredDevice {
+  /** Built-in DeviceType key (e.g. 'switching') OR a custom type id ('custom-…'). */
+  typeId: string;
+  /** User-assigned display name (prefilled from the device name during setup). */
+  name: string;
+  /** Per-DP overrides from the Advanced datapoints editor; applied over inference. */
+  capOverrides?: CapabilityOverride[];
+  /** ISO timestamp the device was set up. */
+  setupAt: string;
+}
+
+/** A user-minted device type (e.g. "Smart lock") — a label + an icon, store-backed. */
+export interface CustomDeviceType {
+  /** Stable id, 'custom-…'. A ConfiguredDevice.typeId may reference this. */
+  id: string;
+  label: string;
+  /** Lucide icon name. */
+  icon: string;
+}
+
 /** Persisted onboarding/triage state for discovered (not-yet-set-up) Tuya devices. */
 export interface DeviceOnboardingState {
   /** Device ids the user has chosen to ignore (hidden from the inbox; un-ignorable). */
   ignored: string[];
+  /** Set-up devices keyed by device id (graduated out of the inbox into a group). */
+  configured: Record<string, ConfiguredDevice>;
+  /** User-minted custom device types (label + icon). */
+  customDeviceTypes: CustomDeviceType[];
 }
 
 // ---- Defaults -----------------------------------------------------------
@@ -833,7 +877,7 @@ function defaults(): StoreSchema {
     devices: defaultDevices(),
     lightScenes: [],
     lightSchedules: [],
-    deviceOnboarding: { ignored: [] },
+    deviceOnboarding: { ignored: [], configured: {}, customDeviceTypes: [] },
   };
 }
 
@@ -1164,12 +1208,47 @@ function hydrate(raw: unknown): StoreSchema {
     devices: hydrateDevices(p.devices, base.devices),
     lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
     lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,
-    deviceOnboarding: {
-      ignored: Array.isArray(p.deviceOnboarding?.ignored)
-        ? [...new Set(p.deviceOnboarding!.ignored.filter((id): id is string => typeof id === 'string'))]
-        : base.deviceOnboarding.ignored,
-    },
+    deviceOnboarding: hydrateDeviceOnboarding(p.deviceOnboarding, base.deviceOnboarding),
   };
+}
+
+/** Rehydrate device-onboarding state, tolerant of the Phase-1 shape (`{ ignored }`
+ *  only). Coerces the `configured` map and `customDeviceTypes` list, dropping junk. */
+function hydrateDeviceOnboarding(
+  p: Partial<DeviceOnboardingState> | undefined,
+  base: DeviceOnboardingState,
+): DeviceOnboardingState {
+  if (!p || typeof p !== 'object') return base;
+  const ignored = Array.isArray(p.ignored)
+    ? [...new Set(p.ignored.filter((id): id is string => typeof id === 'string'))]
+    : base.ignored;
+
+  const configured: Record<string, ConfiguredDevice> = {};
+  if (p.configured && typeof p.configured === 'object') {
+    for (const [id, raw] of Object.entries(p.configured)) {
+      const c = raw as Partial<ConfiguredDevice> | undefined;
+      if (!c || typeof c.typeId !== 'string' || typeof c.name !== 'string') continue;
+      configured[id] = {
+        typeId: c.typeId,
+        name: c.name,
+        setupAt: typeof c.setupAt === 'string' ? c.setupAt : new Date().toISOString(),
+        ...(Array.isArray(c.capOverrides) ? { capOverrides: c.capOverrides.filter(isCapOverride) } : {}),
+      };
+    }
+  }
+
+  const customDeviceTypes: CustomDeviceType[] = Array.isArray(p.customDeviceTypes)
+    ? p.customDeviceTypes
+        .filter((t): t is CustomDeviceType =>
+          !!t && typeof t === 'object' && typeof (t as CustomDeviceType).id === 'string' && typeof (t as CustomDeviceType).label === 'string')
+        .map((t) => ({ id: t.id, label: t.label, icon: typeof t.icon === 'string' ? t.icon : 'plug' }))
+    : base.customDeviceTypes;
+
+  return { ignored, configured, customDeviceTypes };
+}
+
+function isCapOverride(o: unknown): o is CapabilityOverride {
+  return !!o && typeof o === 'object' && typeof (o as CapabilityOverride).dp === 'string';
 }
 
 /**
