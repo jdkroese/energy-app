@@ -181,10 +181,12 @@ export function deleteFavorite(id: string): unknown {
 
 // ---- Import from the Sonos system's own radio favourites -------------------
 
-/** GET /api/radio/sonos-favorites — the speakers' own radio favourites (for import). */
+/** GET /api/radio/sonos-favorites — the speakers' own radio favourites (for import). Also
+ *  reports the non-radio favourites that were skipped, so the UI can explain an empty list
+ *  (the owner's favourites are typically Spotify/SoundCloud playlists, not radio stations). */
 export async function getSonosFavorites(): Promise<unknown> {
-  const favorites = await sonos.getSonosRadioFavorites();
-  return { ts: new Date().toISOString(), favorites };
+  const { radio, skipped } = await sonos.getSonosRadioFavorites();
+  return { ts: new Date().toISOString(), favorites: radio, skipped };
 }
 
 // ---- Play / stop ------------------------------------------------------------
@@ -216,7 +218,26 @@ export async function playRadio(body: unknown): Promise<unknown> {
   const res = await sonos
     .playStation({ streamUrl, name: name || 'Radio', speakerIds, volumePct })
     .catch((e) => badInput(`play failed: ${(e as Error).message}`));
+  // Persist the ACTUAL target speakers so the now-playing banner reflects reality (and
+  // survives a refresh/restart). `wholeHouse` = the play targeted every speaker explicitly
+  // (no selection sent), so the UI can say "All speakers" only when that's truly the case.
+  const wholeHouse = speakerIds.length === 0;
+  store.update((s) => {
+    s.radioNowPlaying = {
+      name: name || 'Radio',
+      stationId: typeof b.stationId === 'string' && b.stationId ? b.stationId : null,
+      speakerIds: res.playedOn,
+      wholeHouse,
+      coordinator: res.coordinator,
+      startedAt: new Date().toISOString(),
+    };
+  });
   return { ts: new Date().toISOString(), ok: true, ...res };
+}
+
+/** GET /api/radio/now-playing — the active radio session (with the real target speakers). */
+export function nowPlaying(): unknown {
+  return { ts: new Date().toISOString(), nowPlaying: store.get().radioNowPlaying };
 }
 
 /** POST /api/radio/stop { speakerIds? } (admin) — stop the chosen speakers (or all). */
@@ -224,6 +245,14 @@ export async function stopRadio(body: unknown): Promise<unknown> {
   const b = (body ?? {}) as { speakerIds?: unknown };
   const speakerIds = Array.isArray(b.speakerIds) ? b.speakerIds.filter((x): x is string => typeof x === 'string') : [];
   await sonos.stopSpeakers(speakerIds.length ? speakerIds : undefined);
+  // Clear the now-playing banner when the stop covers the active session: a whole-house stop
+  // (no ids), or a targeted stop that overlaps the speakers the station is playing on.
+  store.update((s) => {
+    const np = s.radioNowPlaying;
+    if (!np) return;
+    const covers = speakerIds.length === 0 || speakerIds.some((id) => np.speakerIds.includes(id));
+    if (covers) s.radioNowPlaying = null;
+  });
   return { ts: new Date().toISOString(), ok: true };
 }
 

@@ -690,9 +690,31 @@ export interface SonosFavorite {
   streamUrl: string | null;
 }
 
+/** A non-radio Sonos favourite (Spotify/SoundCloud playlist etc.) that can't be imported. */
+export interface SonosSkippedFavorite {
+  title: string;
+  service: string | null;
+}
+
 export interface SonosFavoritesResponse {
   ts: string;
   favorites: SonosFavorite[];
+  skipped?: SonosSkippedFavorite[];
+}
+
+/** The active radio session (with the real target speakers) — for the now-playing banner. */
+export interface RadioNowPlaying {
+  name: string;
+  stationId: string | null;
+  speakerIds: string[];
+  wholeHouse: boolean;
+  coordinator: string | null;
+  startedAt: string;
+}
+
+export interface RadioNowPlayingResponse {
+  ts: string;
+  nowPlaying: RadioNowPlaying | null;
 }
 
 export interface RadioPlayResponse {

@@ -898,6 +898,27 @@ export interface RadioSchedule {
   volumePct: number;
 }
 
+/**
+ * The currently-playing radio station (or null when idle). Persisted so the now-playing
+ * banner — with the ACTUAL target speakers — survives a restart and reflects what's really
+ * sounding. `speakerIds` is the resolved set the station was played on (empty = whole house
+ * was targeted explicitly). Set on play, cleared on stop.
+ */
+export interface RadioNowPlaying {
+  /** Station label (for the banner). */
+  name: string;
+  /** Favourite station id when played from a slot; null for an ad-hoc URL play. */
+  stationId: string | null;
+  /** Resolved speaker UUIDs the station is playing on. */
+  speakerIds: string[];
+  /** True when the play targeted the WHOLE house (no/empty speaker selection). */
+  wholeHouse: boolean;
+  /** Coordinator UUID for the play group. */
+  coordinator: string | null;
+  /** ISO timestamp the play started. */
+  startedAt: string;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -944,6 +965,8 @@ export interface StoreSchema {
   /** Sonos internet-radio favourites (10 slots) + schedules (self-contained). */
   radioFavorites: RadioStation[];
   radioSchedules: RadioSchedule[];
+  /** The active radio now-playing session (with the real target speakers), or null. */
+  radioNowPlaying: RadioNowPlaying | null;
 }
 
 /**
@@ -1215,6 +1238,7 @@ function defaults(): StoreSchema {
     roomsSeeded: false,
     radioFavorites: [],
     radioSchedules: [],
+    radioNowPlaying: null,
   };
 }
 
@@ -1587,6 +1611,7 @@ function hydrate(raw: unknown): StoreSchema {
     roomsSeeded: typeof p.roomsSeeded === 'boolean' ? p.roomsSeeded : false,
     radioFavorites: hydrateRadioFavorites(p.radioFavorites),
     radioSchedules: hydrateRadioSchedules(p.radioSchedules),
+    radioNowPlaying: hydrateRadioNowPlaying(p.radioNowPlaying),
   };
 }
 
@@ -1651,6 +1676,21 @@ function hydrateRadioSchedules(raw: unknown): RadioSchedule[] {
     });
   }
   return out;
+}
+
+/** Coerce the persisted radio now-playing session; null when absent/malformed. */
+function hydrateRadioNowPlaying(raw: unknown): RadioNowPlaying | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Partial<RadioNowPlaying>;
+  if (typeof r.name !== 'string') return null;
+  return {
+    name: r.name,
+    stationId: typeof r.stationId === 'string' ? r.stationId : null,
+    speakerIds: Array.isArray(r.speakerIds) ? r.speakerIds.filter((x): x is string => typeof x === 'string') : [],
+    wholeHouse: typeof r.wholeHouse === 'boolean' ? r.wholeHouse : false,
+    coordinator: typeof r.coordinator === 'string' ? r.coordinator : null,
+    startedAt: typeof r.startedAt === 'string' ? r.startedAt : new Date().toISOString(),
+  };
 }
 
 /** Rehydrate the alarm config, clamping the blink floor and coercing types. */

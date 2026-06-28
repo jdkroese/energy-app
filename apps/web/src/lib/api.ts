@@ -54,6 +54,7 @@ import type {
   RadioSearchResponse,
   SonosFavoritesResponse,
   RadioPlayResponse,
+  RadioNowPlayingResponse,
   RadioSchedule,
   RadioSchedulesResponse,
   LiveResponse,
@@ -327,6 +328,7 @@ export const api = {
     play: (body: { stationId?: string; streamUrl?: string; name?: string; speakerIds: string[]; volumePct: number }) =>
       postJSON<RadioPlayResponse>('/api/radio/play', body),
     stop: (speakerIds: string[] = []) => postJSON<{ ts: string; ok: boolean }>('/api/radio/stop', { speakerIds }),
+    nowPlaying: () => getJSON<RadioNowPlayingResponse>('/api/radio/now-playing'),
     schedules: () => getJSON<RadioSchedulesResponse>('/api/radio/schedules'),
     createSchedule: (s: Partial<RadioSchedule>) => postJSON<{ schedule: RadioSchedule }>('/api/radio/schedules', s),
     updateSchedule: (id: string, s: Partial<RadioSchedule>) =>

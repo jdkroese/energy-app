@@ -58,20 +58,43 @@ async function tick(): Promise<void> {
         if (crossed(last, now, day, onMin)) {
           const station = state.radioFavorites.find((f) => f.id === s.stationId);
           if (station) {
-            await sonos
+            const res = await sonos
               .playStation({
                 streamUrl: station.streamUrl,
                 name: station.name,
                 speakerIds: s.speakerIds,
                 volumePct: s.volumePct,
               })
-              .catch((e) => console.error('[radio] schedule play failed:', (e as Error).message));
+              .catch((e) => {
+                console.error('[radio] schedule play failed:', (e as Error).message);
+                return null;
+              });
+            // Reflect the scheduled play in the now-playing banner (real target speakers).
+            if (res) {
+              store.update((st) => {
+                st.radioNowPlaying = {
+                  name: station.name,
+                  stationId: station.id,
+                  speakerIds: res.playedOn,
+                  wholeHouse: s.speakerIds.length === 0,
+                  coordinator: res.coordinator,
+                  startedAt: new Date().toISOString(),
+                };
+              });
+            }
           }
         }
         if (offMin !== null && crossed(last, now, day, offMin)) {
           await sonos
             .stopSpeakers(s.speakerIds.length ? s.speakerIds : undefined)
             .catch((e) => console.error('[radio] schedule stop failed:', (e as Error).message));
+          // Clear the banner when the scheduled stop overlaps the active session.
+          store.update((st) => {
+            const np = st.radioNowPlaying;
+            if (!np) return;
+            const covers = s.speakerIds.length === 0 || s.speakerIds.some((id) => np.speakerIds.includes(id));
+            if (covers) st.radioNowPlaying = null;
+          });
         }
       }
     }
