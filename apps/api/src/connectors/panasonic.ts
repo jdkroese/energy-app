@@ -21,7 +21,23 @@ const BASE_ACC  = 'https://accsmart.panasonic.com';
 const APP_CLIENT_ID = 'Xmy6xIYIitMxngjB2rHvlm6HSDNnaMJx';
 const AUTH0_CLIENT  = 'eyJuYW1lIjoiQXV0aDAuQW5kcm9pZCIsImVudiI6eyJhbmRyb2lkIjoiMzAifSwidmVyc2lvbiI6IjIuOS4zIn0=';
 const REDIRECT_URI  = 'panasonic-iot-cfc://authglb.digital.panasonic.com/android/com.panasonic.ACCsmart/callback';
-const APP_VERSION   = '1.22.0';
+// Fetched from iTunes on first auth; bump this fallback when Panasonic releases
+// a new mandatory version (they return code 4106 when the version is too old).
+const APP_VERSION_FALLBACK = '4.3.0';
+let appVersion: string | null = null;
+
+async function getAppVersion(): Promise<string> {
+  if (appVersion) return appVersion;
+  try {
+    const r = await fetch('https://itunes.apple.com/lookup?id=1348640525', { signal: AbortSignal.timeout(5_000) });
+    if (r.ok) {
+      const j = (await r.json()) as { results?: Array<{ version?: string }> };
+      const v = j.results?.[0]?.version;
+      if (v) { appVersion = v; return v; }
+    }
+  } catch { /* ignore — use fallback */ }
+  return APP_VERSION_FALLBACK;
+}
 const AUDIENCE      = `https://digital.panasonic.com/${APP_CLIENT_ID}/api/v1/`;
 const SCOPE         = 'openid offline_access comfortcloud.control a2w.control';
 const MOBILE_UA     = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Mobile Safari/537.36';
@@ -100,7 +116,7 @@ function computeApiKey(accessToken: string): { key: string; ts: string } {
 
 // ---- ACC API headers ---------------------------------------------------------
 
-function accHeaders(accessToken: string, accClientId: string): Record<string, string> {
+function accHeaders(accessToken: string, accClientId: string, version: string): Record<string, string> {
   const { key, ts } = computeApiKey(accessToken);
   return {
     'Content-Type': 'application/json;charset=utf-8',
@@ -108,7 +124,7 @@ function accHeaders(accessToken: string, accClientId: string): Record<string, st
     'x-app-name': 'Comfort Cloud',
     'x-app-timestamp': ts,
     'x-app-type': '1',
-    'x-app-version': APP_VERSION,
+    'x-app-version': version,
     'x-cfc-api-key': key,
     'x-client-id': accClientId,
     'x-user-authorization-v2': `Bearer ${accessToken}`,
@@ -174,6 +190,7 @@ interface OAuthTokenResponse {
 }
 
 async function auth0GetToken(username: string, password: string): Promise<PanasonicToken> {
+  const version = await getAppVersion();
   const jar = new CookieJar();
   const verifier  = randomString(43);
   const challenge = codeChallenge(verifier);
@@ -282,7 +299,7 @@ async function auth0GetToken(username: string, password: string): Promise<Panaso
     headers: {
       'Content-Type': 'application/json;charset=utf-8',
       'User-Agent': 'G-RAC', 'x-app-name': 'Comfort Cloud',
-      'x-app-timestamp': ts, 'x-app-type': '1', 'x-app-version': APP_VERSION,
+      'x-app-timestamp': ts, 'x-app-type': '1', 'x-app-version': version,
       'x-cfc-api-key': key,
       'x-user-authorization-v2': `Bearer ${tokenJson.access_token}`,
     },
@@ -296,6 +313,7 @@ async function auth0GetToken(username: string, password: string): Promise<Panaso
     refresh_token: tokenJson.refresh_token,
     expires_at:    Date.now() + tokenJson.expires_in * 1000 - 60_000,
     acc_client_id: v2Json.clientId ?? '',
+    app_version:   version,
   };
 }
 
@@ -315,6 +333,7 @@ async function refreshOAuthToken(old: PanasonicToken): Promise<PanasonicToken> {
     refresh_token: j.refresh_token,
     expires_at:    Date.now() + j.expires_in * 1000 - 60_000,
     acc_client_id: old.acc_client_id,
+    app_version:   old.app_version,
   };
 }
 
@@ -325,6 +344,7 @@ interface PanasonicToken {
   refresh_token: string;
   expires_at: number;
   acc_client_id: string;
+  app_version: string;
 }
 
 let tokenCache: PanasonicToken | null = null;
@@ -415,7 +435,7 @@ function toClimateUnit(d: PanasonicDevice): ClimateUnit {
 async function fetchFleet(): Promise<ClimateUnit[]> {
   const token = await getToken();
   const res = await fetch(`${BASE_ACC}/device/group`, {
-    headers: accHeaders(token.access_token, token.acc_client_id),
+    headers: accHeaders(token.access_token, token.acc_client_id, token.app_version),
     signal: AbortSignal.timeout(15_000),
   });
   if (res.status === 401) {
@@ -466,7 +486,7 @@ export async function setLever(
 
   const res = await fetch(`${BASE_ACC}/deviceStatus/control`, {
     method: 'POST',
-    headers: accHeaders(token.access_token, token.acc_client_id),
+    headers: accHeaders(token.access_token, token.acc_client_id, token.app_version),
     body: JSON.stringify({ deviceGuid: guid, parameters }),
     signal: AbortSignal.timeout(15_000),
   });
