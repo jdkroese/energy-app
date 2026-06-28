@@ -99,6 +99,15 @@ import { startBreakerMetering } from './control/breaker-metering';
 import { startEnergyHistory } from './control/energy-history';
 import { runEnergyBackfill } from './control/energy-backfill';
 import { getBreakerUsage, getUsageSummary } from './routes/breaker-usage';
+import {
+  parseUpload,
+  postParse,
+  postSave,
+  getList as getInvoicesList,
+  getDetail as getInvoiceDetail,
+  getPdf as getInvoicePdf,
+  deleteInvoice,
+} from './routes/invoices';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
 import {
@@ -162,7 +171,14 @@ import { bootstrapAdmin } from './auth/users';
 import type { ScenarioDef, AlertStatus, ControlDevice, ControlMode } from './store';
 
 const app = express();
-app.use(express.json());
+// Global JSON body parser with the default ~100KB cap. The invoice-save route carries
+// the original PDF as base64 (well over that), so it is EXCLUDED here and gets its own
+// higher-limit parser at its mount — keeping the tight default for every other route.
+const globalJson = express.json();
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/api/invoices') return next();
+  return globalJson(req, res, next);
+});
 
 // --- PUBLIC routes (no session required): /api/health and /api/auth/* only ---
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -492,6 +508,23 @@ app.get(
     }),
   ),
 );
+
+// ---- Invoice vault + reconciliation (Phase 1; additive + READ-ONLY) ----
+// Upload/parse/save/delete are admin-gated (mutating); list/detail/pdf are any-authed
+// reads. The parse route takes a multipart PDF (multer memory storage). These handlers
+// send their own responses, so they are NOT wrapped in `wrap`. Nothing here touches any
+// control/coordinator/guardrail/armed code path.
+app.post('/api/invoices/parse', requireAdmin, parseUpload, (req, res) => {
+  void postParse(req, res);
+});
+// The save body carries the original PDF as base64 (~270KB → larger encoded), which
+// exceeds express.json()'s default ~100KB cap. Use a dedicated higher-limit JSON parser
+// on THIS route only so the global default stays tight for every other endpoint.
+app.post('/api/invoices', requireAdmin, express.json({ limit: '20mb' }), postSave);
+app.get('/api/invoices', getInvoicesList);
+app.get('/api/invoices/:id', getInvoiceDetail);
+app.get('/api/invoices/:id/pdf', getInvoicePdf);
+app.delete('/api/invoices/:id', requireAdmin, deleteInvoice);
 
 // ---- Sonos speakers + house alarm (Phase 1) ----
 // Reads any-authed; volume/test/alarm-trigger/stop + integration config admin-gated.

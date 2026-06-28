@@ -80,6 +80,11 @@ import type {
   BreakerUsageGranularity,
   BreakerUsageResponse,
   BreakerUsageSummaryResponse,
+  ParsedInvoice,
+  InvoicesListResponse,
+  InvoiceParseResponse,
+  InvoiceSaveResponse,
+  InvoiceDetail,
 } from './types';
 
 /**
@@ -397,6 +402,22 @@ export const api = {
     create: (a: Partial<Automation>) => postJSON<{ automation: Automation }>('/api/automations', a),
     update: (id: string, a: Partial<Automation>) => putJSON<{ automation: Automation }>(`/api/automations/${enc(id)}`, a),
     remove: (id: string) => delJSON<{ ok: boolean }>(`/api/automations/${enc(id)}`),
+  },
+
+  /* ---- Invoice vault (Bills); parse/save/delete are admin, reads any-authed ---- */
+  invoices: {
+    list: () => getJSON<InvoicesListResponse>('/api/invoices'),
+    detail: (id: string) => getJSON<InvoiceDetail>(`/api/invoices/${enc(id)}`),
+    // Multipart PDF upload → parse only (NOT saved). FormData sets its own content-type.
+    parse: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return getJSON<InvoiceParseResponse>('/api/invoices/parse', { method: 'POST', body: fd });
+    },
+    save: (body: { sourceFile?: string; parsed: ParsedInvoice; edits?: Partial<ParsedInvoice>; pdfBase64?: string }) =>
+      postJSON<InvoiceSaveResponse>('/api/invoices', body),
+    remove: (id: string) => delJSON<{ ok: boolean }>(`/api/invoices/${enc(id)}`),
+    pdfUrl: (id: string) => `/api/invoices/${enc(id)}/pdf`,
   },
 
   /* ---- Rooms (cross-cutting); create/rename/reorder/delete/all-off are admin ---- */
