@@ -604,6 +604,15 @@ export interface StoreSchema {
   /** Tuya light scenes + schedules (self-contained; see types above). */
   lightScenes: LightScene[];
   lightSchedules: LightSchedule[];
+  /** Device-onboarding triage state (the "Discovered devices" inbox). Phase 1
+   *  persists only the list of ignored device ids; later phases extend this. */
+  deviceOnboarding: DeviceOnboardingState;
+}
+
+/** Persisted onboarding/triage state for discovered (not-yet-set-up) Tuya devices. */
+export interface DeviceOnboardingState {
+  /** Device ids the user has chosen to ignore (hidden from the inbox; un-ignorable). */
+  ignored: string[];
 }
 
 // ---- Defaults -----------------------------------------------------------
@@ -806,6 +815,7 @@ function defaults(): StoreSchema {
     devices: defaultDevices(),
     lightScenes: [],
     lightSchedules: [],
+    deviceOnboarding: { ignored: [] },
   };
 }
 
@@ -1123,6 +1133,11 @@ function hydrate(raw: unknown): StoreSchema {
     devices: hydrateDevices(p.devices, base.devices),
     lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
     lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,
+    deviceOnboarding: {
+      ignored: Array.isArray(p.deviceOnboarding?.ignored)
+        ? [...new Set(p.deviceOnboarding!.ignored.filter((id): id is string => typeof id === 'string'))]
+        : base.deviceOnboarding.ignored,
+    },
   };
 }
 

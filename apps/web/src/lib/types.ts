@@ -828,6 +828,51 @@ export interface TuyaIntegrationStatus {
   lightCount: number;
   categories: Array<{ label: string; count: number }>;
   error: string | null;
+  /** Count of paired devices not yet surfaced by a shipped category screen. */
+  needsSetupCount?: number;
+}
+
+/* ============================================================================
+ * Discovered devices (onboarding inbox — Devices → Needs setup). Phase 1 is
+ * READ + TRIAGE: a device the Tuya fleet reports but no shipped screen renders.
+ * ==========================================================================*/
+
+export type CapabilityKind =
+  | 'switch' | 'range' | 'enum' | 'action' | 'color' | 'measure' | 'status';
+
+export interface Capability {
+  kind: CapabilityKind;
+  key: string;
+  label: string;
+  dp: string;
+  unit?: string;
+  min?: number;
+  max?: number;
+  options?: string[];
+  readOnly: boolean;
+}
+
+export type DiscoveredConfidence = 'high' | 'monitor' | 'review';
+
+export interface DiscoveredDevice {
+  id: string;
+  name: string;
+  category: string;
+  productName: string | null;
+  online: boolean;
+  proposedType: { label: string; icon: string };
+  capabilities: Capability[];
+  confidence: DiscoveredConfidence;
+  roomGuess: string | null;
+  readout: string | null;
+}
+
+export interface DiscoveredResponse {
+  ts: string;
+  connected: boolean;
+  fleetError: string | null;
+  devices: DiscoveredDevice[];
+  ignored: DiscoveredDevice[];
 }
 
 /* ---- Light scenes + schedules (self-contained light subsystem) ---- */

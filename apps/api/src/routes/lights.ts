@@ -6,6 +6,7 @@
 
 import * as tuya from '../connectors/tuya';
 import * as lights from '../connectors/tuya-lights';
+import { isBlind } from '../connectors/tuya-blinds';
 import type { LightLever, LightUnit } from '../connectors/tuya-lights';
 import * as store from '../store';
 
@@ -112,8 +113,10 @@ export async function bulkCommandLights(ids: string[], lever: LightLever, value:
 export async function getTuyaIntegration(): Promise<unknown> {
   const connected = tuya.isConfigured();
   const t = store.get().integrations.tuya;
+  const ignored = new Set(store.get().deviceOnboarding.ignored);
   let deviceCount = 0;
   let lightCount = 0;
+  let needsSetupCount = 0;
   let categories: Array<{ label: string; count: number }> = [];
   let error: string | null = null;
   if (connected) {
@@ -121,6 +124,10 @@ export async function getTuyaIntegration(): Promise<unknown> {
       const all = await tuya.getDevices();
       deviceCount = all.length;
       lightCount = all.filter((d) => lights.isLight(d)).length;
+      // "Needs setup" = paired devices no shipped screen renders, minus ignored.
+      needsSetupCount = all.filter(
+        (d) => !lights.isLight(d) && !isBlind(d) && !ignored.has(d.id),
+      ).length;
       categories = tuya.categorize(all);
     } catch (e) {
       error = (e as Error).message;
@@ -132,6 +139,7 @@ export async function getTuyaIntegration(): Promise<unknown> {
     region: t?.region ?? 'eu',
     deviceCount,
     lightCount,
+    needsSetupCount,
     categories,
     error,
   };

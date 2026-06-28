@@ -1056,6 +1056,7 @@ const TUYA_REGIONS = [
 function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const navigate = useNavigate();
   const [status, setStatus] = useState<TuyaIntegrationStatus | null>(null);
   const [region, setRegion] = useState('eu');
   const [accessId, setAccessId] = useState('');
@@ -1140,6 +1141,18 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
               </span>
             ))}
           </div>
+        )}
+
+        {connected && (status?.needsSetupCount ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={() => navigate('/devices?type=needs-setup')}
+            style={{ display: 'flex', alignItems: 'center', gap: 7, alignSelf: 'flex-start', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--grid)', fontSize: 12.5, fontWeight: 600 }}
+          >
+            <Icon name="sparkles" size={13} />
+            {status!.needsSetupCount} device{status!.needsSetupCount === 1 ? '' : 's'} not yet set up
+            <Icon name="arrow-right" size={13} />
+          </button>
         )}
 
         {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{status.error}</div>}

@@ -282,6 +282,75 @@ export const CATEGORY_LABELS: Record<string, string> = {
   fs: 'Fans', fskg: 'Fan switches',
 };
 
+/**
+ * Proposed app-facing device TYPE per Tuya category code — the onboarding-inference
+ * map. Each entry is a coarse type label + a Lucide icon name the inbox renders. This
+ * is intentionally broader than CATEGORY_LABELS (which is a fine-grained human label):
+ * it buckets every category into one of the handful of types the app reasons about
+ * (Light / Blind / Switch / Plug / Fan / Sensor / Climate / Lock / Siren). Categories
+ * not listed fall through to "Unknown" (icon 'circle-help'). Extend here as new Tuya
+ * categories appear in the wild.
+ */
+export interface ProposedType {
+  /** Short type label shown on the inbox row (e.g. 'Light', 'Plug', 'Sensor'). */
+  label: string;
+  /** Lucide icon name for the row's icon tile. */
+  icon: string;
+}
+
+const CATEGORY_TYPES: Record<string, ProposedType> = {
+  // Lights
+  dj: { label: 'Light', icon: 'lightbulb' },
+  dd: { label: 'Light', icon: 'lightbulb' },
+  dc: { label: 'Light', icon: 'lightbulb' },
+  fwd: { label: 'Light', icon: 'lightbulb' },
+  xdd: { label: 'Light', icon: 'lightbulb' },
+  tgq: { label: 'Dimmer', icon: 'lightbulb' },
+  tyndj: { label: 'Light', icon: 'lightbulb' },
+  fsd: { label: 'Fan light', icon: 'fan' },
+  // Blinds / curtains
+  cl: { label: 'Blind', icon: 'blinds' },
+  clkg: { label: 'Blind', icon: 'blinds' },
+  // Switches / sockets / plugs / breakers
+  cz: { label: 'Plug', icon: 'plug' },
+  pc: { label: 'Power strip', icon: 'plug' },
+  kg: { label: 'Switch', icon: 'toggle-right' },
+  tdq: { label: 'Breaker', icon: 'toggle-right' },
+  wkcz: { label: 'Plug', icon: 'plug' },
+  // Fans
+  fs: { label: 'Fan', icon: 'fan' },
+  fskg: { label: 'Fan switch', icon: 'fan' },
+  // Sensors
+  wsdcg: { label: 'Sensor', icon: 'thermometer' },
+  ms: { label: 'Sensor', icon: 'radar' },
+  pir: { label: 'Sensor', icon: 'radar' },
+  mcs: { label: 'Sensor', icon: 'door-open' },
+  cobj: { label: 'Sensor', icon: 'radar' },
+  pm25: { label: 'Sensor', icon: 'wind' },
+  ywbj: { label: 'Sensor', icon: 'flame' },
+  rqbj: { label: 'Sensor', icon: 'flame' },
+  sj: { label: 'Sensor', icon: 'droplet' },
+  // Climate / thermostat
+  wk: { label: 'Climate', icon: 'thermometer-sun' },
+  wkf: { label: 'Climate', icon: 'thermometer-sun' },
+  qn: { label: 'Heater', icon: 'flame' },
+  ktkzq: { label: 'Climate', icon: 'thermometer-sun' },
+  // Locks
+  jtmspro: { label: 'Lock', icon: 'lock' },
+  jtmsbh: { label: 'Lock', icon: 'lock' },
+  mk: { label: 'Lock', icon: 'lock' },
+  // Sirens / alarms
+  sgbj: { label: 'Siren', icon: 'siren' },
+  bjq: { label: 'Siren', icon: 'siren' },
+};
+
+const UNKNOWN_TYPE: ProposedType = { label: 'Unknown', icon: 'circle-help' };
+
+/** Proposed app-facing type + icon for a Tuya category code (Unknown when unmapped). */
+export function proposedType(category: string): ProposedType {
+  return CATEGORY_TYPES[category] ?? UNKNOWN_TYPE;
+}
+
 /** Summarize a fleet into {label: count} buckets for the connection status UI. */
 export function categorize(devices: TuyaDevice[]): Array<{ label: string; count: number }> {
   const counts = new Map<string, number>();

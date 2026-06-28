@@ -13,6 +13,7 @@ import { DEVICE_TYPES, typeMeta, classifyDevice, type DeviceType } from '../lib/
 import { AutomationRow } from '../components/AutomationRow';
 import { LightsPanel } from './Lights';
 import { BlindsPanel } from './Blinds';
+import { DiscoveredInbox, useDiscoveredCount } from './DiscoveredInbox';
 
 /* ============================================================================
  * Devices — the typed-device hub. A segmented type bar (Cooling · Heating ·
@@ -120,9 +121,14 @@ function useLeverCommands(devices: DeviceView[], refetch: () => void) {
   return { sendLever, pendingFor };
 }
 
-/* ---- type tab bar (matches the Autopilot SegmentedControl look + hue dots) -- */
-function TypeTabs({ active, counts, wide, onSelect }: {
-  active: DeviceType; counts: Record<DeviceType, number>; wide: boolean; onSelect: (t: DeviceType) => void;
+/** A hub view = a built device type OR the onboarding inbox ('needs-setup'). */
+type HubView = DeviceType | 'needs-setup';
+
+/* ---- type tab bar (matches the Autopilot SegmentedControl look + hue dots) --
+ * Appends a warning-toned "Needs setup · N" segment when N>0, so discovered
+ * (not-yet-set-up) devices get a first-class home in the hub. */
+function TypeTabs({ active, counts, needsSetup, wide, onSelect }: {
+  active: HubView; counts: Record<DeviceType, number>; needsSetup: number; wide: boolean; onSelect: (t: HubView) => void;
 }) {
   return (
     <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 5 }}>
@@ -151,6 +157,27 @@ function TypeTabs({ active, counts, wide, onSelect }: {
           </button>
         );
       })}
+      {needsSetup > 0 && (() => {
+        const on = active === 'needs-setup';
+        return (
+          <button
+            type="button"
+            onClick={() => onSelect('needs-setup')}
+            title="Devices found but not set up yet"
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: wide ? '9px 6px' : '8px 4px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245,165,36,0.35)', cursor: 'pointer',
+              background: on ? 'var(--grid-wash)' : 'transparent',
+              color: on ? 'var(--grid)' : 'var(--text-2)',
+              fontSize: wide ? 13 : 11.5, fontWeight: 600, minWidth: 0,
+            }}
+          >
+            <Icon name="sparkles" size={12} color="var(--grid)" />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wide ? 'Needs setup' : 'Setup'}</span>
+            <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--grid)' }}>{needsSetup}</span>
+          </button>
+        );
+      })()}
     </div>
   );
 }
@@ -457,12 +484,17 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   // restores the tab the device lives on (e.g. back from a heating zone → Heating).
   const [params, setParams] = useSearchParams();
   const paramType = params.get('type');
-  const initialType: DeviceType = DEVICE_TYPES.some((m) => m.type === paramType) ? (paramType as DeviceType) : 'cooling';
-  const [activeType, setActiveType] = useState<DeviceType>(initialType);
-  const selectType = (t: DeviceType) => {
+  const initialType: HubView =
+    paramType === 'needs-setup' ? 'needs-setup'
+      : DEVICE_TYPES.some((m) => m.type === paramType) ? (paramType as DeviceType) : 'cooling';
+  const [activeType, setActiveType] = useState<HubView>(initialType);
+  const selectType = (t: HubView) => {
     setActiveType(t);
     setParams((prev) => { const n = new URLSearchParams(prev); n.set('type', t); return n; }, { replace: true });
   };
+  // Discovered (not-yet-set-up) count — badges the tab + drives the pinned card.
+  const needsSetupCount = useDiscoveredCount();
+  const inboxView = activeType === 'needs-setup';
 
   const d = data;
   const armed = status?.armed ?? false;
@@ -624,7 +656,8 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     </>
   );
 
-  const content = (t: DeviceType) => {
+  const content = (t: HubView) => {
+    if (t === 'needs-setup') return <DiscoveredInbox wide={wide} canTriage={isAdmin} />;
     if (t === 'cooling') return coolingContent;
     if (t === 'heating') return heatingContent;
     if (t === 'lighting') return <LightsPanel ctx={ctx} />;
@@ -632,13 +665,27 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     return <ComingSoon meta={typeMeta(t)} />;
   };
 
+  // Pinned inbox prompt — sits atop the hub whenever there are devices to triage and
+  // we're not already on the inbox. One tap jumps to the Needs-setup view.
+  const inboxPrompt = needsSetupCount > 0 && !inboxView && (
+    <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.3)', cursor: 'pointer' }} onClick={() => selectType('needs-setup')}>
+      <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--surface-1)', color: 'var(--grid)', flex: 'none' }}><Icon name="sparkles" size={17} /></span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{needsSetupCount} device{needsSetupCount === 1 ? '' : 's'} found, not set up yet</div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>Review and triage what your account has paired.</div>
+      </div>
+      <Icon name="chevron-right" size={16} color="var(--grid)" />
+    </Card>
+  );
+
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
       {!d && loading && <Card padded style={{ color: 'var(--text-3)', fontSize: 13 }}>Loading devices…</Card>}
       {d && (
         <>
-          <TypeTabs active={activeType} counts={counts} wide={wide} onSelect={selectType} />
+          {inboxPrompt}
+          <TypeTabs active={activeType} counts={counts} needsSetup={needsSetupCount} wide={wide} onSelect={selectType} />
           {content(activeType)}
         </>
       )}
