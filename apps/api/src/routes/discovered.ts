@@ -1,17 +1,28 @@
-// Discovered-devices HTTP surface (Tuya onboarding, Phase 1 — READ + TRIAGE only).
+// Device-onboarding HTTP surface (Tuya). Phase 1 was READ + TRIAGE; Phase 2 makes
+// discovered devices CONTROLLABLE and adds the SET-UP flow:
+//   • GET  /api/devices/discovered  — the inbox (discovered − ignored − configured)
+//   • POST /api/devices/:id/ignore | keep — triage flags (Phase 1)
+//   • POST /api/devices/:id/setup   — graduate a device into a type group
+//   • POST /api/devices/:id/unsetup — return it to the inbox (re-classify)
+//   • GET  /api/devices/configured  — set-up devices + (override-applied) caps + live values
+//   • GET/POST /api/devices/custom-types — the user-minted custom type registry
+//   • POST /api/devices/:id/command — generic capability write (see tuya-generic)
 //
-// The Tuya connector enumerates the WHOLE paired fleet, but the shipped category
-// screens (lights, blinds) only render a whitelist of categories — so plugs, fans,
-// sensors, locks, sirens, thermostats etc. exist in the system but are invisible.
-// This route surfaces those "not yet set up" devices so the Devices → Needs-setup
-// inbox can show + triage them. It writes NOTHING to any device; the only mutations
-// are the ignore/keep triage flags persisted in the store.
+// The generic command path reuses the lights writer's scaling math via tuya-generic;
+// safety-critical actions (locks/sirens/gates) are confirmed in the UI before firing.
 
 import * as tuya from '../connectors/tuya';
 import { isLight } from '../connectors/tuya-lights';
 import { isBlind } from '../connectors/tuya-blinds';
-import { toDiscovered, type DiscoveredDevice } from '../connectors/tuya-inference';
-import type { TuyaDevice } from '../connectors/tuya';
+import {
+  toDiscovered,
+  deriveCapabilities,
+  applyOverrides,
+  type DiscoveredDevice,
+  type Capability,
+} from '../connectors/tuya-inference';
+import { buildGenericCommands, readLiveValue, type GenericCommandInput } from '../connectors/tuya-generic';
+import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import * as store from '../store';
 
 function badInput(msg: string): Error & { code: string } {
@@ -25,20 +36,30 @@ function isAlreadyHandled(d: TuyaDevice): boolean {
   return isLight(d) || isBlind(d);
 }
 
+/** Best-effort spec fetch (cached 1h in the connector); null on failure. */
+async function specFor(id: string): Promise<TuyaSpec | null> {
+  try {
+    return await tuya.getSpecifications(id);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * GET /api/devices/discovered — every paired Tuya device that is (a) NOT already
- * surfaced by a shipped connector and (b) not ignored, enriched with the inferred
- * proposedType / capabilities / confidence / roomGuess. Specs are fetched per device
- * (cached 1h in the connector) to derive writable-vs-readable + bounds; a spec failure
- * degrades gracefully to status-only inference. Ignored devices are returned separately
- * so the inbox can render the collapsible "Ignored" list with a Keep action.
+ * GET /api/devices/discovered — the onboarding INBOX: every paired Tuya device that is
+ * (a) NOT already surfaced by a shipped connector, (b) NOT ignored, and (c) NOT yet
+ * configured (set-up devices have graduated into their group). Enriched with the inferred
+ * proposedType / capabilities / confidence / roomGuess. Ignored devices are returned
+ * separately for the collapsible "Ignored" list.
  */
 export async function getDiscovered(): Promise<unknown> {
   const connected = tuya.isConfigured();
   if (!connected) {
     return { ts: new Date().toISOString(), connected: false, fleetError: null, devices: [], ignored: [] };
   }
-  const ignoredIds = new Set(store.get().deviceOnboarding.ignored);
+  const onboarding = store.get().deviceOnboarding;
+  const ignoredIds = new Set(onboarding.ignored);
+  const configuredIds = new Set(Object.keys(onboarding.configured));
   let all: TuyaDevice[];
   try {
     all = await tuya.getDevices();
@@ -46,20 +67,12 @@ export async function getDiscovered(): Promise<unknown> {
     return { ts: new Date().toISOString(), connected: true, fleetError: (e as Error).message, devices: [], ignored: [] };
   }
 
-  // Candidates = paired devices not already shown by a shipped screen.
-  const candidates = all.filter((d) => !isAlreadyHandled(d));
+  // Candidates = paired devices not already shown by a shipped screen, AND not configured
+  // (a set-up device has graduated; it lives in /api/devices/configured now).
+  const candidates = all.filter((d) => !isAlreadyHandled(d) && !configuredIds.has(d.id));
 
-  // Enrich each with its spec (best-effort, in parallel — bounded fleet size).
   const enriched: DiscoveredDevice[] = await Promise.all(
-    candidates.map(async (d) => {
-      let spec = null;
-      try {
-        spec = await tuya.getSpecifications(d.id);
-      } catch {
-        /* no spec — fall back to status-only inference */
-      }
-      return toDiscovered(d, spec);
-    }),
+    candidates.map(async (d) => toDiscovered(d, await specFor(d.id))),
   );
 
   const devices = enriched.filter((d) => !ignoredIds.has(d.id));
@@ -86,4 +99,184 @@ export function keepDiscovered(id: string): unknown {
     s.deviceOnboarding.ignored = s.deviceOnboarding.ignored.filter((x) => x !== deviceId);
   });
   return { ts: new Date().toISOString(), id: deviceId, ignored: false };
+}
+
+// ---- Set-up / re-classify ---------------------------------------------------
+
+function sanitizeOverrides(raw: unknown): store.CapabilityOverride[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const KINDS = new Set(['switch', 'range', 'enum', 'action', 'color', 'measure', 'status']);
+  const out: store.CapabilityOverride[] = [];
+  for (const r of raw) {
+    const o = (r ?? {}) as Record<string, unknown>;
+    if (typeof o.dp !== 'string' || !o.dp) continue;
+    const ov: store.CapabilityOverride = { dp: o.dp };
+    if (typeof o.kind === 'string' && KINDS.has(o.kind)) ov.kind = o.kind as store.CapabilityOverride['kind'];
+    if (typeof o.label === 'string' && o.label.trim()) ov.label = o.label.trim();
+    if (typeof o.hidden === 'boolean') ov.hidden = o.hidden;
+    if (typeof o.readOnly === 'boolean') ov.readOnly = o.readOnly;
+    out.push(ov);
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * POST /api/devices/:id/setup — graduate a discovered device into its type group.
+ * Body: { typeId, name, capOverrides? }. `typeId` is a built-in DeviceType key or a
+ * custom type id; `name` is the assigned display name; `capOverrides` carry the Advanced
+ * DP-remap edits. No auto-add anywhere — a device only becomes controllable after this.
+ */
+export async function setupDevice(id: string, body: unknown): Promise<unknown> {
+  const deviceId = String(id ?? '').trim();
+  if (!deviceId) throw badInput('device id required');
+  const b = (body ?? {}) as { typeId?: unknown; name?: unknown; capOverrides?: unknown };
+  const typeId = String(b.typeId ?? '').trim();
+  const name = String(b.name ?? '').trim();
+  if (!typeId) throw badInput('typeId required');
+  if (!name) throw badInput('name required');
+
+  // Validate the device exists in the fleet (don't set up a phantom id).
+  if (tuya.isConfigured()) {
+    const all = await tuya.getDevices();
+    if (!all.some((d) => d.id === deviceId)) throw badInput(`device ${deviceId} not found`);
+  }
+
+  const configured: store.ConfiguredDevice = {
+    typeId,
+    name,
+    setupAt: new Date().toISOString(),
+    ...(sanitizeOverrides(b.capOverrides) ? { capOverrides: sanitizeOverrides(b.capOverrides) } : {}),
+  };
+  store.update((s) => {
+    s.deviceOnboarding.configured[deviceId] = configured;
+    // A set-up device is no longer "ignored" (the two states are mutually exclusive).
+    s.deviceOnboarding.ignored = s.deviceOnboarding.ignored.filter((x) => x !== deviceId);
+  });
+  return { ts: new Date().toISOString(), id: deviceId, configured };
+}
+
+/** POST /api/devices/:id/unsetup — return a configured device to the inbox (re-classify). */
+export function unsetupDevice(id: string): unknown {
+  const deviceId = String(id ?? '').trim();
+  if (!deviceId) throw badInput('device id required');
+  store.update((s) => {
+    delete s.deviceOnboarding.configured[deviceId];
+  });
+  return { ts: new Date().toISOString(), id: deviceId, configured: false };
+}
+
+// ---- Custom type registry ---------------------------------------------------
+
+export function listCustomTypes(): unknown {
+  return { ts: new Date().toISOString(), customDeviceTypes: store.get().deviceOnboarding.customDeviceTypes };
+}
+
+/** POST /api/devices/custom-types — mint a custom device type { label, icon }. */
+export function createCustomType(body: unknown): unknown {
+  const b = (body ?? {}) as { label?: unknown; icon?: unknown };
+  const label = String(b.label ?? '').trim();
+  const icon = String(b.icon ?? '').trim() || 'plug';
+  if (!label) throw badInput('label required');
+  const type: store.CustomDeviceType = {
+    id: `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    label,
+    icon,
+  };
+  store.update((s) => {
+    s.deviceOnboarding.customDeviceTypes.push(type);
+  });
+  return { ts: new Date().toISOString(), customDeviceType: type };
+}
+
+// ---- Configured devices (controllable, live) --------------------------------
+
+export interface ConfiguredDeviceView {
+  id: string;
+  name: string;
+  typeId: string;
+  category: string;
+  online: boolean;
+  capabilities: Capability[];
+  /** dp → current app-facing value (override-applied scaling). */
+  values: Record<string, unknown>;
+  roomGuess: string | null;
+  setupAt: string;
+}
+
+/**
+ * GET /api/devices/configured — every set-up device with its assigned typeId/name, its
+ * (override-applied) capabilities, and LIVE current values read from the device status so
+ * the UI can render current state. Excludes ignored and not-yet-configured devices.
+ */
+export async function getConfigured(): Promise<unknown> {
+  const connected = tuya.isConfigured();
+  const onboarding = store.get().deviceOnboarding;
+  if (!connected) {
+    return { ts: new Date().toISOString(), connected: false, fleetError: null, devices: [], customDeviceTypes: onboarding.customDeviceTypes };
+  }
+  let all: TuyaDevice[];
+  try {
+    all = await tuya.getDevices();
+  } catch (e) {
+    return { ts: new Date().toISOString(), connected: true, fleetError: (e as Error).message, devices: [], customDeviceTypes: onboarding.customDeviceTypes };
+  }
+  const byId = new Map(all.map((d) => [d.id, d]));
+
+  const devices: ConfiguredDeviceView[] = await Promise.all(
+    Object.entries(onboarding.configured).map(async ([id, cfg]) => {
+      const d = byId.get(id);
+      if (!d) {
+        // Configured but the fleet no longer reports it (offline project / removed device).
+        return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, setupAt: cfg.setupAt };
+      }
+      const spec = await specFor(id);
+      const caps = applyOverrides(deriveCapabilities(d, spec), cfg.capOverrides);
+      const values: Record<string, unknown> = {};
+      for (const cap of caps) {
+        const v = readLiveValue(d, cap, spec);
+        if (v !== undefined) values[cap.dp] = v;
+      }
+      return {
+        id, name: cfg.name, typeId: cfg.typeId, category: d.category, online: d.online,
+        capabilities: caps, values, roomGuess: toDiscovered(d, spec).roomGuess, setupAt: cfg.setupAt,
+      };
+    }),
+  );
+
+  return { ts: new Date().toISOString(), connected: true, fleetError: null, devices, customDeviceTypes: onboarding.customDeviceTypes };
+}
+
+// ---- Generic capability command ---------------------------------------------
+
+/**
+ * POST /api/devices/:id/command (generic Tuya body { dp, kind, value }) — translate to a
+ * Tuya DP command with the correct inverse scaling and issue it. Validates the dp belongs
+ * to the device and is NOT read-only. Used by BOTH the setup-sheet Test action (device may
+ * not be configured yet) and the controllable group/detail views (configured), so it
+ * resolves capabilities from the override set when one exists, else raw inference.
+ */
+export async function commandGeneric(id: string, input: GenericCommandInput): Promise<unknown> {
+  const deviceId = String(id ?? '').trim();
+  if (!deviceId) throw badInput('device id required');
+  if (!input || typeof input.dp !== 'string' || !input.dp) throw badInput('dp required');
+  if (!input.kind) throw badInput('kind required');
+  if (!tuya.isConfigured()) throw badInput('Tuya not connected');
+
+  const all = await tuya.getDevices();
+  const d = all.find((x) => x.id === deviceId);
+  if (!d) throw badInput(`device ${deviceId} not found`);
+
+  const spec = await specFor(deviceId);
+  const overrides = store.get().deviceOnboarding.configured[deviceId]?.capOverrides;
+  const caps = applyOverrides(deriveCapabilities(d, spec), overrides);
+  const cap = caps.find((c) => c.dp === input.dp);
+  if (!cap) throw badInput(`device ${deviceId} has no datapoint ${input.dp}`);
+  if (cap.readOnly || cap.kind === 'measure' || cap.kind === 'status') {
+    throw badInput(`datapoint ${input.dp} is read-only`);
+  }
+
+  const commands = buildGenericCommands(d, cap, input, spec); // may throw BAD_INPUT
+  await tuya.sendCommands(deviceId, commands);
+  tuya.invalidateFleet();
+  return { ts: new Date().toISOString(), ok: true, id: deviceId, commands };
 }

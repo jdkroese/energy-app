@@ -46,6 +46,13 @@ export interface Capability {
   options?: string[];
   /** True for sensor readouts (`measure`/`status`) — never written. */
   readOnly: boolean;
+  /**
+   * True for safety-critical `action` capabilities (lock/unlock, siren/alarm trigger,
+   * garage/gate open) — the generic renderer requires a confirm tap before firing these.
+   * Set by the inference from the device CATEGORY (locks/sirens/gates) and the DP CODE
+   * (lock/unlock/trigger/alarm). Only ever set on `action` capabilities.
+   */
+  sensitive?: boolean;
 }
 
 export type Confidence = 'high' | 'monitor' | 'review';
@@ -126,8 +133,32 @@ const CONTROL_MATCHERS: Matcher[] = [
 
 const ALL_MATCHERS = [...MEASURE_MATCHERS, ...STATUS_MATCHERS, ...CONTROL_MATCHERS];
 
-/** Classify one DP code into a capability, or null if nothing recognizes it. */
-function classify(code: string, spec?: { type?: string; values?: string }): Capability | null {
+// ---- Sensitive-action detection ---------------------------------------------
+// Owner decision: safety-critical `action` controls (locks, sirens/alarms,
+// garage/gate opens) require a confirm tap before firing. We flag them by both
+// the device CATEGORY and the DP CODE so a lock's "unlock" or a siren's "alarm"
+// is gated even when the device's other (innocuous) actions are not.
+
+/** Tuya category codes whose ACTIONS are safety-critical (door locks, sirens). */
+const SENSITIVE_CATEGORIES = new Set([
+  'ms', 'jtmspro', 'jtmsbh', 'mk', // door locks
+  'sgbj', 'bjq', // sirens / alarms
+  'ckmkzq', // garage door opener
+]);
+
+/** DP-code needles that mark an action as safety-critical regardless of category. */
+const SENSITIVE_DP = (code: string): boolean =>
+  /(^|_)(lock|unlock|trigger|alarm|siren|open_door|door_control|garage)(_|$)/i.test(code) ||
+  code === 'manual_lock' || code === 'remote_no_dp_key' || code === 'unlock_request';
+
+/** Whether an `action` capability on `category`/`code` must require a confirm tap. */
+function isSensitiveAction(category: string, code: string): boolean {
+  return SENSITIVE_CATEGORIES.has(category) || SENSITIVE_DP(code);
+}
+
+/** Classify one DP code into a capability, or null if nothing recognizes it.
+ *  `category` (when known) lets `action` capabilities be flagged `sensitive`. */
+function classify(code: string, spec?: { type?: string; values?: string }, category = ''): Capability | null {
   for (const m of ALL_MATCHERS) {
     if (!m.test(code)) continue;
     const cap: Capability = {
@@ -138,6 +169,8 @@ function classify(code: string, spec?: { type?: string; values?: string }): Capa
       readOnly: m.readOnly,
     };
     if (m.unit) cap.unit = m.unit;
+    // Flag safety-critical actions so the generic renderer confirms before firing.
+    if (m.kind === 'action' && isSensitiveAction(category, code)) cap.sensitive = true;
     // Pull bounds / options off the spec's JSON `values` blob when present.
     if (spec?.values) {
       try {
@@ -171,22 +204,23 @@ export function deriveCapabilities(d: TuyaDevice, spec?: TuyaSpec | null): Capab
     if (!existing || (existing.readOnly && !cap.readOnly)) byDp.set(cap.dp, cap);
   };
 
+  const category = d.category;
   if (spec && (spec.functions.length || spec.status.length)) {
     for (const f of spec.functions) {
-      const cap = classify(f.code, f);
+      const cap = classify(f.code, f, category);
       // A DP that the spec lists under `functions` is writable — if our matcher
       // tagged it read-only (rare), trust the spec and keep it writable.
       add(cap && cap.readOnly && !isInherentlyReadOnly(f.code) ? { ...cap, readOnly: false } : cap);
     }
     for (const s of spec.status) {
       if (spec.functions.some((f) => f.code === s.code)) continue; // already added as writable
-      add(classify(s.code, s));
+      add(classify(s.code, s, category));
     }
   }
   // Always also fold in live status codes (covers devices with no spec, and any
   // DP the spec omitted but the device actually reports).
   for (const s of d.status) {
-    if (!byDp.has(s.code)) add(classify(s.code));
+    if (!byDp.has(s.code)) add(classify(s.code, undefined, category));
   }
   return [...byDp.values()];
 }
@@ -258,6 +292,40 @@ function buildReadout(d: TuyaDevice, capabilities: Capability[]): string | null 
 }
 
 // ---- Top-level: build a DiscoveredDevice ------------------------------------
+
+// ---- Capability overrides (Advanced DP-remap editor) ------------------------
+
+/** One per-DP override from the setup sheet's Advanced datapoints editor. */
+export interface CapabilityOverride {
+  dp: string;
+  kind?: CapabilityKind;
+  label?: string;
+  hidden?: boolean;
+  readOnly?: boolean;
+}
+
+/**
+ * Apply the user's per-DP overrides on top of the inferred capabilities. An override
+ * may change a capability's kind, relabel it, hide it (dropped from the list), or force
+ * it read-only. Overrides keyed to a dp the device doesn't expose are ignored. The
+ * resulting list is what the generic renderer drives and what writes are validated
+ * against.
+ */
+export function applyOverrides(caps: Capability[], overrides?: CapabilityOverride[] | null): Capability[] {
+  if (!overrides || overrides.length === 0) return caps;
+  const byDp = new Map(overrides.map((o) => [o.dp, o]));
+  const out: Capability[] = [];
+  for (const cap of caps) {
+    const o = byDp.get(cap.dp);
+    if (!o) { out.push(cap); continue; }
+    if (o.hidden) continue;
+    const kind = o.kind ?? cap.kind;
+    const readOnly =
+      typeof o.readOnly === 'boolean' ? o.readOnly : kind === 'measure' || kind === 'status' ? true : cap.readOnly;
+    out.push({ ...cap, kind, readOnly, ...(o.label ? { label: o.label } : {}) });
+  }
+  return out;
+}
 
 /** Assemble the full discovered-device view from a raw device + (optional) spec. */
 export function toDiscovered(d: TuyaDevice, spec?: TuyaSpec | null): DiscoveredDevice {
