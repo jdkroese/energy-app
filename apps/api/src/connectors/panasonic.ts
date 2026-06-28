@@ -376,7 +376,8 @@ interface PanasonicParameters {
   operate?: number;
   operationMode?: number;
   temperatureSet?: number;
-  temperatureNow?: number;
+  insideTemperature?: number;
+  outTemperature?: number;
   fanSpeed?: number;
   airSwingUD?: number;
   airSwingLR?: number;
@@ -409,6 +410,17 @@ function fromVane(v: number): number {
   return Math.min(5, Math.max(1, v));
 }
 
+// ---- Ambient temperature -----------------------------------------------------
+// Panasonic reports the indoor reading in `insideTemperature`, using the sentinel
+// 126 when no value is available (unit off / sensor warming up). Anything outside a
+// plausible room range is treated as "no reading" → null (UI shows "—").
+
+function toInsideC(raw: number | undefined): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (raw >= 100 || raw <= -50) return null; // 126 = sentinel
+  return raw;
+}
+
 // ---- Normalize device → ClimateUnit -----------------------------------------
 
 function toClimateUnit(d: PanasonicDevice): ClimateUnit {
@@ -420,7 +432,7 @@ function toClimateUnit(d: PanasonicDevice): ClimateUnit {
     power:        p.operate === 1,
     mode:         MODE[p.operationMode ?? -1] ?? 'unknown',
     setpointC:    p.temperatureSet ?? null,
-    currentTempC: p.temperatureNow ?? null,
+    currentTempC: toInsideC(p.insideTemperature),
     minSetpointC: 16,
     maxSetpointC: 30,
     online:       true,
@@ -444,7 +456,33 @@ async function fetchFleet(): Promise<ClimateUnit[]> {
   }
   if (!res.ok) throw new Error(`Panasonic CC getGroups → HTTP ${res.status}`);
   const json = (await res.json()) as { groupList?: PanasonicGroup[] };
-  return (json.groupList ?? []).flatMap((g) => (g.deviceList ?? []).map(toClimateUnit));
+  const devices = (json.groupList ?? []).flatMap((g) => g.deviceList ?? []);
+
+  // The group listing returns the 126 sentinel for `insideTemperature`; the live
+  // ambient reading only comes from the per-device status endpoint. Fetch those in
+  // parallel and overlay the live parameters (best-effort — fall back to the group
+  // snapshot if a per-device read fails).
+  await Promise.all(devices.map(async (d) => {
+    const live = await fetchDeviceNow(token, d.deviceGuid);
+    if (live) d.parameters = { ...(d.parameters ?? {}), ...live };
+  }));
+
+  return devices.map(toClimateUnit);
+}
+
+/** Per-device live snapshot — the only source of a real `insideTemperature`. */
+async function fetchDeviceNow(token: PanasonicToken, guid: string): Promise<PanasonicParameters | null> {
+  try {
+    const res = await fetch(`${BASE_ACC}/deviceStatus/now/${encodeURIComponent(guid)}`, {
+      headers: accHeaders(token.access_token, token.acc_client_id, token.app_version),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { parameters?: PanasonicParameters };
+    return json.parameters ?? null;
+  } catch {
+    return null; // best-effort — keep the group snapshot
+  }
 }
 
 /** Cached 30 s fleet snapshot; returns [] when not configured. */
