@@ -8,6 +8,7 @@ import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { GenericControl } from '../components/GenericControl';
+import { primaryCapabilities, secondaryCapabilities } from '../lib/capabilities';
 import { resolveTypeMeta } from '../lib/deviceTypes';
 import { SetupSheet } from './SetupSheet';
 import type { DiscoveredDevice } from '../lib/types';
@@ -59,8 +60,15 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
 
             <Card padded style={{ padding: 16 }}>
               <div className="pwr-eyebrow" style={{ marginBottom: 10 }}>Controls</div>
-              <GenericControl capabilities={device.capabilities} values={device.values} onWrite={writeCap} disabled={!isAdmin} variant="detail" />
+              <GenericControl capabilities={primaryCapabilities(device.capabilities)} values={device.values} onWrite={writeCap} disabled={!isAdmin} variant="detail" />
             </Card>
+
+            <MoreControlsSection
+              caps={secondaryCapabilities(device.capabilities)}
+              values={device.values}
+              onWrite={writeCap}
+              disabled={!isAdmin}
+            />
 
             <DiagnosticsSection id={device.id} />
 
@@ -111,6 +119,35 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
         {body}
       </div>
     </>
+  );
+}
+
+/* ---- More controls & configuration (the long tail, collapsed) ------------- *
+ * Everything that isn't an everyday primary lever (countdown, mode, direction,
+ * measures, statuses, actions). Collapsed by default; same GenericControl renderer
+ * + writeCap path as the primary Controls card. Only rendered when there ARE
+ * secondary caps (the caller passes secondaryCapabilities(...)). */
+function MoreControlsSection({ caps, values, onWrite, disabled }: {
+  caps: Capability[];
+  values: Record<string, unknown>;
+  onWrite: (dp: string, kind: Capability['kind'], value: unknown) => Promise<unknown> | void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (caps.length === 0) return null;
+  return (
+    <Card padded style={{ padding: 16 }}>
+      <button type="button" onClick={() => setOpen((v) => !v)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+        <span className="pwr-eyebrow" style={{ flex: 1, textAlign: 'left' }}>More controls &amp; configuration</span>
+        <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{caps.length}</span>
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={16} color="var(--text-3)" />
+      </button>
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <GenericControl capabilities={caps} values={values} onWrite={onWrite} disabled={disabled} variant="detail" />
+        </div>
+      )}
+    </Card>
   );
 }
 
