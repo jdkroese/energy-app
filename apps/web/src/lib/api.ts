@@ -163,7 +163,8 @@ export const api = {
   // reads
   live: () => getJSON<LiveResponse>('/api/live'),
   batteries: () => getJSON<BatteriesResponse>('/api/batteries'),
-  history: (range: string) => getJSON<HistoryResponse>(`/api/history?range=${enc(range)}`),
+  history: (range: string, offset = 0) =>
+    getJSON<HistoryResponse>(`/api/history?range=${enc(range)}&offset=${enc(String(offset))}`),
   historyDay: (offset: number) =>
     getJSON<HistoryDayResponse>(`/api/history/day?offset=${enc(String(offset))}`),
   alerts: () => getJSON<AlertsResponse>('/api/alerts'),

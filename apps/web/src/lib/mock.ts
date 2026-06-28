@@ -257,6 +257,11 @@ export const MOCK_BATTERIES: BatteriesResponse = {
 
 export const MOCK_HISTORY: HistoryResponse = {
   ts: new Date().toISOString(),
+  offset: 0,
+  isCurrent: true,
+  hasPrev: true,
+  hasNext: false,
+  periodLabel: null,
   totals: { producedKwh: 1050, consumedKwh: 444, exportedKwh: 625, selfSufficiencyPct: 71, savedEur: 84, co2Kg: 412 },
   solarValue: { selfUsedPct: 68, exportedKwh: 625, exportEur: 13.72, worthIfSelfUsedEur: 131 },
   byBand: [

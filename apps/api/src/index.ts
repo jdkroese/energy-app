@@ -204,7 +204,8 @@ app.get(
     const range = String(req.query.range ?? 'day');
     const valid = ['hour', 'day', 'week', 'month', 'year'] as const;
     const r = (valid as readonly string[]).includes(range) ? (range as (typeof valid)[number]) : 'day';
-    return getHistory(r);
+    const offset = Number(req.query.offset ?? 0);
+    return getHistory(r, Number.isFinite(offset) ? offset : 0);
   }),
 );
 

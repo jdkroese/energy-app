@@ -122,15 +122,27 @@ export function getSiteInfo(): Promise<unknown> {
 /**
  * Rich history. kind = energy|power|soe|backup|self_consumption.
  * period = day|week|month|year. tz = Europe/Madrid (Tesla buckets accordingly).
+ *
+ * `window` anchors the period in the PAST: Tesla's calendar_history accepts ISO
+ * `start_date`/`end_date`, so passing a window returns that historical day/week/
+ * month/year instead of the current one. Omit it for the live/current period
+ * (unchanged behaviour + a longer-lived cache).
  */
 export function getCalendarHistory(
   kind: 'energy' | 'power' | 'soe' | 'self_consumption' | 'backup' = 'energy',
   period: 'day' | 'week' | 'month' | 'year' = 'day',
+  window?: { startDate: string; endDate: string },
 ): Promise<unknown> {
   const tz = encodeURIComponent('Europe/Madrid');
-  return memo(`tesla.hist.${kind}.${period}`, 120_000, () =>
-    apiGet(`/calendar_history?kind=${kind}&period=${period}&time_zone=${tz}`),
-  );
+  let url = `/calendar_history?kind=${kind}&period=${period}&time_zone=${tz}`;
+  if (window) {
+    url += `&start_date=${encodeURIComponent(window.startDate)}&end_date=${encodeURIComponent(window.endDate)}`;
+  }
+  // Current period changes minute-to-minute (short TTL); a past window is fixed
+  // history (cache hard, keyed by the window so offsets don't collide).
+  const key = window ? `tesla.hist.${kind}.${period}.${window.endDate}` : `tesla.hist.${kind}.${period}`;
+  const ttl = window ? 3_600_000 : 120_000;
+  return memo(key, ttl, () => apiGet(url));
 }
 
 // ---- Control / write ----------------------------------------------------

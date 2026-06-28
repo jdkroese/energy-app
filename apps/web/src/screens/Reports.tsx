@@ -1,10 +1,13 @@
+import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_HISTORY } from '../lib/mock';
 import type { HistoryResponse } from '../lib/types';
+import { MAX_BACK, periodLabel } from '../lib/periods';
 import { Card, StatTile, ProgressBar, Badge, SegmentedControl, Eyebrow, Icon } from '../components/ui';
 import { BarChart, type BarDatum } from '../components/energy/BarChart';
 import { GridBandChart } from '../components/energy/GridBandChart';
+import { PeriodNav } from '../components/energy/PeriodNav';
 import { StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
 
@@ -36,21 +39,33 @@ function bandSeries(h: HistoryResponse): { P1: number[]; P2: number[]; P3: numbe
 }
 
 export function Reports({ ctx }: { ctx: ShellContext }) {
+  // Period navigator: how far back from the current period (0 = now, negative = past).
+  // Resets to "now" whenever the Hour/Day/Week/Month/Year range changes.
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [ctx.range]);
+
   const { data, loading, stale, updatedAt } = usePolling<HistoryResponse>(
-    () => api.history(ctx.range.toLowerCase()),
+    () => api.history(ctx.range.toLowerCase(), offset),
     0,
-    [ctx.range],
+    [ctx.range, offset],
   );
   const h = data || (loading ? null : MOCK_HISTORY) || MOCK_HISTORY;
   const bars = toBars(h);
   const sv = h.solarValue;
   const left = sv.worthIfSelfUsedEur - sv.exportEur;
 
-  // Period label tracks the Hour/Day/Week/Month/Year selector (was hardcoded "This month").
-  const periodTitle =
-    ctx.range === 'Hour' ? 'Past hour' : ctx.range === 'Day' ? 'Today' : `This ${ctx.range.toLowerCase()}`;
-  const periodSub =
-    ctx.range === 'Hour' ? 'past hour' : ctx.range === 'Day' ? 'today' : `this ${ctx.range.toLowerCase()}`;
+  // Navigator bounds are computed client-side (server clamps the data identically),
+  // so the ◀ ▶ buttons stay responsive before a fetch resolves. Hidden for Hour.
+  const showNav = ctx.range !== 'Hour';
+  const maxBack = MAX_BACK[ctx.range.toLowerCase()] ?? 0;
+  const navHasPrev = showNav && offset > -maxBack;
+  const navHasNext = offset < 0;
+
+  // Period label tracks the range AND the chosen offset (e.g. "June 2025", "Today").
+  const periodTitle = periodLabel(ctx.range, offset);
+  const periodSub = offset === 0
+    ? (ctx.range === 'Hour' ? 'past hour' : ctx.range === 'Day' ? 'today' : `this ${ctx.range.toLowerCase()}`)
+    : periodTitle;
 
   // Real average grid price = what each self-consumed kWh is worth (avoided import).
   // Derived from the by-band import cost (Σeur / Σkwh) — replaces a hardcoded €0.21.
@@ -201,6 +216,12 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {stale && <StaleBanner updatedAt={updatedAt} />}
+        {showNav && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Showing</span>
+            <PeriodNav range={ctx.range} offset={offset} hasPrev={navHasPrev} hasNext={navHasNext} onChange={setOffset} desktop />
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 16 }}>{kpis}</div>
         {gridBand}
         <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 20 }}>
@@ -221,6 +242,11 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
         <SegmentedControl block options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={ctx.range} onChange={ctx.setRange} />
+        {showNav && (
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <PeriodNav range={ctx.range} offset={offset} hasPrev={navHasPrev} hasNext={navHasNext} onChange={setOffset} />
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>{kpis}</div>
         {gridBand}
         {captured}

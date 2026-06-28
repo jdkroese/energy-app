@@ -136,6 +136,12 @@ export interface HistoryByLoad {
 
 export interface HistoryResponse {
   ts: string;
+  /** Period navigator (Reports): which period this payload is for + bounds. */
+  offset?: number;
+  isCurrent?: boolean;
+  hasPrev?: boolean;
+  hasNext?: boolean;
+  periodLabel?: string | null;
   totals: {
     producedKwh: number;
     consumedKwh: number;
