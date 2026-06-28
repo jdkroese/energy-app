@@ -4,6 +4,7 @@ import {
   POWER_TERM_EUR_MONTH,
   EXPORT_MID,
   bandHourWeights,
+  bandFor,
   type Band,
 } from '../tariff';
 
@@ -112,7 +113,15 @@ export async function getHistory(range: Range): Promise<unknown> {
   // thousands of bars whose leading labels are all the first period ("Jan, Jan…").
   // So aggregate the chart series into the natural bucket per range
   // (year→months, week/month→days, day→hours, hour→5-min), summing energy.
-  const buckets = new Map<string, { label: string; p: number; c: number; imp: number }>();
+  // Per-bucket grid import is also attributed to the REAL tariff band each sample
+  // falls in (time-of-use, via `bandFor(timestamp)` in Europe/Madrid) — this is a
+  // true split, not the WEEKLY_BAND_HOURS weighting used for the aggregate `byBand`.
+  // It backs the Reports "Grid purchase by band" chart and follows the range selector.
+  const zeroBand = (): Record<Band, number> => ({ P1: 0, P2: 0, P3: 0 });
+  const buckets = new Map<
+    string,
+    { label: string; p: number; c: number; imp: number; band: Record<Band, number> }
+  >();
   for (const r of rows) {
     const s = rowSolar(r);
     const h = rowHome(r);
@@ -124,10 +133,11 @@ export async function getHistory(range: Range): Promise<unknown> {
     const d = toDate(r.timestamp);
     if (!d) continue;
     const { key, label } = bucketOf(d, range);
-    const b = buckets.get(key) ?? { label, p: 0, c: 0, imp: 0 };
+    const b = buckets.get(key) ?? { label, p: 0, c: 0, imp: 0, band: zeroBand() };
     b.p += s / 1000;
     b.c += h / 1000;
     b.imp += imp / 1000;
+    b.band[bandFor(d)] += imp / 1000;
     buckets.set(key, b);
   }
   // Map preserves insertion order; Tesla returns rows chronologically.
@@ -135,6 +145,12 @@ export async function getHistory(range: Range): Promise<unknown> {
   const prod = ordered.map((b) => round(b.p, 2));
   const cons = ordered.map((b) => round(b.c, 2));
   const labels = ordered.map((b) => b.label);
+  // Per-bucket grid-import split by real band (kWh) for the by-band purchase chart.
+  const bandKwh = {
+    P1: ordered.map((b) => round(b.band.P1, 2)),
+    P2: ordered.map((b) => round(b.band.P2, 2)),
+    P3: ordered.map((b) => round(b.band.P3, 2)),
+  };
   // Per-bucket self-sufficiency (autonomy) = share of consumption NOT bought from grid.
   const autonomy = ordered.map((b) =>
     b.c > 0 ? Math.max(0, Math.min(100, Math.round((1 - b.imp / b.c) * 100))) : 0,
@@ -199,8 +215,9 @@ export async function getHistory(range: Range): Promise<unknown> {
     powerTermEur: powerTermFor(range),
     // series.prod = real per-bucket solar generation (Tesla calendar_history);
     // series.cons = real per-bucket home consumption; series.autonomy = per-bucket
-    // self-sufficiency %. byBand (above) is the documented weighting APPROXIMATION.
-    series: { prod, cons, labels, autonomy },
+    // self-sufficiency %; series.bandKwh = real per-bucket grid import split by tariff
+    // band (time-of-use). byBand (above) is the documented weighting APPROXIMATION.
+    series: { prod, cons, labels, autonomy, bandKwh },
     byLoad,
   };
 }

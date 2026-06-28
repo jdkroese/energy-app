@@ -152,7 +152,14 @@ export interface HistoryResponse {
   };
   byBand: HistoryByBand[];
   powerTermEur: number;
-  series: { prod: number[]; cons: number[]; labels: string[]; autonomy?: number[] };
+  series: {
+    prod: number[];
+    cons: number[];
+    labels: string[];
+    autonomy?: number[];
+    /** Real per-bucket grid import (kWh) split by tariff band (time-of-use). */
+    bandKwh?: { P1: number[]; P2: number[]; P3: number[] };
+  };
   byLoad: HistoryByLoad[];
 }
 

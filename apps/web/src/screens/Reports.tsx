@@ -4,6 +4,7 @@ import { MOCK_HISTORY } from '../lib/mock';
 import type { HistoryResponse } from '../lib/types';
 import { Card, StatTile, ProgressBar, Badge, SegmentedControl, Eyebrow, Icon } from '../components/ui';
 import { BarChart, type BarDatum } from '../components/energy/BarChart';
+import { GridBandChart } from '../components/energy/GridBandChart';
 import { StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
 
@@ -16,7 +17,23 @@ function toBars(h: HistoryResponse): BarDatum[] {
   }));
 }
 
-const bandTotal = (h: HistoryResponse) => h.byBand.reduce((s, b) => s + b.eur, 0);
+/**
+ * Per-bucket grid import split by band for the GridBandChart. Prefers the API's
+ * real time-of-use series; falls back to distributing each band's `byBand` total
+ * across buckets weighted by consumption (older API / mock without bandKwh).
+ */
+function bandSeries(h: HistoryResponse): { P1: number[]; P2: number[]; P3: number[] } {
+  if (h.series.bandKwh) return h.series.bandKwh;
+  const cons = h.series.cons;
+  const tot = cons.reduce((s, v) => s + (v ?? 0), 0);
+  const n = h.series.labels.length || 1;
+  const w = (i: number) => (tot > 0 ? (cons[i] ?? 0) / tot : 1 / n);
+  const mk = (band: 'P1' | 'P2' | 'P3') => {
+    const bk = h.byBand.find((b) => b.band === band)?.kwh ?? 0;
+    return h.series.labels.map((_, i) => Math.round(bk * w(i) * 100) / 100);
+  };
+  return { P1: mk('P1'), P2: mk('P2'), P3: mk('P3') };
+}
 
 export function Reports({ ctx }: { ctx: ShellContext }) {
   const { data, loading, stale, updatedAt } = usePolling<HistoryResponse>(
@@ -26,7 +43,6 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   );
   const h = data || (loading ? null : MOCK_HISTORY) || MOCK_HISTORY;
   const bars = toBars(h);
-  const total = bandTotal(h);
   const sv = h.solarValue;
   const left = sv.worthIfSelfUsedEur - sv.exportEur;
 
@@ -77,27 +93,14 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
     </Card>
   );
 
-  const byBand = (
+  const gridBand = (
     <Card style={ctx.desktop ? undefined : { padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <Eyebrow>Grid cost · by band</Eyebrow>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: ctx.desktop ? 16 : 15, fontWeight: 600 }}>€{total.toFixed(2)}</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: ctx.desktop ? 13 : 12, marginTop: ctx.desktop ? 16 : 14 }}>
-        {h.byBand.map((b) => (
-          <div key={b.band} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 34, fontFamily: 'var(--font-mono)', fontWeight: 600, color: b.band === 'P3' ? 'var(--solar)' : 'var(--grid)' }}>{b.band}</span>
-              <span style={{ flex: 1, fontSize: 12, color: 'var(--text-2)' }}>
-                {b.kwh} kWh · €{b.rate.toFixed(3)}/kWh
-              </span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>€{b.eur.toFixed(2)}</span>
-            </div>
-            <ProgressBar height={6} segments={[{ value: (b.eur / total) * 100, tone: b.band === 'P3' ? 'solar' : 'grid' }]} />
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop: ctx.desktop ? 13 : 12, fontSize: 11, color: 'var(--text-3)' }}>+ fixed power term €{h.powerTermEur.toFixed(2)}/mo (14 kW)</div>
+      <GridBandChart
+        labels={h.series.labels}
+        bandKwh={bandSeries(h)}
+        powerTermEur={h.powerTermEur}
+        desktop={ctx.desktop}
+      />
     </Card>
   );
 
@@ -199,14 +202,12 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {stale && <StaleBanner updatedAt={updatedAt} />}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 16 }}>{kpis}</div>
+        {gridBand}
         <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 20 }}>
           {captured}
-          {byBand}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-          {prodCons}
           {byLoad}
         </div>
+        {prodCons}
       </div>
     );
   }
@@ -221,8 +222,8 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
         <SegmentedControl block options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={ctx.range} onChange={ctx.setRange} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>{kpis}</div>
+        {gridBand}
         {captured}
-        {byBand}
         {prodCons}
         {byLoad}
       </div>

@@ -269,6 +269,12 @@ export const MOCK_HISTORY: HistoryResponse = {
     prod: [268, 241, 290, 251],
     cons: [104, 118, 96, 126],
     labels: ['W1', 'W2', 'W3', 'W4'],
+    // Real per-bucket grid import split by band (kWh); sums ≈ byBand totals above.
+    bandKwh: {
+      P1: [9, 9, 8, 9],
+      P2: [19, 20, 18, 20],
+      P3: [82, 84, 80, 86],
+    },
   },
   byLoad: [
     { name: 'Heat pump + floor', icon: 'thermometer', tone: 'var(--grid)', kwh: 128, pct: 34 },
