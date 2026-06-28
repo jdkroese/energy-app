@@ -9,12 +9,12 @@ import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * Speakers — the Sonos fleet (local UPnP) + the HOUSE ALARM control. Phase 1 is
- * alarm-only: one big red, confirm-gated trigger sounds a siren on every speaker
- * AND blinks all lights; a STOP is always visible while the alarm is active.
+ * Speakers — the Sonos fleet (local UPnP): per-speaker volume + Test. The house
+ * alarm is triggered from the nav alarm button (everywhere) and configured in
+ * Settings → Notifications, so this screen no longer carries a trigger button.
  * Music-from-the-app is a later phase. Responsive across desktop + mobile per the
- * web+mobile standing rule. Reads poll /api/speakers + /api/alarm/status; writes
- * are admin-gated server-side.
+ * web+mobile standing rule. Reads poll /api/speakers; writes are admin-gated
+ * server-side.
  * ==========================================================================*/
 
 /** Compact mm:ss for the alarm countdown. */
@@ -190,18 +190,12 @@ export function SpeakersPanel({ ctx }: { ctx: ShellContext }) {
   const canControl = user?.role === 'admin';
   const wide = ctx.desktop;
   const { data, loading, stale, updatedAt, refetch } = usePolling<SpeakersResponse>(api.speakers.list, 20_000);
-  // Poll the alarm faster so the active banner + countdown stay live.
-  const { data: alarm, refetch: refetchAlarm } = usePolling<AlarmStatus>(api.alarm.status, 5_000);
 
-  const onAlarmChanged = () => { refetchAlarm(); refetch(); };
   const speakers = [...(data?.speakers ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
-
-      {/* ALARM — always first, the headline control. */}
-      <AlarmControl alarm={alarm ?? null} canControl={canControl} onChanged={onAlarmChanged} />
 
       {!data && loading && <Card padded style={{ color: 'var(--text-3)', fontSize: 13 }}>Discovering speakers…</Card>}
 
