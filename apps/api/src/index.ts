@@ -103,6 +103,7 @@ import {
   unsetupDevice,
   getConfigured,
   getDeviceDiagnostics,
+  testDeviceCommand,
   listCustomTypes,
   createCustomType,
   commandGeneric,
@@ -289,6 +290,7 @@ app.post('/api/devices/:id/setup', requireAdmin, wrap((req) => setupDevice(Strin
 app.post('/api/devices/:id/unsetup', requireAdmin, wrap((req) => unsetupDevice(String(req.params.id))));
 // Diagnostics (identity + datapoint table) — on-demand read; registered before :id.
 app.get('/api/devices/:id/diagnostics', wrap((req) => getDeviceDiagnostics(String(req.params.id))));
+app.post('/api/devices/:id/diagnostics/test', requireAdmin, wrap((req) => testDeviceCommand(String(req.params.id), req.body)));
 app.get('/api/devices/:id', wrap((req) => getDevice(String(req.params.id))));
 app.post(
   '/api/devices/arm',

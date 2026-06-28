@@ -249,9 +249,63 @@ export function getStatus(id: string): Promise<TuyaStatusItem[]> {
   return request<TuyaStatusItem[]>('GET', `/v1.0/devices/${id}/status`);
 }
 
-/** Issue one or more datapoint commands to a device. */
+/** Issue one or more datapoint commands to a device (legacy v1.0 command API). */
 export function sendCommands(id: string, commands: Array<{ code: string; value: unknown }>): Promise<boolean> {
   return request<boolean>('POST', `/v1.0/devices/${id}/commands`, { commands });
+}
+
+/** Issue properties via the NEWER v2.0 "thing model" API. Some devices (often newer
+ *  metering plugs / Matter-era firmware) silently ignore the v1.0 command endpoint
+ *  and only actuate through this one. `properties` is a code→value map. */
+export function sendThingCommands(id: string, properties: Record<string, unknown>): Promise<unknown> {
+  return request<unknown>('POST', `/v2.0/cloud/thing/${id}/shadow/properties/issue`, {
+    properties: JSON.stringify(properties),
+  });
+}
+
+// ---- Low-level signed request that returns the RAW envelope (never throws on a
+//      success:false). Only for diagnostics that must see code/msg/result verbatim.
+async function rawRequest<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<TuyaResp<T>> {
+  const c = mustCreds();
+  const token = await getToken(c);
+  const bodyStr = body === undefined ? '' : JSON.stringify(body);
+  const contentSha = body === undefined ? EMPTY_BODY_SHA256 : sha256(bodyStr);
+  const t = Date.now().toString();
+  const stringToSign = [method, contentSha, '', path].join('\n');
+  const sign = hmac(c.accessId + token + t + stringToSign, c.accessSecret);
+  const headers: Record<string, string> = {
+    client_id: c.accessId, access_token: token, sign, t, sign_method: 'HMAC-SHA256', nonce: '',
+  };
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  const res = await fetch(`${host(c.region)}${path}`, {
+    method, headers, body: body === undefined ? undefined : bodyStr, signal: AbortSignal.timeout(12_000),
+  });
+  return (await res.json()) as TuyaResp<T>;
+}
+
+export interface TuyaCmdProbe {
+  api: 'v1' | 'v2';
+  httpOk: boolean;
+  success: boolean;
+  result: unknown;
+  code?: number;
+  msg?: string;
+}
+
+/** Diagnostic: fire a single DP command through the chosen command API and return the
+ *  RAW Tuya response (success/result/code/msg) so we can see exactly what the device
+ *  accepts. `api` 'v1' = legacy commands; 'v2' = thing-model properties. */
+export async function probeCommand(
+  id: string, code: string, value: unknown, api: 'v1' | 'v2',
+): Promise<TuyaCmdProbe> {
+  try {
+    const j = api === 'v1'
+      ? await rawRequest<boolean>('POST', `/v1.0/devices/${id}/commands`, { commands: [{ code, value }] })
+      : await rawRequest<unknown>('POST', `/v2.0/cloud/thing/${id}/shadow/properties/issue`, { properties: JSON.stringify({ [code]: value }) });
+    return { api, httpOk: true, success: !!j.success, result: j.result ?? null, code: j.code, msg: j.msg };
+  } catch (e) {
+    return { api, httpOk: false, success: false, result: null, msg: (e as Error).message };
+  }
 }
 
 export interface TuyaSpec {
