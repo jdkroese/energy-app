@@ -215,7 +215,7 @@
   /* text — dark ink */
   --text-1: #1a1f23;   /* 16.6:1 on white */
   --text-2: #566366;   /* 5.9:1  on white */
-  --text-3: #6f8085;   /* 4.0:1  on white (large/non-text + axis labels) */
+  --text-3: #647479;   /* 4.87:1 on white — passes WCAG AA for small text (sublines/captions) */
   --text-disabled: #9aa7ab;
   --text-inverse: #ffffff;
 
