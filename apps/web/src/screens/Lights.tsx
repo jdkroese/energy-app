@@ -349,7 +349,7 @@ function Chip({ label, value, color, accent }: { label: string; value: string; c
     <div
       style={{
         background: accent ? 'var(--solar-wash)' : 'var(--surface-1)',
-        border: `1px solid ${accent ? 'rgba(46,230,160,0.25)' : 'var(--border-1)'}`,
+        border: `1px solid ${accent ? 'var(--border-solar)' : 'var(--border-1)'}`,
         borderRadius: 'var(--radius-md)',
         padding: '8px 12px',
         textAlign: 'right',

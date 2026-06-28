@@ -160,7 +160,7 @@ function TypeTabs({ active, tabs, needsSetup, wide, onSelect }: {
               flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
               padding: wide ? '9px 6px' : '8px 4px', borderRadius: 'var(--radius-md)', border: 'none', cursor: 'pointer',
               background: on ? 'var(--surface-3)' : 'transparent',
-              boxShadow: on ? 'inset 0 1px 0 rgba(233,245,242,0.06)' : 'none',
+              boxShadow: on ? 'var(--hairline-top)' : 'none',
               color: on ? 'var(--text-1)' : 'var(--text-2)',
               fontSize: wide ? 13 : 11.5, fontWeight: 500, minWidth: 0,
             }}
@@ -182,7 +182,7 @@ function TypeTabs({ active, tabs, needsSetup, wide, onSelect }: {
             title="Devices found but not set up yet"
             style={{
               flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-              padding: wide ? '9px 6px' : '8px 4px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245,165,36,0.35)', cursor: 'pointer',
+              padding: wide ? '9px 6px' : '8px 4px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-grid-strong)', cursor: 'pointer',
               background: on ? 'var(--grid-wash)' : 'transparent',
               color: on ? 'var(--grid)' : 'var(--text-2)',
               fontSize: wide ? 13 : 11.5, fontWeight: 600, minWidth: 0,

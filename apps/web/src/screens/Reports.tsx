@@ -118,7 +118,7 @@ function EnergyReports({ ctx }: { ctx: ShellContext }) {
         <Icon name="trending-up" size={ctx.desktop ? 18 : 16} color="var(--solar)" />
       </div>
       <div className="splitbar" style={{ display: 'flex', height: ctx.desktop ? 34 : 30, borderRadius: 9, overflow: 'hidden' }}>
-        <div style={{ flex: sv.selfUsedPct, background: 'var(--solar)', color: '#06090b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600 }}>
+        <div style={{ flex: sv.selfUsedPct, background: 'var(--solar)', color: 'var(--accent-contrast)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600 }}>
           {sv.selfUsedPct}% self-used
         </div>
         <div style={{ flex: 100 - sv.selfUsedPct, background: 'var(--surface-3)', color: 'var(--text-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600 }}>

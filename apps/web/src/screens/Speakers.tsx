@@ -247,7 +247,7 @@ function SChip({ label, value, color, accent }: { label: string; value: string; 
   return (
     <div style={{
       background: accent ? 'var(--solar-wash)' : 'var(--surface-1)',
-      border: `1px solid ${accent ? 'rgba(46,230,160,0.25)' : 'var(--border-1)'}`,
+      border: `1px solid ${accent ? 'var(--border-solar)' : 'var(--border-1)'}`,
       borderRadius: 'var(--radius-md)', padding: '8px 12px', textAlign: 'right', minWidth: 0,
     }}>
       <div className="pwr-eyebrow" style={{ color: accent ? 'var(--solar-dim)' : 'var(--text-3)' }}>{label}</div>

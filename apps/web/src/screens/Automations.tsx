@@ -144,7 +144,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       </div>
 
       {/* LIVE PREVIEW */}
-      <div style={{ background: 'var(--surface-2)', border: '1px solid rgba(46,230,160,0.2)', borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
+      <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border-solar-soft)', borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <span className="pwr-eyebrow" style={{ color: tone }}>Live preview · right now</span>
           <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>surplus <span style={{ color: hasSurplus ? 'var(--solar)' : 'var(--text-3)' }}>{surplus > 0 ? '+' : ''}{surplus} kW</span>{soc != null ? ` · batteries ${soc}%` : ''}</span>
@@ -567,7 +567,7 @@ function BatteryRuleCard({ meta, rule, live, socFloorPct, canWrite, onSave }: {
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button type="button" disabled={!canWrite} onClick={() => setAuthAndSave('shadow')} style={{ fontSize: 11, padding: '5px 11px', borderRadius: 8, cursor: canWrite ? 'pointer' : 'default', border: '1px solid var(--border-1)', background: authority === 'shadow' ? 'var(--surface-3)' : 'transparent', color: authority === 'shadow' ? 'var(--text-1)' : 'var(--text-3)', fontWeight: 600 }}>Shadow</button>
-          <button type="button" disabled={!canWrite} onClick={() => setAuthAndSave('auto')} style={{ fontSize: 11, padding: '5px 11px', borderRadius: 8, cursor: canWrite ? 'pointer' : 'default', border: 'none', background: authority === 'auto' ? 'var(--solar)' : 'var(--surface-3)', color: authority === 'auto' ? '#06090b' : 'var(--text-3)', fontWeight: 600 }}>Auto</button>
+          <button type="button" disabled={!canWrite} onClick={() => setAuthAndSave('auto')} style={{ fontSize: 11, padding: '5px 11px', borderRadius: 8, cursor: canWrite ? 'pointer' : 'default', border: 'none', background: authority === 'auto' ? 'var(--solar)' : 'var(--surface-3)', color: authority === 'auto' ? 'var(--accent-contrast)' : 'var(--text-3)', fontWeight: 600 }}>Auto</button>
           <Switch checked={enabled} disabled={!canWrite} onChange={(e) => toggleEnabled(e.target.checked)} />
         </div>
       </div>
@@ -777,7 +777,7 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
           {batteryArmedAuto ? 'Autopilot armed · Auto' : 'Acts when Autopilot is in Auto'}
         </span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--battery-wash)', border: '1px solid rgba(64,160,255,0.18)', borderRadius: 'var(--radius-md)', padding: '9px 13px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--battery-wash)', border: '1px solid var(--border-battery)', borderRadius: 'var(--radius-md)', padding: '9px 13px' }}>
         <Icon name="info" size={15} color="var(--battery)" />
         <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
           The Tesla is kept full for backup (the Sonnen has no backup mode). These rules run in the battery coordinator — <strong style={{ color: 'var(--text-1)' }}>Shadow</strong> only logs intended actions; flip to <strong style={{ color: 'var(--text-1)' }}>Auto</strong> and arm <Link to="/automations?tab=settings" style={{ color: 'var(--battery)' }}>Autopilot</Link> (Auto) to let them act.
