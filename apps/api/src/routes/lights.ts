@@ -8,6 +8,12 @@ import * as tuya from '../connectors/tuya';
 import * as lights from '../connectors/tuya-lights';
 import { isBlind } from '../connectors/tuya-blinds';
 import type { LightLever, LightUnit } from '../connectors/tuya-lights';
+import {
+  resolveConfiguredLightCaps,
+  normalizeConfiguredLight,
+  buildConfiguredLightCommands,
+} from '../connectors/tuya-configured-lights';
+import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import * as store from '../store';
 
 function badInput(msg: string): Error & { code: string } {
@@ -16,14 +22,68 @@ function badInput(msg: string): Error & { code: string } {
   return e;
 }
 
-/** Normalize the connected fleet down to just the light category. */
+/** Best-effort device spec (cached in the connector); null on failure. */
+async function specFor(id: string): Promise<TuyaSpec | null> {
+  try {
+    return await tuya.getSpecifications(id);
+  } catch {
+    return null;
+  }
+}
+
+/** The user-SET-UP devices that were configured as lighting (typeId 'lighting').
+ *  These graduate into the light fleet alongside the native Tuya light categories. */
+function configuredLightingMap(): Record<string, store.ConfiguredDevice> {
+  const out: Record<string, store.ConfiguredDevice> = {};
+  for (const [id, cfg] of Object.entries(store.get().deviceOnboarding.configured)) {
+    if (cfg.typeId === 'lighting') out[id] = cfg;
+  }
+  return out;
+}
+
+/** Resolve the DP commands for a light lever against EITHER a native Tuya light or a
+ *  configured-lighting device (which carries inferred + override capabilities). Throws
+ *  BAD_INPUT when the id isn't a light at all. */
+async function buildAnyLightCommands(
+  d: TuyaDevice,
+  lever: LightLever,
+  value: unknown,
+  cfgMap: Record<string, store.ConfiguredDevice>,
+): Promise<Array<{ code: string; value: unknown }>> {
+  const cfg = cfgMap[d.id];
+  if (cfg) {
+    const caps = resolveConfiguredLightCaps(d, cfg, await specFor(d.id));
+    return buildConfiguredLightCommands(d, caps, lever, value);
+  }
+  if (lights.isLight(d)) return lights.buildCommands(d, lever, value);
+  throw badInput(`light ${d.id} not found`);
+}
+
+/** Normalize the connected fleet down to lights — native categories PLUS any device
+ *  the user set up as lighting (rendered with the same LightUnit shape + card). */
 async function getLightFleet(): Promise<{ units: LightUnit[]; error: string | null }> {
   const settings = store.get().deviceSettings;
   try {
     const all = await tuya.getDevices();
+    const byId = new Map(all.map((d) => [d.id, d]));
     const units = all
       .filter((d) => lights.isLight(d))
       .map((d) => lights.normalizeLight(d, settings[d.id]?.name));
+
+    // Append user-set-up lighting devices (typeId 'lighting') as first-class lights.
+    // Skip ones that are already a native light (no double-up) or no longer reported.
+    const cfgLighting = configuredLightingMap();
+    const nativeIds = new Set(units.map((u) => u.id));
+    const extras = await Promise.all(
+      Object.entries(cfgLighting).map(async ([id, cfg]) => {
+        if (nativeIds.has(id)) return null;
+        const d = byId.get(id);
+        if (!d) return null;
+        return normalizeConfiguredLight(d, cfg, await specFor(id), settings[id]?.name);
+      }),
+    );
+    for (const u of extras) if (u) units.push(u);
+
     return { units, error: null };
   } catch (e) {
     return { units: [], error: (e as Error).message };
@@ -74,9 +134,10 @@ export async function commandLight(id: string, lever: LightLever, value: unknown
   if (!tuya.isConfigured()) throw badInput('Tuya not connected');
   const all = await tuya.getDevices();
   const d = all.find((x) => x.id === id);
-  if (!d || !lights.isLight(d)) throw badInput(`light ${id} not found`);
+  if (!d) throw badInput(`light ${id} not found`);
 
-  const commands = lights.buildCommands(d, lever, value); // may throw BAD_INPUT
+  // Native light OR a device set up as lighting; buildAnyLightCommands routes both.
+  const commands = await buildAnyLightCommands(d, lever, value, configuredLightingMap()); // may throw BAD_INPUT
   await tuya.sendCommands(id, commands);
   tuya.invalidateFleet(); // reflect the change on the next read immediately
   return { ts: new Date().toISOString(), ok: true, id, lever, commands };
@@ -89,15 +150,16 @@ export async function bulkCommandLights(ids: string[], lever: LightLever, value:
   }
   if (!tuya.isConfigured()) throw badInput('Tuya not connected');
   const all = await tuya.getDevices();
+  const cfgMap = configuredLightingMap();
   const results: Array<{ id: string; ok: boolean; reason: string }> = [];
   for (const id of ids) {
     const d = all.find((x) => x.id === id);
-    if (!d || !lights.isLight(d)) {
+    if (!d || (!lights.isLight(d) && !cfgMap[id])) {
       results.push({ id, ok: false, reason: 'not found' });
       continue;
     }
     try {
-      await tuya.sendCommands(id, lights.buildCommands(d, lever, value));
+      await tuya.sendCommands(id, await buildAnyLightCommands(d, lever, value, cfgMap));
       results.push({ id, ok: true, reason: 'ok' });
     } catch (e) {
       results.push({ id, ok: false, reason: (e as Error).message });
@@ -254,20 +316,21 @@ export function deleteScene(id: string): unknown {
 async function applyMembers(members: store.LightSceneMember[]): Promise<{ applied: number; failed: number }> {
   if (!tuya.isConfigured() || members.length === 0) return { applied: 0, failed: 0 };
   const all = await tuya.getDevices();
+  const cfgMap = configuredLightingMap();
   let applied = 0;
   let failed = 0;
   for (const m of members) {
     const d = all.find((x) => x.id === m.lightId);
-    if (!d || !lights.isLight(d)) {
+    if (!d || (!lights.isLight(d) && !cfgMap[d.id])) {
       failed++;
       continue;
     }
     try {
-      await tuya.sendCommands(d.id, lights.buildCommands(d, 'power', m.on));
-      if (m.on && m.brightnessPct != null && lights.isLight(d)) {
+      await tuya.sendCommands(d.id, await buildAnyLightCommands(d, 'power', m.on, cfgMap));
+      if (m.on && m.brightnessPct != null) {
         // Only set brightness on dimmable lights; ignore if unsupported.
         try {
-          await tuya.sendCommands(d.id, lights.buildCommands(d, 'brightness', m.brightnessPct));
+          await tuya.sendCommands(d.id, await buildAnyLightCommands(d, 'brightness', m.brightnessPct, cfgMap));
         } catch {
           /* not dimmable — power already applied */
         }
