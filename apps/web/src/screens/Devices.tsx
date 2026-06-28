@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
-  DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse,
+  DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse, SpeakersResponse,
   ConfiguredResponse, ConfiguredDeviceView, Capability,
 } from '../lib/types';
 import { Card, Icon } from '../components/ui';
@@ -16,6 +16,7 @@ import { GenericControl } from '../components/GenericControl';
 import { primaryCapabilities } from '../lib/capabilities';
 import { LightsPanel } from './Lights';
 import { BlindsPanel } from './Blinds';
+import { SpeakersPanel } from './Speakers';
 import { DiscoveredInbox, useDiscoveredCount } from './DiscoveredInbox';
 
 /* ============================================================================
@@ -545,6 +546,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const { data: autoData, refetch: refetchAuto } = usePolling<AutomationsResponse>(api.automations.list, 0);
   const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 20_000);
   const { data: blindsData } = usePolling<BlindsResponse>(api.blinds.list, 20_000);
+  const { data: speakersData } = usePolling<SpeakersResponse>(api.speakers.list, 20_000);
   // Configured (set-up) generic devices — populate the Switching + custom tabs.
   const { data: configuredData, refetch: refetchConfigured } = usePolling<ConfiguredResponse>(api.devices.configured, 20_000);
   // Active tab persists in the URL (?type=) so returning from a unit detail
@@ -574,6 +576,8 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   // Lights and blinds are separate Tuya fleets (not in the climate /api/devices list).
   counts.lighting = lightsData?.context.deviceCount ?? 0;
   counts.blinds = blindsData?.context.deviceCount ?? 0;
+  // Speakers are the Sonos fleet (local UPnP, separate from /api/devices).
+  counts.speakers = speakersData?.context.deviceCount ?? 0;
   // Configured generic devices feed the Switching tab + any custom-type tab.
   // Skip 'lighting' — those are folded into the /api/lights fleet already, so
   // counts.lighting (from the fleet) would otherwise double-count them.
@@ -784,6 +788,8 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     // and render as light cards inside LightsPanel — no separate generic block here.
     if (t === 'lighting') return <LightsPanel ctx={ctx} />;
     if (t === 'blinds') return <><BlindsPanel ctx={ctx} />{bespokeExtras(t)}</>;
+    // Speakers: the Sonos fleet + the house-alarm control (local UPnP, not Tuya).
+    if (t === 'speakers') return <><SpeakersPanel ctx={ctx} />{bespokeExtras(t)}</>;
     // Switching (built-in generic bucket) + any custom type → the generic group.
     const meta = resolveTypeMeta(t, customTypes);
     return (

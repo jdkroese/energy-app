@@ -540,7 +540,70 @@ export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan' | 'vaneUpDown' 
 export type DeviceWarmth = 'cold' | 'cool' | 'comfortable' | 'warm' | 'hot' | 'unknown';
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds';
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers';
+
+// ---- Sonos speakers + house alarm ------------------------------------------
+
+export interface SonosSpeaker {
+  id: string;
+  name: string;
+  group: string;
+  groupName: string;
+  coordinator: boolean;
+  volumePct: number | null;
+  online: boolean;
+}
+
+export interface SpeakersResponse {
+  ts: string;
+  enabled: boolean;
+  seedIp: string | null;
+  discoveredCount: number;
+  lastError: string | null;
+  speakers: SonosSpeaker[];
+  context: { deviceCount: number };
+}
+
+export interface AlarmStatus {
+  ts: string;
+  active: boolean;
+  startedAt: string | null;
+  durationMs: number | null;
+  remainingSec: number | null;
+  lightIds: string[];
+  siren: boolean;
+}
+
+export interface SonosIntegrationStatus {
+  ts: string;
+  configured: boolean;
+  enabled: boolean;
+  seedIp: string | null;
+  discoveredCount: number;
+  names: string[];
+  lastError: string | null;
+}
+
+/** Hard floor for the blink half-period (ms) — enforced in UI + API. */
+export const ALARM_BLINK_FLOOR_MS = 400;
+
+export interface AlarmConfig {
+  enabled: boolean;
+  /** Speaker UUIDs to sound; empty = all. */
+  speakerIds: string[];
+  volumePct: number;
+  /** Light ids to blink; empty = all. */
+  lightIds: string[];
+  /** Blink half-period (ms); floored at ALARM_BLINK_FLOOR_MS. */
+  blinkMs: number;
+  /** Safety auto-stop (s); 0 = no cap. */
+  autoStopSec: number;
+}
+
+export interface AlarmConfigResponse {
+  ts: string;
+  config: AlarmConfig;
+}
 
 export interface DeviceView {
   id: string;

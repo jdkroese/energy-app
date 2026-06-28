@@ -44,6 +44,11 @@ import type {
   ScenesResponse,
   LightSchedulesResponse,
   TuyaIntegrationStatus,
+  SpeakersResponse,
+  AlarmStatus,
+  AlarmConfig,
+  AlarmConfigResponse,
+  SonosIntegrationStatus,
   LiveResponse,
   ProbeResult,
   LoginResponse,
@@ -251,6 +256,22 @@ export const api = {
     deleteSchedule: (id: string) => delJSON<{ ok: boolean }>(`/api/lights/schedules/${enc(id)}`),
   },
 
+  /* ---- Sonos speakers + house alarm (Phase 1); writes are admin ---- */
+  speakers: {
+    list: () => getJSON<SpeakersResponse>('/api/speakers'),
+    setVolume: (id: string, pct: number) =>
+      postJSON<{ ts: string; ok: boolean }>(`/api/speakers/${enc(id)}/volume`, { pct }),
+    test: (id: string) => postJSON<{ ts: string; ok: boolean }>(`/api/speakers/${enc(id)}/test`, {}),
+  },
+  alarm: {
+    status: () => getJSON<AlarmStatus>('/api/alarm/status'),
+    trigger: (body: { lightIds?: string[]; speakerIds?: string[]; durationSec?: number; volumePct?: number; blinkMs?: number } = {}) =>
+      postJSON<AlarmStatus>('/api/alarm/trigger', body),
+    stop: () => postJSON<AlarmStatus>('/api/alarm/stop', {}),
+    config: () => getJSON<AlarmConfigResponse>('/api/alarm/config'),
+    setConfig: (patch: Partial<AlarmConfig>) => putJSON<AlarmConfigResponse>('/api/alarm/config', patch),
+  },
+
   /* ---- Blinds / curtains (Tuya); command/bulk are admin ---- */
   blinds: {
     list: () => getJSON<BlindsResponse>('/api/blinds'),
@@ -266,6 +287,13 @@ export const api = {
     intesisConnect: (username: string, password: string) =>
       postJSON<IntegrationStatus>('/api/integrations/intesis', { username, password }),
     intesisDisconnect: () => delJSON<{ ok: boolean }>('/api/integrations/intesis'),
+
+    // Sonos house-alarm (local UPnP; enable + optional seed IP).
+    sonosStatus: () => getJSON<SonosIntegrationStatus>('/api/integrations/sonos'),
+    setSonos: (enabled: boolean, seedIp?: string) =>
+      putJSON<SonosIntegrationStatus & { discoveredCount: number; names: string[] }>('/api/integrations/sonos', { enabled, seedIp }),
+    rescanSonos: () =>
+      postJSON<{ ts: string; discoveredCount: number; names: string[]; lastError: string | null }>('/api/integrations/sonos/rescan', {}),
 
     // Tuya Cloud (lights + future categories).
     tuyaStatus: () => getJSON<TuyaIntegrationStatus>('/api/integrations/tuya'),
