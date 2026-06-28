@@ -1,4 +1,5 @@
 import { cached } from '../cache';
+import { config } from '../config';
 import { sonnenHost, sonnenToken } from '../runtime-config';
 
 // Sonnen local REST API v2 (reachable from the VPS over the WireGuard tunnel).
@@ -137,8 +138,11 @@ function modeLabel(m: number | string | undefined): string | undefined {
 export async function getNormalized(): Promise<SonnenNormalized> {
   const raw = (await getStatus()) as SonnenStatusRaw;
   const soc = Math.round(raw.USOC ?? raw.RSOC ?? 0);
-  const remainingWh = raw.RemainingCapacity_Wh ?? 0;
-  const kwh = remainingWh > 0 ? Math.round((remainingWh / 1000) * 10) / 10 : Math.round(soc * 0.092 * 10) / 10;
+  // Stored *usable* energy. The device's RemainingCapacity_Wh reports GROSS cell
+  // capacity, which exceeds the nameplate usable (and even nominal) kWh — using it
+  // made "stored" overshoot usable and pushed the combined SoC past 100%. Derive
+  // from SoC against the configured usable capacity so stored ≤ usable always.
+  const kwh = Math.round((soc / 100) * config.assets.sonnenUsableKwh * 10) / 10;
 
   // Pac_total_W: on Sonnen, negative = charging, positive = discharging.
   const pac = raw.Pac_total_W ?? 0;
