@@ -80,11 +80,24 @@
   --battery-wash: rgba(56, 217, 245, 0.12);
   --grid-wash: rgba(245, 165, 36, 0.12);
   --home-wash: rgba(196, 166, 255, 0.12);
+  --ev-wash: rgba(139, 140, 255, 0.12);
   --danger-wash: rgba(255, 93, 93, 0.12);
 
-  /* tinted accent borders (A1: was hardcoded rgba in Devices.tsx summary tiles) */
+  /* tinted accent borders (A1: was hardcoded rgba in Devices.tsx summary tiles;
+     Track F: filled out the soft/strong + per-hue variants used across screens) */
   --border-grid: rgba(245, 165, 36, 0.25);
+  --border-grid-soft: rgba(245, 165, 36, 0.22);
+  --border-grid-strong: rgba(245, 165, 36, 0.35);
   --border-solar: rgba(46, 230, 160, 0.25);
+  --border-solar-soft: rgba(46, 230, 160, 0.18);
+  --border-solar-glow: rgba(46, 230, 160, 0.28);
+  --border-battery: rgba(56, 217, 245, 0.2);
+  --border-ev: rgba(139, 140, 255, 0.25);
+  --border-danger: rgba(255, 93, 93, 0.25);
+
+  /* tinted accent glows (Track F: schedule/timeline bars + ring glows) */
+  --glow-solar-bar: 0 0 8px rgba(46, 230, 160, 0.55);
+  --glow-ev-bar: 0 0 8px rgba(139, 140, 255, 0.55);
 
   /* semantic surface aliases */
   --surface-card: var(--surface-1);
@@ -267,11 +280,23 @@
   --battery-wash: rgba(15, 127, 184, 0.10);
   --grid-wash: rgba(138, 90, 10, 0.10);
   --home-wash: rgba(109, 68, 209, 0.10);
+  --ev-wash: rgba(81, 82, 214, 0.10);
   --danger-wash: rgba(207, 42, 42, 0.10);
 
-  /* tinted accent borders */
+  /* tinted accent borders — dark hue on white, a touch stronger than dark theme */
   --border-grid: rgba(138, 90, 10, 0.30);
+  --border-grid-soft: rgba(138, 90, 10, 0.26);
+  --border-grid-strong: rgba(138, 90, 10, 0.42);
   --border-solar: rgba(10, 143, 99, 0.30);
+  --border-solar-soft: rgba(10, 143, 99, 0.22);
+  --border-solar-glow: rgba(10, 143, 99, 0.34);
+  --border-battery: rgba(15, 127, 184, 0.26);
+  --border-ev: rgba(81, 82, 214, 0.30);
+  --border-danger: rgba(207, 42, 42, 0.30);
+
+  /* tinted accent glows — toned down to a soft ring on white (no neon) */
+  --glow-solar-bar: 0 0 0 1px rgba(10, 143, 99, 0.30);
+  --glow-ev-bar: 0 0 0 1px rgba(81, 82, 214, 0.30);
 
   /* typography colour aliases inherit from above */
 

@@ -79,7 +79,7 @@ function MemberEditor({ lights, draft, setDraft }: { lights: LightUnit[]; draft:
           <div key={l.id} style={{ padding: '10px 12px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)', background: dr?.included ? 'var(--surface-2)' : 'transparent' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <button type="button" onClick={() => patch(l.id, { included: !dr?.included })} aria-label="include" style={{
-                width: 18, height: 18, borderRadius: 5, flex: 'none', cursor: 'pointer', display: 'grid', placeItems: 'center', color: '#06090b',
+                width: 18, height: 18, borderRadius: 5, flex: 'none', cursor: 'pointer', display: 'grid', placeItems: 'center', color: 'var(--accent-contrast)',
                 border: dr?.included ? 'none' : '1.5px solid var(--border-3)', background: dr?.included ? 'var(--solar)' : 'transparent',
               }}>{dr?.included && <Icon name="check" size={12} />}</button>
               <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</div>

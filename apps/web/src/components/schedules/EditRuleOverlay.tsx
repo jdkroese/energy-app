@@ -212,7 +212,7 @@ export function EditRuleOverlay({
             const on = days.includes(store);
             return (
               <button key={row} type="button" onClick={() => toggleDay(store)} aria-pressed={on}
-                style={{ width: 34, height: 34, borderRadius: 9, border: `1px solid ${on ? 'transparent' : 'var(--border-1)'}`, cursor: 'pointer', fontSize: 12.5, fontWeight: 600, background: on ? 'var(--solar)' : 'var(--surface-1)', color: on ? '#06090b' : 'var(--text-3)' }}>{l}</button>
+                style={{ width: 34, height: 34, borderRadius: 9, border: `1px solid ${on ? 'transparent' : 'var(--border-1)'}`, cursor: 'pointer', fontSize: 12.5, fontWeight: 600, background: on ? 'var(--solar)' : 'var(--surface-1)', color: on ? 'var(--accent-contrast)' : 'var(--text-3)' }}>{l}</button>
             );
           })}
         </div>
@@ -320,7 +320,7 @@ export function EditRuleOverlay({
       )}
 
       {err && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.22)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid var(--border-grid-soft)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
           <Icon name="alert-triangle" size={14} color="var(--grid)" />{err}
         </div>
       )}
@@ -409,7 +409,7 @@ function FanVaneSelect({ title, value, onChange }: { title: string; value: FanSe
           const on = value === o;
           return (
             <button key={String(o)} type="button" onClick={() => onChange(o)}
-              style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: on ? 700 : 500, background: on ? 'var(--solar)' : 'transparent', color: on ? '#06090b' : 'var(--text-3)' }}>
+              style={{ flex: 1, padding: '6px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: on ? 700 : 500, background: on ? 'var(--solar)' : 'transparent', color: on ? 'var(--accent-contrast)' : 'var(--text-3)' }}>
               {o === 'auto' ? 'A' : o}
             </button>
           );
