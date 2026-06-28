@@ -17,6 +17,7 @@ import { Setup } from './screens/auth/Setup';
 import { Reset } from './screens/auth/Reset';
 import { PowerMark } from './screens/auth/AuthShell';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
+import { ThemeProvider } from './lib/ThemeProvider';
 
 const PUBLIC_PATHS = ['/login', '/setup', '/reset'];
 const isPublic = (path: string) => PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + '/'));
@@ -97,9 +98,11 @@ function Gate() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <Gate />
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <Gate />
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

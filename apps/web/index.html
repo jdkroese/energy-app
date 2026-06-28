@@ -1,7 +1,31 @@
 <!doctype html>
-<html lang="en" class="dark" data-theme="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
+
+    <!-- Theme bootstrap (FOUC-safe): apply the resolved theme to <html> BEFORE
+         any CSS/app paints, so there's no dark→light flash on load. Mirrors
+         lib/theme.ts (power.theme: dark|light|system, default dark). -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('power.theme');
+          if (t !== 'dark' && t !== 'light' && t !== 'system') t = 'dark';
+          var resolved =
+            t === 'system'
+              ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+              : t;
+          var html = document.documentElement;
+          html.setAttribute('data-theme', resolved);
+          html.classList.toggle('dark', resolved === 'dark');
+          var m = document.querySelector('meta[name="theme-color"]');
+          if (m) m.setAttribute('content', resolved === 'light' ? '#FAFBFC' : '#06090B');
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
     <!-- Safe-area aware viewport (content sits under the notch / home indicator) -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
