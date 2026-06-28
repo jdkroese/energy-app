@@ -143,7 +143,10 @@ async function applyOn(d: TuyaDevice, caps: Capability[], spec: TuyaSpec | null,
   }
 
   try {
-    await tuya.sendCommands(d.id, cmds);
+    // Dual-API: some relays/plugs accept v1 (success:true) yet only physically
+    // actuate via iot-03 or the v2 thing-model — fire all, succeed if any lands.
+    // Mirrors the manual generic command path (routes/discovered.ts) and lights.
+    await tuya.sendCommandsDual(d.id, cmds);
     tuya.invalidateFleet();
     logCircuit(d.id, 'power', null, 'on', reason, true, 'on');
     if (speedSet != null) logCircuit(d.id, 'speed', null, speedSet, reason, true, `speed ${speedSet}`);
@@ -160,7 +163,7 @@ async function applyOff(d: TuyaDevice, caps: Capability[], spec: TuyaSpec | null
   const reason = `rule ${ruleName}`;
   try {
     const cmds = buildGenericCommands(d, powerCap, { dp: powerCap.dp, kind: 'switch', value: false }, spec);
-    await tuya.sendCommands(d.id, cmds);
+    await tuya.sendCommandsDual(d.id, cmds); // dual-API (see applyOn) — actuate v1/iot-03/v2
     tuya.invalidateFleet();
     logCircuit(d.id, 'power', null, 'off', reason, true, 'off');
   } catch (e) {
