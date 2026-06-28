@@ -152,7 +152,7 @@ function logDecision(deviceId: string, reason: string, detail: string, ok = true
       ok,
       detail,
     });
-    if (s.devices.log.length > 100) s.devices.log = s.devices.log.slice(-100);
+    s.devices.log = store.pruneLog(s.devices.log);
   });
 }
 

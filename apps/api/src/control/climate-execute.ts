@@ -59,7 +59,7 @@ function logEntry(
 ): void {
   store.update((s) => {
     s.devices.log.push({ ts: Date.now(), deviceId, lever, from, to, reason, ok, detail });
-    if (s.devices.log.length > 100) s.devices.log = s.devices.log.slice(-100);
+    s.devices.log = store.pruneLog(s.devices.log);
     s.devices.updatedAt = Date.now();
     if (!ok) s.devices.lastError = `${deviceId}.${lever}: ${detail}`;
   });
@@ -81,15 +81,15 @@ function noop(
   value: string | number,
   reason = 'unchanged',
 ): ClimateIssueResult {
-  // Keep only the LATEST no-op per device+lever so steady-state ticks don't flood the 100-entry
-  // ring and evict real writes/errors. See execute.ts noop() for the full rationale. updatedAt
-  // still advances so the device heartbeat keeps ticking.
+  // Keep only the LATEST no-op per device+lever so steady-state ticks don't bury real writes in
+  // "unchanged" noise, then prune to the 48h retention window. See execute.ts noop() for the full
+  // rationale. updatedAt still advances so the device heartbeat keeps ticking.
   store.update((s) => {
     s.devices.log = s.devices.log.filter(
       (e) => !(e.deviceId === deviceId && e.lever === lever && e.detail === NOOP_DETAIL),
     );
     s.devices.log.push({ ts: Date.now(), deviceId, lever, from: value, to: value, reason, ok: true, detail: NOOP_DETAIL });
-    if (s.devices.log.length > 100) s.devices.log = s.devices.log.slice(-100);
+    s.devices.log = store.pruneLog(s.devices.log);
     s.devices.updatedAt = Date.now();
   });
   return { ok: true, skipped: true, reason, from: value, to: value };
