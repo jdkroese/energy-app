@@ -318,6 +318,24 @@ export async function getDeviceDiagnostics(id: string): Promise<unknown> {
   return { ts: new Date().toISOString(), connected: true, fleetError: null, device };
 }
 
+/**
+ * POST /api/devices/:id/diagnostics/test — fire a single DP command through the chosen
+ * Tuya command API (v1 legacy commands / v2 thing-model) and return the RAW response,
+ * so we can see which API a stubborn device actually accepts. Admin-gated (it actuates).
+ * Body: { dp, value, api }.
+ */
+export async function testDeviceCommand(id: string, body: unknown): Promise<unknown> {
+  const deviceId = String(id ?? '').trim();
+  if (!deviceId) throw badInput('device id required');
+  const b = (body ?? {}) as { dp?: unknown; value?: unknown; api?: unknown };
+  const dp = String(b.dp ?? '').trim();
+  if (!dp) throw badInput('dp required');
+  const api = b.api === 'v2' ? 'v2' : 'v1';
+  if (!tuya.isConfigured()) throw badInput('Tuya not connected');
+  const probe = await tuya.probeCommand(deviceId, dp, b.value, api);
+  return { ts: new Date().toISOString(), id: deviceId, dp, value: b.value, probe };
+}
+
 // ---- Generic capability command ---------------------------------------------
 
 /**
