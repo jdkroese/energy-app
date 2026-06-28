@@ -89,6 +89,10 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const [pending, setPending] = useState<Partial<Record<ClimateLever, PendingValue>>>({});
   const timers = useRef<Partial<Record<ClimateLever, ReturnType<typeof setTimeout>>>>({});
   const settle = useRef<Partial<Record<ClimateLever, ReturnType<typeof setTimeout>>>>({});
+  // Must live above the early return — hooks cannot be called conditionally.
+  const pSet = pending.setpoint as number | undefined;
+  const accSetRef = useRef<number | null>(null);
+  useEffect(() => { if (pSet === undefined) accSetRef.current = null; }, [pSet]);
 
   const dev = data?.device ?? null;
 
@@ -195,7 +199,6 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const canWrite = isAdmin;    // live device commands
 
   // Optimistic display values — a pending lever overrides the last polled state.
-  const pSet = pending.setpoint as number | undefined;
   const pPow = pending.power as boolean | undefined;
   const pMode = pending.mode as string | undefined;
   const pFan = pending.fan as number | undefined;
@@ -212,10 +215,6 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   const hi = Math.min(30, dev.maxSetpointC ?? 30, dev.comfortCeilingC ?? 30);
   const setpoint = pSet ?? dev.setpointC ?? 24;
   const clampSet = (v: number) => Math.min(hi, Math.max(lo, Math.round(v * 2) / 2));
-  // Ref tracks the latest step target synchronously so rapid clicks accumulate
-  // correctly even before React re-renders with the new pending value.
-  const accSetRef = useRef<number | null>(null);
-  useEffect(() => { if (pSet === undefined) accSetRef.current = null; }, [pSet]);
   const commitSetpoint = (v: number) => { const c = clampSet(v); accSetRef.current = c; sendLever('setpoint', c, 500); };
   const previewSetpoint = (v: number) => setPending((p) => ({ ...p, setpoint: clampSet(v) }));
   const step = (delta: number) => commitSetpoint((accSetRef.current ?? setpoint) + delta);
