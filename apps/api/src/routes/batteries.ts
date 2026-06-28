@@ -396,9 +396,10 @@ async function buildTesla(): Promise<BatteryDetail> {
 export async function getBatteries(): Promise<BatteriesResponse> {
   const [s, t] = await Promise.all([buildSonnen(), buildTesla()]);
   const batteries = [s, t];
-  const storedKwh = round(s.kwh + t.kwh, 1);
   const usableKwh = round(s.usableKwh + t.usableKwh, 1);
-  const soc = usableKwh > 0 ? Math.round((storedKwh / usableKwh) * 100) : 0;
+  // Never let a device over-reporting stored energy push the gauge past full.
+  const storedKwh = round(Math.min(s.kwh + t.kwh, usableKwh), 1);
+  const soc = usableKwh > 0 ? Math.min(100, Math.round((storedKwh / usableKwh) * 100)) : 0;
   return {
     ts: new Date().toISOString(),
     combined: { usableKwh, storedKwh, soc },
