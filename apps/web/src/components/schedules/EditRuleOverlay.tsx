@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { Icon, Button, Switch } from '../ui';
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { Icon, Button, Modal } from '../ui';
 import type { Action, Capability, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, TimeAnchor, VaneSetting } from '../../lib/types';
 import { checkRuleOverlap, expandSegments, selfOverlaps, wouldOverlapUnit, TYPE_LABEL } from '../../lib/scheduleRules';
 import { AnchorPicker, OffsetStepper } from './TimeAnchorControls';
@@ -87,14 +87,6 @@ export function EditRuleOverlay({
   );
   const speedMin = speedCap?.min ?? 1;
   const speedMax = speedCap?.max ?? 6;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
-    window.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
-  }, [onCancel]);
 
   const setAct = (patch: Partial<Action>) => setAction((a) => ({ ...a, ...patch }));
   const toggleDay = (store: number) => setDays((p) => (p.includes(store) ? p.filter((x) => x !== store) : [...p, store].sort()));
@@ -347,30 +339,9 @@ export function EditRuleOverlay({
   );
 
   return (
-    <div
-      onClick={onCancel}
-      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: wide ? 'flex-start' : 'flex-end', justifyContent: 'center', overflowY: 'auto', animation: 'ruleFade var(--dur) var(--ease-out)' }}
-    >
-      <style>{`@keyframes ruleFade { from { opacity: 0 } to { opacity: 1 } } @keyframes ruleRise { from { transform: translateY(14px); opacity: .7 } to { transform: translateY(0); opacity: 1 } }`}</style>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Edit rule"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: '100%', maxWidth: 560,
-          margin: wide ? '6vh 12px 6vh' : 0,
-          background: 'var(--surface-1, #14181d)',
-          border: '1px solid var(--border-2)',
-          borderRadius: wide ? 18 : '18px 18px 0 0',
-          boxShadow: '0 -8px 40px rgba(0,0,0,.5)',
-          animation: 'ruleRise var(--dur) var(--ease-out)',
-        }}
-      >
-        {!wide && <div style={{ width: 38, height: 4, borderRadius: 999, background: 'var(--border-3)', margin: '10px auto 2px' }} />}
-        {body}
-      </div>
-    </div>
+    <Modal open onClose={onCancel} placement="sheet" wideViewport={wide} ariaLabel="Edit rule">
+      {body}
+    </Modal>
   );
 }
 

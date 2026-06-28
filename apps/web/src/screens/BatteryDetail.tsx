@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_BATTERIES } from '../lib/mock';
 import type { BatteriesResponse, BatteryDetail as BatteryDetailT } from '../lib/types';
-import { Card, StatTile, RadialGauge, ProgressBar, Badge, StatusDot, Button, IconButton, Eyebrow, Icon } from '../components/ui';
+import { Card, StatTile, RadialGauge, ProgressBar, Badge, StatusDot, Button, Eyebrow, Icon, ScreenHeader } from '../components/ui';
 import { AreaChart } from '../components/energy/AreaChart';
 import { StaleBanner } from './_shared';
 import { PowerPill } from './Batteries';
@@ -283,19 +283,19 @@ export function BatteryDetail({ ctx }: { ctx: ShellContext }) {
   return (
     <div style={{ maxWidth: 880, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: wide ? 16 : 12 }}>
       {/* in-page header (works on both platforms; the desktop TopBar shows a generic title) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: wide ? 0 : 8 }}>
-        <IconButton variant="solid" aria-label="Back" onClick={() => nav('/batteries')}>
-          <Icon name="chevron-left" size={18} />
-        </IconButton>
-        <span style={{ width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', background: 'var(--battery-wash)', color: 'var(--battery)', flex: 'none' }}>
-          <Icon name={b.hasBackup ? 'battery-full' : 'battery-charging'} size={21} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h1 style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-.02em', margin: 0 }}>{b.name}</h1>
-          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{b.vendor} · {b.role}</div>
-        </div>
-        <StatusDot tone={b.online ? 'battery' : 'offline'} live={b.online}>{b.online ? 'Online' : 'Offline'}</StatusDot>
-      </div>
+      <ScreenHeader
+        compact
+        style={{ paddingTop: wide ? 0 : 8 }}
+        onBack={() => nav('/batteries')}
+        leading={
+          <span style={{ width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', background: 'var(--battery-wash)', color: 'var(--battery)', flex: 'none' }}>
+            <Icon name={b.hasBackup ? 'battery-full' : 'battery-charging'} size={21} />
+          </span>
+        }
+        title={b.name}
+        subtitle={`${b.vendor} · ${b.role}`}
+        right={<StatusDot tone={b.online ? 'battery' : 'offline'} live={b.online}>{b.online ? 'Online' : 'Offline'}</StatusDot>}
+      />
 
       {stale && <StaleBanner updatedAt={updatedAt} />}
 

@@ -5,7 +5,7 @@ import type {
   LightUnit, LightScene, LightSceneMember, LightSchedule, LightScheduleTarget, TimeAnchor,
   ScenesResponse, LightSchedulesResponse,
 } from '../../lib/types';
-import { Card, Icon, Button, Switch, Slider, SegmentedControl, Input, Select } from '../ui';
+import { Card, Icon, Button, Switch, Slider, SegmentedControl, Input, Select, Modal } from '../ui';
 import { DayTrack, barsForWindow } from '../schedules/DayTrack';
 import { AnchorPicker, OffsetStepper, anchorLabel } from '../schedules/TimeAnchorControls';
 
@@ -17,25 +17,12 @@ import { AnchorPicker, OffsetStepper, anchorLabel } from '../schedules/TimeAncho
 
 const DOW = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
-/* ---- modal shell --------------------------------------------------------- */
+/* ---- modal shell — the shared <Modal> primitive (fixes the old z-60 bug) ---- */
 function Overlay({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(4,8,10,0.66)', backdropFilter: 'blur(3px)', display: 'grid', placeItems: 'center', padding: 16 }}
-    >
-      <div style={{ width: '100%', maxWidth: 460, maxHeight: '88vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-2)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 18px', borderBottom: '1px solid var(--border-1)' }}>
-          <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--solar-wash)', color: 'var(--solar)', flex: 'none' }}><Icon name="lightbulb" size={16} /></span>
-          <div style={{ fontSize: 15.5, fontWeight: 600, flex: 1 }}>{title}</div>
-          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}><Icon name="x" size={18} /></button>
-        </div>
-        <div style={{ padding: 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 }}>{children}</div>
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', padding: '14px 18px', borderTop: '1px solid var(--border-1)' }}>{footer}</div>
-      </div>
-    </div>
+    <Modal open onClose={onClose} title={title} icon="lightbulb" tone="solar" size="md" footer={footer}>
+      <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>{children}</div>
+    </Modal>
   );
 }
 

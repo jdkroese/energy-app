@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SCENARIOS } from '../lib/mock';
 import type { Scenario, ScenarioDef, ScenariosResponse } from '../lib/types';
-import { Card, Slider, Switch, SegmentedControl, Button, Eyebrow, Icon } from '../components/ui';
+import { Card, Slider, Switch, SegmentedControl, Button, Eyebrow, Icon, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
 
 /** Client-side brain-twin preview (fallback / instant feedback before the API replies). */
@@ -133,10 +133,7 @@ export function Scenarios() {
 
   return (
     <>
-      <div style={{ padding: '12px 18px 12px' }}>
-        <Eyebrow>Scenarios</Eyebrow>
-        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>Strategy profiles</h1>
-      </div>
+      <ScreenHeader className="md:hidden" eyebrow="Scenarios" title="Strategy profiles" />
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
       {/* selector — spread across the full width, sized like the Reports/Live cards */}

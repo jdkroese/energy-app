@@ -1,18 +1,32 @@
-import type { CSSProperties, ReactNode } from 'react';
-import { Eyebrow } from '../components/ui';
+import type { ReactNode } from 'react';
+import { ScreenHeader } from '../components/ui';
 import { ThemeToggle } from '../components/shell/ThemeToggle';
 
-/** Mobile screen header (eyebrow + h1), matching the *-mobile mockups. */
+// Skeleton now lives in components/ui/States (single shimmer source); re-export
+// it here so existing `import { Skeleton } from './_shared'` callers keep working.
+export { Skeleton } from '../components/ui';
+
+/**
+ * Mobile screen header (eyebrow + h1), matching the *-mobile mockups.
+ * Thin wrapper over the shared <ScreenHeader> so titles are standardized
+ * app-wide (Track C). Kept `md:hidden` so the desktop TopBar owns the title on
+ * wide layouts.
+ */
 export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; title: string; right?: ReactNode }) {
+  // Integrate the theme-toggle PR's sun/moon control into the standardized
+  // header (it sits just before the screen-supplied `right` slot, as before).
   return (
-    <div className="flex md:hidden" style={{ alignItems: 'center', gap: 12, padding: '12px 18px 12px' }}>
-      <div style={{ flex: 1 }}>
-        <Eyebrow>{eyebrow}</Eyebrow>
-        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>{title}</h1>
-      </div>
-      <ThemeToggle />
-      {right}
-    </div>
+    <ScreenHeader
+      className="md:hidden"
+      eyebrow={eyebrow}
+      title={title}
+      right={
+        <>
+          <ThemeToggle />
+          {right}
+        </>
+      }
+    />
   );
 }
 
@@ -59,18 +73,3 @@ export function StaleBanner({ updatedAt }: { updatedAt: number | null }) {
   );
 }
 
-/** Simple skeleton block for loading states. */
-export function Skeleton({ height = 120, style }: { height?: number; style?: CSSProperties }) {
-  return (
-    <div
-      style={{
-        height,
-        borderRadius: 'var(--radius-card)',
-        background: 'linear-gradient(90deg,var(--surface-1),var(--surface-2),var(--surface-1))',
-        backgroundSize: '200% 100%',
-        animation: 'pwr-shimmer 1.4s ease-in-out infinite',
-        ...style,
-      }}
-    />
-  );
-}

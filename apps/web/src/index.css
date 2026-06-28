@@ -399,6 +399,12 @@ h1, h2, h3, h4, p {
   100% { background-position: -200% 0; }
 }
 
+/* Shared <Modal> primitive (Track C) — backdrop fade + dialog rise. The global
+   reduced-motion gate above also collapses these; the component additionally
+   omits the animation outright when prefers-reduced-motion is set. */
+@keyframes pwrModalFade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes pwrModalRise { from { transform: translateY(14px); opacity: .7 } to { transform: translateY(0); opacity: 1 } }
+
 /* ---- Map (Leaflet) — Site location picker -------------------------------- */
 .pwr-map {
   height: 240px;
@@ -449,7 +455,8 @@ h1, h2, h3, h4, p {
    (pwr-splash-pulse), button spinner (pwr-btn-spin), skeleton shimmer
    (pwr-shimmer), PlanTimeline draw/grow/pulse (pt-*), and the overlay
    fade/rise keyframes (vhFade/vhRise, ruleFade/ruleRise, mmFade/mmRise,
-   installFade/installRise, setupFade).
+   installFade/installRise, setupFade, and the shared Modal primitive's
+   pwrModalFade/pwrModalRise).
    Functional spinners still resolve to a static state rather than looping. */
 @media (prefers-reduced-motion: reduce) {
   *,

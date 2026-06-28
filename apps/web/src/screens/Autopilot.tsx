@@ -13,7 +13,7 @@ import type {
   ControlStatus,
   LiveResponse,
 } from '../lib/types';
-import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Card, StatTile } from '../components/ui';
+import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Card, StatTile, Modal, ScreenHeader } from '../components/ui';
 import { PlanTimeline } from '../components/energy/PlanTimeline';
 import { StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -49,30 +49,28 @@ interface Confirm {
   onConfirm: () => Promise<void> | void;
 }
 
-function Modal({ confirm, busy, onClose }: { confirm: Confirm; busy: boolean; onClose: () => void }) {
+function ConfirmModal({ confirm, busy, onClose }: { confirm: Confirm; busy: boolean; onClose: () => void }) {
+  // Confirm dialogs here open from inside other Autopilot overlays/flows; use the
+  // 'nested' z-layer so they always paint above. Non-dismissable while busy.
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
-      }}
-      style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(4,8,10,0.66)', backdropFilter: 'blur(3px)', display: 'grid', placeItems: 'center', padding: 18 }}
-    >
-      <div style={{ width: '100%', maxWidth: 420, background: 'var(--surface-1)', border: '1px solid var(--border-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-2)', padding: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 10 }}>
-          <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: confirm.danger ? 'var(--danger-wash)' : 'var(--battery-wash)', color: confirm.danger ? 'var(--danger)' : 'var(--battery)' }}>
-            <Icon name={confirm.danger ? 'alert-triangle' : 'send'} size={18} />
-          </span>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{confirm.title}</div>
-        </div>
-        <div style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5 }}>{confirm.body}</div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
+    <Modal
+      open
+      onClose={onClose}
+      dismissable={!busy}
+      zLayer="nested"
+      size="md"
+      tone={confirm.danger ? 'danger' : 'battery'}
+      icon={confirm.danger ? 'alert-triangle' : 'send'}
+      title={confirm.title}
+      footer={
+        <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant={confirm.danger ? 'danger' : 'primary'} loading={busy} onClick={() => void confirm.onConfirm()}>{confirm.confirmLabel}</Button>
-        </div>
-      </div>
-    </div>
+          <Button data-confirm variant={confirm.danger ? 'danger' : 'primary'} loading={busy} onClick={() => void confirm.onConfirm()}>{confirm.confirmLabel}</Button>
+        </>
+      }
+    >
+      <div style={{ fontSize: 13.5, color: 'var(--text-2)', lineHeight: 1.5, padding: '16px 18px' }}>{confirm.body}</div>
+    </Modal>
   );
 }
 
@@ -393,12 +391,7 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: embedded ? undefined : 1100, margin: embedded ? undefined : '0 auto', width: '100%', padding: embedded ? 0 : wide ? 0 : '8px 14px 22px' }}>
       {/* mobile header — host renders the page header when embedded */}
-      {!wide && !embedded && (
-        <div style={{ padding: '4px 2px 0' }}>
-          <Eyebrow>Live control</Eyebrow>
-          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>Autopilot</h1>
-        </div>
-      )}
+      {!wide && !embedded && <ScreenHeader eyebrow="Live control" title="Autopilot" padding="4px 2px 0" />}
       {planStale && <StaleBanner updatedAt={planAt} />}
 
       {/* tab bar — host renders the tab strip when embedded */}
@@ -701,10 +694,10 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
       )}
 
       {/* confirm dialog */}
-      {confirm && <Modal confirm={confirm} busy={confirmBusy} onClose={closeConfirm} />}
+      {confirm && <ConfirmModal confirm={confirm} busy={confirmBusy} onClose={closeConfirm} />}
 
-      {/* toasts */}
-      <div style={{ position: 'fixed', right: 18, bottom: 18, zIndex: 70, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none' }}>
+      {/* toasts — toast z-layer (above overlays/nested confirms) */}
+      <div style={{ position: 'fixed', right: 18, bottom: 18, zIndex: 1020, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none' }}>
         {toasts.map((t) => (
           <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 'var(--radius-md)', fontSize: 13, maxWidth: 360, background: 'var(--surface-1)', border: `1px solid ${t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)'}`, color: t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)', boxShadow: 'var(--shadow-2)' }}>
             <Icon name={t.kind === 'ok' ? 'check-circle' : 'alert-octagon'} size={16} />
