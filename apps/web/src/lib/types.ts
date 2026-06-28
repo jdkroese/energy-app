@@ -1023,7 +1023,7 @@ export interface DeviceDiagnosticsResponse {
 
 /** Raw result of a single test command fired through a chosen Tuya API. */
 export interface DeviceCommandProbe {
-  api: 'v1' | 'v2';
+  api: 'v1' | 'iot03' | 'v2';
   httpOk: boolean;
   success: boolean;
   result: unknown;

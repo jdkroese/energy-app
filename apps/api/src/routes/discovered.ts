@@ -330,7 +330,7 @@ export async function testDeviceCommand(id: string, body: unknown): Promise<unkn
   const b = (body ?? {}) as { dp?: unknown; value?: unknown; api?: unknown };
   const dp = String(b.dp ?? '').trim();
   if (!dp) throw badInput('dp required');
-  const api = b.api === 'v2' ? 'v2' : 'v1';
+  const api = b.api === 'v2' ? 'v2' : b.api === 'iot03' ? 'iot03' : 'v1';
   if (!tuya.isConfigured()) throw badInput('Tuya not connected');
   const probe = await tuya.probeCommand(deviceId, dp, b.value, api);
   return { ts: new Date().toISOString(), id: deviceId, dp, value: b.value, probe };
@@ -366,7 +366,9 @@ export async function commandGeneric(id: string, input: GenericCommandInput): Pr
   }
 
   const commands = buildGenericCommands(d, cap, input, spec); // may throw BAD_INPUT
-  await tuya.sendCommands(deviceId, commands);
+  // Onboarded plugs/switches vary in which Tuya command API actuates them (legacy v1
+  // vs v2 thing-model) — issue both (idempotent; succeeds if either is accepted).
+  const sent = await tuya.sendCommandsDual(deviceId, commands);
   tuya.invalidateFleet();
-  return { ts: new Date().toISOString(), ok: true, id: deviceId, commands };
+  return { ts: new Date().toISOString(), ok: true, id: deviceId, commands, sent };
 }

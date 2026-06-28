@@ -137,8 +137,12 @@ export async function commandLight(id: string, lever: LightLever, value: unknown
   if (!d) throw badInput(`light ${id} not found`);
 
   // Native light OR a device set up as lighting; buildAnyLightCommands routes both.
-  const commands = await buildAnyLightCommands(d, lever, value, configuredLightingMap()); // may throw BAD_INPUT
-  await tuya.sendCommands(id, commands);
+  const cfgMap = configuredLightingMap();
+  const commands = await buildAnyLightCommands(d, lever, value, cfgMap); // may throw BAD_INPUT
+  // Set-up plugs/switches vary in which Tuya command API actuates them — issue both
+  // (idempotent). Native Tuya lights are well-behaved on the legacy API.
+  if (cfgMap[id]) await tuya.sendCommandsDual(id, commands);
+  else await tuya.sendCommands(id, commands);
   tuya.invalidateFleet(); // reflect the change on the next read immediately
   return { ts: new Date().toISOString(), ok: true, id, lever, commands };
 }
@@ -159,7 +163,9 @@ export async function bulkCommandLights(ids: string[], lever: LightLever, value:
       continue;
     }
     try {
-      await tuya.sendCommands(id, await buildAnyLightCommands(d, lever, value, cfgMap));
+      const cmds = await buildAnyLightCommands(d, lever, value, cfgMap);
+      if (cfgMap[id]) await tuya.sendCommandsDual(id, cmds);
+      else await tuya.sendCommands(id, cmds);
       results.push({ id, ok: true, reason: 'ok' });
     } catch (e) {
       results.push({ id, ok: false, reason: (e as Error).message });
@@ -326,11 +332,14 @@ async function applyMembers(members: store.LightSceneMember[]): Promise<{ applie
       continue;
     }
     try {
-      await tuya.sendCommands(d.id, await buildAnyLightCommands(d, 'power', m.on, cfgMap));
+      const cfg = !!cfgMap[d.id];
+      const sendCmds = (cmds: Array<{ code: string; value: unknown }>) =>
+        cfg ? tuya.sendCommandsDual(d.id, cmds) : tuya.sendCommands(d.id, cmds);
+      await sendCmds(await buildAnyLightCommands(d, 'power', m.on, cfgMap));
       if (m.on && m.brightnessPct != null) {
         // Only set brightness on dimmable lights; ignore if unsupported.
         try {
-          await tuya.sendCommands(d.id, await buildAnyLightCommands(d, 'brightness', m.brightnessPct, cfgMap));
+          await sendCmds(await buildAnyLightCommands(d, 'brightness', m.brightnessPct, cfgMap));
         } catch {
           /* not dimmable — power already applied */
         }

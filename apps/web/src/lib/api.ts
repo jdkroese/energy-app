@@ -223,7 +223,7 @@ export const api = {
     diagnostics: (id: string) => getJSON<DeviceDiagnosticsResponse>(`/api/devices/${enc(id)}/diagnostics`),
     // Fire a DP command through a chosen Tuya API (v1 legacy / v2 thing-model) and
     // return the raw response — for debugging devices that ignore the normal path.
-    testCommand: (id: string, dp: string, value: unknown, cmdApi: 'v1' | 'v2') =>
+    testCommand: (id: string, dp: string, value: unknown, cmdApi: 'v1' | 'iot03' | 'v2') =>
       postJSON<DeviceCommandTestResponse>(`/api/devices/${enc(id)}/diagnostics/test`, { dp, value, api: cmdApi }),
   },
 
