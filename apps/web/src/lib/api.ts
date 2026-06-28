@@ -230,6 +230,8 @@ export const api = {
     // Generic capability command ({ dp, kind, value }) — confirmed in the UI for sensitive actions.
     commandCap: (id: string, dp: string, kind: CapabilityKind, value: unknown) =>
       postJSON<{ ts: string; ok: boolean }>(`/api/devices/${enc(id)}/command`, { dp, kind, value }),
+    // Rename a configured (set-up) device in place.
+    rename: (id: string, name: string) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/name`, { name }),
     // Identity + network + datapoint table for debugging control issues (on-demand).
     diagnostics: (id: string) => getJSON<DeviceDiagnosticsResponse>(`/api/devices/${enc(id)}/diagnostics`),
     // Fire a DP command through a chosen Tuya API (v1 legacy / v2 thing-model) and

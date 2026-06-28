@@ -101,6 +101,7 @@ import {
   keepDiscovered,
   setupDevice,
   unsetupDevice,
+  renameConfiguredDevice,
   getConfigured,
   getDeviceDiagnostics,
   testDeviceCommand,
@@ -313,6 +314,7 @@ app.post('/api/devices/:id/ignore', requireAdmin, wrap((req) => ignoreDiscovered
 app.post('/api/devices/:id/keep', requireAdmin, wrap((req) => keepDiscovered(String(req.params.id))));
 app.post('/api/devices/:id/setup', requireAdmin, wrap((req) => setupDevice(String(req.params.id), req.body)));
 app.post('/api/devices/:id/unsetup', requireAdmin, wrap((req) => unsetupDevice(String(req.params.id))));
+app.put('/api/devices/:id/name', requireAdmin, wrap((req) => renameConfiguredDevice(String(req.params.id), req.body)));
 // Diagnostics (identity + datapoint table) — on-demand read; registered before :id.
 app.get('/api/devices/:id/diagnostics', wrap((req) => getDeviceDiagnostics(String(req.params.id))));
 app.post('/api/devices/:id/diagnostics/test', requireAdmin, wrap((req) => testDeviceCommand(String(req.params.id), req.body)));
