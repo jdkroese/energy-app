@@ -266,7 +266,7 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
     };
   };
 
-  const { data: scenesData } = usePolling<ScenesResponse>(api.lights.scenes, 0);
+  const { data: scenesData, refetch: refetchScenes } = usePolling<ScenesResponse>(api.lights.scenes, 0);
   const d = data;
 
   const body = (
@@ -313,7 +313,7 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
           )}
 
           {/* Scenes + schedules — manage on/off+dim presets and time-based rules */}
-          <ScenesSection lights={d.devices} canControl={canControl} />
+          <ScenesSection lights={d.devices} canControl={canControl} onScenesChanged={refetchScenes} />
           <LightSchedulesSection lights={d.devices} scenes={scenesData?.scenes ?? []} canControl={canControl} />
         </>
       )}
