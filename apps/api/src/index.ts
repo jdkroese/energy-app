@@ -13,6 +13,7 @@ import {
   setAlertStatus,
 } from './routes/alerts';
 import { getSettings, setWhatsAppNumber, getVoltageMonitor, setVoltageMonitor } from './routes/settings';
+import { getVoltageHistory } from './routes/voltage-history';
 import { getPlan } from './routes/brain';
 import {
   getScenarios,
@@ -230,6 +231,9 @@ app.put(
 // not admin-gated, like /api/alerts/rules + /api/alerts/channels it sits beside).
 app.get('/api/settings/voltage-monitor', wrap(() => getVoltageMonitor()));
 app.patch('/api/settings/voltage-monitor', wrap((req) => setVoltageMonitor(req.body)));
+
+// 48h grid-voltage history (5-min buckets) — the Live tile's chart overlay.
+app.get('/api/voltage/history', wrap(() => getVoltageHistory()));
 
 // ---- Brain (shadow / read-only) ----
 app.get('/api/brain/plan', wrap(() => getPlan()));

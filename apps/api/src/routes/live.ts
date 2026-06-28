@@ -3,6 +3,7 @@ import * as tesla from '../connectors/tesla';
 import { bandInfo } from '../tariff';
 import { config } from '../config';
 import * as history5m from '../history5m';
+import * as voltageHistory from '../voltage-history';
 import { climateSurplusW } from '../control/climate-snapshot';
 import { getMonitoredBreaker } from '../connectors/tuya-voltage';
 
@@ -225,6 +226,15 @@ export async function getLive(): Promise<unknown> {
   recordSample(sample);
   // Persistent 5-minute history (its own file) — fills as /api/live is polled.
   history5m.record(sample);
+  // Persistent 5-minute grid-voltage history (its own file) — only when the
+  // breaker reported a real voltage; the 5-min bucketing dedupes the 10s polls.
+  if (breaker && breaker.voltageV > 0) {
+    voltageHistory.record({
+      voltageV: breaker.voltageV,
+      currentA: breaker.currentA,
+      powerW: breaker.powerW,
+    });
+  }
 
   const tb = bandInfo(new Date());
 

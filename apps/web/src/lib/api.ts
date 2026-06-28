@@ -65,6 +65,7 @@ import type {
   UsersResponse,
   VapidPublicResponse,
   VoltageMonitor,
+  VoltageHistoryResponse,
 } from './types';
 
 /**
@@ -165,6 +166,7 @@ export const api = {
   voltageMonitor: () => getJSON<{ voltageMonitor: VoltageMonitor }>('/api/settings/voltage-monitor'),
   setVoltageMonitor: (patch: Partial<Pick<VoltageMonitor, 'enabled' | 'minV' | 'maxV'>>) =>
     patchJSON<{ voltageMonitor: VoltageMonitor }>('/api/settings/voltage-monitor', patch),
+  voltageHistory: () => getJSON<VoltageHistoryResponse>('/api/voltage/history'),
 
   // alert rules + actions
   setRule: (id: string, enabled: boolean) =>

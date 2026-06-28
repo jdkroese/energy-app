@@ -195,6 +195,21 @@ export interface VoltageMonitor {
   breakerId?: string;
 }
 
+/** One 5-minute grid-voltage history bucket (ts = bucket-start epoch ms). */
+export interface VoltageSample {
+  ts: number;
+  voltageV: number;
+  currentA: number;
+  powerW: number;
+}
+
+/** GET /api/voltage/history — 48h grid-voltage history for the Live tile overlay. */
+export interface VoltageHistoryResponse {
+  samples: VoltageSample[];
+  band: { minV: number; maxV: number };
+  breaker: { id: string; name: string } | null;
+}
+
 export interface SettingsResponse {
   ts: string;
   connections: { name: string; icon: string; tone: string; status: string; detail: string }[];

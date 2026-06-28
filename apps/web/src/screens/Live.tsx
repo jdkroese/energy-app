@@ -6,6 +6,7 @@ import type { HistoryDayResponse, LiveResponse, VoltageMonitor } from '../lib/ty
 import { Card, StatTile, RadialGauge, ProgressBar, Badge, Eyebrow, Icon } from '../components/ui';
 import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
+import { VoltageHistoryOverlay } from '../components/energy/VoltageHistoryOverlay';
 import { TariffBand, DEFAULT_TARIFF_24 } from '../components/energy/TariffBand';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { NotificationsWidget } from '../components/Notifications';
@@ -38,45 +39,84 @@ function dirLabel(dir: string) {
  * when no breaker exposes cur_voltage. The value turns danger-toned when voltage leaves the
  * configured band (polled separately; defaults 190–240 V). Rendered in BOTH viewports.
  */
-function GridVoltageStat({ live, size = 'md' }: { live: LiveResponse; size?: 'sm' | 'md' }) {
+function GridVoltageStat({ live, size = 'md', wide = false }: { live: LiveResponse; size?: 'sm' | 'md'; wide?: boolean }) {
   // Band rarely changes — a slow poll is enough; falls back to the 190–240 V default.
   const { data } = usePolling<{ voltageMonitor: VoltageMonitor }>(api.voltageMonitor, 60_000);
   const band = data?.voltageMonitor ?? { enabled: true, minV: 190, maxV: 240 };
   const b = live.breaker;
+  const [showHistory, setShowHistory] = useState(false);
 
-  // No configured breaker, or a poll that momentarily lacks a voltage reading (0 V):
-  // show a neutral placeholder rather than a red "0 V · out of band".
-  if (!b || b.voltageV <= 0) {
+  // No configured breaker: a neutral, NON-clickable placeholder (no history to show).
+  if (!b) {
     return (
       <StatTile
         size={size}
         label="Grid voltage"
         value="—"
-        unit={b ? 'V' : undefined}
         tone="grid"
         icon={<Icon name="zap" />}
-        footnote={b ? `band ${band.minV}–${band.maxV} V` : 'no breaker configured'}
+        footnote="no breaker configured"
       />
     );
   }
 
-  const outOfBand = b.voltageV < band.minV || b.voltageV > band.maxV;
-  const value = outOfBand ? (
+  // A configured breaker that momentarily lacks a reading (0 V): show "—" but still
+  // let the user open the 48h history (earlier readings may be recorded).
+  const noLive = b.voltageV <= 0;
+  const outOfBand = !noLive && (b.voltageV < band.minV || b.voltageV > band.maxV);
+  const value = noLive ? (
+    '—'
+  ) : outOfBand ? (
     <span style={{ color: 'var(--danger)' }}>{b.voltageV}</span>
   ) : (
     b.voltageV
   );
   const detail = `${b.currentA.toFixed(1)} A · ${b.powerW} W`;
+  const footnote = noLive
+    ? `band ${band.minV}–${band.maxV} V`
+    : outOfBand
+      ? `${detail} · outside ${band.minV}–${band.maxV} V`
+      : `${detail} · band ${band.minV}–${band.maxV} V`;
+
   return (
-    <StatTile
-      size={size}
-      label="Grid voltage"
-      value={value}
-      unit="V"
-      tone="grid"
-      icon={<Icon name="zap" />}
-      footnote={outOfBand ? `${detail} · outside ${band.minV}–${band.maxV} V` : `${detail} · band ${band.minV}–${band.maxV} V`}
-    />
+    <>
+      <button
+        type="button"
+        onClick={() => setShowHistory(true)}
+        aria-label="Show 48-hour voltage history"
+        title="Show 48-hour voltage history"
+        style={{
+          all: 'unset',
+          position: 'relative',
+          display: 'block',
+          width: '100%',
+          boxSizing: 'border-box',
+          cursor: 'pointer',
+          borderRadius: 'var(--radius-lg)',
+          textAlign: 'left',
+        }}
+        className="pwr-voltage-tile"
+      >
+        {/* subtle "view history" affordance, top-right of the tile */}
+        <span
+          aria-hidden
+          className="pwr-voltage-tile__chart"
+          style={{ position: 'absolute', top: 0, right: 0, color: 'var(--text-3)', opacity: 0.7, lineHeight: 0, transition: 'opacity .15s' }}
+        >
+          <Icon name="activity" size={14} />
+        </span>
+        <StatTile
+          size={size}
+          label="Grid voltage"
+          value={value}
+          unit="V"
+          tone="grid"
+          icon={<Icon name="zap" />}
+          footnote={footnote}
+        />
+      </button>
+      {showHistory && <VoltageHistoryOverlay wide={wide} onClose={() => setShowHistory(false)} />}
+    </>
   );
 }
 
@@ -329,7 +369,7 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         {/* Live grid voltage/current/power (#77) — kept on desktop after the right-column
             tile grid was removed in the redesign. */}
         <Card>
-          <GridVoltageStat live={live} />
+          <GridVoltageStat live={live} wide />
         </Card>
       </div>
 
