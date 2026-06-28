@@ -4,7 +4,7 @@ import { usePolling } from '../lib/usePolling';
 import { MOCK_HISTORY } from '../lib/mock';
 import type { HistoryResponse } from '../lib/types';
 import { MAX_BACK, periodLabel } from '../lib/periods';
-import { Card, StatTile, ProgressBar, Badge, SegmentedControl, Eyebrow, Icon } from '../components/ui';
+import { Card, StatTile, ProgressBar, Badge, SegmentedControl, Eyebrow, Icon, ScreenHeader } from '../components/ui';
 import { BarChart, type BarDatum } from '../components/energy/BarChart';
 import { GridBandChart } from '../components/energy/GridBandChart';
 import { PeriodNav } from '../components/energy/PeriodNav';
@@ -235,10 +235,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
 
   return (
     <>
-      <div style={{ padding: '12px 18px 12px' }}>
-        <Eyebrow>Reports</Eyebrow>
-        <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>{periodTitle}</h1>
-      </div>
+      <ScreenHeader eyebrow="Reports" title={periodTitle} />
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
         <SegmentedControl block options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={ctx.range} onChange={ctx.setRange} />

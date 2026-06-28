@@ -13,7 +13,7 @@ import type {
   ControlStatus,
   LiveResponse,
 } from '../lib/types';
-import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Card, StatTile, Modal } from '../components/ui';
+import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Card, StatTile, Modal, ScreenHeader } from '../components/ui';
 import { PlanTimeline } from '../components/energy/PlanTimeline';
 import { StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -391,12 +391,7 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: embedded ? undefined : 1100, margin: embedded ? undefined : '0 auto', width: '100%', padding: embedded ? 0 : wide ? 0 : '8px 14px 22px' }}>
       {/* mobile header — host renders the page header when embedded */}
-      {!wide && !embedded && (
-        <div style={{ padding: '4px 2px 0' }}>
-          <Eyebrow>Live control</Eyebrow>
-          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>Autopilot</h1>
-        </div>
-      )}
+      {!wide && !embedded && <ScreenHeader eyebrow="Live control" title="Autopilot" padding="4px 2px 0" />}
       {planStale && <StaleBanner updatedAt={planAt} />}
 
       {/* tab bar — host renders the tab strip when embedded */}

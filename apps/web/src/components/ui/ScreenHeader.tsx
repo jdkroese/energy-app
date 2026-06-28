@@ -22,6 +22,8 @@ import { Icon } from './Icon';
 export interface ScreenHeaderProps {
   eyebrow?: ReactNode;
   title: ReactNode;
+  /** Optional sub-line under the title (detail screens). */
+  subtitle?: ReactNode;
   /** Trailing slot (avatar / weather pill / per-screen control). */
   right?: ReactNode;
   /** Alias of `right` (TopBar called it `actions`). */
@@ -29,6 +31,8 @@ export interface ScreenHeaderProps {
   /** Optional leading back button (detail screens). */
   onBack?: () => void;
   backLabel?: string;
+  /** Optional decoration between the back button and the title (e.g. an icon badge). */
+  leading?: ReactNode;
   /** Smaller heading (21/600) for nested detail headers. */
   compact?: boolean;
   /** Renders the TopBar chrome (bottom border + desktop padding). */
@@ -42,10 +46,12 @@ export interface ScreenHeaderProps {
 export function ScreenHeader({
   eyebrow,
   title,
+  subtitle,
   right,
   actions,
   onBack,
   backLabel = 'Back',
+  leading,
   compact = false,
   asTopBar = false,
   padding,
@@ -95,9 +101,15 @@ export function ScreenHeader({
           <Icon name="chevron-left" size={18} />
         </button>
       )}
+      {leading}
       <div style={{ minWidth: 0, flex: 1 }}>
         {eyebrow != null && <Eyebrow>{eyebrow}</Eyebrow>}
         <h1 style={h1Style}>{title}</h1>
+        {subtitle != null && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
+            {subtitle}
+          </div>
+        )}
       </div>
       {trailing && (
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14, flex: 'none' }}>{trailing}</div>

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { DeviceDetailResponse, ClimateLever, DeviceWarmth, DeviceView, DevicesResponse, Schedule, SchedulesResponse } from '../lib/types';
-import { Card, Icon, Button, IconButton, Switch } from '../components/ui';
+import { Card, Icon, Button, IconButton, Switch, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import { RoomPicker } from '../components/RoomPicker';
@@ -248,17 +248,19 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* HEADER */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: wide ? 0 : 8 }}>
-        <IconButton variant="solid" aria-label="Back" onClick={() => nav(`/devices?type=${dev.type}`)}><Icon name="chevron-left" size={18} /></IconButton>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h1 style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-.01em', margin: 0 }}>{dev.name}</h1>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {isHeating ? 'Airzone underfloor' : 'Panasonic Etherea'}{dev.installation ? ` · ${dev.installation}` : ''} · {modeWord(curMode, stateOn)}
-          </div>
-        </div>
-        <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (curMode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateOn ? accent : 'var(--text-3)' }}>{stateLabel}</span>
-        <IconButton variant="ghost" aria-label="Refresh" disabled={busy} onClick={() => refetch()}><Icon name="refresh-cw" size={16} /></IconButton>
-      </div>
+      <ScreenHeader
+        compact
+        style={{ paddingTop: wide ? 0 : 8 }}
+        onBack={() => nav(`/devices?type=${dev.type}`)}
+        title={dev.name}
+        subtitle={`${isHeating ? 'Airzone underfloor' : 'Panasonic Etherea'}${dev.installation ? ` · ${dev.installation}` : ''} · ${modeWord(curMode, stateOn)}`}
+        right={
+          <>
+            <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 'var(--radius-pill)', background: stateOn ? (curMode === 'heat' ? 'var(--grid-wash)' : 'var(--solar-wash)') : 'var(--surface-3)', color: stateOn ? accent : 'var(--text-3)' }}>{stateLabel}</span>
+            <IconButton variant="ghost" aria-label="Refresh" disabled={busy} onClick={() => refetch()}><Icon name="refresh-cw" size={16} /></IconButton>
+          </>
+        }
+      />
 
       {stale && <StaleBanner updatedAt={updatedAt} />}
 

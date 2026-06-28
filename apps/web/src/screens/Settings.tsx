@@ -4,7 +4,7 @@ import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
 import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
-import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider } from '../components/ui';
+import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { AlertRulesCard, VoltageMonitorCard } from '../components/Notifications';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
@@ -1589,12 +1589,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
   // page header on desktop); mobile (no TopBar) renders its own header.
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 820, margin: '0 auto', width: '100%', padding: ctx.desktop ? 0 : '8px 14px 22px' }}>
-      {!ctx.desktop && (
-        <div style={{ padding: '4px 2px 0' }}>
-          <Eyebrow>Settings</Eyebrow>
-          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>System</h1>
-        </div>
-      )}
+      {!ctx.desktop && <ScreenHeader eyebrow="Settings" title="System" padding="4px 2px 0" />}
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <SegmentedControl block options={tabs} value={active} onChange={ctx.setSettingsTab} />
       {sections}
