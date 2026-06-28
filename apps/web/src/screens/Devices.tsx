@@ -832,8 +832,9 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   );
 
   if (wide) {
+    // Full-width like every other page (title comes from the AppShell TopBar).
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 880, margin: '0 auto', width: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
         {body}
       </div>
     );
