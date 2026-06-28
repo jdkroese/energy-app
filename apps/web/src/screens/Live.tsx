@@ -44,15 +44,18 @@ function GridVoltageStat({ live, size = 'md' }: { live: LiveResponse; size?: 'sm
   const band = data?.voltageMonitor ?? { enabled: true, minV: 190, maxV: 240 };
   const b = live.breaker;
 
-  if (!b) {
+  // No configured breaker, or a poll that momentarily lacks a voltage reading (0 V):
+  // show a neutral placeholder rather than a red "0 V · out of band".
+  if (!b || b.voltageV <= 0) {
     return (
       <StatTile
         size={size}
         label="Grid voltage"
         value="—"
+        unit={b ? 'V' : undefined}
         tone="grid"
         icon={<Icon name="zap" />}
-        footnote="no breaker configured"
+        footnote={b ? `band ${band.minV}–${band.maxV} V` : 'no breaker configured'}
       />
     );
   }

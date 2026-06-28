@@ -173,7 +173,9 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
   const vm = store.get().voltageMonitor;
   if (vm.enabled) {
     const breaker = await getMonitoredBreaker().catch(() => null);
-    if (breaker && (breaker.voltageV < vm.minV || breaker.voltageV > vm.maxV)) {
+    // Only evaluate a real reading (>0). A poll that momentarily lacks cur_voltage
+    // reads as 0 and must not fire a false "0 V — out of band" alert.
+    if (breaker && breaker.voltageV > 0 && (breaker.voltageV < vm.minV || breaker.voltageV > vm.maxV)) {
       live.push({
         id: 'voltage-out-of-band',
         severity: 'danger',
