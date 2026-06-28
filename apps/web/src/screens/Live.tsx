@@ -307,7 +307,7 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {stale && <StaleBanner updatedAt={null} />}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 14 }}>
         <Card>
           <StatTile label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote="today" />
         </Card>
@@ -322,6 +322,11 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         </Card>
         <Card>
           <StatTile label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
+        </Card>
+        {/* Live grid voltage/current/power (#77) — kept on desktop after the right-column
+            tile grid was removed in the redesign. */}
+        <Card>
+          <GridVoltageStat live={live} />
         </Card>
       </div>
 
