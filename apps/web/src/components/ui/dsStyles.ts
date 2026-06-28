@@ -182,6 +182,10 @@ const CSS = `
 .pwr-seg__opt[aria-selected="true"]{ background:var(--surface-4); color:var(--text-1); box-shadow:var(--shadow-1), var(--hairline-top); }
 .pwr-seg__opt:focus-visible{ outline:none; box-shadow:var(--focus-ring); }
 .pwr-seg__opt svg{ width:15px; height:15px; }
+.pwr-seg__label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.pwr-seg__dot{ width:7px; height:7px; border-radius:50%; flex:none; }
+.pwr-seg__count{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:var(--fs-xs); color:var(--text-3); flex:none; }
+.pwr-seg__opt[aria-selected="true"] .pwr-seg__count{ color:var(--text-2); }
 .pwr-seg--sm .pwr-seg__opt{ height:26px; padding:0 10px; font-size:var(--fs-xs); }
 
 /* ---- Select ---- */
