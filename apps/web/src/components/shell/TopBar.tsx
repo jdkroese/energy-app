@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Icon } from '../ui/Icon';
 import { Eyebrow } from '../ui/Eyebrow';
+import { ThemeToggle } from './ThemeToggle';
 
 type Props = {
   eyebrow: string;
@@ -18,6 +19,7 @@ export function TopBar({ eyebrow, title, actions }: Props) {
       </div>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
         {actions}
+        <ThemeToggle />
         <div
           style={{
             display: 'flex',
