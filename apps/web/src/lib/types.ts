@@ -22,6 +22,10 @@ export interface LiveResponse {
     backupHours: number;
     island: boolean;
   };
+  /** Surplus the climate rule gates on (PV − load − battery intake headroom), kW. May be negative. */
+  climateSurplusKw?: number;
+  /** False when a battery's live read is missing — the surplus rule will not START this tick. */
+  batteryDataComplete?: boolean;
   tariff: { band: Band; rateEur: number; nextBand: Band; minsToNext: number };
   today: {
     producedKwh: number;

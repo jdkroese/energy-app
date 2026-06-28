@@ -26,10 +26,6 @@ function batterySoc(live: LiveResponse | null): number | null {
   if (!live) return null;
   return Math.round((live.sonnen.soc * 9.2 + live.tesla.soc * 27) / (9.2 + 27));
 }
-function surplusKw(live: LiveResponse | null): number {
-  if (!live) return 0;
-  return live.grid.dir === 'exporting' ? Math.round(live.grid.kw * 10) / 10 : 0;
-}
 
 function Tok({ children, color }: { children: ReactNode; color?: string }) {
   return <span className="pwr-mono" style={{ fontSize: 12, background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 7, padding: '3px 8px', color: color ?? 'var(--text-1)' }}>{children}</span>;
@@ -90,7 +86,10 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
   const tone = heating ? 'var(--grid)' : 'var(--battery)';
   const wash = heating ? 'var(--grid-wash)' : 'var(--battery-wash)';
 
-  const surplus = surplusKw(live);
+  const surplus = live?.climateSurplusKw ?? 0;                 // real rule surplus (kW), may be negative
+  const batteryDataOk = live?.batteryDataComplete ?? true;
+  const startThresholdKw = (p.startThresholdW ?? 800) / 1000;
+  const hasSurplus = batteryDataOk && surplus > startThresholdKw; // the rule would actually act
   const soc = batterySoc(live);
   // Rooms that QUALIFY for this direction right now: cooling wants rooms ABOVE the warm
   // limit, heating wants rooms BELOW the cold floor. Enrolment is per-direction
@@ -146,9 +145,11 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
       <div style={{ background: 'var(--surface-2)', border: '1px solid rgba(46,230,160,0.2)', borderRadius: 'var(--radius-lg)', padding: '12px 14px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <span className="pwr-eyebrow" style={{ color: tone }}>Live preview · right now</span>
-          <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>surplus <span style={{ color: surplus > 0 ? 'var(--solar)' : 'var(--text-3)' }}>+{surplus} kW</span>{soc != null ? ` · batteries ${soc}%` : ''}</span>
+          <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>surplus <span style={{ color: hasSurplus ? 'var(--solar)' : 'var(--text-3)' }}>{surplus > 0 ? '+' : ''}{surplus} kW</span>{soc != null ? ` · batteries ${soc}%` : ''}</span>
         </div>
-        {qualifying.length > 0 ? (
+        {!batteryDataOk ? (
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>Battery data offline — rule paused.</div>
+        ) : hasSurplus && qualifying.length > 0 ? (
           <>
             <div style={{ fontSize: 12.5, marginBottom: 8 }}>{qualifying.length} room{qualifying.length > 1 ? 's' : ''} qualify — would {verb} to {targetC.toFixed(1)}°:</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -157,9 +158,9 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
               ))}
             </div>
           </>
-        ) : surplus <= 0 ? (
+        ) : !hasSurplus ? (
           <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
-            No solar surplus right now — rule is idle.{excluded.length > 0 ? ` (${excluded.length} room${excluded.length > 1 ? 's' : ''} ${heating ? 'below' : 'above'} ${triggerC.toFixed(1)}°, but not included in automation.)` : ''}
+            No spare solar right now — rule is idle.{offTrigger.length > 0 ? ` (${offTrigger.length} room${offTrigger.length > 1 ? 's' : ''} ${heating ? 'below' : 'above'} ${triggerC.toFixed(1)}°, but no spare solar to ${verb}.)` : ''}
           </div>
         ) : excluded.length > 0 ? (
           <>
@@ -246,7 +247,8 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
   const spreadOk = spread >= p.minSpreadEur;
 
   const soc = batterySoc(live);
-  const surplus = surplusKw(live);
+  // Grid-export surplus (kW) — what this battery rule reasons about (solar spilling to grid).
+  const surplus = live && live.grid.dir === 'exporting' ? Math.round(live.grid.kw * 10) / 10 : 0;
   const exporting = surplus > 0;
 
   // Live preview — mirror the coordinator's gating (band isn't in /live, so we describe

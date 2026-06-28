@@ -21,10 +21,15 @@ export interface RichClimateSnapshot extends ClimateSnapshot {
   surplusW: number;
   /** Combined battery SoC headroom (%). */
   batteryHeadroomPct: number;
+  /**
+   * false when a configured battery's live read is missing — surplus starts are
+   * suppressed (the headroom term would be under-counted ⇒ surplus overstated).
+   */
+  batteryDataComplete: boolean;
 }
 
 /** Approximate how much charge power (W) the batteries can still absorb. */
-function batteryIntakeHeadroomW(
+export function batteryIntakeHeadroomW(
   s: sonnen.SonnenNormalized | null,
   t: tesla.TeslaNormalized | null,
 ): number {
@@ -33,6 +38,16 @@ function batteryIntakeHeadroomW(
   if (s && s.soc < 98) w += config.assets.sonnenMaxKw * 1000 * Math.min(1, (98 - s.soc) / 20);
   if (t && t.soc < 98) w += config.assets.teslaMaxKw * 1000 * Math.min(1, (98 - t.soc) / 20);
   return Math.max(0, w);
+}
+
+/** The surplus (W) the surplus rule reasons about: PV − house load − battery intake headroom. */
+export function climateSurplusW(
+  s: sonnen.SonnenNormalized | null,
+  t: tesla.TeslaNormalized | null,
+): number {
+  const pvW = (t ? t.solarKw * 1000 : 0) + (s ? s.productionW : 0);
+  const houseLoadW = t ? t.loadKw * 1000 : s ? s.consumptionW : 0;
+  return Math.round(pvW - houseLoadW - batteryIntakeHeadroomW(s, t));
 }
 
 export async function takeClimateSnapshot(): Promise<RichClimateSnapshot> {
@@ -54,8 +69,9 @@ export async function takeClimateSnapshot(): Promise<RichClimateSnapshot> {
   if (t) gridImportKw = Math.max(0, t.gridKw);
   else if (s) gridImportKw = Math.max(0, -s.gridFeedInW / 1000);
 
-  const headroomW = batteryIntakeHeadroomW(s, t);
-  const surplusW = pvW - houseLoadW - headroomW;
+  // Compute surplus via the shared helper so the snapshot and the /api/live route
+  // can never drift (both = PV − houseLoad − battery intake headroom).
+  const surplusW = climateSurplusW(s, t);
 
   const socs: number[] = [];
   if (s) socs.push(s.soc);
@@ -71,5 +87,9 @@ export async function takeClimateSnapshot(): Promise<RichClimateSnapshot> {
     houseLoadW: Math.round(houseLoadW),
     surplusW: Math.round(surplusW),
     batteryHeadroomPct: Math.round(100 - avgSoc),
+    // This deployment runs BOTH a Sonnen and a Tesla; the connectors expose no
+    // isConfigured(), so "complete" requires both live reads. A missing read means
+    // the headroom term is under-counted ⇒ surplus would be overstated.
+    batteryDataComplete: s !== null && t !== null,
   };
 }
