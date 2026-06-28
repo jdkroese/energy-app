@@ -111,6 +111,17 @@ import {
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
 import {
+  getIrrigation,
+  getIrrigationZone,
+  commandIrrigation,
+  setIrrigationSettings,
+  getRainbirdIntegration,
+  testRainbird,
+  setRainbird,
+  disconnectRainbird,
+} from './routes/irrigation';
+import type { IrrigationLever } from './control/irrigation-execute';
+import {
   getDiscovered,
   ignoreDiscovered,
   keepDiscovered,
@@ -636,6 +647,44 @@ app.put(
     return setAirzone(b.host);
   }),
 );
+
+// ---- Rain Bird irrigation ----
+// Reads any-authed; commands + connect are admin-gated. Commands ALSO require the
+// Devices layer to be ARMED (enforced in issueIrrigation) — no watering when disarmed.
+app.get('/api/irrigation', wrap(() => getIrrigation()));
+// Literal sub-paths registered before the bare :id so they aren't captured as an :id.
+app.put(
+  '/api/irrigation/:id/settings',
+  requireAdmin,
+  wrap((req) => setIrrigationSettings(String(req.params.id), (req.body ?? {}) as never)),
+);
+app.post(
+  '/api/irrigation/:id/command',
+  requireAdmin,
+  wrap((req) => {
+    const body = (req.body ?? {}) as { lever?: string; value?: unknown };
+    return commandIrrigation(String(req.params.id), body.lever as IrrigationLever, body.value);
+  }),
+);
+app.get('/api/irrigation/:id', wrap((req) => getIrrigationZone(String(req.params.id))));
+// Integration: read-only probe (any signed-in user) + admin connect/disconnect.
+app.get('/api/integrations/rainbird', wrap(() => getRainbirdIntegration()));
+app.post(
+  '/api/integrations/rainbird/test',
+  wrap((req) => {
+    const b = (req.body ?? {}) as { host?: string; password?: string };
+    return testRainbird(b.host, b.password);
+  }),
+);
+app.put(
+  '/api/integrations/rainbird',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { host?: string; password?: string };
+    return setRainbird(b.host, b.password);
+  }),
+);
+app.delete('/api/integrations/rainbird', requireAdmin, wrap(() => disconnectRainbird()));
 
 // ---- Schedules CRUD (admin for writes) ----
 app.get('/api/schedules', wrap(() => listSchedules()));

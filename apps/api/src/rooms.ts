@@ -15,6 +15,7 @@
 import * as intesis from './connectors/intesis';
 import * as airzone from './connectors/airzone';
 import * as panasonic from './connectors/panasonic';
+import * as rainbird from './connectors/rainbird';
 import type { ClimateUnit } from './connectors/intesis';
 import * as tuya from './connectors/tuya';
 import { isLight, normalizeLight } from './connectors/tuya-lights';
@@ -25,7 +26,7 @@ import type { Room } from './store';
 
 /** The coarse kind of a device, for the room-level All-off scoping. `generic` carries
  *  its capability set so the all-off can find an off/power switch + skip sensitive ones. */
-export type RoomDeviceKind = 'climate' | 'light' | 'blind' | 'generic';
+export type RoomDeviceKind = 'climate' | 'light' | 'blind' | 'generic' | 'irrigation';
 
 export interface RoomDevice {
   id: string;
@@ -111,6 +112,26 @@ export async function enumerateDevices(): Promise<RoomDevice[]> {
       }
     } catch {
       /* connector unreachable — skip its fleet */
+    }
+  }
+
+  // Irrigation (Rain Bird) zones — soft-fail so an unreachable controller doesn't
+  // blank the rest. Each zone seeds/assigns a room like any other device; its raw
+  // location falls back to the zone name (no inherent room) so the seed leaves it
+  // Unassigned until the owner places it.
+  if (rainbird.isConfigured()) {
+    try {
+      for (const z of await rainbird.getZones()) {
+        out.push({
+          id: z.id,
+          name: settings[z.id]?.name ?? z.name,
+          kind: 'irrigation',
+          rawLocation: settings[z.id]?.room ?? '',
+          power: z.active,
+        });
+      }
+    } catch {
+      /* controller unreachable — skip its zones */
     }
   }
 

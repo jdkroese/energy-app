@@ -11,7 +11,10 @@
  * route), swap `classifyDevice` to read `d.type` directly.
  */
 
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'blinds' | 'switching' | 'speakers';
+// 'irrigation' is a recognized fleet type but has NO Devices-hub tab — Rain Bird
+// zones live on the dedicated /irrigation screen (run/stop levers, not climate). It's
+// in the union so classifyDevice can tag + EXCLUDE them from the climate hub.
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'blinds' | 'switching' | 'speakers' | 'irrigation';
 
 export interface DeviceTypeMeta {
   type: DeviceType;
@@ -86,6 +89,10 @@ export function classifyDevice(d: { type?: string | null; installation?: string 
     case 'cooling':
     case 'lighting':
       return d.type;
+    case 'irrigation':
+      // Rain Bird zones merge into /api/devices but are surfaced on the dedicated
+      // /irrigation screen — tag them so the climate hub filters can exclude them.
+      return 'irrigation';
     case 'circuit':
     case 'switching':
       return 'switching';
