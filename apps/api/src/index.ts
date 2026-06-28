@@ -122,7 +122,7 @@ import {
   setSonosIntegration,
   rescanSonos,
 } from './routes/alarm';
-import { serveAlarmClip } from './routes/media';
+import { serveAlarmClip, startMediaLanListener } from './routes/media';
 import { resumeAlarm } from './control/alarm';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
@@ -593,6 +593,11 @@ startSolarModelScheduler();
 const server = app.listen(config.port, config.host, () => {
   console.log(`[energy-api] http://${config.host}:${config.port}  (env=${config.env})`);
 });
+
+// The main API binds 127.0.0.1 behind nginx, so the Sonos speakers can't reach it directly
+// to fetch the alarm siren. Start a dedicated LAN listener (0.0.0.0:MEDIA_PORT) that serves
+// ONLY the un-authed siren clip — makes the alarm work over the LAN with zero config.
+startMediaLanListener();
 
 // Graceful shutdown: on SIGTERM/SIGINT, switch off any units the surplus rule
 // started BEFORE we exit (while still armed, so issueClimate is permitted) — so a
