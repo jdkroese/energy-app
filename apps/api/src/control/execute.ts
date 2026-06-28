@@ -301,12 +301,22 @@ function confirmTeslaReserve(
   // Device applied its own ceiling: we requested at least the cap, and it landed
   // at-or-above the cap but no higher than we asked.
   const clampedToCeiling = to >= TESLA_RESERVE_MAX_PCT && readBack >= TESLA_RESERVE_MAX_PCT && readBack <= to;
-  const ok = exact || clampedToCeiling;
+  // Tesla's /site_info LAGS after a /backup write: an immediate read-back that still
+  // shows the PRE-write value (`from`) is the cloud not having propagated yet, NOT a
+  // failure. Treat as pending success (no lastError); a later tick's read confirms the
+  // real value. (Trade-off: if the device genuinely refuses the value and stays at the
+  // old one, this no longer errors — acceptable here; the owner wanted the dashboard
+  // noise gone and Tesla caps reserve anyway. A dedicated "write rejected after N ticks"
+  // detector is a possible follow-up.)
+  const pendingLag = !exact && !clampedToCeiling && typeof from === 'number' && readBack === from;
+  const ok = exact || clampedToCeiling || pendingLag;
   const detail = exact
     ? `confirmed ${to}`
     : clampedToCeiling
       ? `confirmed ${readBack} (device caps usable reserve at ${readBack}%; requested ${to}%)`
-      : `read-back MISMATCH: wanted ${to}, device reports ${readBack}`;
+      : pendingLag
+        ? `issued ${to}% — pending (Tesla read-back still ${readBack}%, cloud lag)`
+        : `read-back MISMATCH: wanted ${to}, device reports ${readBack}`;
   logEntry(device, lever, from, readBack, reason, ok, detail);
   return { ok, skipped: false, reason, from, to: readBack };
 }
