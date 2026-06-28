@@ -267,6 +267,38 @@ export function getSpecifications(id: string): Promise<TuyaSpec> {
   );
 }
 
+// ---- Device identity / network (diagnostics) --------------------------------
+
+/** Device detail — carries the LAN ip, model and uuid. Cached 5 min (ip can move). */
+export interface TuyaDeviceDetail {
+  id?: string;
+  ip?: string;
+  lat?: string;
+  lon?: string;
+  model?: string;
+  uuid?: string;
+  time_zone?: string;
+}
+export function getDeviceDetail(id: string): Promise<TuyaDeviceDetail> {
+  return cached(`tuya.detail.${id}`, 300_000, () =>
+    request<TuyaDeviceDetail>('GET', `/v1.0/devices/${id}`),
+  );
+}
+
+/** Factory infos — the device's hardware MAC + serial. Cached 1h (immutable). */
+export interface TuyaFactoryInfo {
+  id: string;
+  uuid?: string;
+  sn?: string;
+  mac?: string;
+}
+export function getFactoryInfos(ids: string[]): Promise<TuyaFactoryInfo[]> {
+  const q = encodeURIComponent(ids.join(','));
+  return cached(`tuya.factory.${q}`, 3_600_000, () =>
+    request<TuyaFactoryInfo[]>('GET', `/v1.0/devices/factory-infos?device_ids=${q}`),
+  );
+}
+
 // ---- Discovery helpers (for the Settings status panel) ----------------------
 
 /** Human label per Tuya category code, grouped by the app's device-type buckets. */

@@ -965,6 +965,37 @@ export interface CustomTypesResponse {
   customDeviceTypes: CustomDeviceType[];
 }
 
+/** A single datapoint row in the diagnostics table. */
+export interface DiagnosticDp {
+  dp: string;
+  kind: CapabilityKind;
+  label: string;
+  readOnly: boolean;
+  value: unknown;
+}
+
+/** Device identity + network + datapoint table, for debugging control issues. */
+export interface DeviceDiagnostics {
+  id: string;
+  name: string;
+  category: string;
+  productName: string | null;
+  online: boolean;
+  ip: string | null;
+  mac: string | null;
+  typeId: string | null;
+  /** For typeId 'lighting': the DP the on/off toggle + scenes/schedules drive. */
+  primarySwitchDp: string | null;
+  dps: DiagnosticDp[];
+}
+
+export interface DeviceDiagnosticsResponse {
+  ts: string;
+  connected: boolean;
+  fleetError?: string | null;
+  device: DeviceDiagnostics | null;
+}
+
 export type DiscoveredConfidence = 'high' | 'monitor' | 'review';
 
 export interface DiscoveredDevice {

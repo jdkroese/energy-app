@@ -22,6 +22,7 @@ import {
   type Capability,
 } from '../connectors/tuya-inference';
 import { buildGenericCommands, readLiveValue, type GenericCommandInput } from '../connectors/tuya-generic';
+import { resolveConfiguredLightCaps } from '../connectors/tuya-configured-lights';
 import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import * as store from '../store';
 
@@ -244,6 +245,77 @@ export async function getConfigured(): Promise<unknown> {
   );
 
   return { ts: new Date().toISOString(), connected: true, fleetError: null, devices, customDeviceTypes: onboarding.customDeviceTypes };
+}
+
+// ---- Diagnostics ------------------------------------------------------------
+
+export interface DeviceDiagnostics {
+  id: string;
+  name: string;
+  category: string;
+  productName: string | null;
+  online: boolean;
+  /** LAN ip + hardware MAC (best-effort; null when Tuya doesn't return them). */
+  ip: string | null;
+  mac: string | null;
+  /** The device's assigned typeId, when it's a set-up device. */
+  typeId: string | null;
+  /** For typeId 'lighting': the DP the on/off toggle + scenes/schedules actually drive. */
+  primarySwitchDp: string | null;
+  /** Every datapoint the device exposes — code, kind, current value, writable flag. */
+  dps: Array<{ dp: string; kind: Capability['kind']; label: string; readOnly: boolean; value: unknown }>;
+}
+
+/**
+ * GET /api/devices/:id/diagnostics — identity + network + the full datapoint table for
+ * a Tuya device, for debugging control issues (which DP the on/off drives, what the
+ * device actually reports). On-demand (not polled); ip/mac are best-effort.
+ */
+export async function getDeviceDiagnostics(id: string): Promise<unknown> {
+  const deviceId = String(id ?? '').trim();
+  if (!deviceId) throw badInput('device id required');
+  if (!tuya.isConfigured()) return { ts: new Date().toISOString(), connected: false, device: null };
+
+  let all: TuyaDevice[];
+  try {
+    all = await tuya.getDevices();
+  } catch (e) {
+    return { ts: new Date().toISOString(), connected: true, fleetError: (e as Error).message, device: null };
+  }
+  const d = all.find((x) => x.id === deviceId);
+  if (!d) return { ts: new Date().toISOString(), connected: true, fleetError: null, device: null };
+
+  const spec = await specFor(deviceId);
+  const cfg = store.get().deviceOnboarding.configured[deviceId];
+  const caps = applyOverrides(deriveCapabilities(d, spec), cfg?.capOverrides);
+  const statusMap = new Map(d.status.map((s) => [s.code, s.value]));
+
+  // Best-effort network identity — never let a missing field fail the call.
+  let ip: string | null = null;
+  let mac: string | null = null;
+  try { ip = (await tuya.getDeviceDetail(deviceId)).ip ?? null; } catch { /* ignore */ }
+  try { mac = (await tuya.getFactoryInfos([deviceId]))[0]?.mac ?? null; } catch { /* ignore */ }
+
+  const device: DeviceDiagnostics = {
+    id: d.id,
+    name: cfg?.name ?? d.name,
+    category: d.category,
+    productName: d.productName ?? null,
+    online: d.online,
+    ip,
+    mac,
+    typeId: cfg?.typeId ?? null,
+    primarySwitchDp:
+      cfg?.typeId === 'lighting' ? resolveConfiguredLightCaps(d, cfg, spec).powerDp?.dp ?? null : null,
+    dps: caps.map((c) => ({
+      dp: c.dp,
+      kind: c.kind,
+      label: c.label,
+      readOnly: c.readOnly,
+      value: statusMap.get(c.dp) ?? null,
+    })),
+  };
+  return { ts: new Date().toISOString(), connected: true, fleetError: null, device };
 }
 
 // ---- Generic capability command ---------------------------------------------
