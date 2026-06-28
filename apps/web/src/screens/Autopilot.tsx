@@ -331,6 +331,48 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
+  // Summary control grid (armed state / battery autopilot / solar / next move) — rendered
+  // BELOW the KPI row on the Summary tab (see the summary section).
+  const controlGrid = (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      {/* cell 1 — armed state + what it means */}
+      <div style={{ background: at.live ? at.wash : 'var(--surface-2)', border: `1px solid ${at.live ? at.c : 'transparent'}`, borderRadius: 12, padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ position: 'relative', width: 10, height: 10, flex: 'none' }}>
+            <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 8px ${at.c}` : 'none' }} />
+            {at.live && <span style={{ position: 'absolute', inset: -4, borderRadius: '50%', background: at.c, opacity: 0.5, animation: 'pwr-pulse 1.8s var(--ease-out) infinite' }} />}
+          </span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13.5, letterSpacing: '.03em', color: at.c, flex: 1, minWidth: 0 }}>{!status ? 'CONNECTING…' : at.label === 'OFF' ? 'DISARMED' : `${at.label} — running`}</span>
+          {isAdmin && armed && <Button size="sm" variant="danger" onClick={onKill}>Disarm</Button>}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
+          {armed
+            ? 'Power is sending live commands to your Sonnen + Tesla — guardrails stay enforced.'
+            : 'Read-only: no commands reach your batteries. Arm it in Settings to let Power control them.'}
+        </div>
+      </div>
+
+      {/* cell 2 — battery autopilot */}
+      <StatusCell icon="cpu" name="Battery autopilot" sub="Sonnen + Tesla authority" label={sysLabel} tone={at.label === 'OFF' ? 'text-3' : at.label === 'MANUAL' ? 'battery' : 'solar'} dot={at.live} />
+
+      {/* cell 3 — solar */}
+      <StatusCell icon="sun" name="Solar self-consumption" sub={`cloud-adjusted · ~${solarNow.toFixed(1)} kW · ${plan.weather.cloudAvgPct}% cloud`} label={armed ? sysLabel : 'Producing'} tone="solar" dot />
+
+      {/* cell 4 — next move */}
+      {nextAction && (
+        <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <Icon name={nextAction.icon} size={16} color="var(--battery)" />
+            <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--text-3)', flex: 1 }}>Next move</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--battery)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>{hhmm(nextAction.h)} · {nextRel}</span>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{nextAction.title}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>{nextAction.why}</div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1100, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px' }}>
       {/* mobile header */}
@@ -355,47 +397,10 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
         onChange={(v) => setTab(v as TabKey)}
       />
 
-      {/* consolidated control block — compact 2×2 on Summary, slim armed strip elsewhere */}
-      <div style={{ borderRadius: 'var(--radius-card)', border: '1px solid var(--border-1)', background: 'var(--surface-1)', padding: 12 }}>
-        {tab === 'summary' ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            {/* cell 1 — armed state + what it means */}
-            <div style={{ background: at.live ? at.wash : 'var(--surface-2)', border: `1px solid ${at.live ? at.c : 'transparent'}`, borderRadius: 12, padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ position: 'relative', width: 10, height: 10, flex: 'none' }}>
-                  <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 8px ${at.c}` : 'none' }} />
-                  {at.live && <span style={{ position: 'absolute', inset: -4, borderRadius: '50%', background: at.c, opacity: 0.5, animation: 'pwr-pulse 1.8s var(--ease-out) infinite' }} />}
-                </span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13.5, letterSpacing: '.03em', color: at.c, flex: 1, minWidth: 0 }}>{!status ? 'CONNECTING…' : at.label === 'OFF' ? 'DISARMED' : `${at.label} — running`}</span>
-                {isAdmin && armed && <Button size="sm" variant="danger" onClick={onKill}>Disarm</Button>}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
-                {armed
-                  ? 'Power is sending live commands to your Sonnen + Tesla — guardrails stay enforced.'
-                  : 'Read-only: no commands reach your batteries. Arm it in Settings to let Power control them.'}
-              </div>
-            </div>
-
-            {/* cell 2 — battery autopilot */}
-            <StatusCell icon="cpu" name="Battery autopilot" sub="Sonnen + Tesla authority" label={sysLabel} tone={at.label === 'OFF' ? 'text-3' : at.label === 'MANUAL' ? 'battery' : 'solar'} dot={at.live} />
-
-            {/* cell 3 — solar */}
-            <StatusCell icon="sun" name="Solar self-consumption" sub={`cloud-adjusted · ~${solarNow.toFixed(1)} kW · ${plan.weather.cloudAvgPct}% cloud`} label={armed ? sysLabel : 'Producing'} tone="solar" dot />
-
-            {/* cell 4 — next move */}
-            {nextAction && (
-              <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <Icon name={nextAction.icon} size={16} color="var(--battery)" />
-                  <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--text-3)', flex: 1 }}>Next move</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--battery)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>{hhmm(nextAction.h)} · {nextRel}</span>
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{nextAction.title}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>{nextAction.why}</div>
-              </div>
-            )}
-          </div>
-        ) : (
+      {/* armed strip — slim status row at the top on non-summary tabs (on Summary the
+          control block is rendered below the KPI row instead) */}
+      {tab !== 'summary' && (
+        <div style={{ borderRadius: 'var(--radius-card)', border: '1px solid var(--border-1)', background: 'var(--surface-1)', padding: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
             <span style={{ position: 'relative', width: 11, height: 11, flex: 'none' }}>
               <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 9px ${at.c}` : 'none' }} />
@@ -407,15 +412,8 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
             </div>
             {isAdmin && armed && <Button size="sm" variant="danger" iconLeft={<Icon name="power-off" />} onClick={onKill}>Disarm</Button>}
           </div>
-        )}
-
-        {status?.lastError && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, padding: '8px 11px', borderRadius: 'var(--radius-md)', background: 'var(--danger-wash)', color: 'var(--danger)', fontSize: 12.5 }}>
-            <Icon name="alert-octagon" size={15} />
-            <span><strong>Last error:</strong> {status.lastError}</span>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* ============================= SUMMARY ============================= */}
       {tab === 'summary' && (
@@ -461,6 +459,11 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
             <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="P1 avoided" value={plan.projected.p1AvoidedKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="trending-down" />} footnote="moved to P3" /></Card>
             <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Free climatization" value={plan.projected.freeClimatizationKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="snowflake" />} footnote="surplus → HVAC" /></Card>
             <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Projected savings" value={`€${plan.projected.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs vendor default" /></Card>
+          </div>
+
+          {/* control block — armed state + autopilot + solar + next move (moved below the KPI row) */}
+          <div style={{ borderRadius: 'var(--radius-card)', border: '1px solid var(--border-1)', background: 'var(--surface-1)', padding: 12 }}>
+            {controlGrid}
           </div>
 
           {/* today's moves + why now */}
