@@ -23,13 +23,14 @@ function niceCeil(n: number): number {
   return nice * base;
 }
 
+const SWEEP_DEG = 200;
+
 /** Point on the arc at fraction t (0→start, 1→end) of a ~200° sweep. */
 function arcPoint(cx: number, cy: number, r: number, t: number): [number, number] {
-  // Sweep from 170° (lower-left) clockwise through the top to 10° (lower-right):
-  // total ≈ 200° of arc, drawn going down to the right.
-  const startDeg = 170;
-  const sweepDeg = 200;
-  const deg = startDeg + sweepDeg * t;
+  // Rainbow arc over the TOP, centred on 12 o'clock: lower-left (t=0) up over the
+  // top (t=0.5) down to lower-right (t=1). The math angle decreases 190°→-10°, which
+  // is clockwise on screen (y points down), so the arc never dips through the bottom.
+  const deg = 190 - SWEEP_DEG * t;
   const rad = (deg * Math.PI) / 180;
   return [cx + r * Math.cos(rad), cy - r * Math.sin(rad)];
 }
@@ -37,8 +38,9 @@ function arcPoint(cx: number, cy: number, r: number, t: number): [number, number
 function arcPath(cx: number, cy: number, r: number, from: number, to: number): string {
   const [x1, y1] = arcPoint(cx, cy, r, from);
   const [x2, y2] = arcPoint(cx, cy, r, to);
-  const large = to - from > 0.5 ? 1 : 0;
-  // sweep-flag 1 = clockwise in SVG's y-down space (our angle decreases visually).
+  // large-arc-flag must reflect the ACTUAL angular span, not a fixed 0.5 fraction.
+  const large = (to - from) * SWEEP_DEG > 180 ? 1 : 0;
+  // sweep-flag 1 = clockwise in SVG's y-down space (our angle decreases).
   return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
 }
 
