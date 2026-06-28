@@ -255,6 +255,11 @@ export interface ControlState {
   arbitrageLog: ArbitrageEvent[];
   /** Cumulative tariff-arbitrage headline stats (advisory vs active). */
   arbitrageStats: ArbitrageStats;
+  /** One-time migration flag: when the Sonnen-first discharge actuation changed (load-following
+   *  + Tesla backup hold, replacing the reserve-raise hold), the rule is forced back to SHADOW
+   *  once so the new actuation re-validates before going live. Set true after that runs; the
+   *  user's authority toggle is then respected thereafter. */
+  dischargeV2Shadowed?: boolean;
 }
 
 /** Max in-state arbitrage events kept (the JSONL file is the unbounded durable record). */
@@ -886,6 +891,7 @@ export function defaultControl(): ControlState {
     soakExport: defaultSoakExport(),
     arbitrageLog: [],
     arbitrageStats: defaultArbitrageStats(),
+    dischargeV2Shadowed: false,
   };
 }
 
@@ -1455,7 +1461,7 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
  */
 function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState): ControlState {
   if (!p || typeof p !== 'object') return base;
-  return {
+  const result: ControlState = {
     armed: FORCE_DISARM_ON_BOOT ? false : typeof p.armed === 'boolean' ? p.armed : base.armed,
     mode: FORCE_DISARM_ON_BOOT ? 'off' : isControlMode(p.mode) ? p.mode : base.mode,
     updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
@@ -1468,7 +1474,17 @@ function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState
       ? p.arbitrageLog.slice(-ARBITRAGE_LOG_RING_MAX)
       : base.arbitrageLog,
     arbitrageStats: hydrateArbitrageStats(p.arbitrageStats, base.arbitrageStats),
+    dischargeV2Shadowed: typeof p.dischargeV2Shadowed === 'boolean' ? p.dischargeV2Shadowed : false,
   };
+  // ONE-TIME migration: the Sonnen-first discharge actuation changed materially
+  // (load-following force-discharge + Tesla backup hold, replacing the reserve-raise).
+  // Force the rule back to SHADOW once so the new actuation re-validates before going
+  // live, even if the persisted authority was 'auto'. Runs exactly once (flag flips true).
+  if (!result.dischargeV2Shadowed) {
+    result.batteryPriority.dischargeSonnenFirst.authority = 'shadow';
+    result.dischargeV2Shadowed = true;
+  }
+  return result;
 }
 
 function hydrateArbitrageStats(

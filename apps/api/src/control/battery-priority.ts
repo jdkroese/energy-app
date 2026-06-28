@@ -4,10 +4,13 @@
 //
 // Two policies, both aimed at keeping the Tesla (the only battery with a backup
 // feature) full for outages:
-//   • dischargeSonnenFirst — when the house is drawing, HOLD the Tesla (raise its
-//     backup reserve to its current SoC so it won't discharge) so the Sonnen
-//     covers the load first. Release the Tesla once the Sonnen is depleted OR the
-//     grid import shows the Sonnen can't keep up beyond the throughput cap.
+//   • dischargeSonnenFirst — when the house is drawing, the coordinator force-
+//     discharges the Sonnen to cover the WHOLE house draw (load-following) and puts
+//     the Tesla in `backup` mode, so the Sonnen supplies everything and the Tesla
+//     idles and HOLDS its charge. This plan only decides WHEN to hold (holdTesla):
+//     release the Tesla once the Sonnen is depleted OR the grid import shows the
+//     Sonnen can't keep up beyond the throughput cap. (The old mechanism — raising
+//     the Tesla's backup reserve to its SoC — was unreliable and is gone.)
 //   • chargeTeslaFirst — when there's solar surplus, IDLE the Sonnen (manual 0 W)
 //     so all surplus charges the Tesla first and restores backup capacity. Release
 //     the Sonnen once the Tesla is full OR the surplus exceeds the throughput cap.
@@ -25,9 +28,13 @@ export interface DischargePlan {
   /** Rule is enabled. */
   active: boolean;
   authority: BatteryPriorityAuthority;
-  /** Hold the Tesla (raise reserve to its SoC) so the Sonnen discharges first. */
+  /** Hold the Tesla so the Sonnen discharges first. When true, the coordinator force-
+   *  discharges the Sonnen to cover the whole house draw and sets the Tesla to `backup`
+   *  mode, so the Tesla idles and holds its charge. */
   holdTesla: boolean;
-  /** Reserve % to set when holding (else null — leave at the scenario floor). */
+  /** @deprecated Unused since the load-following + Tesla-backup rework. The hold no longer
+   *  raises the Tesla reserve (that write was unreliable and capped at 80%). Kept on the
+   *  type to minimise churn; always null. */
   reserveHoldPct: number | null;
   reason: string;
 }
@@ -46,14 +53,15 @@ export interface PriorityPlan {
 }
 
 /**
- * Decide the discharge-priority stance. `baseReservePct` is the reserve the active
- * scenario would otherwise set; we only ever RAISE it (to hold the Tesla), never
- * below the floor.
+ * Decide the discharge-priority stance — i.e. WHEN to hold the Tesla so the Sonnen
+ * discharges first. The actual hold is done by the coordinator (Sonnen load-following
+ * force-discharge + Tesla `backup` mode); this function just gates it. `baseReservePct`
+ * is retained for signature stability but no longer used to raise the Tesla reserve.
  */
 export function decideDischarge(
   rule: BatteryPriority['dischargeSonnenFirst'],
   snap: RichSnapshot,
-  baseReservePct: number,
+  _baseReservePct: number,
   socFloorPct: number,
 ): DischargePlan {
   const base: Omit<DischargePlan, 'reason'> = {
@@ -80,12 +88,10 @@ export function decideDischarge(
       reason: `grid import ${snap.gridImportKw.toFixed(1)}kW > ${rule.throughputKw}kW cap — Tesla joins`,
     };
   }
-  const reserveHoldPct = Math.min(100, Math.max(baseReservePct, Math.ceil(snap.teslaSoc)));
   return {
     ...base,
     holdTesla: true,
-    reserveHoldPct,
-    reason: `hold Tesla at ${reserveHoldPct}% (SoC ${snap.teslaSoc}%) — Sonnen discharges first`,
+    reason: `Sonnen covers the house (SoC ${snap.sonnenSoc}%) so the Tesla idles and holds (Tesla SoC ${snap.teslaSoc}%) — Sonnen discharges first`,
   };
 }
 
