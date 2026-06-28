@@ -574,7 +574,11 @@ function sanitizeArbitrageParams(
       p?.executionMode === 'active' || p?.executionMode === 'advisory'
         ? p.executionMode
         : base.executionMode ?? 'advisory',
-    deviationThresholdPct: num(p?.deviationThresholdPct, base.deviationThresholdPct ?? 5, 1, 25),
+    solarConfidencePct: num(p?.solarConfidencePct, base.solarConfidencePct ?? 70, 50, 95),
+    prePeakSurplusGuardHours: num(p?.prePeakSurplusGuardHours, base.prePeakSurplusGuardHours ?? 2, 0, 6),
+    prePeakSurplusMarginPct: num(p?.prePeakSurplusMarginPct, base.prePeakSurplusMarginPct ?? 30, 0, 200),
+    deviationThresholdPct: num(p?.deviationThresholdPct, base.deviationThresholdPct ?? 30, 1, 100),
+    deviationMinKw: num(p?.deviationMinKw, base.deviationMinKw ?? 0.8, 0, 5),
   };
 }
 

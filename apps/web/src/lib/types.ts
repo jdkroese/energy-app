@@ -368,6 +368,14 @@ export interface ArbitrageEvent {
     socDeviationPct: number | null;
   };
   action: { mode: string; chargeW: number } | null;
+  /** Forecast-vs-actual divergence that triggered a re-plan (only on `deviation` events). */
+  deviation?: {
+    input: 'solar' | 'load' | 'solar+load';
+    solarForecastKw: number;
+    solarLiveKw: number;
+    loadForecastKw: number;
+    loadLiveKw: number;
+  } | null;
   chargedKwhTick: number;
   estSavedEurTick: number;
 }
@@ -750,8 +758,19 @@ export interface TariffArbitrageParams {
   /** SAFETY GATE: 'advisory' = observe & log only, no battery commands; 'active' = executes
    *  the valley grid-charge (spends money). Default 'advisory'. */
   executionMode: 'advisory' | 'active';
-  /** Deviation threshold (% SoC) that forces an immediate re-plan. Default 5; clamp 1–25. */
+  /** Certainty gate: only pre-buy when ≥ this % sure the next peak's solar falls short.
+   *  Default 70; clamp 50–95. */
+  solarConfidencePct: number;
+  /** Pre-peak surplus guard: stand down if the next P1 is within this many hours and the house
+   *  is already in strong live solar surplus. Default 2; clamp 0–6. */
+  prePeakSurplusGuardHours: number;
+  /** Pre-peak surplus margin (%): live solar must exceed live load by this % to trip the guard.
+   *  Default 30; clamp 0–200. */
+  prePeakSurplusMarginPct: number;
+  /** Deviation threshold as % of the FORECAST value (forecast-vs-actual). Default 30; clamp 1–100. */
   deviationThresholdPct: number;
+  /** Deviation floor (kW) so tiny forecasts don't trip on noise. Default 0.8; clamp 0–5. */
+  deviationMinKw: number;
 }
 
 /** COOLING = solar_surplus_precool · HEATING = solar_surplus_preheat · BATTERY = tariff_arbitrage. */

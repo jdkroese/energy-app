@@ -37,6 +37,13 @@ export interface ArbitragePlan {
   valleyBuyKwh: number;
   /** The P1 peak deficit (kWh) the battery must carry (load − solar over the peak hours). */
   peakDeficitKwh: number;
+  /** The CONFIDENT peak deficit (kWh): load − OPTIMISTIC solar over the peak (item 2). Drives
+   *  the active/stand-down trigger — we only pre-buy when even an optimistic solar forecast
+   *  still leaves a deficit. Sizing of the buy stays on the mean (peakDeficitKwh). */
+  peakDeficitConfidentKwh: number;
+  /** Horizon index (hour) of the NEXT peak's first hour at/after `fromHour`, or null when no
+   *  upcoming peak in the horizon. For a 48h live horizon this can be >=24 (tomorrow). */
+  nextPeakHour: number | null;
   /** Planned moves (may be empty when inactive). */
   moves: ArbitrageMove[];
   /** A SoC trajectory (%) per hour 0..23 with the arbitrage applied (for the chart). */
@@ -49,21 +56,71 @@ function clampPct(v: number): number {
   return Math.max(0, Math.min(100, v));
 }
 
+// ---- >=70%-certainty solar gate (item 2) -----------------------------------
+// We only pre-buy when we're CONFIDENT the next peak's forecast solar will fall short.
+// Mechanism: inflate the forecast solar over the peak window to its optimistic percentile
+// (z·sigma above the mean) and require a deficit to remain even then. A flat relative sigma
+// models forecast spread as a fraction of the forecast value — documented constant below.
+
+/** Relative 1σ spread of the solar forecast (fraction of the mean). A clear-sky-scaled PV
+ *  forecast at this site is materially uncertain hour-to-hour (cloud timing, soiling, the
+ *  learned-PR confidence); 0.30 (= ±30% at 1σ) is a deliberately conservative default that
+ *  keeps the certainty gate from pre-buying on a forecast that could easily come good. */
+export const SOLAR_REL_SIGMA = 0.3;
+
+/**
+ * Standard-normal quantile z(p) for a one-sided probability p (the inverse CDF / probit).
+ * Moro/Acklam rational approximation — accurate to ~1e-9 over the central region, which is
+ * far more than we need for a 50–95% confidence dial. Clamped to [0, 2.5]: p<=0.5 gives 0
+ * (no inflation), and we never inflate beyond ~2.5σ even at p=0.95 (z(0.95)≈1.645 anyway).
+ * Examples: z(0.70)≈0.524, z(0.80)≈0.842, z(0.90)≈1.282, z(0.95)≈1.645.
+ */
+export function normInv(p: number): number {
+  if (!Number.isFinite(p) || p <= 0.5) return 0;
+  if (p >= 1) return 2.5;
+  // Acklam's coefficients.
+  const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2, -3.066479806614716e1, 2.506628277459239];
+  const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+  const pLow = 0.02425;
+  const pHigh = 1 - pLow;
+  let z: number;
+  if (p < pLow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    z = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  } else if (p <= pHigh) {
+    const q = p - 0.5;
+    const r = q * q;
+    z = (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  } else {
+    const q = Math.sqrt(-2 * Math.log(1 - p));
+    z = -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  return Math.max(0, Math.min(2.5, z));
+}
+
 /** P1−P3 spread (€/kWh) for the configured peak/valley bands. */
 export function arbitrageSpreadEur(params: TariffArbitrageParams): number {
   return RATES[params.peakBand] - RATES[params.valleyBand];
 }
 
 /**
- * Compute the arbitrage plan for a calendar day from the hourly forecasts + tariff bands.
+ * Compute the arbitrage plan from the hourly forecasts + tariff bands. Works over a horizon
+ * of arbitrary length H (24 for the calendar-day chart overlay; 48 for the live decision, so
+ * an overnight valley can target TOMORROW's morning peak). It targets the NEXT peak at/after
+ * `fromHour` — not the first peak of the calendar day.
  *
- * @param solarKw   24 hourly forecast PV (kW ≈ kWh over the hour)
- * @param loadKw    24 hourly forecast house load (kW ≈ kWh)
- * @param bandCodes 24 hourly band codes (0=P3 valley, 1=P2, 2=P1 peak)
- * @param startSoc  combined battery SoC now (%)
+ * @param solarKw   H hourly forecast PV (kW ≈ kWh over the hour); index 0 = hour 0 of the horizon
+ * @param loadKw    H hourly forecast house load (kW ≈ kWh)
+ * @param bandCodes H hourly band codes (0=P3 valley, 1=P2, 2=P1 peak)
+ * @param startSoc  combined battery SoC now (%) — seeds the sim at index 0
  * @param capKwh    combined usable battery capacity (kWh)
  * @param maxKw     combined battery max power (kW) for the solar charge/discharge sim
  * @param params    rule params (target ceiling, floor, spread, valley/peak bands, …)
+ * @param fromHour  earliest horizon index to consider for the next peak (default 0). The live
+ *                  coordinator passes the current local hour so "next peak" is the upcoming one;
+ *                  the brain chart overlay passes 0 to keep whole-day behaviour.
  */
 export function planArbitrage(
   solarKw: number[],
@@ -73,18 +130,21 @@ export function planArbitrage(
   capKwh: number,
   maxKw: number,
   params: TariffArbitrageParams,
+  fromHour = 0,
 ): ArbitragePlan {
+  const H = bandCodes.length; // horizon length (24 chart / 48 live)
   const peakCode = params.peakBand === 'P1' ? 2 : params.peakBand === 'P2' ? 1 : 0;
   const valleyCode = params.valleyBand === 'P3' ? 0 : params.valleyBand === 'P2' ? 1 : 2;
   const floor = clampPct(params.dischargeFloorPct);
   const ceiling = clampPct(params.peakTargetSocPct);
+  const fromH = Math.max(0, Math.min(H, Math.floor(fromHour)));
 
   // Baseline SoC trajectory: solar charges, house discharges (no grid-charge), so we can
   // see where SoC would naturally be at the start of the peak and through it.
   const baseSoc: number[] = [];
   {
     let soc = startSoc;
-    for (let h = 0; h < 24; h++) {
+    for (let h = 0; h < H; h++) {
       const net = solarKw[h] - loadKw[h]; // + charge / − discharge (kWh over the hour)
       const deltaKwh =
         net >= 0
@@ -95,16 +155,21 @@ export function planArbitrage(
     }
   }
 
-  // The NEXT peak window (first run of peak-band hours). We plan the upcoming peak only.
-  const firstPeakH = bandCodes.findIndex((b) => b === peakCode);
+  // The NEXT peak window (first run of peak-band hours AT/AFTER fromH). We plan that peak only.
+  let firstPeakH = -1;
+  for (let h = fromH; h < H; h++) {
+    if (bandCodes[h] === peakCode) { firstPeakH = h; break; }
+  }
   const spread = arbitrageSpreadEur(params);
-  const inactive = (reason: string): ArbitragePlan => ({
+  const inactive = (reason: string, nextPeakHour: number | null = null): ArbitragePlan => ({
     active: false,
     targetSocPct: ceiling,
     valleyBuyKwh: 0,
     peakDeficitKwh: 0,
+    peakDeficitConfidentKwh: 0,
+    nextPeakHour,
     moves: [],
-    socPct: baseSoc.map((v) => Math.round(v)),
+    socPct: baseSoc.slice(0, 24).map((v) => Math.round(v)),
     reason,
   });
 
@@ -113,16 +178,26 @@ export function planArbitrage(
       `spread €${spread.toFixed(4)} < min €${params.minSpreadEur.toFixed(2)} — arbitrage not worthwhile`,
     );
   }
-  if (firstPeakH < 0) return inactive(`no ${params.peakBand} peak today — nothing to arbitrage`);
+  if (firstPeakH < 0) return inactive(`no upcoming ${params.peakBand} peak — nothing to arbitrage`);
 
   // End of that contiguous peak run.
   let lastPeakH = firstPeakH;
-  while (lastPeakH + 1 < 24 && bandCodes[lastPeakH + 1] === peakCode) lastPeakH++;
+  while (lastPeakH + 1 < H && bandCodes[lastPeakH + 1] === peakCode) lastPeakH++;
 
-  // Peak deficit (kWh) the battery must carry = Σ over the peak hours of (load − solar)+.
+  // Peak deficit (kWh) the battery must carry = Σ over the peak hours of (load − solar)+ on
+  // the MEAN forecast (drives buy SIZING). The CONFIDENT deficit (item 2) inflates solar to
+  // its optimistic percentile (z·sigma above the mean) and drives the active/stand-down TRIGGER:
+  // we only pre-buy when even optimistic solar still leaves a peak shortfall.
+  // Default a missing/invalid confidence to 70 so an un-migrated persisted rule (no
+  // solarConfidencePct yet) still gates sensibly and never renders "NaN%" on the chart.
+  const confPct = Number.isFinite(params.solarConfidencePct) ? clampPct(params.solarConfidencePct) : 70;
+  const z = normInv(confPct / 100);
   let peakDeficitKwh = 0;
+  let peakDeficitConfidentKwh = 0;
   for (let h = firstPeakH; h <= lastPeakH; h++) {
     peakDeficitKwh += Math.max(0, loadKw[h] - solarKw[h]);
+    const optimisticSolar = solarKw[h] * (1 + z * SOLAR_REL_SIGMA);
+    peakDeficitConfidentKwh += Math.max(0, loadKw[h] - optimisticSolar);
   }
 
   // Pre-peak SoC target = floor + the SoC the deficit represents, capped at the ceiling.
@@ -141,11 +216,13 @@ export function planArbitrage(
     valleyBuyKwh = (Math.max(0, targetSocPct - startSoc) / 100) * capKwh;
   }
 
-  // Valley hours BEFORE the peak, cheapest-first (all valley-band hours share a price, so
-  // order by closeness to the peak is irrelevant for cost — charge in the latest valley hours
-  // before the peak so the energy is freshest, minimising standing losses).
+  // Valley hours between `fromH` and the peak, cheapest-first (all valley-band hours share a
+  // price, so order by closeness to the peak is irrelevant for cost — charge in the latest
+  // valley hours before the peak so the energy is freshest, minimising standing losses).
+  // Starting at fromH (not 0) means overnight P3 hours before TOMORROW's 10:00 peak are the
+  // selected window when the coordinator runs at night with a 48h horizon.
   const valleyHours: number[] = [];
-  for (let h = 0; h < firstPeakH; h++) if (bandCodes[h] === valleyCode) valleyHours.push(h);
+  for (let h = fromH; h < firstPeakH; h++) if (bandCodes[h] === valleyCode) valleyHours.push(h);
   valleyHours.sort((a, b) => b - a); // latest valley hours first
 
   const moves: ArbitrageMove[] = [];
@@ -203,6 +280,8 @@ export function planArbitrage(
     }
   }
 
+  // SoC trajectory (chart): always 24 long. Sim over the first 24h of the horizon only — the
+  // chart overlay is a calendar-day view; the live decision reads targets/deficits, not socPct.
   const socPct: number[] = [];
   {
     let soc = startSoc;
@@ -223,16 +302,25 @@ export function planArbitrage(
     }
   }
 
-  const active = valleyBuyKwh > 0.05 || peakDeficitKwh > 0.05;
+  // ACTIVE GATE (item 2): only pre-buy when even the OPTIMISTIC solar forecast still leaves a
+  // worthwhile peak deficit AND there's a worthwhile valley buy. When the confident deficit is
+  // ~0, optimistic solar carries the peak — stand down (active=false) at the configured certainty.
+  const confidentDeficit = peakDeficitConfidentKwh > 0.05;
+  const active = confidentDeficit && (valleyBuyKwh > 0.05 || peakDeficitKwh > 0.05);
+  const conf = Math.round(confPct);
   const reason = active
-    ? `target ${Math.round(targetSocPct)}% before ${params.peakBand}; buy ${valleyBuyKwh.toFixed(1)} kWh in ${params.valleyBand} (solar leaves SoC ~${Math.round(socAtPeakStart)}%), discharge ${peakDeficitKwh.toFixed(1)} kWh through peak to ${Math.round(floor)}%`
-    : `solar covers the peak (SoC ~${Math.round(socAtPeakStart)}% ≥ target ${Math.round(targetSocPct)}%) — no pre-buy needed`;
+    ? `target ${Math.round(targetSocPct)}% before ${params.peakBand}; buy ${valleyBuyKwh.toFixed(1)} kWh in ${params.valleyBand} (solar leaves SoC ~${Math.round(socAtPeakStart)}%), discharge ${peakDeficitKwh.toFixed(1)} kWh through peak to ${Math.round(floor)}% — ≥${conf}% sure solar falls short`
+    : !confidentDeficit
+      ? `≥${conf}% chance solar carries the next ${params.peakBand} (optimistic-forecast deficit ~0) — standing down`
+      : `solar covers the peak (SoC ~${Math.round(socAtPeakStart)}% ≥ target ${Math.round(targetSocPct)}%) — no pre-buy needed`;
 
   return {
     active,
     targetSocPct,
     valleyBuyKwh: Math.round(valleyBuyKwh * 10) / 10,
     peakDeficitKwh: Math.round(peakDeficitKwh * 10) / 10,
+    peakDeficitConfidentKwh: Math.round(peakDeficitConfidentKwh * 10) / 10,
+    nextPeakHour: firstPeakH,
     moves,
     socPct: socPct.map((v) => Math.round(v)),
     reason,
