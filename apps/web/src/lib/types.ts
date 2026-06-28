@@ -342,6 +342,48 @@ export interface SoakExportRule {
   socCeilingPct: number;
 }
 
+/** A tariff-arbitrage effectiveness event (mirrors the API's ArbitrageEvent). */
+export type ArbitrageEventType = 'plan' | 'engage' | 'revert' | 'standdown' | 'deviation';
+export interface ArbitrageEvent {
+  ts: number;
+  type: ArbitrageEventType;
+  executionMode: 'advisory' | 'active';
+  band: Band;
+  spreadEur: number;
+  plan: {
+    active: boolean;
+    targetSocPct: number;
+    valleyBuyKwh: number;
+    peakDeficitKwh: number;
+    reason: string;
+  } | null;
+  live: {
+    combinedSoc: number | null;
+    sonnenSoc: number | null;
+    teslaSoc: number | null;
+    solarKw: number;
+    loadKw: number;
+    gridExportKw: number;
+    expectedSocFromPlan: number | null;
+    socDeviationPct: number | null;
+  };
+  action: { mode: string; chargeW: number } | null;
+  chargedKwhTick: number;
+  estSavedEurTick: number;
+}
+
+/** Cumulative tariff-arbitrage stats (advisory modelled vs active realized). */
+export interface ArbitrageStats {
+  sinceTs: number;
+  lastEventTs: number | null;
+  engagementsActive: number;
+  engagementsAdvisory: number;
+  valleyKwhActive: number;
+  valleyKwhAdvisory: number;
+  estSavedEurActive: number;
+  estSavedEurAdvisory: number;
+}
+
 export interface ControlStatus {
   armed: boolean;
   mode: ControlMode;
@@ -351,6 +393,9 @@ export interface ControlStatus {
   batteryPriority: BatteryPriority;
   soakExport: SoakExportRule;
   log: ControlLogEntry[];
+  /** Cumulative arbitrage stats + recent events (the in-state ring; JSONL is the durable record). */
+  arbitrageStats?: ArbitrageStats;
+  arbitrageLog?: ArbitrageEvent[];
 }
 
 /** Lever a manual command can target on each device. */
@@ -696,6 +741,11 @@ export interface TariffArbitrageParams {
   valleyBand: Band;
   /** Peak band to discharge through (expensive window; P1). Never grid-charge here or in P2. */
   peakBand: Band;
+  /** SAFETY GATE: 'advisory' = observe & log only, no battery commands; 'active' = executes
+   *  the valley grid-charge (spends money). Default 'advisory'. */
+  executionMode: 'advisory' | 'active';
+  /** Deviation threshold (% SoC) that forces an immediate re-plan. Default 5; clamp 1–25. */
+  deviationThresholdPct: number;
 }
 
 /** COOLING = solar_surplus_precool · HEATING = solar_surplus_preheat · BATTERY = tariff_arbitrage. */

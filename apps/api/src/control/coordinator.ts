@@ -8,15 +8,16 @@
 // manual setpoint.
 
 import * as store from '../store';
-import type { ControlDevice, TariffArbitrageParams } from '../store';
+import type { ControlDevice, TariffArbitrageParams, ArbitrageEvent, ArbitrageEventType } from '../store';
 import { issue, _resetRateLimits } from './execute';
 import { checkSonnenWatts } from './guardrails';
 import { takeSnapshot, type RichSnapshot } from './snapshot';
 import { planBatteryPriority, type PriorityPlan } from './battery-priority';
 import { planArbitrage, arbitrageSpreadEur, type ArbitragePlan } from './arbitrage';
+import { appendArbitrageEvent, accrueArbitrageCharge } from './arbitrage-log';
 import { config } from '../config';
 import * as weather from '../connectors/weather';
-import { bandCodesForDay } from '../tariff';
+import { TZ, bandCodesForDay } from '../tariff';
 import { effectivePR } from '../solar-model';
 import { solarForecast, loadForecast } from '../routes/brain';
 
@@ -30,17 +31,22 @@ let timer: ReturnType<typeof setInterval> | null = null;
 // is called lazily from coordinateArbitrage), so a disabled rule never even fetches weather.
 const ARB_CACHE_TTL_MS = 15 * 60_000;
 let arbCache: { at: number; plan: ArbitragePlan; targetParams: string } | null = null;
+/** Last weather forecast the planner fetched — reused by liveForecastNow() for event capture
+ *  (a diagnostic readout) so it never triggers its own network fetch. */
+let arbWeatherCache: weather.WeatherForecast | null = null;
 
 /** Compute (or reuse a cached) ArbitragePlan from the live forecast for the given params +
- *  current combined SoC. Best-effort: returns null if the forecast is unavailable. */
+ *  current combined SoC. Best-effort: returns null if the forecast is unavailable. The
+ *  returned `freshPlan` flag is true on a cache miss/recompute (so the caller can emit a
+ *  `plan` event only when a genuinely new plan was built). */
 async function computeArbitragePlan(
   params: TariffArbitrageParams,
   startSoc: number,
-): Promise<ArbitragePlan | null> {
+): Promise<{ plan: ArbitragePlan; freshPlan: boolean }> {
   const paramsKey = JSON.stringify(params);
   const now = Date.now();
   if (arbCache && now - arbCache.at < ARB_CACHE_TTL_MS && arbCache.targetParams === paramsKey) {
-    return arbCache.plan;
+    return { plan: arbCache.plan, freshPlan: false };
   }
   let wf: weather.WeatherForecast | null = null;
   try {
@@ -48,6 +54,7 @@ async function computeArbitragePlan(
   } catch {
     wf = null;
   }
+  arbWeatherCache = wf;
   const { prEff } = effectivePR();
   const solarKw = solarForecast(wf?.shortwaveRadiation ?? null, prEff);
   const loadKw = loadForecast(wf?.temperature ?? null);
@@ -56,12 +63,13 @@ async function computeArbitragePlan(
   const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
   const plan = planArbitrage(solarKw, loadKw, bandCodes, startSoc, capKwh, maxKw, params);
   arbCache = { at: now, plan, targetParams: paramsKey };
-  return plan;
+  return { plan, freshPlan: true };
 }
 
 /** Test/diagnostic helper — drop the arbitrage forecast cache. */
 export function _resetArbitrageCache(): void {
   arbCache = null;
+  arbWeatherCache = null;
 }
 
 /** Does this scenario lean toward savings/arbitrage (→ Tesla 'autonomous')? */
@@ -164,6 +172,97 @@ function combinedSoc(snap: RichSnapshot): number | null {
   return snap.tesla?.soc ?? snap.sonnen?.soc ?? null;
 }
 
+/** Current local hour (0..23) in the tariff timezone (Europe/Madrid). */
+function currentLocalHour(d: Date = new Date()): number {
+  return (
+    Number(
+      new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hour12: false }).format(d),
+    ) % 24
+  );
+}
+
+// ---- Arbitrage event logging -----------------------------------------------
+// To keep the JSONL/ring volume sane, the chatty states (engage/revert/standdown) are only
+// logged on a STATE TRANSITION (tracked in module scope). `plan` and `deviation` always log
+// when they occur. Not a 90s heartbeat.
+let lastArbActionState: ArbitrageEventType | null = null;
+
+/** The latest live solar/load forecast for the current hour (for deviation/event capture).
+ *  Best-effort: 0/0 when the forecast isn't available. */
+function liveForecastNow(): { solarKw: number; loadKw: number } {
+  try {
+    // Reuse whatever the cache already fetched (computeArbitragePlan populates it). We don't
+    // force a network fetch here — this is a diagnostic readout only.
+    const wf = arbWeatherCache;
+    const { prEff } = effectivePR();
+    const h = currentLocalHour();
+    const solar = solarForecast(wf?.shortwaveRadiation ?? null, prEff)[h] ?? 0;
+    const load = loadForecast(wf?.temperature ?? null)[h] ?? 0;
+    return { solarKw: Math.round(solar * 100) / 100, loadKw: Math.round(load * 100) / 100 };
+  } catch {
+    return { solarKw: 0, loadKw: 0 };
+  }
+}
+
+/**
+ * Build + record one arbitrage event. `transitionGated` types (engage/revert/standdown) are
+ * suppressed when the action-state hasn't changed since the last tick; `plan`/`deviation`
+ * always record. Returns nothing — best-effort, never throws (the writer is wrapped).
+ */
+function emitArbEvent(
+  type: ArbitrageEventType,
+  snap: RichSnapshot,
+  params: TariffArbitrageParams,
+  plan: ArbitragePlan | null,
+  soc: number | null,
+  opts: { action?: { mode: string; chargeW: number } | null; chargedKwhTick?: number } = {},
+): void {
+  // State-transition de-dup for the chatty action states.
+  if (type === 'engage' || type === 'revert' || type === 'standdown') {
+    if (lastArbActionState === type) return;
+    lastArbActionState = type;
+  }
+
+  const spreadEur = arbitrageSpreadEur(params);
+  const hour = currentLocalHour();
+  const expectedSocFromPlan = plan && plan.socPct.length === 24 ? plan.socPct[hour] : null;
+  const socDeviationPct =
+    soc !== null && expectedSocFromPlan !== null ? Math.round((soc - expectedSocFromPlan) * 10) / 10 : null;
+  const fc = liveForecastNow();
+  const chargedKwhTick = opts.chargedKwhTick ?? 0;
+
+  const ev: ArbitrageEvent = {
+    ts: Date.now(),
+    type,
+    executionMode: params.executionMode,
+    band: snap.band,
+    spreadEur: Math.round(spreadEur * 10000) / 10000,
+    plan: plan
+      ? {
+          active: plan.active,
+          targetSocPct: plan.targetSocPct,
+          valleyBuyKwh: plan.valleyBuyKwh,
+          peakDeficitKwh: plan.peakDeficitKwh,
+          reason: plan.reason,
+        }
+      : null,
+    live: {
+      combinedSoc: soc !== null ? Math.round(soc * 10) / 10 : null,
+      sonnenSoc: snap.sonnen?.soc ?? null,
+      teslaSoc: snap.tesla?.soc ?? null,
+      solarKw: fc.solarKw,
+      loadKw: fc.loadKw,
+      gridExportKw: Math.round(snap.gridExportKw * 100) / 100,
+      expectedSocFromPlan,
+      socDeviationPct,
+    },
+    action: opts.action ?? null,
+    chargedKwhTick: Math.round(chargedKwhTick * 1000) / 1000,
+    estSavedEurTick: Math.round(chargedKwhTick * spreadEur * 1000) / 1000,
+  };
+  appendArbitrageEvent(ev);
+}
+
 /**
  * Tariff-arbitrage VALLEY GRID-CHARGE execution. Returns true when it took authority over
  * the Sonnen this tick (so the caller stops). Acts ONLY when:
@@ -182,7 +281,18 @@ function combinedSoc(snap: RichSnapshot): number | null {
  * already discharges the battery to cover the house through the peak, and the SoC floor +
  * Tesla reserve guardrails enforce the discharge floor — so we compose with the existing
  * discharge logic rather than double-commanding.
+ *
+ * PRODUCTION ROLLOUT (advisory/shadow gate): every tick the rule is enabled+armed+auto it
+ * computes its plan, runs deviation detection, and EMITS LOG EVENTS regardless of mode. It
+ * only calls issue() (commands the battery) when params.executionMode === 'active'. In
+ * 'advisory' it logs the intended action (what it WOULD charge + the modelled saving) and
+ * returns FALSE (no authority), so self-consumption proceeds untouched and the battery is
+ * never commanded. The revert path is likewise advisory-gated (advisory never issued a
+ * charge, so there's nothing to revert — it just logs the stand-down).
  */
+// One coordinator tick is 90s — the energy bought/would-buy this tick (kWh) at a given W.
+const TICK_HOURS = TICK_MS / 3_600_000;
+
 async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: string): Promise<boolean> {
   const automation = store
     .get()
@@ -190,10 +300,13 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   // Disabled / absent → never act. (Type-narrow to the battery param shape.)
   if (!automation || automation.type !== 'tariff_arbitrage') return false;
   const params = automation.params as TariffArbitrageParams;
+  const advisory = params.executionMode !== 'active';
 
   const s = snap.sonnen;
   if (!s) return false; // Sonnen offline — nothing to do
-  const inManual = s.mode === 'manual';
+  // In ADVISORY we never issued a charge, so the Sonnen is never "our" arbitrage manual; treat
+  // it as not-ours so we neither revert (nothing to revert) nor claim authority.
+  const inManual = !advisory && s.mode === 'manual';
 
   // Is the Sonnen currently OUR arbitrage charge? We only ever take over to grid-charge in
   // the valley; if it's in manual for another reason (#34 soak-export), that branch already
@@ -209,15 +322,34 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   const surplusDefers = params.surplusOverridesGridCharge && exporting;
 
   // Pre-peak SoC target from the forecast (cached). Best-effort; if unavailable, do NOT
-  // grid-charge (conservative: no forecast ⇒ no speculative buy).
+  // grid-charge (conservative: no forecast ⇒ no speculative buy). We compute the plan
+  // whenever the headline gates pass so we can run deviation detection + emit a plan event.
   const soc = combinedSoc(snap);
+  let plan: ArbitragePlan | null = null;
   let targetMet = true;
   let targetReason = 'no forecast — standing down (conservative)';
   if (inValley && spreadOk && !surplusDefers && soc !== null) {
-    const arb = await computeArbitragePlan(params, soc);
-    if (arb && arb.active) {
-      targetMet = soc >= arb.targetSocPct;
-      targetReason = `SoC ${Math.round(soc)}% ${targetMet ? '≥' : '<'} target ${Math.round(arb.targetSocPct)}%`;
+    const res = await computeArbitragePlan(params, soc);
+    plan = res.plan;
+    if (res.freshPlan) emitArbEvent('plan', snap, params, plan, soc);
+
+    // ---- Deviation detection + immediate re-plan ----------------------------
+    // Compare live combined SoC to the plan's expected SoC for the current hour. When the gap
+    // exceeds the threshold (unexpected sun/usage/clouds), invalidate the cache, re-plan now,
+    // and emit a `deviation` event capturing the forecast-vs-actual gap. The re-planned target
+    // then drives THIS tick's decision.
+    const hour = currentLocalHour();
+    const expected = plan.socPct.length === 24 ? plan.socPct[hour] : null;
+    if (expected !== null && Math.abs(soc - expected) >= params.deviationThresholdPct) {
+      _resetArbitrageCache();
+      const re = await computeArbitragePlan(params, soc);
+      plan = re.plan;
+      emitArbEvent('deviation', snap, params, plan, soc);
+    }
+
+    if (plan.active) {
+      targetMet = soc >= plan.targetSocPct;
+      targetReason = `SoC ${Math.round(soc)}% ${targetMet ? '≥' : '<'} target ${Math.round(plan.targetSocPct)}%`;
     }
   }
 
@@ -226,24 +358,30 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   const shouldCharge = inValley && spreadOk && !surplusDefers && soc !== null && !targetMet && !nearFull;
 
   if (!shouldCharge) {
-    // REVERT a lingering arbitrage manual charge (safety): out of valley / spread fails /
-    // target met / surplus appeared / near-full. Hand back to self-consumption with a priority
-    // write so it can never be rate-limited. (Not in manual ⇒ just fall through — no command.)
+    // The gating reason this tick is standing down.
+    const why = !inValley
+      ? `band ${snap.band} ≠ valley ${params.valleyBand}`
+      : !spreadOk
+        ? `spread < €${params.minSpreadEur.toFixed(2)}`
+        : surplusDefers
+          ? 'surplus present — defer to soak-export'
+          : nearFull
+            ? `SoC ${Math.round(soc ?? 0)}% ≥ ceiling`
+            : targetReason;
+    // REVERT a lingering arbitrage manual charge (safety): only reachable in ACTIVE mode
+    // (advisory never took the Sonnen, so inManual is forced false above). Hand back to
+    // self-consumption with a priority write so it can never be rate-limited, and log the
+    // stand-down. (Not in manual ⇒ just fall through — no command.)
     if (inManual) {
-      const why = !inValley
-        ? `band ${snap.band} ≠ valley ${params.valleyBand}`
-        : !spreadOk
-          ? `spread < €${params.minSpreadEur.toFixed(2)}`
-          : surplusDefers
-            ? 'surplus present — defer to soak-export'
-            : nearFull
-              ? `SoC ${Math.round(soc ?? 0)}% ≥ ceiling`
-              : targetReason;
       await issue('sonnen', 'mode', '2', `${reason}: end arbitrage grid-charge (${why}) — back to self-consumption`, snap, {
         priority: true,
       });
+      emitArbEvent('revert', snap, params, plan, soc, { action: { mode: '2', chargeW: 0 } });
       return true;
     }
+    // Enabled but not charging — log the stand-down (state-transition gated). Advisory never
+    // had authority; active simply isn't charging this tick. Either way no battery command.
+    emitArbEvent('standdown', snap, params, plan, soc);
     return false;
   }
 
@@ -252,7 +390,24 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   // favouring a steady safe fill.
   const wantW = Math.min(params.maxGridChargeKw * 1000, store.get().control.guardrails.sonnenMaxW);
   const watt = checkSonnenWatts(wantW, 'charge', snap);
-  // Mode FIRST (a charge setpoint is rejected unless the Sonnen reports manual).
+  const chargedKwhTick = (watt.value / 1000) * TICK_HOURS;
+  const spreadEur = arbitrageSpreadEur(params);
+  const now = Date.now();
+
+  if (advisory) {
+    // ADVISORY (shadow): log the intended engage (transition-gated) + accrue THIS tick's modelled
+    // energy/saving every tick, but command NOTHING. Return false so self-consumption proceeds
+    // untouched — the battery is never written.
+    emitArbEvent('engage', snap, params, plan, soc, {
+      action: null,
+      chargedKwhTick,
+    });
+    accrueArbitrageCharge('advisory', chargedKwhTick, spreadEur, now);
+    return false;
+  }
+
+  // ACTIVE: command the Sonnen. Mode FIRST (a charge setpoint is rejected unless the Sonnen
+  // reports manual).
   await issue('sonnen', 'mode', '1', `${reason}: arbitrage valley grid-charge (${targetReason}, band ${snap.band})`, snap);
   await issue(
     'sonnen',
@@ -261,6 +416,13 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
     `${reason}: arbitrage grid-charge ${watt.value}W — pre-buy ${params.valleyBand} for ${params.peakBand} peak`,
     snap,
   );
+  // Log the engage (transition-gated, one readable line per engagement) + accrue THIS tick's
+  // realized energy/saving every tick, so a multi-hour charge accumulates over its full duration.
+  emitArbEvent('engage', snap, params, plan, soc, {
+    action: { mode: '1', chargeW: watt.value },
+    chargedKwhTick,
+  });
+  accrueArbitrageCharge('active', chargedKwhTick, spreadEur, now);
   return true;
 }
 

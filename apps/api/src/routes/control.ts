@@ -46,6 +46,22 @@ export async function getStatus(): Promise<unknown> {
     batteryPriority: ctrl.batteryPriority,
     soakExport: ctrl.soakExport,
     log: ctrl.log.slice(-100),
+    // Tariff-arbitrage effectiveness: cumulative headline stats + recent events (the durable
+    // unbounded record is the JSONL file; this is the in-state ring for the UI history).
+    arbitrageStats: ctrl.arbitrageStats,
+    arbitrageLog: ctrl.arbitrageLog.slice(-50),
+  };
+}
+
+/** Recent tariff-arbitrage events + cumulative stats (reads the in-state ring). The optional
+ *  `limit` (1..200) trims the returned events; defaults to 50. Any authed user (read-only). */
+export function getArbitrageLog(limit?: number): unknown {
+  const ctrl = store.get().control;
+  const n = typeof limit === 'number' && Number.isFinite(limit) ? Math.min(200, Math.max(1, Math.round(limit))) : 50;
+  return {
+    ts: new Date().toISOString(),
+    stats: ctrl.arbitrageStats,
+    events: ctrl.arbitrageLog.slice(-n),
   };
 }
 
