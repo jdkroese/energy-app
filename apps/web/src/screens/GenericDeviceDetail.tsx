@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { Capability, ConfiguredResponse } from '../lib/types';
+import type { Capability, ConfiguredResponse, DeviceDiagnosticsResponse } from '../lib/types';
 import { Card, Icon, Button } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -62,6 +62,8 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
               <GenericControl capabilities={device.capabilities} values={device.values} onWrite={writeCap} disabled={!isAdmin} variant="detail" />
             </Card>
 
+            <DiagnosticsSection id={device.id} />
+
             {isAdmin && (
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button variant="secondary" size="sm" iconLeft={<Icon name="shuffle" size={14} />} onClick={() => setReclassify(true)}>Re-classify</Button>
@@ -109,6 +111,92 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
         {body}
       </div>
     </>
+  );
+}
+
+/* ---- Diagnostics (id / ip / mac / datapoint table) ------------------------ *
+ * Collapsed by default; fetches on first expand (on-demand — not polled). Surfaces
+ * the device's identity + network + every datapoint, and (for set-up lights) which
+ * DP the on/off toggle + scenes/schedules actually drive — for debugging control. */
+function fmtVal(v: unknown): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function DiagRow({ label, value, accent }: { label: string; value: ReactNode; accent?: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '5px 0' }}>
+      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>{label}</span>
+      <span className="pwr-mono" style={{ fontSize: 12, color: accent ? 'var(--solar)' : 'var(--text-1)', textAlign: 'right', wordBreak: 'break-all' }}>{value}</span>
+    </div>
+  );
+}
+
+function DiagnosticsSection({ id }: { id: string }) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<DeviceDiagnosticsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    setErr(null);
+    api.devices
+      .diagnostics(id)
+      .then((r) => setData(r))
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setLoading(false));
+  };
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !data && !loading) load();
+  };
+
+  const dev = data?.device ?? null;
+
+  return (
+    <Card padded style={{ padding: 16 }}>
+      <button type="button" onClick={toggle} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+        <Icon name="bug" size={14} color="var(--text-3)" />
+        <span className="pwr-eyebrow" style={{ flex: 1, textAlign: 'left' }}>Diagnostics</span>
+        {open && <button type="button" onClick={(e) => { e.stopPropagation(); load(); }} aria-label="Refresh" style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2, display: 'inline-flex' }}><Icon name="refresh-cw" size={13} /></button>}
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={16} color="var(--text-3)" />
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          {loading && <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>Loading…</div>}
+          {err && <div style={{ fontSize: 12.5, color: 'var(--danger)' }}>Could not load diagnostics: {err}</div>}
+          {dev && (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <DiagRow label="Device ID" value={dev.id} />
+                <DiagRow label="Category" value={dev.category || '—'} />
+                <DiagRow label="Online" value={dev.online ? 'yes' : 'no'} />
+                <DiagRow label="IP address" value={dev.ip ?? '—'} />
+                <DiagRow label="MAC address" value={dev.mac ?? '—'} />
+                {dev.primarySwitchDp && <DiagRow label="On/off datapoint" value={dev.primarySwitchDp} accent />}
+              </div>
+              <div className="pwr-eyebrow" style={{ marginTop: 14, marginBottom: 6 }}>Datapoints · {dev.dps.length}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                {dev.dps.map((p, i) => (
+                  <div key={p.dp} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center', padding: '7px 10px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)', background: p.dp === dev.primarySwitchDp ? 'var(--solar-wash)' : 'transparent' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="pwr-mono" style={{ fontSize: 12, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.dp}</div>
+                      <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{p.kind}{p.readOnly ? ' · read-only' : ''}</div>
+                    </div>
+                    <div className="pwr-mono" style={{ fontSize: 12, color: 'var(--text-2)', textAlign: 'right', wordBreak: 'break-all', maxWidth: 170 }}>{fmtVal(p.value)}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {data && !dev && !loading && !err && <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No device data (Tuya not connected or device not reported).</div>}
+        </div>
+      )}
+    </Card>
   );
 }
 

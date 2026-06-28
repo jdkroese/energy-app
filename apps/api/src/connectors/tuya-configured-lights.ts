@@ -75,15 +75,35 @@ export interface ConfiguredLightCaps {
   colorDp?: Capability;
 }
 
-/** Non-power switch DP needles that must NEVER be treated as the main on/off. */
+/** Non-power switch DP needles that must NEVER be treated as the main on/off. A
+ *  metering plug/breaker synthesizes many boolean toggles (child lock, overcharge
+ *  protection, cycle/random timers, countdown, inching…) into `switch`-kind caps;
+ *  none of those drive the relay, so they're excluded as power candidates. */
 function isNonPowerSwitch(dp: string): boolean {
   const lower = dp.toLowerCase();
-  return (
-    lower.includes('inching') ||
-    lower.includes('backlight') ||
-    lower.includes('child') ||
-    lower.includes('memory')
-  );
+  return [
+    'inching', 'backlight', 'child', 'memory', 'overcharge',
+    'cycle', 'random', 'countdown', 'lock', 'factory', 'test',
+  ].some((n) => lower.includes(n));
+}
+
+/** Canonical main-relay switch codes, most-preferred first. The real on/off is one
+ *  of these — prefer it over an arbitrary first synthesized switch so a metering
+ *  plug actuates its relay (`switch_1`), not e.g. its overcharge toggle. */
+const POWER_SWITCH_CODES = [
+  'switch_led', 'switch_1', 'switch', 'switch_2', 'switch_3', 'switch_4', 'switch_5', 'switch_6',
+];
+
+/** Pick the capability that acts as the device's main on/off. */
+function pickPowerSwitch(caps: Capability[]): Capability | undefined {
+  const switches = caps.filter((c) => c.kind === 'switch' && !c.readOnly && !isNonPowerSwitch(c.dp));
+  // 1) a canonical relay code (covers virtually every plug/switch/breaker).
+  for (const code of POWER_SWITCH_CODES) {
+    const m = switches.find((s) => s.dp === code);
+    if (m) return m;
+  }
+  // 2) any other real `switch*` relay, then any leftover switch-kind capability.
+  return switches.find((s) => s.dp.startsWith('switch')) ?? switches[0];
 }
 
 /**
@@ -99,9 +119,7 @@ export function resolveConfiguredLightCaps(
 ): ConfiguredLightCaps {
   const caps = applyOverrides(deriveCapabilities(d, spec), cfg.capOverrides);
 
-  const powerDp = caps.find(
-    (c) => c.kind === 'switch' && !c.readOnly && !isNonPowerSwitch(c.dp),
-  );
+  const powerDp = pickPowerSwitch(caps);
   const brightDp = caps.find((c) => c.kind === 'range' && c.dp.startsWith('bright_value'));
   const tempDp = caps.find((c) => c.kind === 'range' && c.dp.startsWith('temp_value'));
   const colorDp = caps.find((c) => c.kind === 'color');

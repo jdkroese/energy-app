@@ -19,6 +19,7 @@ import type {
   ConfiguredResponse,
   CustomDeviceType,
   CustomTypesResponse,
+  DeviceDiagnosticsResponse,
   ControlCommandValue,
   ControlDevice,
   ControlLever,
@@ -217,6 +218,8 @@ export const api = {
     // Generic capability command ({ dp, kind, value }) — confirmed in the UI for sensitive actions.
     commandCap: (id: string, dp: string, kind: CapabilityKind, value: unknown) =>
       postJSON<{ ts: string; ok: boolean }>(`/api/devices/${enc(id)}/command`, { dp, kind, value }),
+    // Identity + network + datapoint table for debugging control issues (on-demand).
+    diagnostics: (id: string) => getJSON<DeviceDiagnosticsResponse>(`/api/devices/${enc(id)}/diagnostics`),
   },
 
   /* ---- Lights (Tuya); command/bulk are admin ---- */
