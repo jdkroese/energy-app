@@ -250,7 +250,15 @@ export interface ControlState {
   batteryPriority: BatteryPriority;
   /** Force-charge-to-soak-export rule (absorb surplus before it spills to grid). */
   soakExport: SoakExportRule;
+  /** Tariff-arbitrage effectiveness log — in-state ring buffer (last ~200 events). The
+   *  durable record is the JSONL file; this survives a restart for the UI history list. */
+  arbitrageLog: ArbitrageEvent[];
+  /** Cumulative tariff-arbitrage headline stats (advisory vs active). */
+  arbitrageStats: ArbitrageStats;
 }
+
+/** Max in-state arbitrage events kept (the JSONL file is the unbounded durable record). */
+export const ARBITRAGE_LOG_RING_MAX = 200;
 
 // ---- Devices / Climate ------------------------------------------------------
 // A generic devices layer; AC (Intesis/Panasonic Etherea) is the first type. The
@@ -446,6 +454,86 @@ export interface TariffArbitrageParams {
    * overridable. Grid-charge is NEVER permitted in this band (nor in P2).
    */
   peakBand: Band;
+  /**
+   * SAFETY GATE — execution mode. 'advisory' (default): observe & log only; the rule
+   * computes its plan, detects deviations, and accrues MODELLED savings stats, but NEVER
+   * commands the battery (no issue() from the arbitrage path). 'active': executes the
+   * valley grid-charge (spends money). The owner reviews the captured advisory data, then
+   * flips to 'active'. Any persisted rule missing this field hydrates to 'advisory'.
+   */
+  executionMode: 'advisory' | 'active';
+  /**
+   * Deviation threshold (% SoC). Each tick the live combined SoC is compared to the plan's
+   * expected SoC for the current hour; when |deviation| ≥ this, the plan cache is invalidated
+   * and the rule re-plans immediately (and emits a `deviation` event). Default 5; clamp 1–25.
+   */
+  deviationThresholdPct: number;
+}
+
+// ---- Tariff-arbitrage effectiveness logging --------------------------------
+// Durable, reproducible record of what the arbitrage rule did (active) or WOULD have
+// done (advisory) each tick. Events are appended to a JSONL file (off-state, survives a
+// state-reset) AND kept as an in-state ring + headline stats (survives a restart via
+// state.json). See control/arbitrage-log.ts for the writer. Advisory (modelled) vs active
+// (realized) savings are tracked apart so the UI can label them.
+
+export type ArbitrageEventType = 'plan' | 'engage' | 'revert' | 'standdown' | 'deviation';
+
+export interface ArbitrageEvent {
+  ts: number;
+  type: ArbitrageEventType;
+  executionMode: 'advisory' | 'active';
+  band: Band;
+  /** P1−P3 spread (€/kWh) at the event. */
+  spreadEur: number;
+  /** The plan headline (null when no forecast plan was available). */
+  plan: {
+    active: boolean;
+    targetSocPct: number;
+    valleyBuyKwh: number;
+    peakDeficitKwh: number;
+    reason: string;
+  } | null;
+  /** Live readings at the event. */
+  live: {
+    combinedSoc: number | null;
+    sonnenSoc: number | null;
+    teslaSoc: number | null;
+    solarKw: number;
+    loadKw: number;
+    gridExportKw: number;
+    /** Plan's expected combined SoC for the current hour (null when no plan). */
+    expectedSocFromPlan: number | null;
+    /** combinedSoc − expectedSocFromPlan (null when no plan / no SoC). */
+    socDeviationPct: number | null;
+  };
+  /** The battery write taken this tick (null in advisory / no-op). */
+  action: { mode: string; chargeW: number } | null;
+  /** Energy bought this tick (active) or would-buy (advisory), kWh. */
+  chargedKwhTick: number;
+  /** MODELLED €saved this tick = chargedKwhTick × spreadEur. */
+  estSavedEurTick: number;
+}
+
+/** Cumulative headline stats over the arbitrage history (survives restart via state.json).
+ *  Advisory (modelled) and active (realized) are tracked apart so the UI labels them. */
+export interface ArbitrageStats {
+  /** Epoch ms the stats window opened (first event / default-creation). */
+  sinceTs: number;
+  /** Epoch ms of the most recent recorded event. */
+  lastEventTs: number | null;
+  /** Count of `engage` events while in active mode. */
+  engagementsActive: number;
+  /** Count of `engage` events while in advisory mode (would-have-engaged). */
+  engagementsAdvisory: number;
+  /** Valley kWh actually shifted (active engagements). */
+  valleyKwhActive: number;
+  /** Valley kWh that WOULD have been shifted (advisory engagements). */
+  valleyKwhAdvisory: number;
+  /** MODELLED €saved, realized (active engagements). */
+  estSavedEurActive: number;
+  /** MODELLED €saved, advisory (would-have-saved). */
+  estSavedEurAdvisory: number;
 }
 
 /** Discriminated automation params: the surplus rules carry the climate shape; the
@@ -498,6 +586,24 @@ export function defaultTariffArbitrageParams(): TariffArbitrageParams {
     surplusOverridesGridCharge: true,
     valleyBand: 'P3',
     peakBand: 'P1',
+    // Production rollout: ship in ADVISORY (shadow) mode — observe & log, never command
+    // the battery. The owner flips to 'active' after reviewing the captured data.
+    executionMode: 'advisory',
+    deviationThresholdPct: 5,
+  };
+}
+
+/** Fresh (empty) arbitrage stats — the window opens now. */
+export function defaultArbitrageStats(): ArbitrageStats {
+  return {
+    sinceTs: Date.now(),
+    lastEventTs: null,
+    engagementsActive: 0,
+    engagementsAdvisory: 0,
+    valleyKwhActive: 0,
+    valleyKwhAdvisory: 0,
+    estSavedEurActive: 0,
+    estSavedEurAdvisory: 0,
   };
 }
 
@@ -762,6 +868,8 @@ export function defaultControl(): ControlState {
     },
     batteryPriority: defaultBatteryPriority(),
     soakExport: defaultSoakExport(),
+    arbitrageLog: [],
+    arbitrageStats: defaultArbitrageStats(),
   };
 }
 
@@ -1340,6 +1448,28 @@ function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState
     guardrails: { ...base.guardrails, ...(p.guardrails ?? {}) },
     batteryPriority: hydrateBatteryPriority(p.batteryPriority, base.batteryPriority),
     soakExport: hydrateSoakExport(p.soakExport, base.soakExport),
+    arbitrageLog: Array.isArray(p.arbitrageLog)
+      ? p.arbitrageLog.slice(-ARBITRAGE_LOG_RING_MAX)
+      : base.arbitrageLog,
+    arbitrageStats: hydrateArbitrageStats(p.arbitrageStats, base.arbitrageStats),
+  };
+}
+
+function hydrateArbitrageStats(
+  p: Partial<ArbitrageStats> | undefined,
+  base: ArbitrageStats,
+): ArbitrageStats {
+  if (!p || typeof p !== 'object') return base;
+  const num = (v: unknown, fb: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fb);
+  return {
+    sinceTs: num(p.sinceTs, base.sinceTs),
+    lastEventTs: typeof p.lastEventTs === 'number' ? p.lastEventTs : base.lastEventTs,
+    engagementsActive: num(p.engagementsActive, base.engagementsActive),
+    engagementsAdvisory: num(p.engagementsAdvisory, base.engagementsAdvisory),
+    valleyKwhActive: num(p.valleyKwhActive, base.valleyKwhActive),
+    valleyKwhAdvisory: num(p.valleyKwhAdvisory, base.valleyKwhAdvisory),
+    estSavedEurActive: num(p.estSavedEurActive, base.estSavedEurActive),
+    estSavedEurAdvisory: num(p.estSavedEurAdvisory, base.estSavedEurAdvisory),
   };
 }
 

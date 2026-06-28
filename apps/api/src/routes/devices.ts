@@ -561,6 +561,13 @@ function sanitizeArbitrageParams(
         : base.surplusOverridesGridCharge,
     valleyBand: isBand(p?.valleyBand) ? p.valleyBand : base.valleyBand,
     peakBand: isBand(p?.peakBand) ? p.peakBand : base.peakBand,
+    // SAFETY GATE: default to 'advisory' if absent/invalid — the rule must never silently
+    // promote itself to commanding the battery on a malformed save.
+    executionMode:
+      p?.executionMode === 'active' || p?.executionMode === 'advisory'
+        ? p.executionMode
+        : base.executionMode ?? 'advisory',
+    deviationThresholdPct: num(p?.deviationThresholdPct, base.deviationThresholdPct ?? 5, 1, 25),
   };
 }
 

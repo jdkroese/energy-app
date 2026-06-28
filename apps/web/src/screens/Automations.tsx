@@ -6,6 +6,7 @@ import type {
   Automation, AutomationsResponse, DevicesResponse, DevicesStatus,
   LiveResponse, SolarSurplusPrecoolParams, TariffArbitrageParams,
   ControlStatus, BatteryPriorityKey, BatteryPriorityRule, SoakExportRule,
+  ArbitrageEvent, ArbitrageStats, ArbitrageEventType,
 } from '../lib/types';
 import { isTariffArbitrage } from '../lib/types';
 import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
@@ -245,6 +246,15 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
   const wash = 'color-mix(in srgb, var(--ev) 12%, transparent)';
   const spread = (TARIFF_RATES[p.peakBand] ?? 0) - (TARIFF_RATES[p.valleyBand] ?? 0);
   const spreadOk = spread >= p.minSpreadEur;
+  // SAFETY GATE — advisory (observe & log only) vs active (executes valley grid-charge).
+  const mode = p.executionMode ?? 'advisory';
+  const active = mode === 'active';
+  // Persist the mode immediately on toggle (round-trips via the automation update path, which
+  // clamps params with sanitizeArbitrageParams). Optimistic local update so the UI tracks it.
+  const setMode = (next: 'advisory' | 'active') => {
+    setP((prev) => ({ ...prev, executionMode: next }));
+    void onSave({ params: { ...p, executionMode: next } });
+  };
 
   const soc = batterySoc(live);
   // Grid-export surplus (kW) — what this battery rule reasons about (solar spilling to grid).
@@ -273,6 +283,26 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
           <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Automation · battery</div>
         </div>
         <Switch checked={enabled} disabled={!canWrite} onChange={(e) => { setEnabled(e.target.checked); void onSave({ enabled: e.target.checked }); }} />
+      </div>
+
+      {/* SAFETY GATE — Advisory ↔ Active. Advisory observes + logs only (no battery commands);
+          Active executes the valley grid-charge (spends money). Make the distinction obvious. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: active ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${active ? 'var(--solar)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
+        <Icon name={active ? 'zap' : 'eye'} size={16} color={active ? 'var(--solar)' : 'var(--text-2)'} />
+        <div style={{ flex: 1, minWidth: 140 }}>
+          <div className="pwr-eyebrow" style={{ color: active ? 'var(--solar)' : 'var(--text-2)' }}>Execution mode</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-2)', marginTop: 2 }}>
+            {active
+              ? 'Active — executes valley grid-charge (spends money to pre-buy).'
+              : 'Advisory — observe & log only, no battery commands.'}
+          </div>
+        </div>
+        <SegmentedControl
+          size="sm"
+          options={[{ value: 'advisory', label: 'Advisory' }, { value: 'active', label: 'Active' }]}
+          value={mode}
+          onChange={(v) => canWrite && setMode(v as 'advisory' | 'active')}
+        />
       </div>
 
       {/* WHEN / DO / UNTIL / LIMITS */}
@@ -325,11 +355,107 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
           <Slider label="Discharge floor through peak" unit=" %" min={10} max={60} step={5} value={p.dischargeFloorPct} onChange={(v) => set({ dischargeFloorPct: v })} />
           <Slider label="Max grid-charge rate" unit=" kW" min={1} max={4.6} step={0.1} value={p.maxGridChargeKw} onChange={(v) => set({ maxGridChargeKw: v })} />
           <Slider label="Min worthwhile spread" unit=" €/kWh" min={0} max={0.2} step={0.01} value={p.minSpreadEur} onChange={(v) => set({ minSpreadEur: v })} />
+          <Slider label="Re-plan when SoC deviates by" unit=" %" min={1} max={25} step={1} value={p.deviationThresholdPct ?? 5} onChange={(v) => set({ deviationThresholdPct: v })} />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save</Button>
             <Button size="sm" variant="ghost" onClick={onDelete}>Delete</Button>
           </div>
         </div>
+      )}
+    </Card>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Tariff-arbitrage effectiveness — cumulative MODELLED savings + valley kWh shifted +
+ * engagement count (advisory vs active tracked apart), a "since" date, and a short recent-
+ * events list. Mirrors the BatteryRuleCard / Surplus-soak card styling. Renders on desktop
+ * (>=768px) and mobile (<768px). The savings are a MODELLED estimate (kWh assumed to displace
+ * a peak import) — labelled as such.
+ * --------------------------------------------------------------------------*/
+const ARB_TYPE_META: Record<ArbitrageEventType, { label: string; color: string }> = {
+  plan: { label: 'plan', color: 'var(--text-2)' },
+  engage: { label: 'engage', color: 'var(--solar)' },
+  revert: { label: 'revert', color: 'var(--grid)' },
+  standdown: { label: 'stand-down', color: 'var(--text-3)' },
+  deviation: { label: 'deviation', color: 'var(--ev)' },
+};
+
+function fmtEur(v: number): string {
+  return `€${v.toFixed(2)}`;
+}
+function fmtSince(ts: number): string {
+  return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function fmtClock(ts: number): string {
+  return new Date(ts).toLocaleString(undefined, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function ArbitrageEffectivenessCard({ stats, events }: { stats?: ArbitrageStats; events?: ArbitrageEvent[] }) {
+  const tone = 'var(--ev)';
+  const recent = (events ?? []).slice(-8).reverse();
+  const hasData = !!stats && (stats.engagementsActive + stats.engagementsAdvisory > 0 || recent.length > 0);
+
+  const Stat = ({ label, value, sub, color }: { label: string; value: string; sub: string; color: string }) => (
+    <div style={{ flex: 1, minWidth: 110, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
+      <div className="pwr-eyebrow" style={{ marginBottom: 4 }}>{label}</div>
+      <div className="pwr-mono" style={{ fontSize: 18, fontWeight: 600, color }}>{value}</div>
+      <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 2 }}>{sub}</div>
+    </div>
+  );
+
+  return (
+    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Icon name="line-chart" size={19} color={tone} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Arbitrage effectiveness</div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            Modelled savings{stats ? ` · since ${fmtSince(stats.sinceTs)}` : ''}
+          </div>
+        </div>
+      </div>
+
+      {!hasData ? (
+        <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>
+          No arbitrage activity logged yet. While the rule is enabled and Autopilot is armed in Auto, every tick is recorded here — Advisory logs what it <em>would</em> do; Active logs what it did.
+        </div>
+      ) : (
+        <>
+          {/* Advisory (modelled) vs Active (realized) headline stats */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Stat label="Advisory €" value={fmtEur(stats!.estSavedEurAdvisory)} sub={`modelled · ${stats!.engagementsAdvisory} engage${stats!.engagementsAdvisory === 1 ? '' : 's'}`} color="var(--text-1)" />
+            <Stat label="Active €" value={fmtEur(stats!.estSavedEurActive)} sub={`realized · ${stats!.engagementsActive} engage${stats!.engagementsActive === 1 ? '' : 's'}`} color={tone} />
+            <Stat label="Valley kWh" value={(stats!.valleyKwhAdvisory + stats!.valleyKwhActive).toFixed(1)} sub={`${stats!.valleyKwhActive.toFixed(1)} active · ${stats!.valleyKwhAdvisory.toFixed(1)} advisory`} color="var(--text-1)" />
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+            Savings are a MODELLED estimate — each shifted kWh is assumed to displace a peak (P1) import at the live P1−P3 spread.
+          </div>
+
+          {/* Recent events */}
+          {recent.length > 0 && (
+            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: '10px 12px' }}>
+              <div className="pwr-eyebrow" style={{ marginBottom: 8 }}>Recent events</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {recent.map((e, i) => {
+                  const m = ARB_TYPE_META[e.type] ?? ARB_TYPE_META.plan;
+                  return (
+                    <div key={`${e.ts}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5 }}>
+                      <span className="pwr-mono" style={{ color: 'var(--text-3)', minWidth: 92 }}>{fmtClock(e.ts)}</span>
+                      <span className="pwr-mono" style={{ color: m.color, fontWeight: 600, minWidth: 70 }}>{m.label}</span>
+                      <span className="pwr-mono" style={{ fontSize: 10.5, color: e.executionMode === 'active' ? 'var(--solar)' : 'var(--text-3)' }}>{e.executionMode}</span>
+                      <span className="pwr-mono" style={{ color: 'var(--text-2)' }}>{e.band}</span>
+                      {e.live.combinedSoc != null && <span className="pwr-mono" style={{ color: 'var(--text-2)' }}>SoC {Math.round(e.live.combinedSoc)}%</span>}
+                      {e.chargedKwhTick > 0 && <span className="pwr-mono" style={{ color: 'var(--text-2)' }}>{e.chargedKwhTick.toFixed(2)} kWh</span>}
+                      {e.estSavedEurTick > 0 && <span className="pwr-mono" style={{ color: tone }}>{fmtEur(e.estSavedEurTick)}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </Card>
   );
@@ -631,6 +757,9 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
       {arbAutomations.map((a) => (
         <TariffArbitrageCard key={a.id} a={a} live={live ?? null} ctrlArmedAuto={batteryArmedAuto} canWrite={!!canWrite} onSave={(patch) => saveAuto(a.id, patch)} onDelete={() => void removeAuto(a.id)} />
       ))}
+      {arbAutomations.length > 0 && (
+        <ArbitrageEffectivenessCard stats={ctrl?.arbitrageStats} events={ctrl?.arbitrageLog} />
+      )}
 
       {/* ---- Climate ---- */}
       <Eyebrow>Climate</Eyebrow>

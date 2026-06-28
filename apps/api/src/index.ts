@@ -29,6 +29,7 @@ import {
   applyScenarioToDevices,
   setBatteryPriority,
   setSoakExport,
+  getArbitrageLog,
 } from './routes/control';
 import { startCoordinator } from './control/coordinator';
 import { startSolarModelScheduler } from './solar-model';
@@ -225,6 +226,14 @@ app.post('/api/push/subscribe', wrap((req) => subscribe((req.body ?? {}) as neve
 // ---- Battery control (REAL device writes) ----
 // status is read-only (any authed user); arm/command/apply are admin-gated.
 app.get('/api/control/status', wrap(() => getControlStatus()));
+app.get(
+  '/api/control/arbitrage-log',
+  wrap((req) => {
+    const raw = req.query.limit;
+    const limit = typeof raw === 'string' ? Number(raw) : undefined;
+    return getArbitrageLog(limit);
+  }),
+);
 app.post(
   '/api/control/arm',
   requireAdmin,
