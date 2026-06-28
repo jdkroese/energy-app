@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { Capability, DiscoveredDevice, DiscoveredResponse } from '../lib/types';
+import type { Capability, CustomDeviceType, CustomTypesResponse, DiscoveredDevice, DiscoveredResponse } from '../lib/types';
 import { Card, Icon, Button, Badge } from '../components/ui';
+import { SetupSheet } from './SetupSheet';
 
 /* ============================================================================
  * Discovered devices — the onboarding INBOX (Devices → Needs setup). Phase 1 is
@@ -47,6 +48,29 @@ function devFixture(): DiscoveredResponse | null {
         online: true, proposedType: { label: 'Fan', icon: 'fan' },
         capabilities: [cap('switch', 'switch', 'Switch'), cap('range', 'fan_speed', 'Fan speed', { min: 1, max: 5 }), cap('enum', 'mode', 'Mode', { options: ['normal', 'nature', 'sleep'] })],
         confidence: 'high', roomGuess: 'office', readout: null,
+      },
+      {
+        // Sensitive: a door lock. Its unlock action carries `sensitive: true` so the
+        // generic renderer requires a confirm tap before firing.
+        id: 'demo-lock-1', name: 'Front door lock', category: 'jtmspro', productName: 'Smart Lock',
+        online: true, proposedType: { label: 'Lock', icon: 'lock' },
+        capabilities: [
+          cap('action', 'unlock_request', 'Unlock', { sensitive: true }),
+          cap('status', 'lock_motor_state', 'Lock state', { readOnly: true }),
+          cap('measure', 'battery_percentage', 'Battery', { unit: '%', readOnly: true }),
+        ],
+        confidence: 'review', roomGuess: 'entrance', readout: '78 %',
+      },
+      {
+        // Sensitive: a siren. Its alarm trigger is confirm-gated too.
+        id: 'demo-siren-1', name: 'Garage siren', category: 'sgbj', productName: 'Alarm Siren',
+        online: true, proposedType: { label: 'Siren', icon: 'siren' },
+        capabilities: [
+          cap('switch', 'switch_alarm', 'Alarm'),
+          cap('action', 'alarm_trigger', 'Trigger alarm', { sensitive: true }),
+          cap('enum', 'alarm_volume', 'Volume', { options: ['low', 'middle', 'high'] }),
+        ],
+        confidence: 'review', roomGuess: 'garage', readout: null,
       },
       {
         id: 'demo-sensor-1', name: 'Bedroom temp/humidity sensor', category: 'wsdcg', productName: 'TH Sensor',
@@ -183,16 +207,23 @@ export interface DiscoveredInboxProps {
   canTriage: boolean;
   /** Lift the active count up so the parent hub can badge the tab / show the banner. */
   onCount?: (n: number) => void;
+  /** Called after a device is set up (and after a setup graduates it) so the parent
+   *  hub can refetch the configured list + jump to the new group. */
+  onSetupDone?: (typeId: string) => void;
 }
 
-export function DiscoveredInbox({ wide, canTriage }: DiscoveredInboxProps) {
+export function DiscoveredInbox({ wide, canTriage, onSetupDone }: DiscoveredInboxProps) {
   const fixture = useMemo(() => devFixture(), []);
   const live = usePolling<DiscoveredResponse>(api.devices.discovered, fixture ? 0 : 30_000);
   const data = fixture ?? live.data;
+  const customTypesPoll = usePolling<CustomTypesResponse>(api.devices.customTypes, fixture ? 0 : 0);
+  const customTypes: CustomDeviceType[] = customTypesPoll.data?.customDeviceTypes ?? [];
   const [busy, setBusy] = useState<string | null>(null);
   const [showIgnored, setShowIgnored] = useState(false);
-  // Local optimistic override so an Ignore/Keep reflects instantly (fixture too).
-  const [override, setOverride] = useState<Record<string, 'ignored' | 'kept'>>({});
+  // Local optimistic override so an Ignore/Keep/Setup reflects instantly (fixture too).
+  const [override, setOverride] = useState<Record<string, 'ignored' | 'kept' | 'configured'>>({});
+  const [setupDevice, setSetupDevice] = useState<DiscoveredDevice | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   const ignore = (id: string) => {
     setOverride((o) => ({ ...o, [id]: 'ignored' }));
@@ -219,8 +250,9 @@ export function DiscoveredInbox({ wide, canTriage }: DiscoveredInboxProps) {
     );
   }
 
-  // Apply local overrides on top of the server lists.
-  const active = data.devices.filter((d) => override[d.id] !== 'ignored');
+  // Apply local overrides on top of the server lists. A 'configured' override hides the
+  // device from the inbox entirely (it has graduated into its group).
+  const active = data.devices.filter((d) => override[d.id] !== 'ignored' && override[d.id] !== 'configured');
   const newlyKept = data.ignored.filter((d) => override[d.id] === 'kept');
   const activeAll = [...active, ...newlyKept];
   const ignored = [...data.ignored.filter((d) => override[d.id] !== 'kept'), ...data.devices.filter((d) => override[d.id] === 'ignored')];
@@ -229,8 +261,14 @@ export function DiscoveredInbox({ wide, canTriage }: DiscoveredInboxProps) {
   const monitor = activeAll.filter((d) => d.confidence === 'monitor');
   const recognized = activeAll.filter((d) => d.confidence === 'high');
 
+  const setupBtn = (d: DiscoveredDevice) => (
+    <Button size="sm" variant="primary" disabled={!canTriage} onClick={() => setSetupDevice(d)} iconLeft={<Icon name="plus" size={13} />}>Set up</Button>
+  );
   const ignoreBtn = (d: DiscoveredDevice) => (
-    <Button size="sm" variant="ghost" disabled={!canTriage || busy === d.id} onClick={() => ignore(d.id)} iconLeft={<Icon name="eye-off" size={13} />}>Ignore</Button>
+    <div style={{ display: 'inline-flex', gap: 7, alignItems: 'center' }}>
+      {setupBtn(d)}
+      <Button size="sm" variant="ghost" disabled={!canTriage || busy === d.id} onClick={() => ignore(d.id)} iconLeft={<Icon name="eye-off" size={13} />}>Ignore</Button>
+    </div>
   );
   const keepBtn = (d: DiscoveredDevice) => (
     <Button size="sm" variant="secondary" disabled={!canTriage || busy === d.id} onClick={() => keep(d.id)} iconLeft={<Icon name="rotate-ccw" size={13} />}>Keep</Button>
@@ -287,7 +325,35 @@ export function DiscoveredInbox({ wide, canTriage }: DiscoveredInboxProps) {
         </div>
       )}
 
-      {!canTriage && <div style={{ fontSize: 11.5, color: 'var(--text-3)', textAlign: 'center' }}>Read-only — only an admin can ignore or keep devices.</div>}
+      {!canTriage && <div style={{ fontSize: 11.5, color: 'var(--text-3)', textAlign: 'center' }}>Read-only — only an admin can set up, ignore or keep devices.</div>}
+
+      {setupDevice && (
+        <SetupSheet
+          device={setupDevice}
+          wide={wide}
+          customTypes={customTypes}
+          onClose={() => setSetupDevice(null)}
+          onTypesChanged={() => customTypesPoll.refetch()}
+          onDone={(label) => {
+            // Optimistically hide it from the inbox; refetch the live lists.
+            const id = setupDevice.id;
+            const typeId = setupDevice.proposedType.label;
+            setOverride((o) => ({ ...o, [id]: 'configured' }));
+            setSetupDevice(null);
+            setToast(`Added to ${label}`);
+            window.setTimeout(() => setToast(null), 2600);
+            if (!fixture) live.refetch();
+            onSetupDone?.(typeId);
+          }}
+        />
+      )}
+      {toast && (
+        <div role="status" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 1100,
+          background: 'var(--surface-3)', border: '1px solid var(--border-2)', color: 'var(--text-1)', borderRadius: 'var(--radius-pill)',
+          padding: '9px 16px', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+          <Icon name="check" size={15} color="var(--solar)" /> {toast}
+        </div>
+      )}
     </div>
   );
 }

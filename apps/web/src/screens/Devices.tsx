@@ -4,13 +4,15 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
   DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse,
+  ConfiguredResponse, ConfiguredDeviceView, Capability,
 } from '../lib/types';
 import { Card, Icon } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
-import { DEVICE_TYPES, typeMeta, classifyDevice, type DeviceType } from '../lib/deviceTypes';
+import { DEVICE_TYPES, classifyDevice, resolveTypeMeta, type DeviceType } from '../lib/deviceTypes';
 import { AutomationRow } from '../components/AutomationRow';
+import { GenericControl } from '../components/GenericControl';
 import { LightsPanel } from './Lights';
 import { BlindsPanel } from './Blinds';
 import { DiscoveredInbox, useDiscoveredCount } from './DiscoveredInbox';
@@ -121,25 +123,34 @@ function useLeverCommands(devices: DeviceView[], refetch: () => void) {
   return { sendLever, pendingFor };
 }
 
-/** A hub view = a built device type OR the onboarding inbox ('needs-setup'). */
-type HubView = DeviceType | 'needs-setup';
+/** A hub view = a device type id (built-in or custom) OR the onboarding inbox. */
+type HubView = string; // a DeviceType key, a custom type id, or 'needs-setup'
+
+/** One tab in the type bar — built-in or custom, with its hue + icon + count. */
+interface TabSpec {
+  id: string;
+  label: string;
+  hue: string;
+  icon: string;
+  count: number;
+}
 
 /* ---- type tab bar (matches the Autopilot SegmentedControl look + hue dots) --
- * Appends a warning-toned "Needs setup · N" segment when N>0, so discovered
- * (not-yet-set-up) devices get a first-class home in the hub. */
-function TypeTabs({ active, counts, needsSetup, wide, onSelect }: {
-  active: HubView; counts: Record<DeviceType, number>; needsSetup: number; wide: boolean; onSelect: (t: HubView) => void;
+ * Renders built-in tabs plus any type (built-in or custom) that has configured
+ * generic devices. Appends a warning-toned "Needs setup · N" segment when N>0. */
+function TypeTabs({ active, tabs, needsSetup, wide, onSelect }: {
+  active: HubView; tabs: TabSpec[]; needsSetup: number; wide: boolean; onSelect: (t: HubView) => void;
 }) {
   return (
-    <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 5 }}>
-      {DEVICE_TYPES.map((m) => {
-        const on = m.type === active;
+    <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 5, flexWrap: 'wrap' }}>
+      {tabs.map((m) => {
+        const on = m.id === active;
         const short = !wide && m.label.length > 7 ? m.label.slice(0, 5) : m.label;
         return (
           <button
-            key={m.type}
+            key={m.id}
             type="button"
-            onClick={() => onSelect(m.type)}
+            onClick={() => onSelect(m.id)}
             style={{
               flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
               padding: wide ? '9px 6px' : '8px 4px', borderRadius: 'var(--radius-md)', border: 'none', cursor: 'pointer',
@@ -151,8 +162,8 @@ function TypeTabs({ active, counts, needsSetup, wide, onSelect }: {
           >
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: m.hue, flex: 'none', opacity: on ? 1 : 0.6 }} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
-            {wide && counts[m.type] > 0 && (
-              <span className="pwr-mono" style={{ fontSize: 11, color: on ? 'var(--text-3)' : 'var(--text-disabled)' }}>{counts[m.type]}</span>
+            {wide && m.count > 0 && (
+              <span className="pwr-mono" style={{ fontSize: 11, color: on ? 'var(--text-3)' : 'var(--text-disabled)' }}>{m.count}</span>
             )}
           </button>
         );
@@ -459,6 +470,58 @@ function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, se
   );
 }
 
+/* ---- generic (set-up) device group ---------------------------------------- */
+
+/** A compact card for one configured generic device — header + the generic control
+ *  renderer. Used in the type tab grid; the whole card title links to its detail. */
+function GenericDeviceCard({ d, wide, canWrite, onWrite, onOpen }: {
+  d: ConfiguredDeviceView; wide: boolean; canWrite: boolean;
+  onWrite: (dp: string, kind: Capability['kind'], value: unknown) => Promise<unknown> | void;
+  onOpen: () => void;
+}) {
+  return (
+    <Card padded style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button type="button" onClick={onOpen} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
+          <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 1 }}>
+            Tuya · {d.category || '?'}{!d.online ? ' · offline' : ''}
+          </div>
+        </button>
+        <button type="button" onClick={onOpen} aria-label="Open detail" style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2 }}>
+          <Icon name="chevron-right" size={16} color="var(--text-3)" />
+        </button>
+      </div>
+      <GenericControl capabilities={d.capabilities} values={d.values} onWrite={onWrite} disabled={!canWrite} variant="card" />
+    </Card>
+  );
+}
+
+/** The content for a type tab populated by configured generic devices (Switching /
+ *  custom / any type a set-up device landed in). */
+function GenericGroup({ devices, wide, canWrite, onWrite, onOpen, emptyMeta }: {
+  devices: ConfiguredDeviceView[]; wide: boolean; canWrite: boolean;
+  onWrite: (id: string, dp: string, kind: Capability['kind'], value: unknown) => Promise<unknown> | void;
+  onOpen: (id: string) => void;
+  emptyMeta: { label: string; icon: string; hue: string };
+}) {
+  if (devices.length === 0) return <ComingSoon meta={emptyMeta} />;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(2, 1fr)' : '1fr', gap: 10 }}>
+      {devices.map((d) => (
+        <GenericDeviceCard
+          key={d.id}
+          d={d}
+          wide={wide}
+          canWrite={canWrite}
+          onWrite={(dp, kind, value) => onWrite(d.id, dp, kind, value)}
+          onOpen={() => onOpen(d.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
 function ComingSoon({ meta }: { meta: { label: string; icon: string; hue: string } }) {
   return (
     <Card padded style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 28 }}>
@@ -480,13 +543,13 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const { data: autoData, refetch: refetchAuto } = usePolling<AutomationsResponse>(api.automations.list, 0);
   const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 20_000);
   const { data: blindsData } = usePolling<BlindsResponse>(api.blinds.list, 20_000);
+  // Configured (set-up) generic devices — populate the Switching + custom tabs.
+  const { data: configuredData, refetch: refetchConfigured } = usePolling<ConfiguredResponse>(api.devices.configured, 20_000);
   // Active tab persists in the URL (?type=) so returning from a unit detail
   // restores the tab the device lives on (e.g. back from a heating zone → Heating).
   const [params, setParams] = useSearchParams();
   const paramType = params.get('type');
-  const initialType: HubView =
-    paramType === 'needs-setup' ? 'needs-setup'
-      : DEVICE_TYPES.some((m) => m.type === paramType) ? (paramType as DeviceType) : 'cooling';
+  const initialType: HubView = paramType || 'cooling';
   const [activeType, setActiveType] = useState<HubView>(initialType);
   const selectType = (t: HubView) => {
     setActiveType(t);
@@ -499,6 +562,9 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const d = data;
   const armed = status?.armed ?? false;
 
+  const configured = configuredData?.devices ?? [];
+  const customTypes = configuredData?.customDeviceTypes ?? [];
+
   const counts = DEVICE_TYPES.reduce((acc, m) => {
     acc[m.type] = (d?.devices ?? []).filter((x) => classifyDevice(x) === m.type).length;
     return acc;
@@ -506,6 +572,27 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   // Lights and blinds are separate Tuya fleets (not in the climate /api/devices list).
   counts.lighting = lightsData?.context.deviceCount ?? 0;
   counts.blinds = blindsData?.context.deviceCount ?? 0;
+  // Configured generic devices feed the Switching tab + any custom-type tab.
+  for (const cfg of configured) {
+    if (cfg.typeId in counts) (counts as Record<string, number>)[cfg.typeId] += 1;
+  }
+  counts.switching = configured.filter((c) => c.typeId === 'switching').length;
+
+  // Devices grouped by their assigned typeId (built-in or custom).
+  const configuredByType = (typeId: string) => configured.filter((c) => c.typeId === typeId);
+
+  // Tab list = the built-in types + any custom type that has configured devices.
+  const customTabSpecs: TabSpec[] = customTypes
+    .filter((c) => configuredByType(c.id).length > 0)
+    .map((c) => { const m = resolveTypeMeta(c.id, customTypes); return { id: c.id, label: c.label, hue: m.hue, icon: m.icon, count: configuredByType(c.id).length }; });
+  const tabs: TabSpec[] = [
+    ...DEVICE_TYPES.map((m) => ({ id: m.type, label: m.label, hue: m.hue, icon: m.icon, count: counts[m.type] })),
+    ...customTabSpecs,
+  ];
+
+  // Optimistic write for a generic capability — fire-and-refetch.
+  const writeCap = (id: string, dp: string, kind: Capability['kind'], value: unknown) =>
+    api.devices.commandCap(id, dp, kind, value).finally(() => refetchConfigured());
 
   const cooling = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'cooling');
   const heating = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'heating');
@@ -656,13 +743,32 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     </>
   );
 
+  const onSetupDone = (typeId: string) => {
+    refetchConfigured();
+    // Jump to the group the device graduated into (switching by default; the inbox
+    // passes the proposed-type label, which may not be a tab id — fall to switching).
+    const target = tabs.some((t) => t.id === typeId) ? typeId : 'switching';
+    selectType(target);
+  };
+
   const content = (t: HubView) => {
-    if (t === 'needs-setup') return <DiscoveredInbox wide={wide} canTriage={isAdmin} />;
+    if (t === 'needs-setup') return <DiscoveredInbox wide={wide} canTriage={isAdmin} onSetupDone={onSetupDone} />;
     if (t === 'cooling') return coolingContent;
     if (t === 'heating') return heatingContent;
     if (t === 'lighting') return <LightsPanel ctx={ctx} />;
     if (t === 'blinds') return <BlindsPanel ctx={ctx} />;
-    return <ComingSoon meta={typeMeta(t)} />;
+    // Switching (built-in generic bucket) + any custom type → the generic group.
+    const meta = resolveTypeMeta(t, customTypes);
+    return (
+      <GenericGroup
+        devices={configuredByType(t)}
+        wide={wide}
+        canWrite={isAdmin}
+        onWrite={writeCap}
+        onOpen={(id) => nav(`/devices/generic/${id}`)}
+        emptyMeta={{ label: meta.label, icon: meta.icon, hue: meta.hue }}
+      />
+    );
   };
 
   // Pinned inbox prompt — sits atop the hub whenever there are devices to triage and
@@ -685,7 +791,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {d && (
         <>
           {inboxPrompt}
-          <TypeTabs active={activeType} counts={counts} needsSetup={needsSetupCount} wide={wide} onSelect={selectType} />
+          <TypeTabs active={activeType} tabs={tabs} needsSetup={needsSetupCount} wide={wide} onSelect={selectType} />
           {content(activeType)}
         </>
       )}

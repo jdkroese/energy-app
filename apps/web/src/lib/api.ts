@@ -11,9 +11,14 @@ import type {
   BlindsResponse,
   BlindDetailResponse,
   BrainPlanResponse,
+  CapabilityKind,
+  CapabilityOverride,
   Channels,
   ChannelType,
   ClimateLever,
+  ConfiguredResponse,
+  CustomDeviceType,
+  CustomTypesResponse,
   ControlCommandValue,
   ControlDevice,
   ControlLever,
@@ -200,6 +205,18 @@ export const api = {
     discovered: () => getJSON<DiscoveredResponse>('/api/devices/discovered'),
     ignore: (id: string) => postJSON<{ ts: string; id: string; ignored: boolean }>(`/api/devices/${enc(id)}/ignore`, {}),
     keep: (id: string) => postJSON<{ ts: string; id: string; ignored: boolean }>(`/api/devices/${enc(id)}/keep`, {}),
+
+    // Onboarding Phase 2 — set-up flow + generic control of configured devices (admin writes).
+    configured: () => getJSON<ConfiguredResponse>('/api/devices/configured'),
+    setup: (id: string, body: { typeId: string; name: string; capOverrides?: CapabilityOverride[] }) =>
+      postJSON<{ ts: string; id: string }>(`/api/devices/${enc(id)}/setup`, body),
+    unsetup: (id: string) => postJSON<{ ts: string; id: string }>(`/api/devices/${enc(id)}/unsetup`, {}),
+    customTypes: () => getJSON<CustomTypesResponse>('/api/devices/custom-types'),
+    createCustomType: (label: string, icon: string) =>
+      postJSON<{ customDeviceType: CustomDeviceType }>('/api/devices/custom-types', { label, icon }),
+    // Generic capability command ({ dp, kind, value }) — confirmed in the UI for sensitive actions.
+    commandCap: (id: string, dp: string, kind: CapabilityKind, value: unknown) =>
+      postJSON<{ ts: string; ok: boolean }>(`/api/devices/${enc(id)}/command`, { dp, kind, value }),
   },
 
   /* ---- Lights (Tuya); command/bulk are admin ---- */
