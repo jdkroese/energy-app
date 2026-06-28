@@ -37,6 +37,12 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 // Per-device "surplus first dropped at" timestamp, for the sustained-clear debounce.
 const surplusClearedSince = new Map<string, number>();
+// Per-device count of CONSECUTIVE ticks a rule-owned unit has been observed OFF, for the
+// release debounce (so one stale `power=false` read from the flaky cloud can't orphan a
+// still-running unit). Reset to 0 the moment it reads ON again.
+const offSeenCount = new Map<string, number>();
+// Consecutive OFF reads required before the rule releases ownership of a unit.
+const OFF_RELEASE_TICKS = 2;
 
 // Above this much GRID IMPORT (kW) we treat the moment as a DEFICIT regardless of
 // the computed surplusW — a safety net so surplus cooling can never silently turn
@@ -204,9 +210,50 @@ async function evaluateSurplusDirection(
   let pendingImportKw = 0;
 
   for (const u of candidates) {
-    // Provenance reconcile: if a rule-started unit is observed OFF (someone turned it
-    // off), drop it from the set so it's no longer considered rule-owned.
-    if (!u.power && surplusOwns(u.id)) dropSurplusStarted(u.id);
+    // Provenance reconcile: if a rule-started unit is observed OFF (someone turned it off),
+    // release it — but DEBOUNCED. A single stale/transient `power=false` read from the flaky
+    // Intesis cloud must not orphan a unit that is actually still running, so require the unit
+    // to read OFF for OFF_RELEASE_TICKS consecutive ticks before dropping ownership. Any ON
+    // reading resets the counter.
+    if (surplusOwns(u.id)) {
+      if (!u.power) {
+        const n = (offSeenCount.get(u.id) ?? 0) + 1;
+        if (n >= OFF_RELEASE_TICKS) {
+          dropSurplusStarted(u.id);
+          offSeenCount.delete(u.id);
+        } else {
+          offSeenCount.set(u.id, n);
+        }
+      } else {
+        offSeenCount.delete(u.id);
+      }
+    }
+
+    // Reclaim orphaned rule-started units: a unit that is ON but NOT in provenance, not under
+    // a manual hold, and sitting at THIS rule's exact target (same mode + setpoint) is almost
+    // certainly one the rule started and then lost ownership of (a failed off in an older build,
+    // or before the debounce above). Re-adopt it so the rule can manage — and crucially STOP —
+    // it again. (candidates are already filtered to units ENROLLED in this direction.) The
+    // mode+setpoint match protects a genuinely manual unit: an AC a person set to a DIFFERENT
+    // setpoint won't match and stays manual. RESIDUAL (documented): a unit a person set via a
+    // PHYSICAL REMOTE to exactly this rule's mode+target in an enrolled room would also be
+    // reclaimed; app/dashboard manual commands are excluded via the manual-override hold.
+    if (
+      u.power &&
+      !surplusOwns(u.id) &&
+      !isManualOverrideActive(u.id) &&
+      u.mode === dir &&
+      u.setpointC != null &&
+      Math.abs(u.setpointC - targetC) <= 0.5
+    ) {
+      addSurplusStarted(u.id);
+      offSeenCount.delete(u.id);
+      logDecision(
+        u.id,
+        `${automation.name}: reclaim`,
+        `re-adopted orphaned ${dir}@${targetC}°C unit (was falsely shown manual)`,
+      );
+    }
 
     // Manual protection (provenance): a unit that is powered ON but the rule did NOT
     // start (dashboard, remote, or schedule) is hands-off — never auto-off, never
@@ -249,8 +296,13 @@ async function evaluateSurplusDirection(
           ? `room ${room}°C at ${dir} target ${targetC}°C`
           : `${importingFromGrid ? `grid import ${snap.gridImportKw.toFixed(1)}kW` : 'no surplus'} ${Math.round(clearedFor / 1000)}s ≥ ${p.surplusClearSec}s`;
       const reason = `${automation.name}: stop — ${why}`;
-      await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
-      dropSurplusStarted(u.id);
+      const res = await issueClimate(u, 'power', false, reason, { ...snap, pendingImportKw });
+      // Only release ownership if the off ACTUALLY succeeded. issueClimate returns ok:false
+      // (never throws) on a cloud error, rate-limit, or guardrail reject. Dropping a unit on a
+      // FAILED off would orphan a still-running unit (on + unowned ⇒ falsely "manual" ⇒ never
+      // stopped again — the all-night-runner bug). Keep it owned so the next tick retries the off.
+      // Mirrors the start path's `if (res.ok) addSurplusStarted(...)` guard below.
+      if (res.ok) dropSurplusStarted(u.id);
       continue;
     }
 
@@ -502,6 +554,7 @@ export async function stopSurplusStartedUnits(reason: string): Promise<number> {
 export function revertClimateToSafe(): void {
   _resetClimateRateLimits();
   surplusClearedSince.clear();
+  offSeenCount.clear();
   store.update((st) => {
     st.devices.armed = false;
     st.devices.mode = 'off';
