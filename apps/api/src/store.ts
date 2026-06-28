@@ -377,8 +377,13 @@ export function defaultAlarmConfig(): AlarmConfig {
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */
 export interface DeviceSettings {
-  /** Friendly room override (falls back to the device's reported zone/name). */
+  /** Friendly room override (falls back to the device's reported zone/name). Kept as a
+   *  display fallback; the first-class Rooms model (rooms + roomId below) supersedes it. */
   room?: string;
+  /** First-class Rooms assignment: the id of the {@link Room} this device belongs to,
+   *  or undefined/null = Unassigned. Spans EVERY device type (climate, lights, blinds,
+   *  generic) because deviceSettings is keyed by the globally-unique device id. */
+  roomId?: string | null;
   /** Custom display name override (lights; falls back to the device's reported name). */
   name?: string;
   /**
@@ -837,6 +842,21 @@ export interface LightSchedule {
   target: LightScheduleTarget;
 }
 
+// ---- Rooms ------------------------------------------------------------------
+// A first-class, cross-cutting Rooms concept that spans EVERY device type. A device's
+// room is stored on deviceSettings[deviceId].roomId (a single map keyed by the globally-
+// unique device id), so climate/lights/blinds/generic all resolve their room the same way.
+
+/** A room — a flat (no floors/zones hierarchy) named bucket devices are assigned to. */
+export interface Room {
+  id: string;
+  name: string;
+  /** Lucide icon name (UI wayfinding). */
+  icon: string;
+  /** Sort order in the By-room view + manage list (first-seen on seed; user-reorderable). */
+  order: number;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -875,6 +895,11 @@ export interface StoreSchema {
   alarmActive: AlarmActive | null;
   /** Owner-configurable house-alarm defaults (Settings → Alarm / Panic). */
   alarmConfig: AlarmConfig;
+  /** First-class Rooms: roomId → Room. Devices map to a room via deviceSettings[id].roomId. */
+  rooms: Record<string, Room>;
+  /** One-time guard: once true the auto-seed/pre-assign migration never runs again, so it
+   *  can't clobber the owner's room edits/assignments on a later boot. */
+  roomsSeeded: boolean;
 }
 
 /**
@@ -1142,6 +1167,8 @@ function defaults(): StoreSchema {
     deviceOnboarding: { ignored: [], configured: {}, customDeviceTypes: [] },
     alarmActive: null,
     alarmConfig: defaultAlarmConfig(),
+    rooms: {},
+    roomsSeeded: false,
   };
 }
 
@@ -1510,7 +1537,28 @@ function hydrate(raw: unknown): StoreSchema {
     deviceOnboarding: hydrateDeviceOnboarding(p.deviceOnboarding, base.deviceOnboarding),
     alarmActive: hydrateAlarmActive(p.alarmActive),
     alarmConfig: hydrateAlarmConfig(p.alarmConfig, base.alarmConfig),
+    rooms: hydrateRooms(p.rooms),
+    roomsSeeded: typeof p.roomsSeeded === 'boolean' ? p.roomsSeeded : false,
   };
+}
+
+/** Rehydrate the rooms map, coercing each entry + dropping malformed ones. */
+function hydrateRooms(p: unknown): Record<string, Room> {
+  if (!p || typeof p !== 'object') return {};
+  const out: Record<string, Room> = {};
+  let i = 0;
+  for (const [id, raw] of Object.entries(p as Record<string, unknown>)) {
+    const r = (raw ?? {}) as Partial<Room>;
+    if (typeof r.name !== 'string' || !r.name.trim()) continue;
+    out[id] = {
+      id,
+      name: r.name.trim(),
+      icon: typeof r.icon === 'string' && r.icon ? r.icon : 'home',
+      order: typeof r.order === 'number' ? r.order : i,
+    };
+    i++;
+  }
+  return out;
 }
 
 /** Rehydrate the alarm config, clamping the blink floor and coercing types. */

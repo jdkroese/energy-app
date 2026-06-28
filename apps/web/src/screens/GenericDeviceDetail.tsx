@@ -8,6 +8,8 @@ import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { GenericControl } from '../components/GenericControl';
+import { RoomPicker } from '../components/RoomPicker';
+import type { RoomsResponse } from '../lib/types';
 import { primaryCapabilities, secondaryCapabilities, hasPowerSwitch } from '../lib/capabilities';
 import { resolveTypeMeta } from '../lib/deviceTypes';
 import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
@@ -31,6 +33,7 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
   const { data, stale, updatedAt, refetch } = usePolling<ConfiguredResponse>(api.devices.configured, 15_000);
   const { data: schedData, refetch: refetchSchedules } = usePolling<SchedulesResponse>(api.schedules.list, 0);
+  const { data: roomsData, refetch: refetchRooms } = usePolling<RoomsResponse>(api.rooms.list, 0);
   const [reclassify, setReclassify] = useState(false);
   const [editingRule, setEditingRule] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
   const [editingName, setEditingName] = useState(false);
@@ -130,6 +133,13 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
                   {meta.label} · Tuya · {device.category || '?'}{!device.online ? ' · offline' : ''}
                 </div>
               </div>
+            </Card>
+
+            {/* ROOM — cross-cutting Rooms assignment (picker with + New room). */}
+            <Card padded style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px' }}>
+              <Icon name="layout-grid" size={16} color="var(--text-3)" />
+              <span style={{ fontSize: 13, color: 'var(--text-2)', flex: 1 }}>Room</span>
+              <RoomPicker deviceId={device.id} value={device.roomId ?? null} rooms={roomsData?.rooms ?? []} disabled={!isAdmin} onChanged={() => { refetch(); refetchRooms(); }} />
             </Card>
 
             <Card padded style={{ padding: 16 }}>

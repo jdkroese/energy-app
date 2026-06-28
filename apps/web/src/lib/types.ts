@@ -665,6 +665,9 @@ export interface DeviceView {
   /** Radio thermostat reporting a low battery. */
   lowBattery?: boolean | null;
   room: string;
+  /** First-class Rooms model: assigned room id (null = Unassigned) + resolved name. */
+  roomId: string | null;
+  roomName: string | null;
   /** LEGACY: true iff EITHER solar direction is enrolled. */
   automationEnabled: boolean;
   /** Solar-surplus COOLING enrolment (independent per-direction flag). */
@@ -939,6 +942,9 @@ export interface LightUnit {
   id: string;
   name: string;
   room: string;
+  /** First-class Rooms model: assigned room id (null = Unassigned) + resolved name. */
+  roomId?: string | null;
+  roomName?: string | null;
   category: string;
   online: boolean;
   power: boolean;
@@ -980,6 +986,9 @@ export interface BlindUnit {
   id: string;
   name: string;
   room: string;
+  /** First-class Rooms model: assigned room id (null = Unassigned) + resolved name. */
+  roomId?: string | null;
+  roomName?: string | null;
   category: string;
   online: boolean;
   /** Current position, 0 = closed, 100 = open; null if the motor has no feedback. */
@@ -1069,6 +1078,9 @@ export interface ConfiguredDeviceView {
   /** dp → current app-facing value. */
   values: Record<string, unknown>;
   roomGuess: string | null;
+  /** First-class Rooms model: assigned room id (null = Unassigned) + resolved name. */
+  roomId?: string | null;
+  roomName?: string | null;
   setupAt: string;
 }
 
@@ -1154,6 +1166,46 @@ export interface DiscoveredResponse {
   fleetError: string | null;
   devices: DiscoveredDevice[];
   ignored: DiscoveredDevice[];
+}
+
+/* ============================================================================
+ * Rooms — a first-class, cross-cutting location concept spanning every device type.
+ * ==========================================================================*/
+
+export interface Room {
+  id: string;
+  name: string;
+  icon: string;
+  order: number;
+}
+
+/** A room with its live device count (from GET /api/rooms). */
+export interface RoomWithCount extends Room {
+  deviceCount: number;
+}
+
+export interface RoomsResponse {
+  ts: string;
+  rooms: RoomWithCount[];
+  unassignedCount: number;
+  deviceCount: number;
+  fleetError: string | null;
+}
+
+/** One device's result in a room-level All-off. */
+export interface RoomAllOffResult {
+  id: string;
+  name: string;
+  kind: string;
+  ok: boolean;
+  reason: string;
+}
+
+export interface RoomAllOffResponse {
+  ts: string;
+  id: string;
+  scope: 'all' | 'lights';
+  results: RoomAllOffResult[];
 }
 
 /* ---- Light scenes + schedules (self-contained light subsystem) ---- */

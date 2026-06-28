@@ -15,6 +15,14 @@ import {
 } from '../connectors/tuya-configured-lights';
 import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import * as store from '../store';
+import { resolveRoomId } from '../rooms';
+
+/** Attach the first-class Rooms fields (roomId + resolved name) to a normalized unit. */
+function withRoom<T extends { id: string }>(u: T): T & { roomId: string | null; roomName: string | null } {
+  const roomId = resolveRoomId(u.id);
+  const roomName = roomId ? store.get().rooms[roomId]?.name ?? null : null;
+  return { ...u, roomId, roomName };
+}
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -84,7 +92,7 @@ async function getLightFleet(): Promise<{ units: LightUnit[]; error: string | nu
     );
     for (const u of extras) if (u) units.push(u);
 
-    return { units, error: null };
+    return { units: units.map(withRoom), error: null };
   } catch (e) {
     return { units: [], error: (e as Error).message };
   }
