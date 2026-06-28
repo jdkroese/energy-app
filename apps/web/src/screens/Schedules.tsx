@@ -28,7 +28,6 @@ const FILTERS: { value: 'all' | DeviceType; label: string }[] = [
   { value: 'blinds', label: 'Blinds' },
   { value: 'circuit', label: 'Circ' },
 ];
-const TYPE_ORDER: DeviceType[] = ['cooling', 'heating', 'lighting', 'blinds', 'circuit'];
 
 /** Minimal schedulable-unit shape — climate devices and Tuya blinds both map to this. */
 interface SchedUnit { id: string; name: string; type: DeviceType }
@@ -58,7 +57,7 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
   const units = useMemo<SchedUnit[]>(() => {
     const climate: SchedUnit[] = (devData?.devices ?? []).map((d) => ({ id: d.id, name: d.room || d.name, type: d.type }));
     const blinds: SchedUnit[] = (blindsData?.devices ?? []).map((b) => ({ id: b.id, name: b.room || b.name, type: 'blinds' as DeviceType }));
-    return [...climate, ...blinds];
+    return [...climate, ...blinds].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   }, [devData, blindsData]);
   const unitById = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
   const unitName = (id: string) => unitById.get(id)?.name || id;
@@ -111,7 +110,7 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
       .map((id) => ({ id, unit: unitById.get(id), rules: rulesByUnit.get(id) ?? [] }))
       .filter((u): u is { id: string; unit: SchedUnit; rules: Schedule[] } => !!u.unit)
       .filter((u) => filter === 'all' || u.unit.type === filter)
-      .sort((a, b) => TYPE_ORDER.indexOf(a.unit.type) - TYPE_ORDER.indexOf(b.unit.type) || a.unit.type.localeCompare(b.unit.type));
+      .sort((a, b) => a.unit.name.localeCompare(b.unit.name, undefined, { numeric: true, sensitivity: 'base' }));
     return list;
   }, [showAll, units, schedules, unitById, rulesByUnit, filter]);
 

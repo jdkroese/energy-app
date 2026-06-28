@@ -285,6 +285,9 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
 
   const { data: scenesData, refetch: refetchScenes } = usePolling<ScenesResponse>(api.lights.scenes, 0);
   const d = data;
+  // Alphabetical (case-insensitive, number-aware) order for the lights list, the scene
+  // builder's light picker, and the light-schedule target picker — derived once here.
+  const sortedLights = [...(d?.devices ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -313,7 +316,7 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
             </Card>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(auto-fill, minmax(260px, 1fr))' : '1fr', gap: 12 }}>
-              {d.devices.map((dev) => {
+              {sortedLights.map((dev) => {
                 const m = withOverrides(dev);
                 return (
                   <LightCard
@@ -331,8 +334,8 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
           )}
 
           {/* Scenes + schedules — manage on/off+dim presets and time-based rules */}
-          <ScenesSection lights={d.devices} canControl={canControl} onScenesChanged={refetchScenes} />
-          <LightSchedulesSection lights={d.devices} scenes={scenesData?.scenes ?? []} canControl={canControl} />
+          <ScenesSection lights={sortedLights} canControl={canControl} onScenesChanged={refetchScenes} />
+          <LightSchedulesSection lights={sortedLights} scenes={scenesData?.scenes ?? []} canControl={canControl} />
         </>
       )}
     </div>
