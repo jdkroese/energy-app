@@ -21,16 +21,20 @@ import type { ShellContext } from '../components/shell/AppShell';
  * Autopilot — the battery-control screen, organised into four tabs:
  *   Summary  · the plan (hero) + which systems are armed and in what mode
  *   Status   · live device truth + always-on guardrails
- *   Activity · the command audit log ("what the boss did")
+ *   Events   · the command audit log ("what the boss did")
  *   Settings · arm/mode/kill + manual levers (admin only)
  *
  * It commands REAL Sonnen + Tesla hardware, so the armed state and kill switch
  * are pinned in the header on every tab, and every write runs through a confirm
  * dialog with always-enforced guardrails.
+ *
+ * Embeddable: when hosted inside the Automations screen (`embedded`), the host
+ * renders the page header + tab strip and passes the active `tab` in as a prop,
+ * so this component skips its own header/tab bar and drops the page padding.
  * ==========================================================================*/
 
 const POLL_MS = 5_000;
-type TabKey = 'summary' | 'status' | 'activity' | 'settings';
+export type TabKey = 'summary' | 'status' | 'events' | 'settings';
 
 /* ---- small toast bus (local to this screen) ------------------------------ */
 type Toast = { id: number; kind: 'ok' | 'err'; text: string };
@@ -123,8 +127,12 @@ const SONNEN_MODES = [
   { value: 'time_of_use', label: 'Time-of-use' },
 ];
 
-function prettyMode(m: string): string {
-  return m.replace(/_/g, ' ');
+function prettyMode(m: string | null | undefined): string {
+  // Tolerate missing values: when a device is offline the control status omits
+  // mode/exportRule, and the Status panel formats them directly. Guard so an
+  // undefined field renders as a dash instead of throwing and blanking the screen.
+  if (m === null || m === undefined) return '—';
+  return String(m).replace(/_/g, ' ');
 }
 function fmtVal(v: string | number | boolean | null): string {
   if (v === null || v === undefined) return '—';
@@ -139,12 +147,15 @@ function hhmm(h: number): string {
 /* ============================================================================
  * The screen
  * ==========================================================================*/
-export function Autopilot({ ctx }: { ctx: ShellContext }) {
+export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellContext; tab?: TabKey; embedded?: boolean }) {
   const wide = ctx.desktop;
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
-  const [tab, setTab] = useState<TabKey>('summary');
+  // When embedded, the host owns tab state and passes it in; otherwise we keep
+  // our own internal state and render our own tab strip.
+  const [tabState, setTabState] = useState<TabKey>('summary');
+  const tab = tabProp ?? tabState;
   const [status, setStatus] = useState<ControlStatus | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
@@ -375,9 +386,9 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 1100, margin: '0 auto', width: '100%', padding: wide ? 0 : '8px 14px 22px' }}>
-      {/* mobile header */}
-      {!wide && (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: embedded ? undefined : 1100, margin: embedded ? undefined : '0 auto', width: '100%', padding: embedded ? 0 : wide ? 0 : '8px 14px 22px' }}>
+      {/* mobile header — host renders the page header when embedded */}
+      {!wide && !embedded && (
         <div style={{ padding: '4px 2px 0' }}>
           <Eyebrow>Live control</Eyebrow>
           <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>Autopilot</h1>
@@ -385,18 +396,20 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
       )}
       {planStale && <StaleBanner updatedAt={planAt} />}
 
-      {/* tab bar */}
-      <SegmentedControl
-        block
-        options={[
-          { value: 'summary', label: 'Summary' },
-          { value: 'status', label: 'Status' },
-          { value: 'activity', label: 'Activity' },
-          { value: 'settings', label: 'Settings' },
-        ]}
-        value={tab}
-        onChange={(v) => setTab(v as TabKey)}
-      />
+      {/* tab bar — host renders the tab strip when embedded */}
+      {!embedded && (
+        <SegmentedControl
+          block
+          options={[
+            { value: 'summary', label: 'Summary' },
+            { value: 'status', label: 'Status' },
+            { value: 'events', label: 'Events' },
+            { value: 'settings', label: 'Settings' },
+          ]}
+          value={tab}
+          onChange={(v) => setTabState(v as TabKey)}
+        />
+      )}
 
       {/* armed strip — slim status row at the top on non-summary tabs (on Summary the
           control block is rendered below the KPI row instead) */}
@@ -539,8 +552,8 @@ export function Autopilot({ ctx }: { ctx: ShellContext }) {
         </>
       ) : connecting)}
 
-      {/* ============================= ACTIVITY =========================== */}
-      {tab === 'activity' && (status ? (
+      {/* ============================== EVENTS ============================ */}
+      {tab === 'events' && (status ? (
         <div style={panelCard}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <Icon name="history" size={16} color="var(--text-3)" />
