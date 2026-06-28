@@ -149,12 +149,13 @@ function SceneEditor({ lights, scene, onClose, onSaved }: { lights: LightUnit[];
   );
 }
 
-export function ScenesSection({ lights, canControl }: { lights: LightUnit[]; canControl: boolean }) {
+export function ScenesSection({ lights, canControl, onScenesChanged }: { lights: LightUnit[]; canControl: boolean; onScenesChanged?: () => void }) {
   const { data, refetch } = usePolling<ScenesResponse>(api.lights.scenes, 0);
   const scenes = data?.scenes ?? [];
   const [editing, setEditing] = useState<LightScene | null | undefined>(undefined); // undefined=closed, null=new
   const [busyId, setBusyId] = useState<string | null>(null);
   const byId = useMemo(() => new Map(lights.map((l) => [l.id, l])), [lights]);
+  const savedScenes = () => { refetch(); onScenesChanged?.(); };
 
   // A scene reads as "on" when all of its on-members are currently on.
   const isOn = (s: LightScene) => {
@@ -167,7 +168,7 @@ export function ScenesSection({ lights, canControl }: { lights: LightUnit[]; can
   };
   const del = async (id: string) => {
     setBusyId(id);
-    try { await api.lights.deleteScene(id); } catch { /* ignore */ } finally { setBusyId(null); refetch(); }
+    try { await api.lights.deleteScene(id); } catch { /* ignore */ } finally { setBusyId(null); savedScenes(); }
   };
 
   return (
@@ -200,7 +201,7 @@ export function ScenesSection({ lights, canControl }: { lights: LightUnit[]; can
           })}
         </div>
       )}
-      {editing !== undefined && <SceneEditor lights={lights} scene={editing} onClose={() => setEditing(undefined)} onSaved={refetch} />}
+      {editing !== undefined && <SceneEditor lights={lights} scene={editing} onClose={() => setEditing(undefined)} onSaved={savedScenes} />}
     </Card>
   );
 }
