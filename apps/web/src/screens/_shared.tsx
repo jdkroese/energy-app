@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { Eyebrow } from '../components/ui';
+import { ThemeToggle } from '../components/shell/ThemeToggle';
 
 /** Mobile screen header (eyebrow + h1), matching the *-mobile mockups. */
 export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; title: string; right?: ReactNode }) {
@@ -9,6 +10,7 @@ export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; ti
         <Eyebrow>{eyebrow}</Eyebrow>
         <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' }}>{title}</h1>
       </div>
+      <ThemeToggle />
       {right}
     </div>
   );
