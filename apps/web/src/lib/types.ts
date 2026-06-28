@@ -996,6 +996,23 @@ export interface DeviceDiagnosticsResponse {
   device: DeviceDiagnostics | null;
 }
 
+/** Raw result of a single test command fired through a chosen Tuya API. */
+export interface DeviceCommandProbe {
+  api: 'v1' | 'v2';
+  httpOk: boolean;
+  success: boolean;
+  result: unknown;
+  code?: number;
+  msg?: string;
+}
+export interface DeviceCommandTestResponse {
+  ts: string;
+  id: string;
+  dp: string;
+  value: unknown;
+  probe: DeviceCommandProbe;
+}
+
 export type DiscoveredConfidence = 'high' | 'monitor' | 'review';
 
 export interface DiscoveredDevice {

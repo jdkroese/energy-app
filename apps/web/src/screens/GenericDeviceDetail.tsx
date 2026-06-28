@@ -62,7 +62,7 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
               <GenericControl capabilities={device.capabilities} values={device.values} onWrite={writeCap} disabled={!isAdmin} variant="detail" />
             </Card>
 
-            <DiagnosticsSection id={device.id} />
+            <DiagnosticsSection id={device.id} isAdmin={isAdmin} />
 
             {isAdmin && (
               <div style={{ display: 'flex', gap: 8 }}>
@@ -133,11 +133,13 @@ function DiagRow({ label, value, accent }: { label: string; value: ReactNode; ac
   );
 }
 
-function DiagnosticsSection({ id }: { id: string }) {
+function DiagnosticsSection({ id, isAdmin }: { id: string; isAdmin: boolean }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<DeviceDiagnosticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testLog, setTestLog] = useState<string[]>([]);
 
   const load = () => {
     setLoading(true);
@@ -155,6 +157,21 @@ function DiagnosticsSection({ id }: { id: string }) {
   };
 
   const dev = data?.device ?? null;
+
+  const runTest = (dp: string, value: boolean, cmdApi: 'v1' | 'v2') => {
+    setTesting(true);
+    api.devices
+      .testCommand(id, dp, value, cmdApi)
+      .then((r) => {
+        const p = r.probe;
+        setTestLog((l) => [
+          `${cmdApi} · ${dp}=${String(value)} → success=${p.success} result=${JSON.stringify(p.result)}${p.code != null ? ` code=${p.code}` : ''}${p.msg ? ` msg=${p.msg}` : ''}`,
+          ...l,
+        ].slice(0, 8));
+      })
+      .catch((e) => setTestLog((l) => [`${cmdApi} · ${dp}=${String(value)} → ERROR ${(e as Error).message}`, ...l].slice(0, 8)))
+      .finally(() => setTesting(false));
+  };
 
   return (
     <Card padded style={{ padding: 16 }}>
@@ -191,6 +208,29 @@ function DiagnosticsSection({ id }: { id: string }) {
                   </div>
                 ))}
               </div>
+
+              {/* Command test — fire the on/off DP through both Tuya APIs to see which
+                  one the device actually obeys (legacy v1 vs newer v2 thing-model). */}
+              {isAdmin && dev.primarySwitchDp && (
+                <div style={{ marginTop: 14 }}>
+                  <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Test relay · {dev.primarySwitchDp}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(['v1', 'v2'] as const).map((cmdApi) => (
+                      <div key={cmdApi} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-3)', minWidth: 18 }}>{cmdApi}</span>
+                        <Button size="sm" variant="secondary" disabled={testing} onClick={() => runTest(dev.primarySwitchDp as string, true, cmdApi)}>On</Button>
+                        <Button size="sm" variant="ghost" disabled={testing} onClick={() => runTest(dev.primarySwitchDp as string, false, cmdApi)}>Off</Button>
+                      </div>
+                    ))}
+                  </div>
+                  {testLog.length > 0 && (
+                    <div className="pwr-mono" style={{ marginTop: 8, fontSize: 11, color: 'var(--text-2)', display: 'flex', flexDirection: 'column', gap: 3, background: 'var(--surface-2)', borderRadius: 'var(--radius-md)', padding: '8px 10px', wordBreak: 'break-all' }}>
+                      {testLog.map((line, i) => <div key={i} style={{ color: i === 0 ? 'var(--text-1)' : 'var(--text-3)' }}>{line}</div>)}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 6 }}>Tip: try v1 On, then v2 On — whichever physically switches the plug is the API it needs.</div>
+                </div>
+              )}
             </>
           )}
           {data && !dev && !loading && !err && <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No device data (Tuya not connected or device not reported).</div>}
