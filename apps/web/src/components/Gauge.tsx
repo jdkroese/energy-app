@@ -84,7 +84,7 @@ export function Gauge({ label, value, unit, accent, nominalFloor = 1, size = 132
       <div
         style={{
           position: 'absolute',
-          top: '46%',
+          top: '58%',
           left: 0,
           right: 0,
           textAlign: 'center',
