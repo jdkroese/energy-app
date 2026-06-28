@@ -733,9 +733,8 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     setActiveType(t);
     setParams((prev) => { const n = new URLSearchParams(prev); n.set('type', t); return n; }, { replace: true });
   };
-  // Discovered (not-yet-set-up) count — badges the tab + drives the pinned card.
+  // Discovered (not-yet-set-up) count — badges the tab.
   const needsSetupCount = useDiscoveredCount();
-  const inboxView = activeType === 'needs-setup';
 
   // Lens: By type (the typed hub) vs By room (the room-grouped view). Remember-last via
   // localStorage so returning to Devices restores the chosen lens.
@@ -1013,19 +1012,6 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     );
   };
 
-  // Pinned inbox prompt — sits atop the hub whenever there are devices to triage and
-  // we're not already on the inbox. One tap jumps to the Needs-setup view.
-  const inboxPrompt = needsSetupCount > 0 && !inboxView && (
-    <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.3)', cursor: 'pointer' }} onClick={() => selectType('needs-setup')}>
-      <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--surface-1)', color: 'var(--grid)', flex: 'none' }}><Icon name="sparkles" size={17} /></span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{needsSetupCount} device{needsSetupCount === 1 ? '' : 's'} found, not set up yet</div>
-        <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>Review and triage what your account has paired.</div>
-      </div>
-      <Icon name="chevron-right" size={16} color="var(--grid)" />
-    </Card>
-  );
-
   // By type / By room lens toggle — the same control on both viewports.
   const lensToggle = (
     <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-pill)', padding: 4, alignSelf: wide ? 'flex-start' : 'stretch' }}>
@@ -1047,7 +1033,6 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       {!d && loading && <Card padded style={{ color: 'var(--text-3)', fontSize: 13 }}>Loading devices…</Card>}
       {d && (
         <>
-          {inboxPrompt}
           {lensToggle}
           {lens === 'room' ? (
             <DevicesByRoom wide={wide} canEdit={isAdmin} />
