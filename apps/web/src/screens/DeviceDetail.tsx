@@ -265,7 +265,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
       {cmdErr && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid rgba(245,165,36,0.22)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid var(--border-grid-soft)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
           <Icon name="alert-triangle" size={14} color="var(--grid)" />
           <span>Couldn&apos;t send — {cmdErr}.</span>
         </div>
@@ -406,7 +406,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
           surplus (cools when warm / heats when cold). Underfloor (Airzone) is no longer
           surplus-eligible, so the enrolment toggle isn't shown for heating zones. */}
       {!isHeating && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--battery-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'rgba(56,217,245,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: dev.automationEnabled ? 'var(--battery-wash)' : 'var(--surface-1)', border: `1px solid ${dev.automationEnabled ? 'var(--border-battery)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '11px 13px' }}>
           <Icon name="zap" size={17} color={dev.automationEnabled ? 'var(--battery)' : 'var(--text-3)'} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600 }}>Solar-surplus climate</div>
@@ -545,7 +545,7 @@ function VaneCard({ title, value, disabled, syncing, onSelect }: { title: string
           const on = pos === o.v;
           return (
             <button key={o.v} type="button" disabled={disabled} aria-label={`${title} ${o.label}`} onClick={() => onSelect(o.v)}
-              style={{ flex: 1, textAlign: 'center', fontSize: 12, padding: '7px 0', borderRadius: 6, border: 'none', cursor: disabled ? 'default' : 'pointer', fontWeight: on ? 700 : 500, background: on ? 'var(--solar)' : 'transparent', color: on ? '#04140d' : 'var(--text-3)' }}>{o.label}</button>
+              style={{ flex: 1, textAlign: 'center', fontSize: 12, padding: '7px 0', borderRadius: 6, border: 'none', cursor: disabled ? 'default' : 'pointer', fontWeight: on ? 700 : 500, background: on ? 'var(--solar)' : 'transparent', color: on ? 'var(--accent-contrast)' : 'var(--text-3)' }}>{o.label}</button>
           );
         })}
       </div>
@@ -556,7 +556,7 @@ function VaneCard({ title, value, disabled, syncing, onSelect }: { title: string
 function Banner({ icon, tone, iconColor, children }: { icon: string; tone: 'solar' | 'surface'; iconColor?: string; children: ReactNode }) {
   const solar = tone === 'solar';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: solar ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${solar ? 'rgba(46,230,160,0.2)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 11, background: solar ? 'var(--solar-wash)' : 'var(--surface-1)', border: `1px solid ${solar ? 'var(--border-solar-soft)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-lg)', padding: '10px 13px' }}>
       <Icon name={icon} size={17} color={iconColor ?? 'var(--text-1)'} />
       <div style={{ flex: 1, fontSize: 12 }}>{children}</div>
     </div>

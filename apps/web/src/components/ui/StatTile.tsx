@@ -8,7 +8,7 @@ const TONE: Record<Tone, [string | null, string | null]> = {
   battery: ['var(--battery)', 'var(--battery-wash)'],
   grid: ['var(--grid)', 'var(--grid-wash)'],
   home: ['var(--home)', 'var(--home-wash)'],
-  ev: ['var(--ev)', 'rgba(139,140,255,0.12)'],
+  ev: ['var(--ev)', 'var(--ev-wash)'],
   neutral: [null, null],
 };
 

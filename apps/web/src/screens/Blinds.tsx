@@ -63,7 +63,7 @@ function BlindCard({
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12, opacity: d.online ? 1 : 0.6 }}>
       {/* Header: icon · name/state · settings */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-        <span style={{ width: 38, height: 38, borderRadius: 11, flex: 'none', display: 'grid', placeItems: 'center', background: d.online && isOpen ? 'rgba(139,140,255,0.14)' : 'var(--surface-3)', color: tint }}>
+        <span style={{ width: 38, height: 38, borderRadius: 11, flex: 'none', display: 'grid', placeItems: 'center', background: d.online && isOpen ? 'var(--ev-wash)' : 'var(--surface-3)', color: tint }}>
           <Icon name="blinds" size={19} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -212,7 +212,7 @@ export function BlindsPanel({ ctx }: { ctx: ShellContext }) {
 
 function Chip({ label, value, color, accent }: { label: string; value: string; color?: string; accent?: boolean }) {
   return (
-    <div style={{ background: accent ? 'rgba(139,140,255,0.12)' : 'var(--surface-1)', border: `1px solid ${accent ? 'rgba(139,140,255,0.25)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-md)', padding: '8px 12px', textAlign: 'right', minWidth: 0 }}>
+    <div style={{ background: accent ? 'var(--ev-wash)' : 'var(--surface-1)', border: `1px solid ${accent ? 'var(--border-ev)' : 'var(--border-1)'}`, borderRadius: 'var(--radius-md)', padding: '8px 12px', textAlign: 'right', minWidth: 0 }}>
       <div className="pwr-eyebrow" style={{ color: accent ? 'var(--ev)' : 'var(--text-3)' }}>{label}</div>
       <div className="pwr-mono" style={{ fontSize: 16, marginTop: 2, color: color ?? 'var(--text-1)' }}>{value}</div>
     </div>

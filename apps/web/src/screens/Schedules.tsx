@@ -211,7 +211,7 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
       )}
 
       {/* smart-override note */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.18)', borderRadius: 'var(--radius-md)', padding: '10px 13px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--solar-wash)', border: '1px solid var(--border-solar-soft)', borderRadius: 'var(--radius-md)', padding: '10px 13px' }}>
         <Icon name="zap" size={15} color="var(--solar)" />
         <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>Smart rules run on top — surplus solar can start a window <span style={{ color: 'var(--text-1)' }}>early</span>. Schedules are the floor.</span>
       </div>

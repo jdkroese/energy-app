@@ -99,7 +99,7 @@ function SpeakerPicker({ speakers, selected, onToggle }: {
             background: on ? 'var(--surface-2)' : 'transparent', color: 'var(--text-1)',
           }}>
             <span style={{
-              width: 18, height: 18, borderRadius: 5, flex: 'none', display: 'grid', placeItems: 'center', color: '#06090b',
+              width: 18, height: 18, borderRadius: 5, flex: 'none', display: 'grid', placeItems: 'center', color: 'var(--accent-contrast)',
               border: on ? 'none' : '1.5px solid var(--border-3)', background: on ? 'var(--solar)' : 'transparent',
             }}>{on && <Icon name="check" size={12} />}</span>
             <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
@@ -375,9 +375,9 @@ function NowPlayingBanner({ np, speakers, canControl, onChanged }: {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.25)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--solar-wash)', border: '1px solid var(--border-solar)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-        <span style={{ width: 32, height: 32, borderRadius: 9, flex: 'none', display: 'grid', placeItems: 'center', background: 'var(--solar)', color: '#06090b' }}>
+        <span style={{ width: 32, height: 32, borderRadius: 9, flex: 'none', display: 'grid', placeItems: 'center', background: 'var(--solar)', color: 'var(--accent-contrast)' }}>
           <Icon name="radio" size={17} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>

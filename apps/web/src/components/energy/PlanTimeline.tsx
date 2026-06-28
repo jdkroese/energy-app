@@ -33,15 +33,15 @@ const ROW_GAP = 4;
 const PH = 246; // chart plot height
 const SMAX = 14; // kW axis max
 
-const BANDFILL = ['rgba(46,230,160,.05)', 'transparent', 'rgba(245,165,36,.10)'];
+const BANDFILL = ['var(--band-p3-fill)', 'transparent', 'var(--band-p1-fill)'];
 const BAND_LABEL = ['P3', 'P2', 'P1'];
 const BAND_RATE = ['€0.078', '€0.131', '€0.209'];
 const BAND_COLOR = ['var(--solar)', 'var(--text-3)', 'var(--grid)'];
 
-// sun gradient stops (lit)
-const SUN_LIT = ['#f5c518', '#ffd24a', '#ffe27a'];
-const SUN_UNLIT = 'rgba(245,197,24,.10)';
-const GOLD = '#ffd24a';
+// sun gradient stops (lit) — tokenised so the light theme can deepen the amber
+const SUN_LIT = ['var(--sun-lit-1)', 'var(--sun-lit-2)', 'var(--sun-lit-3)'];
+const SUN_UNLIT = 'var(--sun-unlit)';
+const GOLD = 'var(--sun-gold)';
 
 type Props = {
   /** 25-length (0..24) solar forecast in kW */

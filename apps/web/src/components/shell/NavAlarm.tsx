@@ -68,7 +68,7 @@ function AlarmConfirm({ open, onConfirm, onCancel }: { open: boolean; onConfirm:
   );
 }
 
-const PULSE_KEYFRAMES = `@keyframes pwrNavAlarmPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,90,90,0.55) } 50% { box-shadow: 0 0 0 6px rgba(255,90,90,0) } }`;
+const PULSE_KEYFRAMES = `@keyframes pwrNavAlarmPulse { 0%,100% { box-shadow: 0 0 0 0 var(--alarm-pulse) } 50% { box-shadow: 0 0 0 6px var(--alarm-pulse-0) } }`;
 
 /* ---- Desktop Rail button (pinned bottom) --------------------------------- */
 

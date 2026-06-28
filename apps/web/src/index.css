@@ -74,22 +74,54 @@
   --band-p1: #f5a524;
   --band-p2: #5f7672;
   --band-p3: #2ee6a0;
+  /* faint tariff-band column washes (Track F: PlanTimeline BANDFILL) */
+  --band-p1-fill: rgba(245, 165, 36, 0.10);
+  --band-p3-fill: rgba(46, 230, 160, 0.05);
 
   /* tinted washes */
   --solar-wash: rgba(46, 230, 160, 0.12);
   --battery-wash: rgba(56, 217, 245, 0.12);
   --grid-wash: rgba(245, 165, 36, 0.12);
   --home-wash: rgba(196, 166, 255, 0.12);
+  --ev-wash: rgba(139, 140, 255, 0.12);
   --danger-wash: rgba(255, 93, 93, 0.12);
 
-  /* tinted accent borders (A1: was hardcoded rgba in Devices.tsx summary tiles) */
+  /* tinted accent borders (A1: was hardcoded rgba in Devices.tsx summary tiles;
+     Track F: filled out the soft/strong + per-hue variants used across screens) */
   --border-grid: rgba(245, 165, 36, 0.25);
+  --border-grid-soft: rgba(245, 165, 36, 0.22);
+  --border-grid-strong: rgba(245, 165, 36, 0.35);
   --border-solar: rgba(46, 230, 160, 0.25);
+  --border-solar-soft: rgba(46, 230, 160, 0.20);
+  --border-solar-glow: rgba(46, 230, 160, 0.28);
+  --border-battery: rgba(56, 217, 245, 0.2);
+  --border-ev: rgba(139, 140, 255, 0.25);
+  --border-danger: rgba(255, 93, 93, 0.25);
+
+  /* tinted accent glows (Track F: schedule/timeline bars + ring glows) */
+  --glow-solar-bar: 0 0 8px rgba(46, 230, 160, 0.55);
+  --glow-ev-bar: 0 0 8px rgba(139, 140, 255, 0.55);
+  /* soft accent focus tint (Track F: input/select/otp :focus rings in dsStyles) */
+  --ring-accent: rgba(46, 230, 160, 0.18);
+  /* ambient brand glow behind the auth/splash backdrop (Track F: AuthShell) */
+  --auth-bg-glow: rgba(46, 230, 160, 0.08);
+  /* nav alarm pulse ring (Track F: NavAlarm keyframes) */
+  --alarm-pulse: rgba(255, 90, 90, 0.55);
+  --alarm-pulse-0: rgba(255, 90, 90, 0);
+
+  /* sun-intensity gold ramp (Track F: PlanTimeline sun bars + Autopilot legend) */
+  --sun-lit-1: #f5c518;
+  --sun-lit-2: #ffd24a;
+  --sun-lit-3: #ffe27a;
+  --sun-unlit: rgba(245, 197, 24, 0.10);
+  --sun-gold: #ffd24a;
 
   /* semantic surface aliases */
   --surface-card: var(--surface-1);
   --surface-raised: var(--surface-2);
   --surface-app: var(--bg-0);
+  /* floating popover/tooltip surface (Track F: chart tooltips) */
+  --surface-pop: #060c0e;
   --text-body: var(--text-1);
   --text-muted: var(--text-2);
 
@@ -205,6 +237,7 @@
   --surface-2: #f6f8fa;
   --surface-3: #eef1f4;
   --surface-4: #e5e9ed;
+  --surface-pop: #ffffff;
 
   /* borders & lines — dark hairlines on light */
   --border-1: rgba(20, 30, 33, 0.10);
@@ -261,17 +294,42 @@
   --band-p1: #8a5a0a;
   --band-p2: #6f8085;
   --band-p3: #0a8f63;
+  --band-p1-fill: rgba(138, 90, 10, 0.10);
+  --band-p3-fill: rgba(10, 143, 99, 0.07);
 
   /* tinted washes — hue at ~10–12% on white */
   --solar-wash: rgba(10, 143, 99, 0.10);
   --battery-wash: rgba(15, 127, 184, 0.10);
   --grid-wash: rgba(138, 90, 10, 0.10);
   --home-wash: rgba(109, 68, 209, 0.10);
+  --ev-wash: rgba(81, 82, 214, 0.10);
   --danger-wash: rgba(207, 42, 42, 0.10);
 
-  /* tinted accent borders */
+  /* tinted accent borders — dark hue on white, a touch stronger than dark theme */
   --border-grid: rgba(138, 90, 10, 0.30);
+  --border-grid-soft: rgba(138, 90, 10, 0.26);
+  --border-grid-strong: rgba(138, 90, 10, 0.42);
   --border-solar: rgba(10, 143, 99, 0.30);
+  --border-solar-soft: rgba(10, 143, 99, 0.22);
+  --border-solar-glow: rgba(10, 143, 99, 0.34);
+  --border-battery: rgba(15, 127, 184, 0.26);
+  --border-ev: rgba(81, 82, 214, 0.30);
+  --border-danger: rgba(207, 42, 42, 0.30);
+
+  /* tinted accent glows — toned down to a soft ring on white (no neon) */
+  --glow-solar-bar: 0 0 0 1px rgba(10, 143, 99, 0.30);
+  --glow-ev-bar: 0 0 0 1px rgba(81, 82, 214, 0.30);
+  --ring-accent: rgba(10, 143, 99, 0.22);
+  --auth-bg-glow: rgba(10, 143, 99, 0.06);
+  --alarm-pulse: rgba(207, 42, 42, 0.45);
+  --alarm-pulse-0: rgba(207, 42, 42, 0);
+
+  /* sun-intensity gold ramp — deepened amber so it reads on the white plot */
+  --sun-lit-1: #c98a00;
+  --sun-lit-2: #e0a416;
+  --sun-lit-3: #f0bd45;
+  --sun-unlit: rgba(201, 138, 0, 0.12);
+  --sun-gold: #d99a0a;
 
   /* typography colour aliases inherit from above */
 

@@ -51,7 +51,7 @@ export function DayTrack({ bars, dim, axis, title, height = 22, style }: {
         {bars.map((bar, i) => (
           <span
             key={i}
-            style={{ position: 'absolute', top: 3, bottom: 3, left: `${bar.left}%`, width: `${Math.max(0.7, bar.width)}%`, borderRadius: 3, background: 'var(--solar)', boxShadow: '0 0 8px rgba(46,230,160,0.55)' }}
+            style={{ position: 'absolute', top: 3, bottom: 3, left: `${bar.left}%`, width: `${Math.max(0.7, bar.width)}%`, borderRadius: 3, background: 'var(--solar)', boxShadow: 'var(--glow-solar-bar)' }}
           />
         ))}
       </div>

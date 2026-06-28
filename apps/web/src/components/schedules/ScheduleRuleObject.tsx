@@ -68,9 +68,9 @@ export function ScheduleRuleObject({
   const barColor = isBlind ? (opening ? 'var(--ev)' : 'var(--text-3)') : 'var(--solar)';
   const barGlow = isBlind
     ? opening
-      ? '0 0 8px rgba(139,140,255,0.55)'
+      ? 'var(--glow-ev-bar)'
       : 'none'
-    : '0 0 8px rgba(46,230,160,0.55)';
+    : 'var(--glow-solar-bar)';
 
   const dayCell = (on: boolean): CSSProperties => ({
     width: 26,
@@ -83,7 +83,7 @@ export function ScheduleRuleObject({
     fontWeight: 600,
     cursor: canConfig ? 'pointer' : 'default',
     background: on ? 'var(--solar)' : 'var(--surface-1)',
-    color: on ? '#06090b' : 'var(--text-3)',
+    color: on ? 'var(--accent-contrast)' : 'var(--text-3)',
     border: `1px solid ${on ? 'transparent' : 'var(--border-1)'}`,
     transition: 'background .12s',
   });

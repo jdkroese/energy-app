@@ -287,7 +287,7 @@ export function DiscoveredInbox({ wide, canTriage, onSetupDone }: DiscoveredInbo
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Discovery banner */}
       {activeAll.length > 0 && (
-        <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.25)' }}>
+        <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11, background: 'var(--solar-wash)', border: '1px solid var(--border-solar)' }}>
           <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--surface-1)', color: 'var(--solar)', flex: 'none' }}><Icon name="sparkles" size={17} /></span>
           <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
             <strong style={{ color: 'var(--text-1)' }}>{activeAll.length} device{activeAll.length === 1 ? '' : 's'} found</strong> that aren't set up yet. Review them below — these are listed for visibility and aren't controlled or grouped yet.
