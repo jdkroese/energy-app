@@ -49,6 +49,13 @@ import type {
   AlarmConfig,
   AlarmConfigResponse,
   SonosIntegrationStatus,
+  RadioStation,
+  RadioFavoritesResponse,
+  RadioSearchResponse,
+  SonosFavoritesResponse,
+  RadioPlayResponse,
+  RadioSchedule,
+  RadioSchedulesResponse,
   LiveResponse,
   ProbeResult,
   LoginResponse,
@@ -286,6 +293,26 @@ export const api = {
     stop: () => postJSON<AlarmStatus>('/api/alarm/stop', {}),
     config: () => getJSON<AlarmConfigResponse>('/api/alarm/config'),
     setConfig: (patch: Partial<AlarmConfig>) => putJSON<AlarmConfigResponse>('/api/alarm/config', patch),
+  },
+
+  /* ---- Sonos internet radio; play/stop + favourite/schedule writes are admin ---- */
+  radio: {
+    search: (q: string, limit = 30) =>
+      getJSON<RadioSearchResponse>(`/api/radio/search?q=${enc(q)}&limit=${enc(String(limit))}`),
+    favorites: () => getJSON<RadioFavoritesResponse>('/api/radio/favorites'),
+    createFavorite: (s: Partial<RadioStation>) => postJSON<{ favorite: RadioStation }>('/api/radio/favorites', s),
+    updateFavorite: (id: string, s: Partial<RadioStation>) =>
+      putJSON<{ favorite: RadioStation }>(`/api/radio/favorites/${enc(id)}`, s),
+    deleteFavorite: (id: string) => delJSON<{ ok: boolean }>(`/api/radio/favorites/${enc(id)}`),
+    sonosFavorites: () => getJSON<SonosFavoritesResponse>('/api/radio/sonos-favorites'),
+    play: (body: { stationId?: string; streamUrl?: string; name?: string; speakerIds: string[]; volumePct: number }) =>
+      postJSON<RadioPlayResponse>('/api/radio/play', body),
+    stop: (speakerIds: string[] = []) => postJSON<{ ts: string; ok: boolean }>('/api/radio/stop', { speakerIds }),
+    schedules: () => getJSON<RadioSchedulesResponse>('/api/radio/schedules'),
+    createSchedule: (s: Partial<RadioSchedule>) => postJSON<{ schedule: RadioSchedule }>('/api/radio/schedules', s),
+    updateSchedule: (id: string, s: Partial<RadioSchedule>) =>
+      putJSON<{ schedule: RadioSchedule }>(`/api/radio/schedules/${enc(id)}`, s),
+    deleteSchedule: (id: string) => delJSON<{ ok: boolean }>(`/api/radio/schedules/${enc(id)}`),
   },
 
   /* ---- Blinds / curtains (Tuya); command/bulk are admin ---- */

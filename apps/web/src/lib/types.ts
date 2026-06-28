@@ -616,6 +616,77 @@ export interface SonosIntegrationStatus {
   lastError: string | null;
 }
 
+/* ---- Sonos internet radio (favourites + directory + schedules) ---- */
+
+export const RADIO_FAVORITE_SLOTS = 10;
+
+export interface RadioStation {
+  id: string;
+  slot: number;
+  name: string;
+  streamUrl: string;
+  logo?: string;
+  codec?: string;
+}
+
+export interface RadioFavoritesResponse {
+  ts: string;
+  slots: number;
+  favorites: RadioStation[];
+}
+
+export interface RadioSearchResult {
+  name: string;
+  streamUrl: string;
+  logo: string | null;
+  codec: string | null;
+  bitrate: number | null;
+  countryCode: string | null;
+  tags: string[];
+}
+
+export interface RadioSearchResponse {
+  ts: string;
+  query: string;
+  results: RadioSearchResult[];
+  error?: string;
+}
+
+export interface SonosFavorite {
+  title: string;
+  uri: string;
+  streamUrl: string | null;
+}
+
+export interface SonosFavoritesResponse {
+  ts: string;
+  favorites: SonosFavorite[];
+}
+
+export interface RadioPlayResponse {
+  ts: string;
+  ok: boolean;
+  playedOn: string[];
+  coordinator: string;
+}
+
+export interface RadioSchedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  days: number[];
+  onTime: string;
+  offTime?: string | null;
+  stationId: string;
+  speakerIds: string[];
+  volumePct: number;
+}
+
+export interface RadioSchedulesResponse {
+  ts: string;
+  schedules: RadioSchedule[];
+}
+
 /** Hard floor for the blink half-period (ms) — enforced in UI + API. */
 export const ALARM_BLINK_FLOOR_MS = 400;
 

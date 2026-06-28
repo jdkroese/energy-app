@@ -93,6 +93,7 @@ import {
   deleteLightSchedule,
 } from './routes/lights';
 import { startLightCoordinator } from './control/light-coordinator';
+import { startRadioCoordinator } from './control/radio-coordinator';
 import { startDeviceScheduleCoordinator } from './control/device-schedule-coordinator';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
@@ -132,6 +133,20 @@ import {
   setSonosIntegration,
   rescanSonos,
 } from './routes/alarm';
+import {
+  searchRadio,
+  listFavorites,
+  createFavorite,
+  updateFavorite,
+  deleteFavorite,
+  getSonosFavorites,
+  playRadio,
+  stopRadio,
+  listSchedules as listRadioSchedules,
+  createSchedule as createRadioSchedule,
+  updateSchedule as updateRadioSchedule,
+  deleteSchedule as deleteRadioSchedule,
+} from './routes/radio';
 import { serveAlarmClip, startMediaLanListener } from './routes/media';
 import { resumeAlarm } from './control/alarm';
 import * as notify from './notify';
@@ -478,6 +493,21 @@ app.get('/api/integrations/sonos', wrap(() => getSonosIntegration()));
 app.put('/api/integrations/sonos', requireAdmin, wrap((req) => setSonosIntegration(req.body)));
 app.post('/api/integrations/sonos/rescan', requireAdmin, wrap(() => rescanSonos()));
 
+// ---- Sonos internet radio (favourites + play/stop + schedules) ----
+// Reads any-authed; play/stop, favourite + schedule writes are admin-gated.
+app.get('/api/radio/search', wrap((req) => searchRadio(req.query.q, req.query.limit)));
+app.get('/api/radio/favorites', wrap(() => listFavorites()));
+app.post('/api/radio/favorites', requireAdmin, wrap((req) => createFavorite((req.body ?? {}) as never)));
+app.put('/api/radio/favorites/:id', requireAdmin, wrap((req) => updateFavorite(String(req.params.id), (req.body ?? {}) as never)));
+app.delete('/api/radio/favorites/:id', requireAdmin, wrap((req) => deleteFavorite(String(req.params.id))));
+app.get('/api/radio/sonos-favorites', wrap(() => getSonosFavorites()));
+app.post('/api/radio/play', requireAdmin, wrap((req) => playRadio(req.body)));
+app.post('/api/radio/stop', requireAdmin, wrap((req) => stopRadio(req.body)));
+app.get('/api/radio/schedules', wrap(() => listRadioSchedules()));
+app.post('/api/radio/schedules', requireAdmin, wrap((req) => createRadioSchedule((req.body ?? {}) as never)));
+app.put('/api/radio/schedules/:id', requireAdmin, wrap((req) => updateRadioSchedule(String(req.params.id), (req.body ?? {}) as never)));
+app.delete('/api/radio/schedules/:id', requireAdmin, wrap((req) => deleteRadioSchedule(String(req.params.id))));
+
 // ---- Tuya Cloud integration ----
 app.get('/api/integrations/tuya', wrap(() => getTuyaIntegration()));
 app.post(
@@ -605,6 +635,11 @@ startLightCoordinator();
 // switchable Tuya devices on/off at their scheduled window edges, optionally at a
 // chosen fan speed/direction). No arm gate — matches the lights coordinator.
 startDeviceScheduleCoordinator();
+
+// Start the Sonos radio-schedule coordinator (edge-triggered; plays a station on chosen
+// speakers at its on-time and stops at its off-time). No arm gate — it only acts on enabled
+// radio schedules and never touches the battery/climate control authority.
+startRadioCoordinator();
 
 // Resume a still-active house alarm after a restart (siren + light-blink). If the
 // persisted duration already elapsed it stops + restores instead. No-op when idle.
