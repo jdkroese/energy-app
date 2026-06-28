@@ -1,14 +1,11 @@
 import { useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { BlindUnit, BlindsResponse, BlindLever, Schedule, SchedulesResponse } from '../lib/types';
+import type { BlindUnit, BlindsResponse, BlindLever } from '../lib/types';
 import { Card, Icon, Switch, Slider, Input, Button } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
-import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
-import { EditRuleOverlay } from '../components/schedules/EditRuleOverlay';
-import { newRuleDraft } from '../lib/scheduleRules';
 
 /* ============================================================================
  * Blinds — second Tuya device category, embedded in the Devices → Blinds tab and
@@ -31,27 +28,16 @@ function BlindCard({
   d,
   wide,
   canControl,
-  rules,
   onCmd,
   onSaveSettings,
-  onAddRule,
-  onEditRule,
-  onToggleRuleEnabled,
-  onToggleRuleDay,
 }: {
   d: BlindUnit;
   wide: boolean;
   canControl: boolean;
-  rules: Schedule[];
   onCmd: (lever: BlindLever, value?: number) => void;
   onSaveSettings: (patch: { room?: string; invertPosition?: boolean }) => void;
-  onAddRule: () => void;
-  onEditRule: (s: Schedule) => void;
-  onToggleRuleEnabled: (s: Schedule, enabled: boolean) => void;
-  onToggleRuleDay: (s: Schedule, day: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [schedOpen, setSchedOpen] = useState(false);
   const [roomDraft, setRoomDraft] = useState(d.room);
   const isOpen = (d.positionPct ?? 0) > 2;
   const tint = d.online && isOpen ? 'var(--ev)' : 'var(--text-3)';
@@ -130,33 +116,6 @@ function BlindCard({
           </div>
         </div>
       )}
-      {/* Schedule — this blind's rules, via the shared UnitScheduleBox + overlay.
-          Collapsed by default; mirrors the "More controls" disclosure pattern. */}
-      <div style={{ borderTop: '1px solid var(--border-1)', paddingTop: 10 }}>
-        <button type="button" onClick={() => setSchedOpen((v) => !v)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-          <Icon name="calendar-clock" size={14} color="var(--text-3)" />
-          <span className="pwr-eyebrow" style={{ flex: 1, textAlign: 'left' }}>Schedule</span>
-          {rules.length > 0 && (
-            <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{rules.length} rule{rules.length > 1 ? 's' : ''}</span>
-          )}
-          <Icon name={schedOpen ? 'chevron-up' : 'chevron-down'} size={16} color="var(--text-3)" />
-        </button>
-        {schedOpen && (
-          <div style={{ marginTop: 12 }}>
-            <UnitScheduleBox
-              name={d.name}
-              type="blinds"
-              rules={rules}
-              canConfig={canControl}
-              onAddRule={onAddRule}
-              onEditRule={onEditRule}
-              onToggleEnabled={onToggleRuleEnabled}
-              onToggleDay={onToggleRuleDay}
-            />
-          </div>
-        )}
-      </div>
-
       {!canControl && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Read-only — admin required to control.</div>}
     </Card>
   );
@@ -168,31 +127,6 @@ export function BlindsPanel({ ctx }: { ctx: ShellContext }) {
   const canControl = user?.role === 'admin';
   const wide = ctx.desktop;
   const { data, loading, stale, updatedAt, refetch } = usePolling<BlindsResponse>(api.blinds.list, 15_000);
-  const { data: schedData, refetch: refetchSched } = usePolling<SchedulesResponse>(api.schedules.list, 0);
-
-  // Rule editing — same overlay/box as the climate + generic device pages. The
-  // overlay is rendered once here at the panel level (not per-card) to avoid
-  // duplicate modals; cards open it via onOpenSchedule.
-  const [editingRule, setEditingRule] = useState<{ rule: Schedule; isNew: boolean } | null>(null);
-  const allRules = schedData?.schedules ?? [];
-  const rulesFor = (blindId: string) => allRules.filter((s) => s.scope.kind === 'unit' && s.scope.deviceId === blindId);
-  const toggleRuleEnabled = (s: Schedule, enabled: boolean) =>
-    void api.schedules.update(s.id, { enabled }).finally(refetchSched);
-  const toggleRuleDay = (s: Schedule, day: number) => {
-    const days = s.days.includes(day) ? s.days.filter((x) => x !== day) : [...s.days, day].sort();
-    void api.schedules.update(s.id, { days }).finally(refetchSched);
-  };
-  const saveRule = async (rule: Schedule, copyTo: string[]) => {
-    const { id: _rid, ...payload } = rule;
-    if (rule.id) await api.schedules.update(rule.id, payload);
-    else await api.schedules.create(payload);
-    for (const deviceId of copyTo) await api.schedules.create({ ...payload, scope: { kind: 'unit', deviceId } });
-    setEditingRule(null);
-    refetchSched();
-  };
-  const deleteRule = (s: Schedule) => { setEditingRule(null); void api.schedules.remove(s.id).finally(refetchSched); };
-  const openAddRule = (blind: BlindUnit) =>
-    setEditingRule({ rule: newRuleDraft({ type: 'blinds', deviceId: blind.id, name: blind.name }), isNew: true });
 
   // Optimistic position override keyed by id, so a dragged slider / open-close feels
   // live while the debounced command is in flight; cleared on the next refresh.
@@ -264,34 +198,13 @@ export function BlindsPanel({ ctx }: { ctx: ShellContext }) {
                   d={withOverride(dev)}
                   wide={wide}
                   canControl={canControl}
-                  rules={rulesFor(dev.id)}
                   onCmd={(lever, value) => send(dev.id, lever, value)}
                   onSaveSettings={(patch) => saveSettings(dev.id, patch)}
-                  onAddRule={() => openAddRule(dev)}
-                  onEditRule={(s) => setEditingRule({ rule: s, isNew: false })}
-                  onToggleRuleEnabled={toggleRuleEnabled}
-                  onToggleRuleDay={toggleRuleDay}
                 />
               ))}
             </div>
           )}
         </>
-      )}
-
-      {editingRule && (
-        <EditRuleOverlay
-          rule={editingRule.rule}
-          unitName={editingRule.rule.scope.kind === 'unit'
-            ? (d?.devices.find((b) => b.id === (editingRule.rule.scope as { deviceId: string }).deviceId)?.name ?? '')
-            : ''}
-          wide={wide}
-          peers={[]}
-          allRules={allRules}
-          canDelete={canControl && !editingRule.isNew}
-          onCancel={() => setEditingRule(null)}
-          onSave={saveRule}
-          onDelete={() => deleteRule(editingRule.rule)}
-        />
       )}
     </div>
   );

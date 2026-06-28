@@ -14,7 +14,8 @@ import type { ShellContext } from '../components/shell/AppShell';
 import { DEVICE_TYPES, classifyDevice, resolveTypeMeta, type DeviceType } from '../lib/deviceTypes';
 import { AutomationRow } from '../components/AutomationRow';
 import { GenericControl } from '../components/GenericControl';
-import { primaryCapabilities, powerCap, findMeasure } from '../lib/capabilities';
+import { primaryCapabilities, powerCap, findMeasure, hasPowerSwitch } from '../lib/capabilities';
+import { DeviceSchedulesSection } from '../components/schedules/DeviceSchedulesSection';
 import { LightsPanel } from './Lights';
 import { BlindsPanel } from './Blinds';
 import { SpeakersPanel } from './Speakers';
@@ -946,23 +947,44 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     // Lighting: devices set up as 'lighting' are folded into the /api/lights fleet
     // and render as light cards inside LightsPanel — no separate generic block here.
     if (t === 'lighting') return <LightsPanel ctx={ctx} />;
-    if (t === 'blinds') return <><BlindsPanel ctx={ctx} />{bespokeExtras(t)}</>;
+    if (t === 'blinds') return (
+      <>
+        <BlindsPanel ctx={ctx} />
+        {bespokeExtras(t)}
+        <DeviceSchedulesSection
+          type="blinds"
+          units={(blindsData?.devices ?? []).map((b) => ({ id: b.id, name: b.room || b.name }))}
+          canConfig={isAdmin}
+          wide={wide}
+        />
+      </>
+    );
     // Speakers: the Sonos fleet + the house-alarm control (local UPnP, not Tuya).
     if (t === 'speakers') return <><SpeakersPanel ctx={ctx} />{bespokeExtras(t)}</>;
     // Switching (built-in generic bucket) + any custom type → the generic group.
     const meta = resolveTypeMeta(t, customTypes);
     return (
-      <GenericGroup
-        devices={configuredByType(t)}
-        wide={wide}
-        canWrite={isAdmin}
-        onWrite={writeCap}
-        onOpen={(id) => nav(`/devices/generic/${id}`)}
-        emptyMeta={{ label: meta.label, icon: meta.icon, hue: meta.hue }}
-        breaker={t === 'switching'}
-        onSchedule={(id) => nav(`/automations?tab=schedules&new=${id}`)}
-        onRenamed={refetchConfigured}
-      />
+      <>
+        <GenericGroup
+          devices={configuredByType(t)}
+          wide={wide}
+          canWrite={isAdmin}
+          onWrite={writeCap}
+          onOpen={(id) => nav(`/devices/generic/${id}`)}
+          emptyMeta={{ label: meta.label, icon: meta.icon, hue: meta.hue }}
+          breaker={t === 'switching'}
+          onSchedule={(id) => nav(`/automations?tab=schedules&new=${id}`)}
+          onRenamed={refetchConfigured}
+        />
+        <DeviceSchedulesSection
+          type="circuit"
+          units={configuredByType(t)
+            .filter((dev) => hasPowerSwitch(dev.capabilities))
+            .map((dev) => ({ id: dev.id, name: dev.name, capabilities: dev.capabilities }))}
+          canConfig={isAdmin}
+          wide={wide}
+        />
+      </>
     );
   };
 
