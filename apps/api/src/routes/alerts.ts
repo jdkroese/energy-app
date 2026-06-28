@@ -2,6 +2,7 @@ import * as sonnen from '../connectors/sonnen';
 import * as tesla from '../connectors/tesla';
 import { bandFor } from '../tariff';
 import { probeAll } from './health-probe';
+import { getMonitoredBreaker } from '../connectors/tuya-voltage';
 import * as store from '../store';
 
 export type Severity = 'danger' | 'warning' | 'info' | 'ok';
@@ -28,6 +29,7 @@ const RULE_META: Record<string, { icon: string; label: string }> = {
   'rule-offline': { icon: 'wifi-off', label: 'Device unreachable' },
   'rule-outage': { icon: 'zap-off', label: 'Grid outage detected' },
   'rule-export': { icon: 'arrow-up-from-line', label: 'Exporting during P1 (wasted value)' },
+  'rule-voltage': { icon: 'zap', label: 'Grid voltage out of band' },
 };
 
 // A small seeded set of historical/resolved alerts so the feed is never empty.
@@ -165,6 +167,27 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
     }
   }
 
+  // Grid voltage out of band — gated on its OWN config (voltageMonitor.enabled), not the
+  // generic rule toggle. Reads the monitored Tuya breaker's live voltage; debounced in the
+  // alert loop (2 consecutive ticks) since the reading fluctuates a lot.
+  const vm = store.get().voltageMonitor;
+  if (vm.enabled) {
+    const breaker = await getMonitoredBreaker().catch(() => null);
+    if (breaker && (breaker.voltageV < vm.minV || breaker.voltageV > vm.maxV)) {
+      live.push({
+        id: 'voltage-out-of-band',
+        severity: 'danger',
+        icon: 'zap',
+        title: 'Grid voltage out of band',
+        sub: `${breaker.voltageV} V — outside ${vm.minV}–${vm.maxV} V band`,
+        device: breaker.name,
+        ts: now,
+        status: 'new',
+        rule: 'rule-voltage',
+      });
+    }
+  }
+
   return live;
 }
 
@@ -199,12 +222,17 @@ export async function getAlerts(): Promise<unknown> {
       { type: 'Push', detail: 'This device', enabled: state.channels.push.enabled },
       { type: 'Email', detail: state.channels.email.address, enabled: state.channels.email.enabled },
     ],
-    rules: state.rules.map((r) => ({
-      id: r.id,
-      icon: RULE_META[r.id]?.icon ?? 'bell',
-      label: RULE_META[r.id]?.label ?? r.id,
-      enabled: r.enabled,
-    })),
+    // `rule-voltage` is intentionally omitted from the generic rule toggles — it has its
+    // own config + control (Settings → Notifications "Grid voltage" card / voltageMonitor),
+    // so it must not appear here as a second, competing on/off switch.
+    rules: state.rules
+      .filter((r) => r.id !== 'rule-voltage')
+      .map((r) => ({
+        id: r.id,
+        icon: RULE_META[r.id]?.icon ?? 'bell',
+        label: RULE_META[r.id]?.label ?? r.id,
+        enabled: r.enabled,
+      })),
   };
 }
 

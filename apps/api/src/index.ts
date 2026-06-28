@@ -12,7 +12,7 @@ import {
   setRule,
   setAlertStatus,
 } from './routes/alerts';
-import { getSettings, setWhatsAppNumber } from './routes/settings';
+import { getSettings, setWhatsAppNumber, getVoltageMonitor, setVoltageMonitor } from './routes/settings';
 import { getPlan } from './routes/brain';
 import {
   getScenarios,
@@ -225,6 +225,10 @@ app.put(
   '/api/settings/whatsapp',
   wrap((req) => setWhatsAppNumber((req.body ?? {}).number)),
 );
+// Grid-voltage band monitor (reads any-authed; PATCH follows the alert-config pattern —
+// not admin-gated, like /api/alerts/rules + /api/alerts/channels it sits beside).
+app.get('/api/settings/voltage-monitor', wrap(() => getVoltageMonitor()));
+app.patch('/api/settings/voltage-monitor', wrap((req) => setVoltageMonitor(req.body)));
 
 // ---- Brain (shadow / read-only) ----
 app.get('/api/brain/plan', wrap(() => getPlan()));

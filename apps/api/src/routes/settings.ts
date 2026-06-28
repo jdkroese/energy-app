@@ -29,6 +29,40 @@ export function setWhatsAppNumber(numberRaw: unknown): unknown {
   return { ts: new Date().toISOString(), channels };
 }
 
+/** GET /api/settings/voltage-monitor → the grid-voltage band config + chosen breaker id. */
+export function getVoltageMonitor(): unknown {
+  const vm = store.get().voltageMonitor;
+  return { ts: new Date().toISOString(), voltageMonitor: vm };
+}
+
+/**
+ * PATCH /api/settings/voltage-monitor { enabled?, minV?, maxV? } → validate + persist the
+ * grid-voltage band. Enforces minV < maxV and a sane 0–500 V range. breakerId is managed by
+ * the reader (auto-pick), not user-settable here.
+ */
+export function setVoltageMonitor(body: unknown): unknown {
+  const b = (body ?? {}) as { enabled?: unknown; minV?: unknown; maxV?: unknown };
+  const cur = store.get().voltageMonitor;
+
+  const enabled = typeof b.enabled === 'boolean' ? b.enabled : cur.enabled;
+  const minV = typeof b.minV === 'number' && Number.isFinite(b.minV) ? b.minV : cur.minV;
+  const maxV = typeof b.maxV === 'number' && Number.isFinite(b.maxV) ? b.maxV : cur.maxV;
+
+  if (minV < 0 || maxV > 500 || minV >= maxV) {
+    const err = new Error('minV must be ≥ 0 and < maxV (≤ 500)') as Error & { code?: string };
+    err.code = 'BAD_INPUT';
+    throw err;
+  }
+
+  const voltageMonitor = store.update((s) => {
+    s.voltageMonitor.enabled = enabled;
+    s.voltageMonitor.minV = minV;
+    s.voltageMonitor.maxV = maxV;
+    return s.voltageMonitor;
+  });
+  return { ts: new Date().toISOString(), voltageMonitor };
+}
+
 export async function getSettings(): Promise<unknown> {
   const probe = await probeAll();
   const channels = store.get().channels;
@@ -40,6 +74,7 @@ export async function getSettings(): Promise<unknown> {
       push: { enabled: channels.push.enabled },
       email: { address: channels.email.address, enabled: channels.email.enabled },
     },
+    voltageMonitor: store.get().voltageMonitor,
     connections: [
       {
         name: 'Tesla cloud',

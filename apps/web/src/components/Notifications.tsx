@@ -2,8 +2,8 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_ALERTS } from '../lib/mock';
-import type { Alert, AlertsResponse, AlertSeverity, AlertStatus } from '../lib/types';
-import { Card, Switch, Icon, Button } from './ui';
+import type { Alert, AlertsResponse, AlertSeverity, AlertStatus, VoltageMonitor } from '../lib/types';
+import { Card, Switch, Icon, Button, Input } from './ui';
 
 /* ============================================================================
  * Notifications — the alert feed (recent notifications) and the alert-rule
@@ -160,6 +160,105 @@ export function AlertRulesCard() {
           <Switch checked={r.enabled} onChange={(e) => void toggleRule(r.id, e.target.checked)} />
         </div>
       ))}
+    </Card>
+  );
+}
+
+const DEFAULT_VM: VoltageMonitor = { enabled: true, minV: 190, maxV: 240 };
+
+/**
+ * Grid-voltage band monitor control (Settings → Notifications). An enable toggle plus
+ * two numeric inputs (min/max V); persists via PATCH /api/settings/voltage-monitor.
+ * Self-contained: fetches its own config, mirrors locally for optimistic edits. Works on
+ * desktop and mobile (the inputs wrap and stay full-width). The same band drives the Live
+ * KPI box colour and the `rule-voltage` WhatsApp/push alert.
+ */
+export function VoltageMonitorCard() {
+  const { data } = usePolling<{ voltageMonitor: VoltageMonitor }>(api.voltageMonitor, 0);
+  const [local, setLocal] = useState<VoltageMonitor | null>(null);
+  useEffect(() => { if (data?.voltageMonitor) setLocal(data.voltageMonitor); }, [data]);
+  const vm = local ?? data?.voltageMonitor ?? DEFAULT_VM;
+
+  // Draft strings for the numeric fields so a partial edit doesn't snap mid-typing.
+  const [minDraft, setMinDraft] = useState<string | null>(null);
+  const [maxDraft, setMaxDraft] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const persist = async (patch: Partial<Pick<VoltageMonitor, 'enabled' | 'minV' | 'maxV'>>) => {
+    const prev = vm;
+    const next = { ...vm, ...patch };
+    setLocal(next);
+    setErr(null);
+    try {
+      const res = await api.setVoltageMonitor(patch);
+      setLocal(res.voltageMonitor);
+    } catch {
+      setLocal(prev);
+      setErr('Could not save — reverted');
+    }
+  };
+
+  const commitMin = () => {
+    const n = Number(minDraft);
+    setMinDraft(null);
+    if (minDraft === null || !Number.isFinite(n) || n >= vm.maxV || n < 0) {
+      if (minDraft !== null) setErr('Min must be ≥ 0 and below max');
+      return;
+    }
+    void persist({ minV: n });
+  };
+  const commitMax = () => {
+    const n = Number(maxDraft);
+    setMaxDraft(null);
+    if (maxDraft === null || !Number.isFinite(n) || n <= vm.minV || n > 500) {
+      if (maxDraft !== null) setErr('Max must be above min (≤ 500)');
+      return;
+    }
+    void persist({ maxV: n });
+  };
+
+  const fieldWrap: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minWidth: 120 };
+  const fieldLabel: CSSProperties = { fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.04em' };
+
+  return (
+    <Card title="Grid voltage" style={{ padding: 0 }}>
+      <div style={{ ...row, borderTop: 'none' }}>
+        <span style={{ color: 'var(--text-2)' }}>
+          <Icon name="zap" size={17} />
+        </span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14 }}>Out-of-band alert</div>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
+            Notify when grid voltage leaves the band
+          </div>
+        </div>
+        <Switch checked={vm.enabled} onChange={(e) => void persist({ enabled: e.target.checked })} />
+      </div>
+      <div style={{ borderTop: '1px solid var(--border-1)', padding: '13px 16px', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <label style={fieldWrap}>
+          <span style={fieldLabel}>Min voltage (V)</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            value={minDraft ?? String(vm.minV)}
+            onChange={(e) => setMinDraft(e.target.value)}
+            onBlur={commitMin}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitMin(); }}
+          />
+        </label>
+        <label style={fieldWrap}>
+          <span style={fieldLabel}>Max voltage (V)</span>
+          <Input
+            type="number"
+            inputMode="numeric"
+            value={maxDraft ?? String(vm.maxV)}
+            onChange={(e) => setMaxDraft(e.target.value)}
+            onBlur={commitMax}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitMax(); }}
+          />
+        </label>
+      </div>
+      {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', padding: '0 16px 12px' }}>{err}</div>}
     </Card>
   );
 }

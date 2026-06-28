@@ -58,6 +58,7 @@ export const MOCK_LIVE: LiveResponse = {
   sonnen: { soc: 100, kwh: 9.2, kw: 0, dir: 'idle' },
   tesla: { soc: 100, kwh: 27, kw: 0, dir: 'idle', reservePct: 20, backupKwh: 27, backupHours: 16, island: false },
   tariff: { band: 'P2', rateEur: 0.131, nextBand: 'P1', minsToNext: 72 },
+  breaker: { id: 'mock-breaker', name: 'Main breaker', voltageV: 231, currentA: 12.4, powerW: 2860 },
   today: { producedKwh: 42.3, consumedKwh: 28.6, gridFeedInKwh: 18.4, selfSufficiencyPct: 71, savedEur: 5.4 },
   day: {
     solarKw: solarDay,

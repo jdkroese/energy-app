@@ -64,6 +64,7 @@ import type {
   UserRole,
   UsersResponse,
   VapidPublicResponse,
+  VoltageMonitor,
 } from './types';
 
 /**
@@ -159,6 +160,11 @@ export const api = {
   setWhatsapp: (number: string) => putJSON<{ channels: Channels }>('/api/settings/whatsapp', { number }),
   setChannel: (type: ChannelType, enabled: boolean) =>
     patchJSON<{ channels: Channels }>('/api/alerts/channels', { type, enabled }),
+
+  // grid-voltage band monitor
+  voltageMonitor: () => getJSON<{ voltageMonitor: VoltageMonitor }>('/api/settings/voltage-monitor'),
+  setVoltageMonitor: (patch: Partial<Pick<VoltageMonitor, 'enabled' | 'minV' | 'maxV'>>) =>
+    patchJSON<{ voltageMonitor: VoltageMonitor }>('/api/settings/voltage-monitor', patch),
 
   // alert rules + actions
   setRule: (id: string, enabled: boolean) =>
