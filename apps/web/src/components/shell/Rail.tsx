@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
 import { Eyebrow } from '../ui/Eyebrow';
 import { NAV, NAV_MORE } from './nav';
+import { RailAlarmButton } from './NavAlarm';
 import { useAuth } from '../../auth/AuthProvider';
 
 type Props = {
@@ -84,6 +85,8 @@ export function Rail({ expanded, onToggle }: Props) {
       </nav>
 
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Panic button — always reachable, visually set apart from the nav links. */}
+        <RailAlarmButton expanded={expanded} />
         {expanded && (
           <div style={{ padding: 14, borderRadius: 'var(--radius-lg)', background: 'var(--surface-1)', border: '1px solid var(--border-1)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>

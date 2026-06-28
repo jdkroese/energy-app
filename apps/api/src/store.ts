@@ -343,12 +343,17 @@ export interface AlarmConfig {
   blinkMs: number;
   /** Safety auto-stop after this many seconds; 0 = no cap (manual stop only). */
   autoStopSec: number;
+  /** One-time migration flag: the default siren volume was raised 70 → 80. On first
+   *  hydrate after that change, a persisted config still sitting on the OLD default (70)
+   *  is bumped to 80 once; set true so it runs exactly once and never overrides a future
+   *  deliberate owner change. */
+  volumeBumpedTo80?: boolean;
 }
 
-/** Sensible defaults: enabled, all speakers + all lights, 70% volume, ~1 Hz blink
+/** Sensible defaults: enabled, all speakers + all lights, 80% volume, ~1 Hz blink
  *  (500 ms half-period), 10-min safety cap. */
 export function defaultAlarmConfig(): AlarmConfig {
-  return { enabled: true, speakerIds: [], volumePct: 70, lightIds: [], blinkMs: 500, autoStopSec: 600 };
+  return { enabled: true, speakerIds: [], volumePct: 80, lightIds: [], blinkMs: 500, autoStopSec: 600, volumeBumpedTo80: true };
 }
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */
@@ -1451,14 +1456,24 @@ function hydrateAlarmConfig(p: unknown, base: AlarmConfig): AlarmConfig {
   if (!p || typeof p !== 'object') return base;
   const a = p as Partial<AlarmConfig>;
   const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
-  return {
+  const result: AlarmConfig = {
     enabled: typeof a.enabled === 'boolean' ? a.enabled : base.enabled,
     speakerIds: strArr(a.speakerIds),
     volumePct: typeof a.volumePct === 'number' ? Math.max(0, Math.min(100, Math.round(a.volumePct))) : base.volumePct,
     lightIds: strArr(a.lightIds),
     blinkMs: typeof a.blinkMs === 'number' ? Math.max(ALARM_BLINK_FLOOR_MS, Math.round(a.blinkMs)) : base.blinkMs,
     autoStopSec: typeof a.autoStopSec === 'number' && a.autoStopSec >= 0 ? Math.round(a.autoStopSec) : base.autoStopSec,
+    volumeBumpedTo80: typeof a.volumeBumpedTo80 === 'boolean' ? a.volumeBumpedTo80 : false,
   };
+  // ONE-TIME migration: the default siren volume was raised 70 → 80. If this config
+  // predates the change (flag absent) and is still sitting on the OLD default (70) —
+  // i.e. the owner never deliberately changed it — bump it to 80 once. A deliberate
+  // value (anything other than 70) is left untouched. Flag flips true so it runs once.
+  if (!result.volumeBumpedTo80) {
+    if (result.volumePct === 70) result.volumePct = 80;
+    result.volumeBumpedTo80 = true;
+  }
+  return result;
 }
 
 /** Rehydrate a persisted alarm session, dropping anything malformed (→ idle). */

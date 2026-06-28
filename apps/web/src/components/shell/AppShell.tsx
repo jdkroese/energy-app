@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { Rail } from './Rail';
 import { TabBar } from './TabBar';
 import { TopBar } from './TopBar';
+import { MobileAlarmFab } from './NavAlarm';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
 import { settingsTabsFor } from './nav';
@@ -94,6 +95,7 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', paddingTop: 'env(safe-area-inset-top)' }}>
       <div style={{ flex: 1, overflowY: 'auto' }}>{children(ctx)}</div>
+      <MobileAlarmFab />
       <TabBar />
     </div>
   );
