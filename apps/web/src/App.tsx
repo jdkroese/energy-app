@@ -10,6 +10,7 @@ import { Devices } from './screens/Devices';
 import { DeviceDetail } from './screens/DeviceDetail';
 import { GenericDeviceDetail } from './screens/GenericDeviceDetail';
 import { Automations } from './screens/Automations';
+import { AlarmScreen, AlarmActiveBanner } from './screens/Speakers';
 import { Login } from './screens/auth/Login';
 import { Setup } from './screens/auth/Setup';
 import { Reset } from './screens/auth/Reset';
@@ -35,6 +36,8 @@ function AppRoutes() {
   return (
     <AppShell>
       {(ctx: ShellContext) => (
+        <>
+        <AlarmActiveBanner />
         <Routes>
           <Route path="/" element={<Live ctx={ctx} />} />
           <Route path="/reports" element={<Reports ctx={ctx} />} />
@@ -53,10 +56,13 @@ function AppRoutes() {
               back-compat redirect to the Schedules tab for bookmarks/links. */}
           <Route path="/schedules" element={<Navigate to="/automations?tab=schedules" replace />} />
           <Route path="/automations" element={<Automations ctx={ctx} />} />
+          {/* House-alarm panic page — a big trigger/STOP button for a phone shortcut. */}
+          <Route path="/alarm" element={<AlarmScreen ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </>
       )}
     </AppShell>
   );

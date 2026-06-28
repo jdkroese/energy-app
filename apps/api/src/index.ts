@@ -109,6 +109,21 @@ import {
   commandGeneric,
 } from './routes/discovered';
 import type { BlindLever } from './connectors/tuya-blinds';
+import {
+  getSpeakers,
+  setSpeakerVolume,
+  testSpeaker,
+  postAlarmTrigger,
+  postAlarmStop,
+  getAlarmStatusRoute,
+  getAlarmConfig,
+  setAlarmConfig,
+  getSonosIntegration,
+  setSonosIntegration,
+  rescanSonos,
+} from './routes/alarm';
+import { serveAlarmClip } from './routes/media';
+import { resumeAlarm } from './control/alarm';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
 import { authRouter } from './routes/auth';
@@ -124,6 +139,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ ok: true, service: 'energy-api', env: config.env, time: new Date().toISOString() });
 });
 app.use('/api/auth', authRouter);
+
+// Alarm siren clip — served UN-AUTHED so the Sonos speakers (which fetch it over the LAN
+// by URL during PlayNotification) can reach it. It's just a static, royalty-free siren
+// tone — no sensitive data — and the trigger/stop endpoints below are still admin-gated.
+app.get('/api/media/alarm.mp3', serveAlarmClip);
+app.get('/api/media/alarm.wav', serveAlarmClip);
 
 // --- Everything below this line requires a valid session ---
 app.use(requireAuth);
@@ -410,6 +431,29 @@ app.post(
   }),
 );
 
+// ---- Sonos speakers + house alarm (Phase 1) ----
+// Reads any-authed; volume/test/alarm-trigger/stop + integration config admin-gated.
+app.get('/api/speakers', wrap(() => getSpeakers()));
+app.post(
+  '/api/speakers/:id/volume',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { pct?: unknown };
+    return setSpeakerVolume(String(req.params.id), b.pct);
+  }),
+);
+app.post('/api/speakers/:id/test', requireAdmin, wrap((req) => testSpeaker(String(req.params.id), req)));
+
+app.get('/api/alarm/status', wrap(() => getAlarmStatusRoute()));
+app.post('/api/alarm/trigger', requireAdmin, wrap((req) => postAlarmTrigger(req.body, req)));
+app.post('/api/alarm/stop', requireAdmin, wrap(() => postAlarmStop()));
+app.get('/api/alarm/config', wrap(() => getAlarmConfig()));
+app.put('/api/alarm/config', requireAdmin, wrap((req) => setAlarmConfig(req.body)));
+
+app.get('/api/integrations/sonos', wrap(() => getSonosIntegration()));
+app.put('/api/integrations/sonos', requireAdmin, wrap((req) => setSonosIntegration(req.body)));
+app.post('/api/integrations/sonos/rescan', requireAdmin, wrap(() => rescanSonos()));
+
 // ---- Tuya Cloud integration ----
 app.get('/api/integrations/tuya', wrap(() => getTuyaIntegration()));
 app.post(
@@ -529,6 +573,10 @@ startLightCoordinator();
 // switchable Tuya devices on/off at their scheduled window edges, optionally at a
 // chosen fan speed/direction). No arm gate — matches the lights coordinator.
 startDeviceScheduleCoordinator();
+
+// Resume a still-active house alarm after a restart (siren + light-blink). If the
+// persisted duration already elapsed it stops + restores instead. No-op when idle.
+setTimeout(() => void resumeAlarm().catch((e) => console.error('[alarm] resume failed:', (e as Error).message)), 4_000);
 
 // Background 5-minute sampler for the Live day chart. getLive() records the live
 // snapshot into history5m, so the day fills continuously even when no client is

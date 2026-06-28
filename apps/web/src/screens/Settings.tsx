@@ -2,8 +2,9 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, UserRole, AuthUser } from '../lib/types';
-import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge } from '../components/ui';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
+import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
+import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { AlertRulesCard } from '../components/Notifications';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
@@ -1182,6 +1183,219 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
   );
 }
 
+/* ============================================================================
+ * Sonos — the house-alarm speakers, discovered over LOCAL UPnP (no account/login).
+ * Enabled by default; a seed IP is the robust path on multi-NIC hosts where SSDP
+ * multicast is blocked. A Re-scan re-runs discovery. Admin-only writes.
+ * ==========================================================================*/
+
+function SonosConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState<SonosIntegrationStatus | null>(null);
+  const [enabled, setEnabled] = useState(true);
+  const [seedIp, setSeedIp] = useState('');
+  const [busy, setBusy] = useState<'save' | 'rescan' | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const s = await api.integrations.sonosStatus();
+      setStatus(s);
+      setEnabled(s.enabled);
+      setSeedIp(s.seedIp ?? '');
+    } catch {
+      /* shows as not-connected */
+    }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const save = async () => {
+    setBusy('save'); setErr(null);
+    try {
+      const s = await api.integrations.setSonos(enabled, seedIp.trim() || undefined);
+      setStatus(s);
+    } catch (e) {
+      setErr((e as Error).message || 'Could not save');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const rescan = async () => {
+    setBusy('rescan'); setErr(null);
+    try {
+      await api.integrations.rescanSonos();
+      await load();
+    } catch (e) {
+      setErr((e as Error).message || 'Re-scan failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const count = status?.discoveredCount ?? 0;
+  const statusText = status === null ? 'loading…' : !status.enabled ? 'off' : count > 0 ? `${count} speaker${count === 1 ? '' : 's'}` : 'no speakers found';
+  const statusTone = status === null ? 'text-3' : !status.enabled ? 'grid' : count > 0 ? 'solar' : 'grid';
+
+  return (
+    <ConnectionRow
+      first={first}
+      icon="volume-2"
+      tone={count > 0 ? 'solar' : undefined}
+      name="Sonos"
+      statusText={statusText}
+      statusTone={statusTone}
+      showDot={status !== null}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Sonos speakers for the house alarm — discovered over local UPnP on the home network. No Sonos account or login needed.
+        </div>
+
+        {status?.enabled && count > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>{count} discovered</Badge>
+            {status.names.slice(0, 8).map((n) => (
+              <span key={n} style={{ fontSize: 11.5, color: 'var(--text-2)', background: 'var(--surface-2)', borderRadius: 'var(--radius-pill)', padding: '2px 9px' }}>{n}</span>
+            ))}
+          </div>
+        )}
+
+        {status?.lastError && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{status.lastError}</div>}
+        {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
+
+        {isAdmin ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 360 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'var(--text-1)' }}>
+              <Switch checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+              Sonos enabled
+            </label>
+            <Input
+              label="Seed IP (optional)"
+              type="text"
+              autoComplete="off"
+              value={seedIp}
+              onChange={(e) => setSeedIp(e.target.value)}
+              placeholder="e.g. 192.168.1.149"
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+              On a host with more than one network adapter, multicast discovery can fail — set any one speaker's IP here for reliable topology-based discovery.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void save()}>Save</Button>
+              <Button size="sm" variant="secondary" loading={busy === 'rescan'} onClick={() => void rescan()}>Re-scan</Button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can change Sonos settings.</div>
+        )}
+      </div>
+    </ConnectionRow>
+  );
+}
+
+/* ============================================================================
+ * Alarm / Panic — owner-configurable defaults for the house alarm (siren + light
+ * blink). The big trigger button lives on Devices → Speakers; this configures what
+ * it does. Web + mobile responsive. Admin-only writes.
+ * ==========================================================================*/
+
+function AlarmPanicCard() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [cfg, setCfg] = useState<AlarmConfig | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.alarm.config().then((r) => setCfg(r.config)).catch(() => {});
+  }, []);
+
+  if (!cfg) {
+    return <Card title="Alarm / Panic"><div style={{ padding: '4px 16px 16px', fontSize: 13, color: 'var(--text-3)' }}>Loading…</div></Card>;
+  }
+
+  const patch = (p: Partial<AlarmConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
+  const save = async () => {
+    if (!cfg) return;
+    setBusy(true); setSaved(false);
+    try {
+      // Enforce the blink floor client-side too (the API also clamps).
+      const blinkMs = Math.max(ALARM_BLINK_FLOOR_MS, Math.round(cfg.blinkMs));
+      const r = await api.alarm.setConfig({ ...cfg, blinkMs });
+      setCfg(r.config);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const blinkHz = (1000 / Math.max(ALARM_BLINK_FLOOR_MS, cfg.blinkMs)).toFixed(1);
+
+  return (
+    <Card title="Alarm / Panic">
+      <div style={{ padding: '4px 16px 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          The panic button (on <strong style={{ color: 'var(--text-1)' }}>Devices → Speakers</strong>) sounds a siren on your Sonos speakers and blinks your lights until stopped. Configure the defaults here.
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, color: 'var(--text-1)', fontWeight: 500 }}>
+          <Switch checked={cfg.enabled} disabled={!isAdmin} onChange={(e) => patch({ enabled: e.target.checked })} />
+          House alarm enabled
+        </label>
+
+        <div style={{ opacity: cfg.enabled ? 1 : 0.5, pointerEvents: cfg.enabled && isAdmin ? 'auto' : 'none', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <Slider label="Siren volume" min={0} max={100} value={cfg.volumePct} unit="%" onChange={(v) => patch({ volumePct: v })} />
+          </div>
+
+          <div>
+            <Slider
+              label={`Light blink rate · ${blinkHz} Hz`}
+              min={ALARM_BLINK_FLOOR_MS}
+              max={2000}
+              value={cfg.blinkMs}
+              showValue={false}
+              onChange={(v) => patch({ blinkMs: Math.max(ALARM_BLINK_FLOOR_MS, v) })}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+              {cfg.blinkMs} ms on / {cfg.blinkMs} ms off. Floor {ALARM_BLINK_FLOOR_MS} ms — lights are cloud-controlled and can't blink faster reliably.
+            </div>
+          </div>
+
+          <div>
+            <Input
+              label="Auto-stop after (seconds, 0 = never)"
+              type="number"
+              value={String(cfg.autoStopSec)}
+              onChange={(e) => patch({ autoStopSec: Math.max(0, Math.round(Number(e.target.value) || 0)) })}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+              Safety cap so a forgotten alarm self-stops. The primary stop is always the manual STOP button.
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.5 }}>
+            Scope: all discovered speakers and all lights are included by default. (Per-device selection is coming; today the alarm sounds everywhere.)
+          </div>
+        </div>
+
+        {isAdmin ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save</Button>
+            {saved && <span style={{ fontSize: 12, color: 'var(--solar)' }}>✓ Saved</span>}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can change the alarm settings.</div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 /** Connections card — single-open accordion across all integrations. */
 function ConnectionsCard({ connections }: { connections: SettingsResponse['connections'] }) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -1218,6 +1432,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
       <AcCloudConnection first={false} open={openId === 'accloud'} onToggle={() => toggle('accloud')} />
       <AirzoneConnection first={false} open={openId === 'airzone'} onToggle={() => toggle('airzone')} cfg={cfg} reload={loadCfg} />
       <TuyaConnection first={false} open={openId === 'tuya'} onToggle={() => toggle('tuya')} />
+      <SonosConnection first={false} open={openId === 'sonos'} onToggle={() => toggle('sonos')} />
     </Card>
   );
 }
@@ -1255,6 +1470,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <SiteLocationCard />
           <ConnectionsCard connections={s.connections} />
+          <AlarmPanicCard />
         </div>
       )}
 

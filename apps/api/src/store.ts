@@ -304,6 +304,51 @@ export interface IntegrationsState {
   tuya?: { region?: string; accessId?: string; accessSecret?: string };
   /** Panasonic Comfort Cloud — native WiFi AC modules (CS-Z / CS-XZ series). */
   panasonic?: { username: string; password: string } | null;
+  /** Sonos house-alarm. Local UPnP discovery (zero-config on the LAN); `seedIp` is a
+   *  fallback for networks where SSDP multicast is blocked. Enabled by default. */
+  sonos?: { enabled: boolean; seedIp?: string } | null;
+}
+
+/** A live house-alarm session (siren + light-blink). Persisted so the UI shows an
+ *  active banner and the engine can resume/auto-stop across a restart. `null` = idle. */
+export interface AlarmActive {
+  /** ISO timestamp the alarm was triggered. */
+  startedAt: string;
+  /** Auto-stop after this many ms, or null for run-until-stopped. */
+  durationMs: number | null;
+  /** Light ids enrolled in the blink (snapshotted at trigger time). */
+  lightIds: string[];
+  /** Whether the siren leg was requested. */
+  siren: boolean;
+}
+
+/** Hard floor for the blink half-period (ms). Tuya is CLOUD (~0.2–0.8s/cmd + rate limits),
+ *  so a faster cadence just drops commands; enforced in BOTH the UI and the API. */
+export const ALARM_BLINK_FLOOR_MS = 400;
+
+/**
+ * Owner-configurable house-alarm defaults (Settings → Alarm / Panic). The trigger uses
+ * these unless a per-call override is supplied. Persisted in app state.
+ */
+export interface AlarmConfig {
+  /** Master enable for the panic button. When false the trigger endpoint refuses. */
+  enabled: boolean;
+  /** Speaker UUIDs to sound; empty = ALL discovered speakers. */
+  speakerIds: string[];
+  /** Siren volume 0–100. */
+  volumePct: number;
+  /** Light ids to blink; empty = ALL discovered lights. */
+  lightIds: string[];
+  /** Blink HALF-period (ms): on for this long, off for this long. Floor ALARM_BLINK_FLOOR_MS. */
+  blinkMs: number;
+  /** Safety auto-stop after this many seconds; 0 = no cap (manual stop only). */
+  autoStopSec: number;
+}
+
+/** Sensible defaults: enabled, all speakers + all lights, 70% volume, ~1 Hz blink
+ *  (500 ms half-period), 10-min safety cap. */
+export function defaultAlarmConfig(): AlarmConfig {
+  return { enabled: true, speakerIds: [], volumePct: 70, lightIds: [], blinkMs: 500, autoStopSec: 600 };
 }
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */
@@ -334,7 +379,7 @@ export interface DeviceSettings {
 export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds';
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers';
 
 /** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
 export type FanSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
@@ -799,6 +844,11 @@ export interface StoreSchema {
   /** Device-onboarding triage state (the "Discovered devices" inbox). Phase 1
    *  persists only the list of ignored device ids; later phases extend this. */
   deviceOnboarding: DeviceOnboardingState;
+  /** Active house-alarm session (siren + light-blink), or null when idle. Persisted
+   *  so the UI banner survives a restart and the engine can resume/auto-stop. */
+  alarmActive: AlarmActive | null;
+  /** Owner-configurable house-alarm defaults (Settings → Alarm / Panic). */
+  alarmConfig: AlarmConfig;
 }
 
 /**
@@ -1055,6 +1105,8 @@ function defaults(): StoreSchema {
     lightScenes: [],
     lightSchedules: [],
     deviceOnboarding: { ignored: [], configured: {}, customDeviceTypes: [] },
+    alarmActive: null,
+    alarmConfig: defaultAlarmConfig(),
   };
 }
 
@@ -1371,6 +1423,7 @@ function hydrate(raw: unknown): StoreSchema {
       ...(p.integrations?.airzone ? { airzone: p.integrations.airzone } : {}),
       ...(p.integrations?.tuya ? { tuya: p.integrations.tuya } : {}),
       ...(p.integrations?.panasonic ? { panasonic: p.integrations.panasonic } : {}),
+      ...(p.integrations?.sonos ? { sonos: p.integrations.sonos } : {}),
     },
     deviceSettings: hydrateDeviceSettings(p.deviceSettings, base.deviceSettings),
     schedules: migrateSchedules(p.schedules),
@@ -1388,6 +1441,36 @@ function hydrate(raw: unknown): StoreSchema {
     lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
     lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,
     deviceOnboarding: hydrateDeviceOnboarding(p.deviceOnboarding, base.deviceOnboarding),
+    alarmActive: hydrateAlarmActive(p.alarmActive),
+    alarmConfig: hydrateAlarmConfig(p.alarmConfig, base.alarmConfig),
+  };
+}
+
+/** Rehydrate the alarm config, clamping the blink floor and coercing types. */
+function hydrateAlarmConfig(p: unknown, base: AlarmConfig): AlarmConfig {
+  if (!p || typeof p !== 'object') return base;
+  const a = p as Partial<AlarmConfig>;
+  const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  return {
+    enabled: typeof a.enabled === 'boolean' ? a.enabled : base.enabled,
+    speakerIds: strArr(a.speakerIds),
+    volumePct: typeof a.volumePct === 'number' ? Math.max(0, Math.min(100, Math.round(a.volumePct))) : base.volumePct,
+    lightIds: strArr(a.lightIds),
+    blinkMs: typeof a.blinkMs === 'number' ? Math.max(ALARM_BLINK_FLOOR_MS, Math.round(a.blinkMs)) : base.blinkMs,
+    autoStopSec: typeof a.autoStopSec === 'number' && a.autoStopSec >= 0 ? Math.round(a.autoStopSec) : base.autoStopSec,
+  };
+}
+
+/** Rehydrate a persisted alarm session, dropping anything malformed (→ idle). */
+function hydrateAlarmActive(p: unknown): AlarmActive | null {
+  if (!p || typeof p !== 'object') return null;
+  const a = p as Partial<AlarmActive>;
+  if (typeof a.startedAt !== 'string') return null;
+  return {
+    startedAt: a.startedAt,
+    durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
+    lightIds: Array.isArray(a.lightIds) ? a.lightIds.filter((x): x is string => typeof x === 'string') : [],
+    siren: a.siren !== false,
   };
 }
 
