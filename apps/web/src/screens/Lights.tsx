@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { LightUnit, LightsResponse, LightLever, LightHsv, ScenesResponse } from '../lib/types';
@@ -39,12 +40,16 @@ function LightCard({
   canControl,
   onCmd,
   onRename,
+  onOpenDetail,
 }: {
   d: LightUnit;
   wide: boolean;
   canControl: boolean;
   onCmd: (lever: LightLever, value: boolean | number | LightHsv) => void;
   onRename: (name: string) => void;
+  /** Configured (set-up) lights only — opens the device edit/detail screen where the
+   *  full capability set (modes, inching, sensor readouts) lives. */
+  onOpenDetail?: () => void;
 }) {
   const on = d.power;
   const [editing, setEditing] = useState(false);
@@ -104,6 +109,17 @@ function LightCard({
             <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{d.online ? (on ? 'on' : 'off') : 'offline'}</div>
           )}
         </div>
+        {onOpenDetail && (
+          <button
+            type="button"
+            aria-label="Device details"
+            title="Details & advanced settings"
+            onClick={onOpenDetail}
+            style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4, flex: 'none', display: 'grid', placeItems: 'center' }}
+          >
+            <Icon name="settings-2" size={15} />
+          </button>
+        )}
         <Switch
           checked={on}
           disabled={!canControl || !d.online}
@@ -185,6 +201,7 @@ function LightCard({
 /** The lights content (no page chrome) — embedded in the Devices → Lighting tab. */
 export function LightsPanel({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
+  const nav = useNavigate();
   const canControl = user?.role === 'admin';
   const wide = ctx.desktop;
   const { data, loading, stale, updatedAt, refetch } = usePolling<LightsResponse>(api.lights.list, 15_000);
@@ -306,6 +323,7 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
                     canControl={canControl}
                     onCmd={(lever, value) => send(dev.id, lever, value)}
                     onRename={(name) => { void api.lights.rename(dev.id, name).then(refetch); }}
+                    onOpenDetail={dev.configured ? () => nav(`/devices/generic/${dev.id}`) : undefined}
                   />
                 );
               })}

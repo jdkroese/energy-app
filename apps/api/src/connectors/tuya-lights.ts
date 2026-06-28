@@ -66,6 +66,9 @@ export interface LightUnit {
   dimmable: boolean;
   tunable: boolean;
   colorable: boolean;
+  /** True when this unit is a user-SET-UP device (typeId 'lighting'), not a native
+   *  Tuya light. The light card shows a "details" affordance for these. */
+  configured?: boolean;
 }
 
 function statusMap(status: TuyaStatusItem[]): Record<string, unknown> {

@@ -573,7 +573,10 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   counts.lighting = lightsData?.context.deviceCount ?? 0;
   counts.blinds = blindsData?.context.deviceCount ?? 0;
   // Configured generic devices feed the Switching tab + any custom-type tab.
+  // Skip 'lighting' — those are folded into the /api/lights fleet already, so
+  // counts.lighting (from the fleet) would otherwise double-count them.
   for (const cfg of configured) {
+    if (cfg.typeId === 'lighting') continue;
     if (cfg.typeId in counts) (counts as Record<string, number>)[cfg.typeId] += 1;
   }
   counts.switching = configured.filter((c) => c.typeId === 'switching').length;
@@ -775,7 +778,9 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     if (t === 'needs-setup') return <DiscoveredInbox wide={wide} canTriage={isAdmin} onSetupDone={onSetupDone} />;
     if (t === 'cooling') return <>{coolingContent}{bespokeExtras(t)}</>;
     if (t === 'heating') return <>{heatingContent}{bespokeExtras(t)}</>;
-    if (t === 'lighting') return <><LightsPanel ctx={ctx} />{bespokeExtras(t)}</>;
+    // Lighting: devices set up as 'lighting' are folded into the /api/lights fleet
+    // and render as light cards inside LightsPanel — no separate generic block here.
+    if (t === 'lighting') return <LightsPanel ctx={ctx} />;
     if (t === 'blinds') return <><BlindsPanel ctx={ctx} />{bespokeExtras(t)}</>;
     // Switching (built-in generic bucket) + any custom type → the generic group.
     const meta = resolveTypeMeta(t, customTypes);

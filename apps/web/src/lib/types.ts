@@ -831,6 +831,9 @@ export interface LightUnit {
   dimmable: boolean;
   tunable: boolean;
   colorable: boolean;
+  /** True when this unit is a user-SET-UP device (typeId 'lighting'), not a native
+   *  Tuya light. The card shows a "details" affordance that opens its edit screen. */
+  configured?: boolean;
 }
 
 export interface LightsResponse {
