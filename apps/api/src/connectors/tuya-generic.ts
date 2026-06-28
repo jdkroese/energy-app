@@ -66,7 +66,7 @@ function specBounds(spec: TuyaSpec | null | undefined, dp: string): { min?: numb
  * Breakers report e.g. `cur_voltage` scale 1 (deci-volts), `cur_power` scale 1
  * (deci-watts), `cur_current` scale 0 (mA). Undefined when the spec omits scale.
  */
-function specScale(spec: TuyaSpec | null | undefined, dp: string): number | undefined {
+export function specScale(spec: TuyaSpec | null | undefined, dp: string): number | undefined {
   const v = specValues(spec, dp);
   return v && typeof v.scale === 'number' && Number.isFinite(v.scale) ? v.scale : undefined;
 }
