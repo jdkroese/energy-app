@@ -361,6 +361,192 @@ export async function playSiren(opts: SirenOptions, overallBudgetSec: number | n
   } while (myToken === sirenToken && (deadline == null || Date.now() < deadline));
 }
 
+// ---- Internet radio (takeover playback) ------------------------------------
+// Radio playback is a TAKEOVER (unlike the alarm's non-destructive PlayNotification):
+// it groups the chosen speakers under one coordinator, points its AVTransport at the
+// stream and plays, then sets each member's volume. Owner-validated facts:
+//   • A station plays via the `x-rincon-mp3radio://` URI scheme with the http(s):// prefix
+//     STRIPPED. A plain http:// URL is rejected by Sonos (UPnPError 714 Illegal MIME-Type).
+//   • Metadata MUST be empty — a DIDL metadata string makes Sonos reject the play with
+//     UPnPError 402 (Invalid args). https-only hosts that 701 when the scheme is stripped
+//     play via the scheme-preserving variant (see startRadioStream).
+
+/** Build the Sonos radio URI from a stream URL (strip the http(s):// prefix). */
+function radioUri(streamUrl: string): string {
+  return 'x-rincon-mp3radio://' + streamUrl.replace(/^https?:\/\//i, '');
+}
+
+/** The scheme-preserving variant: prepend x-rincon-mp3radio:// WITHOUT stripping, so the
+ *  original https:// is kept for TLS-only hosts (e.g. icecast on :8443) that 701 when the
+ *  scheme is dropped to plain http. */
+function radioUriKeep(streamUrl: string): string {
+  return 'x-rincon-mp3radio://' + streamUrl;
+}
+
+/** Start a radio stream on a coordinator, robust across stream types (owner-validated live).
+ *  EMPTY metadata is used DELIBERATELY — passing a DIDL metadata string makes Sonos reject
+ *  the call with UPnPError 402 (Invalid args) on EVERY play. Do not "add a title" here.
+ *  Strategy: try the stripped URI first (works for most http/https MP3 + many AAC/HLS), then
+ *  fall back to the scheme-preserving URI for https-only hosts. Confirms the transport
+ *  actually started (PLAYING/TRANSITIONING) rather than trusting SetAVTransportURI's return. */
+async function startRadioStream(coordinator: SonosDevice, streamUrl: string): Promise<void> {
+  const candidates = [radioUri(streamUrl)];
+  const keep = radioUriKeep(streamUrl);
+  if (keep !== candidates[0]) candidates.push(keep);
+  let lastErr: unknown = null;
+  for (const uri of candidates) {
+    try {
+      await coordinator.AVTransportService.SetAVTransportURI({ InstanceID: 0, CurrentURI: uri, CurrentURIMetaData: '' });
+      await coordinator.AVTransportService.Play({ InstanceID: 0, Speed: '1' });
+      const info = await coordinator.AVTransportService.GetTransportInfo({ InstanceID: 0 });
+      if (info.CurrentTransportState === 'PLAYING' || info.CurrentTransportState === 'TRANSITIONING') return;
+      lastErr = new Error(`stream did not start (${info.CurrentTransportState})`);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error(`could not start stream: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+}
+
+export interface PlayStationOptions {
+  /** The HTTP(S) stream URL of the station. */
+  streamUrl: string;
+  /** Station name (label only — used for logging/UI; not sent as Sonos metadata, see above). */
+  name: string;
+  /** Speaker UUIDs to play on. Empty = ALL discovered speakers (whole house). */
+  speakerIds?: string[];
+  /** Playback volume 0–100 applied to every targeted speaker. */
+  volumePct: number;
+}
+
+/** Resolve the target devices for a radio play: the named speakers, or the whole fleet
+ *  when none are named. */
+function targetDevices(m: SonosManager, speakerIds?: string[]): SonosDevice[] {
+  if (!speakerIds || speakerIds.length === 0) return m.Devices.slice();
+  const want = new Set(speakerIds);
+  return m.Devices.filter((d) => want.has(d.Uuid));
+}
+
+/**
+ * Play an internet-radio station on the chosen speakers (synced) at a chosen volume.
+ * Picks the first target as the GROUP COORDINATOR, joins the rest into its group, points
+ * the coordinator's AVTransport at the radio URI and plays, then sets each member's volume.
+ * Returns the speaker ids that were played on. Throws when Sonos isn't reachable or no
+ * targeted speaker is present.
+ */
+export async function playStation(opts: PlayStationOptions): Promise<{ playedOn: string[]; coordinator: string }> {
+  const m = await getManager();
+  if (!m) throw new Error(lastError || 'Sonos not available');
+  const targets = targetDevices(m, opts.speakerIds);
+  if (targets.length === 0) throw new Error('no matching speakers found');
+  const vol = Math.max(0, Math.min(100, Math.round(opts.volumePct)));
+
+  const coordinator = targets[0];
+  // Join the other targets into the coordinator's group so they play the stream in sync.
+  for (const d of targets.slice(1)) {
+    try {
+      await d.JoinGroup(coordinator.Name);
+    } catch {
+      /* leave this speaker where it is; the rest still group + play */
+    }
+  }
+
+  // Point the coordinator at the radio stream and play (empty metadata + strip→keep fallback).
+  await startRadioStream(coordinator, opts.streamUrl);
+
+  // Set volume on every target (best-effort per speaker).
+  await Promise.all(
+    targets.map(async (d) => {
+      try {
+        await d.RenderingControlService.SetVolume({ InstanceID: 0, Channel: 'Master', DesiredVolume: vol });
+      } catch {
+        /* one speaker's volume failed — playback still holds */
+      }
+    }),
+  );
+
+  lastFleetAt = 0; // force the next read to reflect the new volumes
+  return { playedOn: targets.map((d) => d.Uuid), coordinator: coordinator.Uuid };
+}
+
+/**
+ * Stop playback on the chosen speakers (or the whole fleet when none are named). Stops the
+ * coordinator of each targeted speaker's group so the stream actually ends. Best-effort.
+ */
+export async function stopSpeakers(speakerIds?: string[]): Promise<void> {
+  const m = await getManager();
+  if (!m) return; // nothing reachable to stop
+  const coords = groupCoordinators(m, speakerIds && speakerIds.length ? speakerIds : undefined);
+  await Promise.all(
+    coords.map(async (d) => {
+      try {
+        await d.Stop();
+      } catch {
+        /* best-effort */
+      }
+    }),
+  );
+  lastFleetAt = 0;
+}
+
+/** A Sonos system radio favourite (from GetFavorites / GetFavoriteRadioStations). */
+export interface SonosFavorite {
+  title: string;
+  /** The stream URI as Sonos stores it (often x-rincon-mp3radio:// or x-sonosapi-stream:). */
+  uri: string;
+  /** Best-effort plain stream URL (http(s)://…) derived from the Sonos URI; null if not derivable. */
+  streamUrl: string | null;
+}
+
+/** A Sonos `x-rincon-mp3radio://host/path` URI back to a plain http URL (best-effort). */
+function favoriteStreamUrl(uri: string): string | null {
+  if (/^https?:\/\//i.test(uri)) return uri;
+  const m = uri.match(/^x-rincon-mp3radio:\/\/(.+)$/i);
+  if (m) return 'http://' + m[1];
+  return null; // x-sonosapi-stream / service URIs can't be replayed as a plain stream
+}
+
+/**
+ * Read the Sonos system's own radio favourites (for the "Import from Sonos" feature).
+ * Merges GetFavoriteRadioStations + the audioBroadcast entries of GetFavorites, deduped by
+ * title. Returns [] when Sonos isn't reachable.
+ */
+export async function getSonosRadioFavorites(): Promise<SonosFavorite[]> {
+  const m = await getManager();
+  if (!m || m.Devices.length === 0) return [];
+  const d = m.Devices[0];
+  const out: SonosFavorite[] = [];
+  const seen = new Set<string>();
+  const add = (title: unknown, uri: unknown) => {
+    if (typeof title !== 'string' || typeof uri !== 'string' || !uri) return;
+    const key = title.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ title: title || 'Station', uri, streamUrl: favoriteStreamUrl(uri) });
+  };
+  // Radio favourites (R: container).
+  try {
+    const r = await d.GetFavoriteRadioStations();
+    if (Array.isArray(r.Result)) for (const t of r.Result) add(t.Title, t.TrackUri);
+  } catch {
+    /* not all systems expose this; fall through to GetFavorites */
+  }
+  // General favourites — keep only the radio/audioBroadcast ones.
+  try {
+    const f = await d.GetFavorites();
+    if (Array.isArray(f.Result)) {
+      for (const t of f.Result) {
+        const isRadio =
+          (t.UpnpClass ?? '').includes('audioBroadcast') || /^x-rincon-mp3radio:|^x-sonosapi-stream:/i.test(t.TrackUri ?? '');
+        if (isRadio) add(t.Title, t.TrackUri);
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+  return out;
+}
+
 /**
  * Stop the siren immediately: bump the token so any looping playSiren() breaks, then stop
  * transport on each group coordinator so the current clip is cut short now (PlayNotification

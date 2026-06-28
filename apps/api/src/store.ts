@@ -857,6 +857,47 @@ export interface Room {
   order: number;
 }
 
+// ---- Sonos radio: favourite stations + schedules ---------------------------
+// A self-contained internet-radio subsystem for the Sonos fleet (separate from the
+// house-alarm path, which uses the non-destructive PlayNotification). A FAVOURITE is
+// a saved station in one of 10 slots (name + stream URL, optional logo/codec). A radio
+// SCHEDULE plays a station on chosen speakers at a chosen volume at an on-time, and
+// optionally stops at an off-time, on chosen weekdays — mirrors the light schedule model.
+
+/** Hard cap on favourite radio slots surfaced in the UI grid. */
+export const RADIO_FAVORITE_SLOTS = 10;
+
+export interface RadioStation {
+  id: string;
+  /** Slot index 0..RADIO_FAVORITE_SLOTS-1 (position in the favourites grid). */
+  slot: number;
+  name: string;
+  /** The HTTP(S) stream URL (the connector strips the scheme + applies x-rincon-mp3radio://). */
+  streamUrl: string;
+  /** Optional station logo/favicon URL (from the directory or import). */
+  logo?: string;
+  /** Optional codec hint (e.g. 'MP3', 'AAC') surfaced in the UI. */
+  codec?: string;
+}
+
+export interface RadioSchedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Days of week the schedule runs on (0=Sun..6=Sat). */
+  days: number[];
+  /** Local "HH:MM" — when to start the station. */
+  onTime: string;
+  /** Optional local "HH:MM" — stop the speakers. null = no auto-stop. */
+  offTime?: string | null;
+  /** The favourite station to play (by id). */
+  stationId: string;
+  /** Speaker UUIDs to play on; empty = ALL discovered speakers. */
+  speakerIds: string[];
+  /** Playback volume 0–100. */
+  volumePct: number;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -900,6 +941,9 @@ export interface StoreSchema {
   /** One-time guard: once true the auto-seed/pre-assign migration never runs again, so it
    *  can't clobber the owner's room edits/assignments on a later boot. */
   roomsSeeded: boolean;
+  /** Sonos internet-radio favourites (10 slots) + schedules (self-contained). */
+  radioFavorites: RadioStation[];
+  radioSchedules: RadioSchedule[];
 }
 
 /**
@@ -1169,6 +1213,8 @@ function defaults(): StoreSchema {
     alarmConfig: defaultAlarmConfig(),
     rooms: {},
     roomsSeeded: false,
+    radioFavorites: [],
+    radioSchedules: [],
   };
 }
 
@@ -1539,6 +1585,8 @@ function hydrate(raw: unknown): StoreSchema {
     alarmConfig: hydrateAlarmConfig(p.alarmConfig, base.alarmConfig),
     rooms: hydrateRooms(p.rooms),
     roomsSeeded: typeof p.roomsSeeded === 'boolean' ? p.roomsSeeded : false,
+    radioFavorites: hydrateRadioFavorites(p.radioFavorites),
+    radioSchedules: hydrateRadioSchedules(p.radioSchedules),
   };
 }
 
@@ -1557,6 +1605,50 @@ function hydrateRooms(p: unknown): Record<string, Room> {
       order: typeof r.order === 'number' ? r.order : i,
     };
     i++;
+  }
+  return out;
+}
+
+/** Coerce persisted radio favourites; drops malformed entries + clamps slots. */
+function hydrateRadioFavorites(raw: unknown): RadioStation[] {
+  if (!Array.isArray(raw)) return [];
+  const out: RadioStation[] = [];
+  for (const item of raw) {
+    const r = (item ?? {}) as Partial<RadioStation>;
+    if (typeof r.id !== 'string' || typeof r.streamUrl !== 'string' || !r.streamUrl) continue;
+    const slot = typeof r.slot === 'number' ? Math.max(0, Math.min(RADIO_FAVORITE_SLOTS - 1, Math.round(r.slot))) : 0;
+    out.push({
+      id: r.id,
+      slot,
+      name: typeof r.name === 'string' && r.name ? r.name : 'Station',
+      streamUrl: r.streamUrl,
+      ...(typeof r.logo === 'string' && r.logo ? { logo: r.logo } : {}),
+      ...(typeof r.codec === 'string' && r.codec ? { codec: r.codec } : {}),
+    });
+  }
+  return out;
+}
+
+/** Coerce persisted radio schedules; drops malformed entries. */
+function hydrateRadioSchedules(raw: unknown): RadioSchedule[] {
+  if (!Array.isArray(raw)) return [];
+  const out: RadioSchedule[] = [];
+  const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+  for (const item of raw) {
+    const r = (item ?? {}) as Partial<RadioSchedule>;
+    if (typeof r.id !== 'string' || typeof r.stationId !== 'string') continue;
+    if (typeof r.onTime !== 'string' || !HHMM.test(r.onTime)) continue;
+    out.push({
+      id: r.id,
+      name: typeof r.name === 'string' && r.name ? r.name : 'Radio schedule',
+      enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
+      days: Array.isArray(r.days) ? r.days.filter((d) => typeof d === 'number' && d >= 0 && d <= 6) : [1, 2, 3, 4, 5],
+      onTime: r.onTime,
+      offTime: typeof r.offTime === 'string' && HHMM.test(r.offTime) ? r.offTime : null,
+      stationId: r.stationId,
+      speakerIds: Array.isArray(r.speakerIds) ? r.speakerIds.filter((x): x is string => typeof x === 'string') : [],
+      volumePct: typeof r.volumePct === 'number' ? Math.max(0, Math.min(100, Math.round(r.volumePct))) : 25,
+    });
   }
   return out;
 }

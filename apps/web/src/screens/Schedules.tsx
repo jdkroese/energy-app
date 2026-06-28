@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { DeviceType, DevicesResponse, Schedule, SchedulesResponse, LightsResponse, ScenesResponse, BlindsResponse, ConfiguredResponse } from '../lib/types';
+import type { DeviceType, DevicesResponse, Schedule, SchedulesResponse, LightsResponse, ScenesResponse, BlindsResponse, ConfiguredResponse, SpeakersResponse } from '../lib/types';
 import { Icon, Button, SegmentedControl } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -10,6 +10,7 @@ import type { ShellContext } from '../components/shell/AppShell';
 import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
 import { EditRuleOverlay, type RulePeer } from '../components/schedules/EditRuleOverlay';
 import { LightSchedulesSection } from '../components/lights/ScenesAndSchedules';
+import { RadioSchedulesSection } from '../components/radio/Radio';
 import { newRuleDraft, TYPE_LABEL } from '../lib/scheduleRules';
 import { hasPowerSwitch } from '../lib/capabilities';
 
@@ -28,6 +29,7 @@ const FILTERS: { value: 'all' | DeviceType; label: string }[] = [
   { value: 'lighting', label: 'Light' },
   { value: 'blinds', label: 'Blinds' },
   { value: 'circuit', label: 'Circ' },
+  { value: 'speakers', label: 'Radio' },
 ];
 
 /** Minimal schedulable-unit shape — climate devices and Tuya blinds both map to this. */
@@ -49,6 +51,11 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
   const { data: configuredData } = usePolling<ConfiguredResponse>(api.devices.configured, 0);
   const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 0);
   const { data: lightScenesData } = usePolling<ScenesResponse>(api.lights.scenes, 0);
+  const { data: speakersData } = usePolling<SpeakersResponse>(api.speakers.list, 0);
+  const speakers = useMemo(
+    () => [...(speakersData?.speakers ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })),
+    [speakersData],
+  );
   const lights = useMemo(
     () => [...(lightsData?.devices ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })),
     [lightsData],
@@ -196,6 +203,11 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
       {/* Lighting — full Tuya light/scene scheduling, same editor as Devices → Lighting */}
       {(filter === 'all' || filter === 'lighting') && lights.length > 0 && (
         <LightSchedulesSection lights={lights} scenes={lightScenes} canControl={!!canConfig} heading="Lighting" icon="lightbulb" iconColor="var(--home)" />
+      )}
+
+      {/* Radio — Sonos internet-radio schedules (play a saved station on chosen speakers). */}
+      {(filter === 'all' || filter === 'speakers') && speakersData?.enabled && (
+        <RadioSchedulesSection speakers={speakers} canControl={!!canConfig} wide={wide} />
       )}
 
       {/* smart-override note */}

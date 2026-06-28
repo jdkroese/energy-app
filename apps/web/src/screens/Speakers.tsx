@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
+import { RadioPanel, RadioSchedulesSection } from '../components/radio/Radio';
 
 /* ============================================================================
  * Speakers — the Sonos fleet (local UPnP): per-speaker volume + Test. The house
@@ -232,6 +233,10 @@ export function SpeakersPanel({ ctx }: { ctx: ShellContext }) {
               ))}
             </div>
           )}
+
+          {/* Internet radio — favourites grid + play on chosen speakers + schedules. */}
+          <RadioPanel speakers={speakers} canControl={canControl} wide={wide} />
+          <RadioSchedulesSection speakers={speakers} canControl={canControl} wide={wide} />
         </>
       )}
     </div>
