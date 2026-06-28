@@ -12,10 +12,12 @@
 
 import type { TuyaDevice, TuyaStatusItem } from './tuya';
 
-/** Tuya category codes that are "lights" for this category screen. NOTE: 'fsd'
- *  (ceiling-fan light) is intentionally EXCLUDED — a fan-with-light is a fan, not
- *  a light; it belongs to the (future) fan category, not the Lighting list. */
-const LIGHT_CATEGORIES = new Set(['dj', 'dd', 'dc', 'fwd', 'xdd', 'tgq', 'tyndj']);
+/** Tuya category codes that are "lights" for this category screen. 'tgq' (dimmer)
+ *  and 'tgkg' (dimmer SWITCH — the in-wall sibling, e.g. a 1-channel Wi-Fi dimmer
+ *  module) both drive a light's brightness via switch_led/bright_value DPs, so they
+ *  belong here. NOTE: 'fsd' (ceiling-fan light) is intentionally EXCLUDED — a
+ *  fan-with-light is a fan, not a light; it belongs to the (future) fan category. */
+const LIGHT_CATEGORIES = new Set(['dj', 'dd', 'dc', 'fwd', 'xdd', 'tgq', 'tgkg', 'tyndj']);
 
 export function isLight(d: TuyaDevice): boolean {
   return LIGHT_CATEGORIES.has(d.category);
