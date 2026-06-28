@@ -15,6 +15,100 @@ function round(n: number, dp = 1): number {
   return Math.round(n * f) / f;
 }
 
+// How far back the Reports period navigator can step, per range (offset 0 = now).
+// Hour is always "now". Bounds keep the picker finite and disable ◀ at the edge.
+export const MAX_BACK: Record<Range, number> = { hour: 0, day: 60, week: 26, month: 24, year: 5 };
+
+const TZ = 'Europe/Madrid';
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Minutes Europe/Madrid is ahead of UTC at instant `d` (handles CET/CEST). */
+function madridOffsetMin(d: Date): number {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(d);
+  const g = (t: string) => Number(p.find((x) => x.type === t)?.value);
+  const asUTC = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second'));
+  return Math.round((asUTC - d.getTime()) / 60000);
+}
+
+/** The UTC instant whose Madrid wall-clock equals the given Y-M-D H:Mi:S.mmm. */
+function madridInstant(y: number, m: number, d: number, H: number, Mi: number, S: number, ms: number): Date {
+  let guess = Date.UTC(y, m - 1, d, H, Mi, S, ms);
+  for (let i = 0; i < 2; i++) {
+    const off = madridOffsetMin(new Date(guess));
+    guess = Date.UTC(y, m - 1, d, H, Mi, S, ms) - off * 60000;
+  }
+  return new Date(guess);
+}
+
+/** Madrid calendar fields for instant `d` (wd 0=Sun..6=Sat). */
+function madridCal(d: Date): { y: number; m: number; day: number; wd: number } {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
+  }).formatToParts(d);
+  const g = (t: string) => p.find((x) => x.type === t)?.value ?? '';
+  const wmap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return { y: Number(g('year')), m: Number(g('month')), day: Number(g('day')), wd: wmap[g('weekday')] ?? 1 };
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * The Tesla `start_date`/`end_date` window + a display label for a given range
+ * and offset (0 = current period, negative = into the past). Returns null for the
+ * live/current period (no window → unchanged current-period behaviour).
+ */
+function periodWindow(range: Range, offset: number): { startDate: string; endDate: string; label: string } | null {
+  if (offset === 0 || range === 'hour') return null;
+  const today = madridCal(new Date());
+
+  if (range === 'year') {
+    const y = today.y + offset;
+    return {
+      startDate: madridInstant(y, 1, 1, 0, 0, 0, 0).toISOString(),
+      endDate: madridInstant(y, 12, 31, 23, 59, 59, 999).toISOString(),
+      label: String(y),
+    };
+  }
+  if (range === 'month') {
+    const base = today.m - 1 + offset;
+    const y = today.y + Math.floor(base / 12);
+    const m = ((base % 12) + 12) % 12 + 1;
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    return {
+      startDate: madridInstant(y, m, 1, 0, 0, 0, 0).toISOString(),
+      endDate: madridInstant(y, m, lastDay, 23, 59, 59, 999).toISOString(),
+      label: `${MONTHS[m - 1]} ${y}`,
+    };
+  }
+  // day / week — anchor on Madrid-noon and step in whole days (DST-safe).
+  const anchor = madridInstant(today.y, today.m, today.day, 12, 0, 0, 0);
+  if (range === 'day') {
+    const c = madridCal(new Date(anchor.getTime() + offset * DAY_MS));
+    return {
+      startDate: madridInstant(c.y, c.m, c.day, 0, 0, 0, 0).toISOString(),
+      endDate: madridInstant(c.y, c.m, c.day, 23, 59, 59, 999).toISOString(),
+      label: `${WD[c.wd]} ${c.day} ${MONTHS[c.m - 1]} ${c.y}`,
+    };
+  }
+  // week — Monday..Sunday, shifted by `offset` weeks.
+  const isoWd = today.wd === 0 ? 7 : today.wd; // Mon=1..Sun=7
+  const mondayInstant = new Date(anchor.getTime() + (offset * 7 - (isoWd - 1)) * DAY_MS);
+  const monday = madridCal(mondayInstant);
+  const sunday = madridCal(new Date(mondayInstant.getTime() + 6 * DAY_MS));
+  const label =
+    monday.m === sunday.m
+      ? `${monday.day}–${sunday.day} ${MONTHS[monday.m - 1]} ${monday.y}`
+      : `${monday.day} ${MONTHS[monday.m - 1]} – ${sunday.day} ${MONTHS[sunday.m - 1]} ${sunday.y}`;
+  return {
+    startDate: madridInstant(monday.y, monday.m, monday.day, 0, 0, 0, 0).toISOString(),
+    endDate: madridInstant(sunday.y, sunday.m, sunday.day, 23, 59, 59, 999).toISOString(),
+    label,
+  };
+}
+
 interface EnergyRow {
   timestamp?: string | number;
   total_solar_generation?: number;
@@ -81,13 +175,18 @@ const LOAD_SPLIT: Array<{ name: string; icon: string; tone: string; pct: number 
   { name: 'Lighting', icon: 'lightbulb', tone: 'home', pct: 0.06 },
 ];
 
-export async function getHistory(range: Range): Promise<unknown> {
+export async function getHistory(range: Range, rawOffset = 0): Promise<unknown> {
+  // Period navigator: clamp the requested offset into the allowed look-back. Hour
+  // is always "now" (offset 0); other ranges step back day/week/month/year.
+  const offset = range === 'hour' ? 0 : Math.max(-MAX_BACK[range], Math.min(0, Math.round(rawOffset)));
+  const win = periodWindow(range, offset);
+
   // Tesla calendar_history has no sub-day period, so the Hour view reuses the day
   // series and keeps only the last 60 minutes.
   const period = range === 'hour' ? 'day' : range;
   let rows: EnergyRow[] = [];
   try {
-    const raw = (await tesla.getCalendarHistory('energy', period)) as {
+    const raw = (await tesla.getCalendarHistory('energy', period, win ?? undefined)) as {
       time_series?: EnergyRow[];
     };
     rows = raw.time_series ?? [];
@@ -202,6 +301,12 @@ export async function getHistory(range: Range): Promise<unknown> {
   return {
     ts: new Date().toISOString(),
     range,
+    // Period navigator: which period this payload is for + whether older/newer exist.
+    offset,
+    isCurrent: offset === 0,
+    hasPrev: range !== 'hour' && offset > -MAX_BACK[range],
+    hasNext: offset < 0,
+    periodLabel: win?.label ?? null,
     totals: {
       producedKwh,
       consumedKwh,
