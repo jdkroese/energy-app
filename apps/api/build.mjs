@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { cpSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
@@ -19,7 +19,15 @@ await build({
   // that resolves to node_modules/better-sqlite3 on the host. The metering layer
   // requires it lazily inside a try/catch, so a host where the dep is absent
   // disables metering gracefully rather than crashing the API.
-  external: ['better-sqlite3'],
+  //
+  // pdfjs-dist (invoice PDF text extraction) is PURE-JS but does NOT survive esbuild
+  // CJS bundling: its legacy build lazily `import()`s pdf.worker.mjs from the bundle's
+  // OWN directory at runtime (the "fake worker" path), which doesn't exist inside the
+  // flat dist. Marking it external keeps a runtime resolve to a vendored copy in
+  // dist/node_modules/pdfjs-dist (added below), exactly like better-sqlite3. parse.ts
+  // imports it lazily and never throws, so a host missing the dep just fails a parse
+  // with a warning rather than crashing the API.
+  external: ['better-sqlite3', 'pdfjs-dist'],
 });
 
 // Copy static assets (the bundled alarm siren clip) into dist/ so they travel with the
@@ -63,5 +71,36 @@ mkdirSync(vendorRoot, { recursive: true });
 const vendored = new Set();
 for (const name of NATIVE_EXTERNALS) vendorDep(name, process.cwd(), vendored);
 console.log(`[build] vendored native externals into ${vendorRoot}/: ${[...vendored].join(', ')}`);
+
+// Vendor a MINIMAL pdfjs-dist into dist/node_modules/pdfjs-dist so the externalised
+// `pdfjs-dist/legacy/build/pdf.mjs` import resolves at runtime. We only do TEXT
+// extraction (never render glyphs), so we copy just the legacy build (pdf.mjs +
+// pdf.worker.mjs) + a trimmed package.json — ~3MB instead of the full ~37MB package
+// (skips cmaps, standard_fonts, image decoders, the non-legacy build). The optional
+// @napi-rs/canvas is intentionally absent: pdfjs logs one harmless "cannot load canvas"
+// warning at init and proceeds with text-only extraction.
+{
+  const pkgJsonPath = require.resolve('pdfjs-dist/package.json', { paths: [process.cwd()] });
+  const srcDir = dirname(pkgJsonPath);
+  const destDir = join(vendorRoot, 'pdfjs-dist');
+  mkdirSync(join(destDir, 'legacy', 'build'), { recursive: true });
+  for (const f of ['pdf.mjs', 'pdf.worker.mjs']) {
+    cpSync(join(srcDir, 'legacy', 'build', f), join(destDir, 'legacy', 'build', f), { dereference: true });
+  }
+  // Trim the package.json to its essentials (drop optionalDependencies so no resolver
+  // ever tries to pull @napi-rs/canvas at runtime) and keep the "exports" map intact so
+  // the `pdfjs-dist/legacy/build/pdf.mjs` subpath import resolves.
+  const fullPkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+  const trimmed = {
+    name: fullPkg.name,
+    version: fullPkg.version,
+    type: fullPkg.type,
+    main: fullPkg.main,
+    module: fullPkg.module,
+    exports: fullPkg.exports,
+  };
+  writeFileSync(join(destDir, 'package.json'), JSON.stringify(trimmed, null, 2));
+  console.log(`[build] vendored minimal pdfjs-dist@${fullPkg.version} (legacy build only) into ${vendorRoot}/`);
+}
 
 console.log('[build] apps/api -> dist/index.cjs');

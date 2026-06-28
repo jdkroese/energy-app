@@ -9,6 +9,7 @@ import { BarChart, type BarDatum } from '../components/energy/BarChart';
 import { GridBandChart } from '../components/energy/GridBandChart';
 import { PeriodNav } from '../components/energy/PeriodNav';
 import { StaleBanner } from './_shared';
+import { Bills } from './Bills';
 import type { ShellContext } from '../components/shell/AppShell';
 
 function toBars(h: HistoryResponse): BarDatum[] {
@@ -38,7 +39,44 @@ function bandSeries(h: HistoryResponse): { P1: number[]; P2: number[]; P3: numbe
   return { P1: mk('P1'), P2: mk('P2'), P3: mk('P3') };
 }
 
+/**
+ * Reports hosts two sub-tabs to avoid crowding the primary nav: the existing
+ * energy/cost dashboard ("Energy") and the new invoice vault ("Bills"). The tab strip
+ * renders inline at the top of the screen (both viewports); the desktop TopBar range
+ * selector still drives the Energy view.
+ */
 export function Reports({ ctx }: { ctx: ShellContext }) {
+  const [tab, setTab] = useState<'Energy' | 'Bills'>('Energy');
+  const tabs = (
+    <SegmentedControl
+      options={['Energy', 'Bills']}
+      value={tab}
+      onChange={(v) => setTab(v as 'Energy' | 'Bills')}
+      size={ctx.desktop ? 'sm' : undefined}
+      block={!ctx.desktop}
+    />
+  );
+
+  if (ctx.desktop) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>{tabs}</div>
+        {tab === 'Energy' ? <EnergyReports ctx={ctx} /> : <Bills ctx={ctx} />}
+      </div>
+    );
+  }
+  return (
+    <>
+      <div style={{ padding: '12px 18px 4px' }}>
+        <Eyebrow>Reports</Eyebrow>
+      </div>
+      <div style={{ padding: '4px 14px 6px' }}>{tabs}</div>
+      {tab === 'Energy' ? <EnergyReports ctx={ctx} /> : <div style={{ padding: '8px 14px 22px' }}><Bills ctx={ctx} /></div>}
+    </>
+  );
+}
+
+function EnergyReports({ ctx }: { ctx: ShellContext }) {
   // Period navigator: how far back from the current period (0 = now, negative = past).
   // Resets to "now" whenever the Hour/Day/Week/Month/Year range changes.
   const [offset, setOffset] = useState(0);
@@ -235,7 +273,9 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
 
   return (
     <>
-      <ScreenHeader eyebrow="Reports" title={periodTitle} />
+      {/* Eyebrow "Reports" + the Energy/Bills tab strip are rendered by the Reports
+          wrapper above on mobile, so this header carries only the period title. */}
+      <ScreenHeader title={periodTitle} padding="6px 18px 8px" />
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
         <SegmentedControl block options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={ctx.range} onChange={ctx.setRange} />

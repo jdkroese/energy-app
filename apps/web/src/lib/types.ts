@@ -1393,3 +1393,107 @@ export interface LightSchedulesResponse {
   ts: string;
   schedules: LightSchedule[];
 }
+
+// ---- Invoice vault (Bills) -------------------------------------------------
+
+export type InvoiceBand = 'P1' | 'P2' | 'P3';
+
+export interface InvoiceBandLine {
+  kwh?: number;
+  rate?: number;
+  amount?: number;
+}
+export interface InvoicePowerLine {
+  kw?: number;
+  days?: number;
+  rate?: number;
+  amount?: number;
+}
+export interface InvoiceIeeLine {
+  amount?: number;
+  basis?: number;
+  pct?: number;
+  mwh?: number;
+  eurPerMwh?: number;
+}
+
+/** The full parsed invoice struct returned by the API (every field optional). */
+export interface ParsedInvoice {
+  facturaNum?: string;
+  fechaFactura?: string;
+  cups?: string;
+  nif?: string;
+  comercializadora?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  days?: number;
+  contractedKw?: { P1?: number; P2?: number };
+  maxPowerKw?: { P1?: number; P2?: number; P3?: number };
+  meterRegister?: Record<InvoiceBand, number | undefined>;
+  energy?: Record<InvoiceBand, InvoiceBandLine | undefined>;
+  power?: { P1?: InvoicePowerLine; P2?: InvoicePowerLine };
+  excedentes?: Record<InvoiceBand, InvoiceBandLine | undefined>;
+  adjustments?: Array<{ label: string; kwh?: number; rate?: number; amount?: number }>;
+  subtotal?: number;
+  iee?: InvoiceIeeLine;
+  meterRental?: number;
+  bonoSocial?: { days?: number; rate?: number; amount?: number };
+  baseImponible?: number;
+  ivaPct?: number;
+  iva?: number;
+  total?: number;
+  warnings: string[];
+}
+
+export interface InvoiceSummary {
+  id: string;
+  uploadedAt: string;
+  sourceFile: string;
+  confirmed: boolean;
+  facturaNum?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  total?: number;
+  bandKwh: { P1: number | null; P2: number | null; P3: number | null };
+  flagged: boolean;
+  flagReason?: string;
+}
+
+export interface ReconcileRow {
+  key: string;
+  label: string;
+  billed: number | null;
+  modelled: number | null;
+  deltaEur: number | null;
+  deltaPct: number | null;
+}
+export interface Reconciliation {
+  rows: ReconcileRow[];
+  billedTotal: number | null;
+  modelledTotal: number | null;
+  totalDeltaEur: number | null;
+  totalDeltaPct: number | null;
+  pricingLabel?: string;
+  notes: string[];
+}
+
+export interface InvoiceDetail {
+  id: string;
+  uploadedAt: string;
+  sourceFile: string;
+  confirmed: boolean;
+  parsed: ParsedInvoice;
+  reconciliation: Reconciliation;
+}
+
+export interface InvoicesListResponse {
+  invoices: InvoiceSummary[];
+}
+export interface InvoiceParseResponse {
+  parsed: ParsedInvoice;
+  sourceFile: string;
+}
+export interface InvoiceSaveResponse {
+  id: string;
+  invoice: InvoiceSummary;
+}
