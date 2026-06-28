@@ -39,6 +39,13 @@ export const config = {
     username: process.env.INTESIS_USERNAME ?? '',
     password: process.env.INTESIS_PASSWORD ?? '',
   },
+  panasonic: {
+    // Panasonic Comfort Cloud — native WiFi modules (CS-Z / CS-XZ series).
+    // Creds are the same login used in the Comfort Cloud mobile app.
+    // Normally set in-app (Settings → Connect Panasonic CC); env is a fallback.
+    username: process.env.PANASONIC_CC_USER ?? '',
+    password: process.env.PANASONIC_CC_PASS ?? '',
+  },
   tuya: {
     // Tuya Cloud project — normally set in-app (Settings → Connect Tuya); env is
     // a fallback. Region is the datacenter (eu for Spain).

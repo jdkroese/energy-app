@@ -6,6 +6,7 @@
 import * as intesis from '../connectors/intesis';
 import { UID, MODE_VALUE } from '../connectors/intesis';
 import * as airzone from '../connectors/airzone';
+import * as panasonic from '../connectors/panasonic';
 import * as store from '../store';
 import type { ClimateUnit } from '../connectors/intesis';
 import {
@@ -40,9 +41,9 @@ function key(deviceId: string, lever: ClimateLever): string {
 }
 
 /** Airzone underfloor zones use a separate connector + native (non-UID) write API. */
-function isAirzone(id: string): boolean {
-  return id.startsWith('air-');
-}
+function isAirzone(id: string): boolean { return id.startsWith('air-'); }
+/** Panasonic Comfort Cloud WiFi units use the CC REST API. */
+function isPanasonic(id: string): boolean { return id.startsWith('pan-'); }
 
 function logEntry(
   deviceId: string,
@@ -136,6 +137,7 @@ export async function issueClimate(
       if (unit.power === to) return noop(unit.id, lever, to ? 'on' : 'off');
       if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.power ? 'on' : 'off', 'rate-limited (<30s)');
       if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'power', to);
+      else if (isPanasonic(unit.id)) await panasonic.setLever(unit.id, 'power', to);
       else await intesis.setDatapoint(unit.id, UID.power, to ? 1 : 0);
       markWritten(unit.id, lever);
       return confirmPower(unit.id, unit.power, to, reason);
@@ -148,6 +150,7 @@ export async function issueClimate(
       if (unit.mode === to) return noop(unit.id, lever, to);
       if (limited(lever)) return reject(unit.id, lever, unit.mode, 'rate-limited (<30s)');
       if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'mode', to);
+      else if (isPanasonic(unit.id)) await panasonic.setLever(unit.id, 'mode', to);
       else await intesis.setDatapoint(unit.id, UID.mode, MODE_VALUE[to]);
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, unit.mode, to, reason, true, `mode ${to} issued`);
@@ -159,8 +162,9 @@ export async function issueClimate(
       const to = guard.value;
       if (unit.setpointC === to) return noop(unit.id, lever, to);
       if (limited(lever)) return reject(unit.id, lever, unit.setpointC, 'rate-limited (<30s)');
-      // Airzone takes whole °C (0.5° steps); Intesis wants tenths of °C.
+      // Airzone takes whole °C (0.5° steps); Intesis wants tenths of °C; Panasonic takes decimal °C.
       if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'setpoint', to);
+      else if (isPanasonic(unit.id)) await panasonic.setLever(unit.id, 'setpoint', to);
       else await intesis.setDatapoint(unit.id, UID.setpoint, Math.round(to * 10));
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, unit.setpointC, to, `${reason}${guard.reason !== 'ok' ? ` (${guard.reason})` : ''}`, true, `setpoint ${to}°C issued`);
@@ -172,7 +176,8 @@ export async function issueClimate(
       if (isAirzone(unit.id)) return noop(unit.id, lever, fan, 'underfloor has no fan');
       if (unit.fanLevel != null && unit.fanLevel === fan) return noop(unit.id, lever, fan);
       if (limited(lever)) return reject(unit.id, lever, unit.fanLevel ?? null, 'rate-limited (<30s)');
-      await intesis.setDatapoint(unit.id, UID.fan, fan);
+      if (isPanasonic(unit.id)) await panasonic.setLever(unit.id, 'fan', fan);
+      else await intesis.setDatapoint(unit.id, UID.fan, fan);
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, unit.fanLevel ?? null, fan, reason, true, `fan ${fan} issued`);
       return { ok: true, skipped: false, reason, from: unit.fanLevel ?? null, to: fan };
@@ -186,7 +191,8 @@ export async function issueClimate(
       const cur = lever === 'vaneUpDown' ? unit.vaneUpDown : unit.vaneLeftRight;
       if (cur != null && cur === to) return noop(unit.id, lever, to);
       if (limited(lever)) return reject(unit.id, lever, cur ?? null, 'rate-limited (<30s)');
-      await intesis.setDatapoint(unit.id, lever === 'vaneUpDown' ? UID.vaneV : UID.vaneH, to);
+      if (isPanasonic(unit.id)) await panasonic.setLever(unit.id, lever, to);
+      else await intesis.setDatapoint(unit.id, lever === 'vaneUpDown' ? UID.vaneV : UID.vaneH, to);
       markWritten(unit.id, lever);
       logEntry(unit.id, lever, cur ?? null, to, reason, true, `${lever} ${to} issued`);
       return { ok: true, skipped: false, reason, from: cur ?? null, to };
