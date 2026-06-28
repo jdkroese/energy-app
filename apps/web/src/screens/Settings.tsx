@@ -1297,9 +1297,10 @@ function SonosConnection({ first, open, onToggle }: { first?: boolean; open: boo
 }
 
 /* ============================================================================
- * Alarm / Panic — owner-configurable defaults for the house alarm (siren + light
- * blink). The big trigger button lives on Devices → Speakers; this configures what
- * it does. Web + mobile responsive. Admin-only writes.
+ * House alarm — owner-configurable defaults for the house alarm (siren + light
+ * blink). Lives in Settings → Notifications (alongside the channels + grid-voltage
+ * alert). The alarm is triggered from the nav alarm button (everywhere); this card
+ * configures what it does. Web + mobile responsive. Admin-only writes.
  * ==========================================================================*/
 
 function AlarmPanicCard() {
@@ -1314,7 +1315,7 @@ function AlarmPanicCard() {
   }, []);
 
   if (!cfg) {
-    return <Card title="Alarm / Panic"><div style={{ padding: '4px 16px 16px', fontSize: 13, color: 'var(--text-3)' }}>Loading…</div></Card>;
+    return <Card title="House alarm"><div style={{ padding: '4px 16px 16px', fontSize: 13, color: 'var(--text-3)' }}>Loading…</div></Card>;
   }
 
   const patch = (p: Partial<AlarmConfig>) => setCfg((c) => (c ? { ...c, ...p } : c));
@@ -1336,10 +1337,10 @@ function AlarmPanicCard() {
   const blinkHz = (1000 / Math.max(ALARM_BLINK_FLOOR_MS, cfg.blinkMs)).toFixed(1);
 
   return (
-    <Card title="Alarm / Panic">
+    <Card title="House alarm">
       <div style={{ padding: '4px 16px 16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          The panic button (on <strong style={{ color: 'var(--text-1)' }}>Devices → Speakers</strong>) sounds a siren on your Sonos speakers and blinks your lights until stopped. Configure the defaults here.
+          The alarm button (in the navigation bar) sounds a siren on your Sonos speakers and blinks your lights until stopped. Configure the defaults here.
         </div>
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, color: 'var(--text-1)', fontWeight: 500 }}>
@@ -1470,7 +1471,6 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <SiteLocationCard />
           <ConnectionsCard connections={s.connections} />
-          <AlarmPanicCard />
         </div>
       )}
 
@@ -1479,6 +1479,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
           <NotificationsCard channels={ch} onChannels={setChannels} />
           <AlertRulesCard />
           <VoltageMonitorCard />
+          <AlarmPanicCard />
         </div>
       )}
 
