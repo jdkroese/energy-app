@@ -12,12 +12,6 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["dev"],
       "port": 5173
-    },
-    {
-      "name": "ux-theme-web",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@energy/web", "dev", "--port", "5219", "--strictPort"],
-      "port": 5219
     }
   ]
 }
