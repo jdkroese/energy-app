@@ -341,7 +341,7 @@ function ScheduleEditor({ lights, scenes, sched, onClose, onSaved }: { lights: L
   );
 }
 
-export function LightSchedulesSection({ lights, scenes, canControl }: { lights: LightUnit[]; scenes: LightScene[]; canControl: boolean }) {
+export function LightSchedulesSection({ lights, scenes, canControl, heading = 'Schedules', icon = 'calendar-clock', iconColor = 'var(--solar)' }: { lights: LightUnit[]; scenes: LightScene[]; canControl: boolean; heading?: string; icon?: string; iconColor?: string }) {
   const { data, refetch } = usePolling<LightSchedulesResponse>(api.lights.schedules, 0);
   const schedules = useMemo(() => data?.schedules ?? [], [data]);
   const [editing, setEditing] = useState<LightSchedule | null | undefined>(undefined);
@@ -352,8 +352,8 @@ export function LightSchedulesSection({ lights, scenes, canControl }: { lights: 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Icon name="calendar-clock" size={16} color="var(--solar)" />
-        <div style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>Schedules</div>
+        <Icon name={icon} size={16} color={iconColor} />
+        <div style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>{heading}</div>
         {canControl && <Button size="sm" variant="secondary" iconLeft={<Icon name="plus" size={14} />} onClick={() => setEditing(null)}>New</Button>}
       </div>
       {schedules.length === 0 ? (
