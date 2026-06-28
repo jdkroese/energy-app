@@ -12,6 +12,7 @@
   "dependencies": {
     "@svrooij/sonos": "^2.5.0",
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^12.11.1",
     "cookie": "^1.0.2",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/cookie": "^0.6.0",
     "@types/express": "^5.0.1",
     "@types/node": "^24.0.0",

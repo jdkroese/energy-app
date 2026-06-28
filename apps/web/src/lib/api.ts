@@ -76,6 +76,9 @@ import type {
   VapidPublicResponse,
   VoltageMonitor,
   VoltageHistoryResponse,
+  BreakerUsageGranularity,
+  BreakerUsageResponse,
+  BreakerUsageSummaryResponse,
 } from './types';
 
 /**
@@ -253,6 +256,22 @@ export const api = {
     // return the raw response — for debugging devices that ignore the normal path.
     testCommand: (id: string, dp: string, value: unknown, cmdApi: 'v1' | 'iot03' | 'v2') =>
       postJSON<DeviceCommandTestResponse>(`/api/devices/${enc(id)}/diagnostics/test`, { dp, value, api: cmdApi }),
+  },
+
+  /* ---- Circuit-breaker usage metering (read-only) ---- */
+  breakers: {
+    // Per-breaker usage time-series over [from,to]; granularity auto-picked when omitted.
+    usage: (id: string, params: { from?: string; to?: string; granularity?: BreakerUsageGranularity } = {}) => {
+      const q = new URLSearchParams();
+      if (params.from) q.set('from', params.from);
+      if (params.to) q.set('to', params.to);
+      if (params.granularity) q.set('granularity', params.granularity);
+      const qs = q.toString();
+      return getJSON<BreakerUsageResponse>(`/api/breakers/${enc(id)}/usage${qs ? `?${qs}` : ''}`);
+    },
+    // Fleet usage summary (per-breaker kWh + share) for a period.
+    usageSummary: (period: 'today' | 'week' | 'month' = 'today') =>
+      getJSON<BreakerUsageSummaryResponse>(`/api/breakers/usage/summary?period=${enc(period)}`),
   },
 
   /* ---- Lights (Tuya); command/bulk are admin ---- */

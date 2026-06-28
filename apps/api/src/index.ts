@@ -95,6 +95,8 @@ import {
 import { startLightCoordinator } from './control/light-coordinator';
 import { startRadioCoordinator } from './control/radio-coordinator';
 import { startDeviceScheduleCoordinator } from './control/device-schedule-coordinator';
+import { startBreakerMetering } from './control/breaker-metering';
+import { getBreakerUsage, getUsageSummary } from './routes/breaker-usage';
 import type { LightLever } from './connectors/tuya-lights';
 import { getBlinds, getBlind, commandBlind, bulkCommandBlinds } from './routes/blinds';
 import {
@@ -470,6 +472,23 @@ app.post(
   }),
 );
 
+// ---- Circuit-breaker usage metering (read-only) ----
+// Per-breaker energy/usage time-series from the metering SQLite store. Reads only
+// (no admin gate, consistent with other read routes); returns an "unavailable"
+// payload when metering is disabled. The literal /usage/summary path is registered
+// BEFORE /:id/usage so it isn't captured as an :id.
+app.get('/api/breakers/usage/summary', wrap((req) => getUsageSummary(req.query.period)));
+app.get(
+  '/api/breakers/:id/usage',
+  wrap((req) =>
+    getBreakerUsage(String(req.params.id), {
+      from: req.query.from,
+      to: req.query.to,
+      granularity: req.query.granularity,
+    }),
+  ),
+);
+
 // ---- Sonos speakers + house alarm (Phase 1) ----
 // Reads any-authed; volume/test/alarm-trigger/stop + integration config admin-gated.
 app.get('/api/speakers', wrap(() => getSpeakers()));
@@ -640,6 +659,17 @@ startDeviceScheduleCoordinator();
 // speakers at its on-time and stops at its off-time). No arm gate — it only acts on enabled
 // radio schedules and never touches the battery/climate control authority.
 startRadioCoordinator();
+
+// Start circuit-breaker usage metering (additive + READ-ONLY: reads the Tuya
+// fleet, writes its own SQLite store; no control authority). Fail-soft — if the
+// native sqlite dep or the DB is unavailable it logs + disables metering and the
+// API (incl. the armed control loop) is unaffected. Guarded so it can never throw
+// into the boot path.
+try {
+  startBreakerMetering();
+} catch (e) {
+  console.error('[energy-api] breaker metering init failed (metering disabled, API unaffected):', (e as Error).message);
+}
 
 // Resume a still-active house alarm after a restart (siren + light-blink). If the
 // persisted duration already elapsed it stops + restores instead. No-op when idle.

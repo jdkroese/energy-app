@@ -10,7 +10,8 @@ import type { ShellContext } from '../components/shell/AppShell';
 import { GenericControl } from '../components/GenericControl';
 import { RoomPicker } from '../components/RoomPicker';
 import type { RoomsResponse } from '../lib/types';
-import { primaryCapabilities, secondaryCapabilities, hasPowerSwitch } from '../lib/capabilities';
+import { primaryCapabilities, secondaryCapabilities, hasPowerSwitch, isMeteredBreaker } from '../lib/capabilities';
+import { BreakerUsageSection } from '../components/energy/BreakerUsageSection';
 import { resolveTypeMeta } from '../lib/deviceTypes';
 import { UnitScheduleBox } from '../components/schedules/UnitScheduleBox';
 import { EditRuleOverlay } from '../components/schedules/EditRuleOverlay';
@@ -146,6 +147,11 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
               <div className="pwr-eyebrow" style={{ marginBottom: 10 }}>Controls</div>
               <GenericControl capabilities={primaryCapabilities(device.capabilities)} values={device.values} onWrite={writeCap} disabled={!isAdmin} variant="detail" />
             </Card>
+
+            {/* USAGE — metered breakers only (current/voltage/energy caps): kWh
+                stat row + power chart from the metering store. Non-metering
+                breakers (no electrical caps) show no usage section at all. */}
+            {isMeteredBreaker(device.capabilities) && <BreakerUsageSection id={device.id} />}
 
             <MoreControlsSection
               caps={secondaryCapabilities(device.capabilities)}

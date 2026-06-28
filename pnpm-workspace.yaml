@@ -1,7 +1,10 @@
 packages:
   - apps/*
 
-# pnpm 11 build-script gate. esbuild ships its binary via an optional dependency,
-# so running its install script is safe. (This is the key pnpm itself honors.)
+# pnpm 11 build-script gate. Only the dependencies listed here may run their
+# install/build scripts. esbuild ships its binary via an optional dependency, so
+# running its install script is safe. better-sqlite3 is a native module that must
+# compile (or fetch a prebuilt binary) at install time — required for metering.
 allowBuilds:
+  better-sqlite3: true
   esbuild: true
