@@ -490,11 +490,34 @@ export interface TariffArbitrageParams {
    */
   executionMode: 'advisory' | 'active';
   /**
-   * Deviation threshold (% SoC). Each tick the live combined SoC is compared to the plan's
-   * expected SoC for the current hour; when |deviation| ≥ this, the plan cache is invalidated
-   * and the rule re-plans immediately (and emits a `deviation` event). Default 5; clamp 1–25.
+   * CERTAINTY GATE (item 2): only pre-buy when ≥ this % sure the next peak's solar falls short.
+   * The forecast solar over the peak is inflated to its optimistic percentile (z(p)·σ above the
+   * mean) and a deficit must remain even then. Higher = more conservative (buys less often).
+   * Default 70; clamp 50–95.
+   */
+  solarConfidencePct: number;
+  /**
+   * PRE-PEAK SURPLUS GUARD (item 3): when the next P1 is within this many hours AND the house is
+   * already in strong live solar surplus, don't grid-buy this tick. Default 2; clamp 0–6.
+   */
+  prePeakSurplusGuardHours: number;
+  /**
+   * Pre-peak surplus margin (%): live solar must exceed live load by at least this % to trip the
+   * pre-peak surplus stand-down (item 3). Default 30; clamp 0–200.
+   */
+  prePeakSurplusMarginPct: number;
+  /**
+   * Deviation threshold — repurposed (item 4) as a % of the FORECAST value. Each tick the live
+   * solar/load are compared to the hour's forecast; when |live − forecast| ≥ max(deviationMinKw,
+   * this%·forecast) on EITHER input, the plan cache is invalidated and the rule re-plans (emits a
+   * `deviation` event). Default 30; clamp 1–100.
    */
   deviationThresholdPct: number;
+  /**
+   * Deviation floor (kW, item 4): a minimum absolute gap so a tiny forecast doesn't trip the
+   * deviation re-plan on noise. Default 0.8; clamp 0–5.
+   */
+  deviationMinKw: number;
 }
 
 // ---- Tariff-arbitrage effectiveness logging --------------------------------
@@ -536,6 +559,15 @@ export interface ArbitrageEvent {
   };
   /** The battery write taken this tick (null in advisory / no-op). */
   action: { mode: string; chargeW: number } | null;
+  /** Forecast-vs-actual divergence that triggered a re-plan (item 4). Only set on `deviation`
+   *  events; null otherwise. `input` = which forecast input crossed its tolerance. */
+  deviation?: {
+    input: 'solar' | 'load' | 'solar+load';
+    solarForecastKw: number;
+    solarLiveKw: number;
+    loadForecastKw: number;
+    loadLiveKw: number;
+  } | null;
   /** Energy bought this tick (active) or would-buy (advisory), kWh. */
   chargedKwhTick: number;
   /** MODELLED €saved this tick = chargedKwhTick × spreadEur. */
@@ -616,7 +648,12 @@ export function defaultTariffArbitrageParams(): TariffArbitrageParams {
     // Production rollout: ship in ADVISORY (shadow) mode — observe & log, never command
     // the battery. The owner flips to 'active' after reviewing the captured data.
     executionMode: 'advisory',
-    deviationThresholdPct: 5,
+    solarConfidencePct: 70,
+    prePeakSurplusGuardHours: 2,
+    prePeakSurplusMarginPct: 30,
+    // Item 4: deviation is now forecast-vs-actual on a % of the forecast value (was % SoC gap).
+    deviationThresholdPct: 30,
+    deviationMinKw: 0.8,
   };
 }
 

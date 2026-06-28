@@ -30,23 +30,54 @@ let timer: ReturnType<typeof setInterval> | null = null;
 // The cache is only ever populated when the rule is enabled+armed+auto (computeArbitragePlan
 // is called lazily from coordinateArbitrage), so a disabled rule never even fetches weather.
 const ARB_CACHE_TTL_MS = 15 * 60_000;
-let arbCache: { at: number; plan: ArbitragePlan; targetParams: string } | null = null;
+interface ArbForecast {
+  /** 48h horizon solar forecast (kW/h), hours 0..47 = today 0..23 ++ tomorrow 0..23. */
+  solarKw: number[];
+  /** 48h horizon load forecast (kW/h). */
+  loadKw: number[];
+}
+let arbCache: { at: number; plan: ArbitragePlan; fc: ArbForecast; targetParams: string } | null = null;
 /** Last weather forecast the planner fetched — reused by liveForecastNow() for event capture
  *  (a diagnostic readout) so it never triggers its own network fetch. */
 let arbWeatherCache: weather.WeatherForecast | null = null;
 
+/**
+ * Build the 48h forecast horizon (today ++ tomorrow). The Open-Meteo forecast we fetch only
+ * covers the next 24h (one calendar day's hourly arrays), so the TOMORROW slice REPEATS today's
+ * forecast shape (same hourly solar/load pattern). That's a deliberate, documented fallback: the
+ * primary overnight case (P3 valley → tomorrow's 10:00 P1) only needs a plausible morning-peak
+ * load/solar shape, and a same-shape repeat is the best zero-extra-fetch estimate we have.
+ */
+function buildArbForecast(wf: weather.WeatherForecast | null, prEff: number): ArbForecast {
+  const solarToday = solarForecast(wf?.shortwaveRadiation ?? null, prEff);
+  const loadToday = loadForecast(wf?.temperature ?? null);
+  // Repeat today's shape for tomorrow (fallback — see doc above).
+  return {
+    solarKw: [...solarToday, ...solarToday],
+    loadKw: [...loadToday, ...loadToday],
+  };
+}
+
+/** 48h band codes: today's 24 ++ tomorrow's 24 (so an overnight valley can see tomorrow's peak). */
+function bandCodes48(now: Date = new Date()): number[] {
+  const tomorrow = new Date(now.getTime() + 24 * 3_600_000);
+  return [...bandCodesForDay(now), ...bandCodesForDay(tomorrow)];
+}
+
 /** Compute (or reuse a cached) ArbitragePlan from the live forecast for the given params +
  *  current combined SoC. Best-effort: returns null if the forecast is unavailable. The
  *  returned `freshPlan` flag is true on a cache miss/recompute (so the caller can emit a
- *  `plan` event only when a genuinely new plan was built). */
+ *  `plan` event only when a genuinely new plan was built). The plan targets the NEXT peak
+ *  at/after the current local hour over a 48h horizon, so overnight it targets tomorrow's
+ *  morning peak. `fc` is the 48h forecast the plan used (for forecast-vs-actual deviation). */
 async function computeArbitragePlan(
   params: TariffArbitrageParams,
   startSoc: number,
-): Promise<{ plan: ArbitragePlan; freshPlan: boolean }> {
+): Promise<{ plan: ArbitragePlan; freshPlan: boolean; fc: ArbForecast }> {
   const paramsKey = JSON.stringify(params);
   const now = Date.now();
   if (arbCache && now - arbCache.at < ARB_CACHE_TTL_MS && arbCache.targetParams === paramsKey) {
-    return { plan: arbCache.plan, freshPlan: false };
+    return { plan: arbCache.plan, freshPlan: false, fc: arbCache.fc };
   }
   let wf: weather.WeatherForecast | null = null;
   try {
@@ -56,14 +87,14 @@ async function computeArbitragePlan(
   }
   arbWeatherCache = wf;
   const { prEff } = effectivePR();
-  const solarKw = solarForecast(wf?.shortwaveRadiation ?? null, prEff);
-  const loadKw = loadForecast(wf?.temperature ?? null);
-  const bandCodes = bandCodesForDay(new Date());
+  const fc = buildArbForecast(wf, prEff);
+  const bandCodes = bandCodes48(new Date());
   const capKwh = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
   const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
-  const plan = planArbitrage(solarKw, loadKw, bandCodes, startSoc, capKwh, maxKw, params);
-  arbCache = { at: now, plan, targetParams: paramsKey };
-  return { plan, freshPlan: true };
+  // Target the NEXT peak relative to now (item 1): pass the current local hour as fromHour.
+  const plan = planArbitrage(fc.solarKw, fc.loadKw, bandCodes, startSoc, capKwh, maxKw, params, currentLocalHour());
+  arbCache = { at: now, plan, fc, targetParams: paramsKey };
+  return { plan, freshPlan: true, fc };
 }
 
 /** Test/diagnostic helper — drop the arbitrage forecast cache. */
@@ -199,6 +230,18 @@ function currentLocalHour(d: Date = new Date()): number {
 // when they occur. Not a 90s heartbeat.
 let lastArbActionState: ArbitrageEventType | null = null;
 
+// ---- Deviation latch (item 4) ----------------------------------------------
+// A forecast divergence triggers ONE re-plan + `deviation` event per crossing. After it fires,
+// re-planning rebuilds the SAME forecast (re-planning can't make the forecast match live), so a
+// naive check would re-fire every tick while the divergence persists. The latch suppresses
+// repeats until the divergence CLEARS (live re-converges to forecast) or the local hour rolls
+// over (a new forecast hour is a fresh comparison). Keyed on the hour the latch was set.
+let deviationLatchHour: number | null = null;
+/** Test/diagnostic helper — clear the deviation latch. */
+export function _resetDeviationLatch(): void {
+  deviationLatchHour = null;
+}
+
 /** The latest live solar/load forecast for the current hour (for deviation/event capture).
  *  Best-effort: 0/0 when the forecast isn't available. */
 function liveForecastNow(): { solarKw: number; loadKw: number } {
@@ -227,7 +270,11 @@ function emitArbEvent(
   params: TariffArbitrageParams,
   plan: ArbitragePlan | null,
   soc: number | null,
-  opts: { action?: { mode: string; chargeW: number } | null; chargedKwhTick?: number } = {},
+  opts: {
+    action?: { mode: string; chargeW: number } | null;
+    chargedKwhTick?: number;
+    deviation?: ArbitrageEvent['deviation'];
+  } = {},
 ): void {
   // State-transition de-dup for the chatty action states.
   if (type === 'engage' || type === 'revert' || type === 'standdown') {
@@ -269,6 +316,7 @@ function emitArbEvent(
       socDeviationPct,
     },
     action: opts.action ?? null,
+    deviation: opts.deviation ?? null,
     chargedKwhTick: Math.round(chargedKwhTick * 1000) / 1000,
     estSavedEurTick: Math.round(chargedKwhTick * spreadEur * 1000) / 1000,
   };
@@ -311,7 +359,18 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
     .automations.find((a) => a.type === 'tariff_arbitrage' && a.enabled);
   // Disabled / absent → never act. (Type-narrow to the battery param shape.)
   if (!automation || automation.type !== 'tariff_arbitrage') return false;
-  const params = automation.params as TariffArbitrageParams;
+  // Default any fields a pre-refinement persisted rule (PR #59) may lack, so the new gates read
+  // sane values even before the rule is next saved (sanitize fills them on save). Defaults match
+  // defaultTariffArbitrageParams(); a missing field never silently flips a gate on.
+  const raw = automation.params as TariffArbitrageParams;
+  const params: TariffArbitrageParams = {
+    ...raw,
+    solarConfidencePct: Number.isFinite(raw.solarConfidencePct) ? raw.solarConfidencePct : 70,
+    prePeakSurplusGuardHours: Number.isFinite(raw.prePeakSurplusGuardHours) ? raw.prePeakSurplusGuardHours : 2,
+    prePeakSurplusMarginPct: Number.isFinite(raw.prePeakSurplusMarginPct) ? raw.prePeakSurplusMarginPct : 30,
+    deviationThresholdPct: Number.isFinite(raw.deviationThresholdPct) ? raw.deviationThresholdPct : 30,
+    deviationMinKw: Number.isFinite(raw.deviationMinKw) ? raw.deviationMinKw : 0.8,
+  };
   const advisory = params.executionMode !== 'active';
 
   const s = snap.sonnen;
@@ -340,34 +399,87 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   let plan: ArbitragePlan | null = null;
   let targetMet = true;
   let targetReason = 'no forecast — standing down (conservative)';
+  // PRE-PEAK SURPLUS GUARD (item 3) — when tripped, do not engage this tick (no grid-buy).
+  let prePeakSurplusStandDown = false;
+  let prePeakSurplusWhy = '';
   if (inValley && spreadOk && !surplusDefers && soc !== null) {
     const res = await computeArbitragePlan(params, soc);
     plan = res.plan;
     if (res.freshPlan) emitArbEvent('plan', snap, params, plan, soc);
 
-    // ---- Deviation detection + immediate re-plan ----------------------------
-    // Compare live combined SoC to the plan's expected SoC for the current hour. When the gap
-    // exceeds the threshold (unexpected sun/usage/clouds), invalidate the cache, re-plan now,
-    // and emit a `deviation` event capturing the forecast-vs-actual gap. The re-planned target
-    // then drives THIS tick's decision.
+    // ---- Deviation detection + immediate re-plan (item 4) -------------------
+    // Compare LIVE solar/load to the FORECAST values for the current hour (the same 48h arrays
+    // the plan used). When either input diverges by ≥ max(deviationMinKw, threshold%·forecast),
+    // the forecast that built the plan is stale: invalidate the cache, re-plan now, and emit a
+    // `deviation` event capturing which input diverged + the forecast-vs-actual gap. The re-
+    // planned target drives THIS tick. The floor (deviationMinKw) stops tiny forecasts tripping
+    // on noise, and threshold% scales with the forecast — so under steady conditions it does NOT
+    // fire every tick: only a genuine solar/load swing crosses it, and once re-planned the new
+    // forecast tracks live, so it settles to a single re-plan per crossing.
     const hour = currentLocalHour();
-    const expected = plan.socPct.length === 24 ? plan.socPct[hour] : null;
-    if (expected !== null && Math.abs(soc - expected) >= params.deviationThresholdPct) {
+    const fSolar = res.fc.solarKw[hour] ?? 0;
+    const fLoad = res.fc.loadKw[hour] ?? 0;
+    const liveSolar = (s.productionW ?? 0) / 1000;
+    const liveLoad = (s.consumptionW ?? 0) / 1000;
+    const solarTol = Math.max(params.deviationMinKw, (params.deviationThresholdPct / 100) * fSolar);
+    const loadTol = Math.max(params.deviationMinKw, (params.deviationThresholdPct / 100) * fLoad);
+    const solarDiverged = Math.abs(liveSolar - fSolar) >= solarTol;
+    const loadDiverged = Math.abs(liveLoad - fLoad) >= loadTol;
+    const diverged = solarDiverged || loadDiverged;
+    if (!diverged) {
+      // Live re-converged to forecast (or never diverged) → clear the latch so the NEXT genuine
+      // crossing fires again.
+      deviationLatchHour = null;
+    } else if (deviationLatchHour !== hour) {
+      // A genuine crossing we haven't acted on for this forecast hour → re-plan ONCE. The latch
+      // (keyed on the hour) suppresses a per-tick storm while the divergence persists; it clears
+      // when live re-converges (above) or the hour rolls over.
+      deviationLatchHour = hour;
       _resetArbitrageCache();
       const re = await computeArbitragePlan(params, soc);
       plan = re.plan;
-      emitArbEvent('deviation', snap, params, plan, soc);
+      const which = solarDiverged && loadDiverged ? 'solar+load' : solarDiverged ? 'solar' : 'load';
+      emitArbEvent('deviation', snap, params, plan, soc, {
+        deviation: {
+          input: which,
+          solarForecastKw: Math.round(fSolar * 100) / 100,
+          solarLiveKw: Math.round(liveSolar * 100) / 100,
+          loadForecastKw: Math.round(fLoad * 100) / 100,
+          loadLiveKw: Math.round(liveLoad * 100) / 100,
+        },
+      });
     }
 
     if (plan.active) {
       targetMet = soc >= plan.targetSocPct;
       targetReason = `SoC ${Math.round(soc)}% ${targetMet ? '≥' : '<'} target ${Math.round(plan.targetSocPct)}%`;
+
+      // PRE-PEAK SURPLUS GUARD (item 3): if the next P1 is imminent AND the house is already in
+      // strong live solar surplus, don't grid-buy — even before we're net-exporting. Composes
+      // with (and fires earlier than) the export-defer surplusOverridesGridCharge above.
+      const liveSolarKw = (s.productionW ?? 0) / 1000;
+      const liveLoadKw = (s.consumptionW ?? 0) / 1000;
+      if (plan.nextPeakHour !== null) {
+        const hoursToPeak = plan.nextPeakHour - currentLocalHour();
+        const marginFactor = 1 + params.prePeakSurplusMarginPct / 100;
+        if (
+          hoursToPeak >= 0 &&
+          hoursToPeak <= params.prePeakSurplusGuardHours &&
+          liveLoadKw > 0 &&
+          liveSolarKw >= marginFactor * liveLoadKw
+        ) {
+          prePeakSurplusStandDown = true;
+          const overPct = Math.round((liveSolarKw / liveLoadKw - 1) * 100);
+          prePeakSurplusWhy = `pre-peak surplus: solar ${overPct}% over load, ${params.peakBand} in ${hoursToPeak}h`;
+        }
+      }
     }
   }
 
   // Never grid-charge a (near-)full battery (mirrors the soak-export SoC ceiling).
   const nearFull = soc !== null && soc >= soak.socCeilingPct;
-  const shouldCharge = inValley && spreadOk && !surplusDefers && soc !== null && !targetMet && !nearFull;
+  const shouldCharge =
+    inValley && spreadOk && !surplusDefers && soc !== null && !targetMet && !nearFull && !prePeakSurplusStandDown;
 
   if (!shouldCharge) {
     // The gating reason this tick is standing down.
@@ -379,7 +491,9 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
           ? 'surplus present — defer to soak-export'
           : nearFull
             ? `SoC ${Math.round(soc ?? 0)}% ≥ ceiling`
-            : targetReason;
+            : prePeakSurplusStandDown
+              ? prePeakSurplusWhy
+              : targetReason;
     // REVERT a lingering arbitrage manual charge (safety): only reachable in ACTIVE mode
     // (advisory never took the Sonnen, so inManual is forced false above). Hand back to
     // self-consumption with a priority write so it can never be rate-limited, and log the

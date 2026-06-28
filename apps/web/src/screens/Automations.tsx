@@ -309,7 +309,7 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
       {/* WHEN / DO / UNTIL / LIMITS */}
       <Block label="When" color="var(--battery)" wash="var(--battery-wash)">
         <Tok color="var(--grid)">{p.valleyBand}</Tok><span style={{ color: 'var(--text-3)' }}>valley is cheap</span>
-        <span style={{ color: 'var(--text-3)' }}>and</span><Tok>forecast solar won’t carry the {p.peakBand} peak</Tok>
+        <span style={{ color: 'var(--text-3)' }}>and</span><Tok>forecast solar won’t carry the next {p.peakBand} cycle — ≥{p.solarConfidencePct ?? 70}% certain</Tok>
       </Block>
       <Block label="Do" color={tone} wash={wash}>
         grid-charge to <Tok color={tone}>{p.peakTargetSocPct}%</Tok> before the peak <span style={{ color: 'var(--text-3)' }}>·then·</span> discharge through <Tok color="var(--grid)">{p.peakBand}</Tok> to <Tok color={tone}>{p.dischargeFloorPct}%</Tok>
@@ -325,6 +325,7 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
           <Tok color="var(--text-2)">never P1 / P2</Tok>
           <Tok color="var(--text-2)">solar-first</Tok>
           <Tok color="var(--text-2)">SoC floor + Tesla reserve</Tok>
+          <Tok color="var(--text-2)">stand down if {p.peakBand} &lt;{p.prePeakSurplusGuardHours ?? 2}h away &amp; solar &gt;{100 + (p.prePeakSurplusMarginPct ?? 30)}% of load</Tok>
         </div>
       </div>
 
@@ -356,7 +357,11 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
           <Slider label="Discharge floor through peak" unit=" %" min={10} max={60} step={5} value={p.dischargeFloorPct} onChange={(v) => set({ dischargeFloorPct: v })} />
           <Slider label="Max grid-charge rate" unit=" kW" min={1} max={4.6} step={0.1} value={p.maxGridChargeKw} onChange={(v) => set({ maxGridChargeKw: v })} />
           <Slider label="Min worthwhile spread" unit=" €/kWh" min={0} max={0.2} step={0.01} value={p.minSpreadEur} onChange={(v) => set({ minSpreadEur: v })} />
-          <Slider label="Re-plan when SoC deviates by" unit=" %" min={1} max={25} step={1} value={p.deviationThresholdPct ?? 5} onChange={(v) => set({ deviationThresholdPct: v })} />
+          <Slider label="Solar-shortfall certainty to pre-buy" unit=" %" min={50} max={95} step={5} value={p.solarConfidencePct ?? 70} onChange={(v) => set({ solarConfidencePct: v })} />
+          <Slider label="Pre-peak surplus guard window" unit=" h" min={0} max={6} step={1} value={p.prePeakSurplusGuardHours ?? 2} onChange={(v) => set({ prePeakSurplusGuardHours: v })} />
+          <Slider label="Pre-peak surplus margin (solar over load)" unit=" %" min={0} max={200} step={10} value={p.prePeakSurplusMarginPct ?? 30} onChange={(v) => set({ prePeakSurplusMarginPct: v })} />
+          <Slider label="Re-plan when forecast diverges by" unit=" %" min={1} max={100} step={5} value={p.deviationThresholdPct ?? 30} onChange={(v) => set({ deviationThresholdPct: v })} />
+          <Slider label="Deviation floor (ignore tiny gaps)" unit=" kW" min={0} max={5} step={0.1} value={p.deviationMinKw ?? 0.8} onChange={(v) => set({ deviationMinKw: v })} />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>Save</Button>
             <Button size="sm" variant="ghost" onClick={onDelete}>Delete</Button>
@@ -469,6 +474,11 @@ function ArbitrageEffectivenessCard({ stats, events }: { stats?: ArbitrageStats;
                       {e.live.combinedSoc != null && <span className="pwr-mono" style={{ color: 'var(--text-2)' }}>SoC {Math.round(e.live.combinedSoc)}%</span>}
                       {e.chargedKwhTick > 0 && <span className="pwr-mono" style={{ color: 'var(--text-2)' }}>{e.chargedKwhTick.toFixed(2)} kWh</span>}
                       {e.estSavedEurTick > 0 && <span className="pwr-mono" style={{ color: tone }}>{fmtEur(e.estSavedEurTick)}</span>}
+                      {e.type === 'deviation' && e.deviation && (
+                        <span className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--ev)' }}>
+                          {e.deviation.input}: {e.deviation.input.includes('solar') ? `solar ${e.deviation.solarLiveKw.toFixed(1)}≠${e.deviation.solarForecastKw.toFixed(1)}` : `load ${e.deviation.loadLiveKw.toFixed(1)}≠${e.deviation.loadForecastKw.toFixed(1)}`} kW
+                        </span>
+                      )}
                     </div>
                   );
                 })}
