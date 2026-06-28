@@ -76,8 +76,17 @@ function devFixture(): DiscoveredResponse | null {
 const CONFIDENCE_META: Record<DiscoveredDevice['confidence'], { label: string; tone: 'solar' | 'grid' | 'neutral' }> = {
   high: { label: 'Recognized', tone: 'solar' },
   monitor: { label: 'Read-only', tone: 'neutral' },
-  review: { label: 'Light or plug?', tone: 'grid' },
+  review: { label: 'Needs a look', tone: 'grid' },
 };
+
+/** The review pill reads "Light or plug?" only when the device is genuinely
+ *  switch-only (the classic on/off ambiguity); anything else gets the generic
+ *  "Needs a look" so a lock/valve/unknown isn't mislabelled as a light-or-plug. */
+function reviewLabel(d: DiscoveredDevice): string {
+  const controllable = d.capabilities.filter((c) => !c.readOnly);
+  const switchOnly = controllable.length > 0 && controllable.every((c) => c.kind === 'switch');
+  return switchOnly ? 'Light or plug?' : CONFIDENCE_META.review.label;
+}
 
 const KIND_LABEL: Record<Capability['kind'], string> = {
   switch: 'on/off', range: 'level', enum: 'mode', action: 'action', color: 'colour', measure: 'reads', status: 'state',
@@ -105,6 +114,7 @@ function CapChip({ cap }: { cap: Capability }) {
 function DeviceRow({ d, wide, action }: { d: DiscoveredDevice; wide: boolean; action: React.ReactNode }) {
   const subline = [d.category || '?', d.productName].filter(Boolean).join(' · ');
   const conf = CONFIDENCE_META[d.confidence];
+  const confLabel = d.confidence === 'review' ? reviewLabel(d) : conf.label;
   return (
     <div
       style={{
@@ -137,7 +147,7 @@ function DeviceRow({ d, wide, action }: { d: DiscoveredDevice; wide: boolean; ac
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flex: 'none', alignSelf: wide ? 'center' : 'flex-end', paddingTop: wide ? 0 : 2 }}>
-        <Badge tone={conf.tone} variant="soft">{conf.label}</Badge>
+        <Badge tone={conf.tone} variant="soft">{confLabel}</Badge>
         {action}
       </div>
     </div>

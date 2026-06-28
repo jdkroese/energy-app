@@ -111,7 +111,10 @@ const STATUS_MATCHERS: Matcher[] = [
 const CONTROL_MATCHERS: Matcher[] = [
   { kind: 'color', test: starts('colour_data'), label: () => 'Colour', readOnly: false },
   { kind: 'action', test: has('lock_motor_state', 'unlock_request', 'manual_lock', 'remote_no_dp_key'), label: () => 'Lock', readOnly: false },
-  { kind: 'action', test: has('control', 'mach_operate'), label: () => 'Open / stop', readOnly: false },
+  // Exact match: a bare `control` DP is the curtain open/stop/close lever. Do NOT
+  // use substring matching here — `percent_control` is a position RANGE, not an
+  // action, and must fall through to the range matcher below.
+  { kind: 'action', test: (c) => c === 'control' || c === 'mach_operate', label: () => 'Open / stop', readOnly: false },
   { kind: 'action', test: has('trigger', 'reset', 'factory_reset'), label: (c) => prettify(c), readOnly: false },
   { kind: 'enum', test: has('work_mode', 'mode', 'level'), label: (c) => prettify(c), readOnly: false },
   { kind: 'enum', test: (c) => c.endsWith('_mode'), label: (c) => prettify(c), readOnly: false },
