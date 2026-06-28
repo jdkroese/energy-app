@@ -263,6 +263,37 @@ export function sendThingCommands(id: string, properties: Record<string, unknown
   });
 }
 
+/** Issue commands via the iot-03 "general" command API — the path some newer device
+ *  models accept when the classic /v1.0/devices/{id}/commands is a silent no-op. */
+export function sendIot03Commands(id: string, commands: Array<{ code: string; value: unknown }>): Promise<unknown> {
+  return request<unknown>('POST', `/v1.0/iot-03/devices/${id}/commands`, { commands });
+}
+
+/**
+ * Issue a DP command set through EVERY Tuya control API — legacy v1.0 commands, the
+ * iot-03 command path, and the v2.0 thing-model properties — succeeding if ANY is
+ * accepted. Devices vary wildly: older Tuya devices obey v1, while newer metering plugs
+ * / Matter-era firmware accept v1 (success:true) yet only physically actuate via the
+ * thing-model or iot-03 path. Each command sets an ABSOLUTE value (e.g. switch_1=true),
+ * so issuing them all is idempotent — the device lands in the same state whichever path
+ * delivers. Best-effort per API; throws only when ALL fail. Returns which APIs accepted.
+ */
+export async function sendCommandsDual(
+  id: string, commands: Array<{ code: string; value: unknown }>,
+): Promise<{ v1: boolean; iot03: boolean; thing: boolean }> {
+  const properties: Record<string, unknown> = {};
+  for (const c of commands) properties[c.code] = c.value;
+  let v1 = false;
+  let iot03 = false;
+  let thing = false;
+  let lastErr: unknown = null;
+  try { await sendCommands(id, commands); v1 = true; } catch (e) { lastErr = e; }
+  try { await sendIot03Commands(id, commands); iot03 = true; } catch (e) { lastErr = e; }
+  try { await sendThingCommands(id, properties); thing = true; } catch (e) { lastErr = e; }
+  if (!v1 && !iot03 && !thing) throw lastErr instanceof Error ? lastErr : new Error('command rejected on all Tuya APIs');
+  return { v1, iot03, thing };
+}
+
 // ---- Low-level signed request that returns the RAW envelope (never throws on a
 //      success:false). Only for diagnostics that must see code/msg/result verbatim.
 async function rawRequest<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<TuyaResp<T>> {
@@ -283,8 +314,9 @@ async function rawRequest<T>(method: 'GET' | 'POST', path: string, body?: unknow
   return (await res.json()) as TuyaResp<T>;
 }
 
+export type CmdApi = 'v1' | 'iot03' | 'v2';
 export interface TuyaCmdProbe {
-  api: 'v1' | 'v2';
+  api: CmdApi;
   httpOk: boolean;
   success: boolean;
   result: unknown;
@@ -294,13 +326,14 @@ export interface TuyaCmdProbe {
 
 /** Diagnostic: fire a single DP command through the chosen command API and return the
  *  RAW Tuya response (success/result/code/msg) so we can see exactly what the device
- *  accepts. `api` 'v1' = legacy commands; 'v2' = thing-model properties. */
+ *  accepts. 'v1' = legacy commands; 'iot03' = iot-03 commands; 'v2' = thing-model. */
 export async function probeCommand(
-  id: string, code: string, value: unknown, api: 'v1' | 'v2',
+  id: string, code: string, value: unknown, api: CmdApi,
 ): Promise<TuyaCmdProbe> {
   try {
-    const j = api === 'v1'
-      ? await rawRequest<boolean>('POST', `/v1.0/devices/${id}/commands`, { commands: [{ code, value }] })
+    const j =
+      api === 'v1' ? await rawRequest<boolean>('POST', `/v1.0/devices/${id}/commands`, { commands: [{ code, value }] })
+      : api === 'iot03' ? await rawRequest<unknown>('POST', `/v1.0/iot-03/devices/${id}/commands`, { commands: [{ code, value }] })
       : await rawRequest<unknown>('POST', `/v2.0/cloud/thing/${id}/shadow/properties/issue`, { properties: JSON.stringify({ [code]: value }) });
     return { api, httpOk: true, success: !!j.success, result: j.result ?? null, code: j.code, msg: j.msg };
   } catch (e) {

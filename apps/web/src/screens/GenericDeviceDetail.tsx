@@ -255,7 +255,7 @@ function DiagnosticsSection({ id, isAdmin }: { id: string; isAdmin: boolean }) {
 
   const dev = data?.device ?? null;
 
-  const runTest = (dp: string, value: boolean, cmdApi: 'v1' | 'v2') => {
+  const runTest = (dp: string, value: boolean, cmdApi: 'v1' | 'iot03' | 'v2') => {
     setTesting(true);
     api.devices
       .testCommand(id, dp, value, cmdApi)
@@ -312,9 +312,9 @@ function DiagnosticsSection({ id, isAdmin }: { id: string; isAdmin: boolean }) {
                 <div style={{ marginTop: 14 }}>
                   <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Test relay · {dev.primarySwitchDp}</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {(['v1', 'v2'] as const).map((cmdApi) => (
+                    {(['v1', 'iot03', 'v2'] as const).map((cmdApi) => (
                       <div key={cmdApi} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <span style={{ fontSize: 11, color: 'var(--text-3)', minWidth: 18 }}>{cmdApi}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-3)', minWidth: 34 }}>{cmdApi}</span>
                         <Button size="sm" variant="secondary" disabled={testing} onClick={() => runTest(dev.primarySwitchDp as string, true, cmdApi)}>On</Button>
                         <Button size="sm" variant="ghost" disabled={testing} onClick={() => runTest(dev.primarySwitchDp as string, false, cmdApi)}>Off</Button>
                       </div>
@@ -325,7 +325,7 @@ function DiagnosticsSection({ id, isAdmin }: { id: string; isAdmin: boolean }) {
                       {testLog.map((line, i) => <div key={i} style={{ color: i === 0 ? 'var(--text-1)' : 'var(--text-3)' }}>{line}</div>)}
                     </div>
                   )}
-                  <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 6 }}>Tip: try v1 On, then v2 On — whichever physically switches the plug is the API it needs.</div>
+                  <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 6 }}>Normal control now fires all three APIs automatically. These buttons isolate which one your device obeys.</div>
                 </div>
               )}
             </>
