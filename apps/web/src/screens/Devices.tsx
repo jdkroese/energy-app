@@ -6,7 +6,7 @@ import type {
   DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse, SpeakersResponse,
   ConfiguredResponse, ConfiguredDeviceView, Capability,
 } from '../lib/types';
-import { Card, Icon, Switch, Button } from '../components/ui';
+import { Card, Icon, Switch, Button, EmptyState, ErrorState, LoadingState } from '../components/ui';
 import { Gauge } from '../components/Gauge';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -701,10 +701,12 @@ function GenericGroup({ devices, wide, canWrite, onWrite, onOpen, emptyMeta, bre
 
 function ComingSoon({ meta }: { meta: { label: string; icon: string; hue: string } }) {
   return (
-    <Card padded style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 28 }}>
-      <span style={{ width: 40, height: 40, borderRadius: 11, display: 'grid', placeItems: 'center', background: 'var(--surface-3)', color: meta.hue }}><Icon name={meta.icon} size={20} /></span>
-      <div style={{ fontSize: 15, fontWeight: 600 }}>{meta.label}</div>
-      <div style={{ fontSize: 12.5, color: 'var(--text-3)', maxWidth: 320, lineHeight: 1.5 }}>Not set up yet — {meta.label.toLowerCase()} controls are coming to this hub.</div>
+    <Card padded style={{ padding: 0 }}>
+      <EmptyState
+        icon={meta.icon}
+        title={meta.label}
+        subtitle={`Not set up yet — ${meta.label.toLowerCase()} controls are coming to this hub.`}
+      />
     </Card>
   );
 }
@@ -882,8 +884,12 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
           </div>
         </Card>
       ) : (
-        <Card padded style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 13, padding: 24 }}>
-          {d.fleetError ? `Could not read the fleet: ${d.fleetError}` : 'No AC units reported by the account.'}
+        <Card padded style={{ padding: 0 }}>
+          {d.fleetError ? (
+            <ErrorState title="Could not read the fleet" subtitle={d.fleetError} />
+          ) : (
+            <EmptyState icon="thermometer" title="No AC units" subtitle="No AC units reported by the account." />
+          )}
         </Card>
       )}
     </>
@@ -927,8 +933,12 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
           </div>
         </Card>
       ) : (
-        <Card padded style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 13, padding: 24 }}>
-          {d.fleetError ? `Could not read the fleet: ${d.fleetError}` : 'No underfloor zones reported.'}
+        <Card padded style={{ padding: 0 }}>
+          {d.fleetError ? (
+            <ErrorState title="Could not read the fleet" subtitle={d.fleetError} />
+          ) : (
+            <EmptyState icon="thermometer" title="No underfloor zones" subtitle="No underfloor zones reported." />
+          )}
         </Card>
       )}
 
@@ -1030,7 +1040,7 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
-      {!d && loading && <Card padded style={{ color: 'var(--text-3)', fontSize: 13 }}>Loading devices…</Card>}
+      {!d && loading && <LoadingState rows={3} label="Loading devices…" />}
       {d && (
         <>
           {lensToggle}
