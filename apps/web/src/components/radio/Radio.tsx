@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
 import type {
-  RadioStation, RadioFavoritesResponse, RadioSearchResult, SonosFavorite,
+  RadioStation, RadioFavoritesResponse, RadioSearchResult, SonosFavoritesResponse,
   RadioSchedule, RadioSchedulesResponse, SonosSpeaker,
+  RadioNowPlaying, RadioNowPlayingResponse,
 } from '../../lib/types';
 import { RADIO_FAVORITE_SLOTS } from '../../lib/types';
 import { Card, Icon, Button, Switch, Slider, SegmentedControl, Input, Select } from '../ui';
@@ -205,10 +206,32 @@ function UrlTab({ busy, onSave, onCancel }: { busy: boolean; onSave: (s: { name:
 }
 
 function ImportTab({ busy, onPick }: { busy: boolean; onPick: (s: { name: string; streamUrl: string }) => void }) {
-  const { data, loading } = usePolling<{ favorites: SonosFavorite[] }>(api.radio.sonosFavorites, 0);
+  const { data, loading } = usePolling<SonosFavoritesResponse>(api.radio.sonosFavorites, 0);
   const favorites = data?.favorites ?? [];
+  const skipped = data?.skipped ?? [];
   if (loading && !data) return <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>Reading the Sonos system's favourites…</div>;
-  if (favorites.length === 0) return <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No radio favourites found on the Sonos system.</div>;
+  // Honest empty state: the owner's favourites are typically Spotify/SoundCloud playlists,
+  // which Sonos rejects over local control — explain that instead of showing a blank list.
+  if (favorites.length === 0) {
+    const services = Array.from(new Set(skipped.map((s) => s.service).filter((x): x is string => !!x && x !== 'a streaming service')));
+    const egList = services.length ? ` (e.g. ${services.slice(0, 3).join(', ')})` : '';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 13px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-2)', background: 'var(--surface-2)' }}>
+          <Icon name="info" size={16} color="var(--text-3)" />
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 600, color: 'var(--text-1)', marginBottom: 3 }}>No radio stations saved in Sonos</div>
+            {skipped.length > 0
+              ? <>You have {skipped.length} other favourite{skipped.length === 1 ? '' : 's'}{egList} — playlists like these can't be added as radio here.</>
+              : <>There are no radio favourites in your Sonos system to import.</>}
+            <div style={{ marginTop: 6, color: 'var(--text-3)' }}>
+              Tip: save a station under TuneIn / Radio in the Sonos app and it'll show up here. Or use Search / Paste URL to add one directly.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', maxHeight: 340, overflowY: 'auto' }}>
       {favorites.map((f, i) => {
@@ -274,25 +297,152 @@ function PlayStationModal({ station, speakers, wide, onClose, onPlayed }: {
 }
 
 /* ============================================================================
+ * Now-playing banner — real target speakers + group/per-speaker volume
+ * ==========================================================================*/
+
+/** Human label for the speakers a station is playing on. "All speakers" only when the play
+ *  targeted the whole house (or the resolved set equals the entire fleet). Otherwise a name,
+ *  a short list, or "N speakers". */
+function speakerScopeLabel(np: RadioNowPlaying, speakers: SonosSpeaker[]): string {
+  const total = speakers.length;
+  const ids = np.speakerIds;
+  const allFleet = total > 0 && ids.length >= total;
+  if (np.wholeHouse || allFleet) return 'All speakers';
+  const names = ids
+    .map((id) => speakers.find((s) => s.id === id)?.name)
+    .filter((n): n is string => !!n);
+  if (names.length === 0) return ids.length ? `${ids.length} speaker${ids.length === 1 ? '' : 's'}` : 'All speakers';
+  if (names.length <= 2) return names.join(', ');
+  return `${names.length} speakers`;
+}
+
+/** A volume slider whose writes are coalesced (~250ms) so dragging doesn't flood the API. It
+ *  follows the live value only while the user isn't actively dragging. */
+function DebouncedSlider({ value, onCommit }: { value: number; onCommit: (pct: number) => void }) {
+  const [local, setLocal] = useState(value);
+  const dirty = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { if (!dirty.current) setLocal(value); }, [value]);
+  const change = (v: number) => {
+    dirty.current = true;
+    setLocal(v);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => { dirty.current = false; onCommit(v); }, 250);
+  };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return <Slider min={0} max={100} unit="%" value={local} onChange={change} />;
+}
+
+/** A per-speaker volume row: name + debounced slider writing to /api/speakers/:id/volume. */
+function VolumeRow({ label, value, onCommit }: { label: string; value: number; onCommit: (pct: number) => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span style={{ flex: '0 0 92px', fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <div style={{ flex: 1 }}><DebouncedSlider value={value} onCommit={onCommit} /></div>
+    </div>
+  );
+}
+
+function NowPlayingBanner({ np, speakers, canControl, onChanged }: {
+  np: RadioNowPlaying; speakers: SonosSpeaker[]; canControl: boolean; onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  // The in-scope speakers actually playing (resolved primaries). Whole-house = the full fleet.
+  const inScope = useMemo(() => {
+    if (np.wholeHouse || np.speakerIds.length === 0) return speakers;
+    const want = new Set(np.speakerIds);
+    return speakers.filter((s) => want.has(s.id));
+  }, [np, speakers]);
+
+  const scopeLabel = speakerScopeLabel(np, speakers);
+  // Group master = the average of the in-scope speakers' current volumes (best-effort).
+  const vols = inScope.map((s) => (typeof s.volumePct === 'number' ? s.volumePct : 0));
+  const groupVol = vols.length ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 25;
+
+  const setOne = (id: string, pct: number) => {
+    void api.speakers.setVolume(id, pct).then(onChanged).catch(() => {});
+  };
+  const setGroup = (pct: number) => {
+    // Apply to every in-scope speaker together.
+    inScope.forEach((s) => { void api.speakers.setVolume(s.id, pct).catch(() => {}); });
+    onChanged();
+  };
+  const stop = async () => {
+    setBusy(true);
+    try { await api.radio.stop(np.wholeHouse ? [] : np.speakerIds); onChanged(); } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.25)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+        <span style={{ width: 32, height: 32, borderRadius: 9, flex: 'none', display: 'grid', placeItems: 'center', background: 'var(--solar)', color: '#06090b' }}>
+          <Icon name="radio" size={17} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{np.name}</div>
+          <div style={{ fontSize: 11, color: 'var(--solar-dim, var(--text-3))' }}>Playing on {scopeLabel}</div>
+        </div>
+        {canControl && <Button size="sm" variant="secondary" loading={busy} iconLeft={<Icon name="square" size={13} />} onClick={() => void stop()}>Stop</Button>}
+      </div>
+
+      {canControl && inScope.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 2 }}>
+          {/* Group master — adjusts every in-scope speaker together (debounced). */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Icon name="volume-2" size={15} color="var(--text-3)" />
+            <div style={{ flex: 1 }}>
+              <DebouncedSlider value={groupVol} onCommit={setGroup} />
+            </div>
+          </div>
+          {inScope.length > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--solar)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: 0 }}
+              >
+                <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={13} />
+                {expanded ? 'Hide' : 'Per-speaker'} volume
+              </button>
+              {expanded && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {inScope.map((s) => (
+                    <VolumeRow
+                      key={s.id}
+                      label={s.name}
+                      value={typeof s.volumePct === 'number' ? s.volumePct : 0}
+                      onCommit={(pct) => setOne(s.id, pct)}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
  * Favourites grid + now-playing
  * ==========================================================================*/
 export function RadioPanel({ speakers, canControl, wide }: {
   speakers: SonosSpeaker[]; canControl: boolean; wide: boolean;
 }) {
   const { data, refetch } = usePolling<RadioFavoritesResponse>(api.radio.favorites, 0);
+  // Drive the now-playing banner from server state so it shows the REAL target speakers and
+  // survives a refresh/restart (scheduled plays land here too).
+  const { data: npData, refetch: refetchNp } = usePolling<RadioNowPlayingResponse>(api.radio.nowPlaying, 8_000);
   const favorites = useMemo(() => [...(data?.favorites ?? [])].sort((a, b) => a.slot - b.slot), [data]);
   const bySlot = useMemo(() => new Map(favorites.map((f) => [f.slot, f])), [favorites]);
+  const nowPlaying = npData?.nowPlaying ?? null;
 
   const [adding, setAdding] = useState<number | null>(null); // slot index being filled
   const [editing, setEditing] = useState<RadioStation | null>(null);
   const [playing, setPlaying] = useState<RadioStation | null>(null);
-  const [nowPlaying, setNowPlaying] = useState<{ name: string; speakerIds: string[] } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const stop = async () => {
-    setBusy(true);
-    try { await api.radio.stop(nowPlaying?.speakerIds ?? []); setNowPlaying(null); } finally { setBusy(false); }
-  };
 
   const slots = Array.from({ length: RADIO_FAVORITE_SLOTS }, (_, i) => i);
 
@@ -305,16 +455,12 @@ export function RadioPanel({ speakers, canControl, wide }: {
       </div>
 
       {nowPlaying && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--solar-wash)', border: '1px solid rgba(46,230,160,0.25)' }}>
-          <span style={{ width: 32, height: 32, borderRadius: 9, flex: 'none', display: 'grid', placeItems: 'center', background: 'var(--solar)', color: '#06090b' }}>
-            <Icon name="radio" size={17} />
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nowPlaying.name}</div>
-            <div style={{ fontSize: 11, color: 'var(--solar-dim, var(--text-3))' }}>Playing on {nowPlaying.speakerIds.length || 'all'} speaker{nowPlaying.speakerIds.length === 1 ? '' : 's'}</div>
-          </div>
-          {canControl && <Button size="sm" variant="secondary" loading={busy} iconLeft={<Icon name="square" size={13} />} onClick={() => void stop()}>Stop</Button>}
-        </div>
+        <NowPlayingBanner
+          np={nowPlaying}
+          speakers={speakers}
+          canControl={canControl}
+          onChanged={refetchNp}
+        />
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(auto-fill, minmax(150px, 1fr))' : 'repeat(2, 1fr)', gap: 9 }}>
@@ -366,7 +512,7 @@ export function RadioPanel({ speakers, canControl, wide }: {
           speakers={speakers}
           wide={wide}
           onClose={() => setPlaying(null)}
-          onPlayed={() => setNowPlaying({ name: playing.name, speakerIds: [] })}
+          onPlayed={refetchNp}
         />
       )}
     </Card>

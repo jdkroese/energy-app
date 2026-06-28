@@ -144,6 +144,7 @@ import {
   getSonosFavorites,
   playRadio,
   stopRadio,
+  nowPlaying as radioNowPlaying,
   listSchedules as listRadioSchedules,
   createSchedule as createRadioSchedule,
   updateSchedule as updateRadioSchedule,
@@ -520,6 +521,7 @@ app.post('/api/radio/favorites', requireAdmin, wrap((req) => createFavorite((req
 app.put('/api/radio/favorites/:id', requireAdmin, wrap((req) => updateFavorite(String(req.params.id), (req.body ?? {}) as never)));
 app.delete('/api/radio/favorites/:id', requireAdmin, wrap((req) => deleteFavorite(String(req.params.id))));
 app.get('/api/radio/sonos-favorites', wrap(() => getSonosFavorites()));
+app.get('/api/radio/now-playing', wrap(() => radioNowPlaying()));
 app.post('/api/radio/play', requireAdmin, wrap((req) => playRadio(req.body)));
 app.post('/api/radio/stop', requireAdmin, wrap((req) => stopRadio(req.body)));
 app.get('/api/radio/schedules', wrap(() => listRadioSchedules()));

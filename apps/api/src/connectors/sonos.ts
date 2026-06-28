@@ -39,6 +39,17 @@ export function isConfigured(): boolean {
   return cfg().enabled;
 }
 
+/** Decode the XML entities Sonos uses to escape the embedded ZoneGroupState document
+ *  (&lt; &gt; &quot; &amp; &apos;) so we can regex the inner ZoneGroupMember tags. */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 // ---- Normalized shapes ------------------------------------------------------
 
 export interface SonosSpeaker {
@@ -69,6 +80,11 @@ let lastFleet: SonosSpeaker[] = [];
 let lastFleetAt = 0;
 let lastError: string | null = null;
 let discoveredCount = 0;
+// UUIDs of the HIDDEN half of stereo pairs / surround satellites (ZoneGroupTopology
+// Invisible="1"). Cached alongside the fleet (~30s) so we don't re-read the topology on
+// every fleet read. We DROP these from getFleet() so each bonded zone shows ONCE (the
+// visible primary controls both units). Empty until the first topology read.
+let invisibleUuids: Set<string> = new Set();
 
 /** Lazily create + initialize the manager (discovery, or seed-IP fallback). Returns
  *  null when Sonos is disabled or no device could be found. Concurrent callers share
@@ -137,6 +153,7 @@ export function resetManager(): void {
   initPromise = null;
   lastFleet = [];
   lastFleetAt = 0;
+  invisibleUuids = new Set();
 }
 
 function normalize(d: SonosDevice): SonosSpeaker {
@@ -160,6 +177,35 @@ function normalize(d: SonosDevice): SonosSpeaker {
   };
 }
 
+/**
+ * Read the set of INVISIBLE player UUIDs from ZoneGroupTopology — the hidden half of each
+ * stereo pair (and any surround satellite) is marked `Invisible="1"`. We drop these so a
+ * bonded zone shows once (its visible primary controls both units). Best-effort: on any
+ * parse/read error we return the previously-cached set so the list never spuriously
+ * doubles. Validated against the owner's 5-pair / 8-zone system.
+ */
+async function readInvisibleUuids(m: SonosManager): Promise<Set<string>> {
+  const d = m.Devices[0];
+  if (!d) return invisibleUuids;
+  try {
+    const r = await d.ZoneGroupTopologyService.GetZoneGroupState();
+    const xml = typeof r?.ZoneGroupState === 'string' ? decodeEntities(r.ZoneGroupState) : '';
+    if (!xml) return invisibleUuids;
+    const out = new Set<string>();
+    // Each ZoneGroupMember is a self-contained tag; pull the ones flagged Invisible="1".
+    const memberRe = /<ZoneGroupMember\b[^>]*>/gi;
+    for (const tag of xml.match(memberRe) ?? []) {
+      if (/\bInvisible="1"/i.test(tag)) {
+        const uuid = tag.match(/\bUUID="([^"]+)"/i)?.[1];
+        if (uuid) out.add(uuid);
+      }
+    }
+    return out;
+  } catch {
+    return invisibleUuids; // keep the last good set on a transient topology read failure
+  }
+}
+
 /** Refresh the cached fleet (volume read per speaker, best-effort). Soft-fails to the
  *  last good snapshot so a transient error doesn't blank the UI. */
 async function refreshFleet(force = false): Promise<SonosSpeaker[]> {
@@ -172,7 +218,10 @@ async function refreshFleet(force = false): Promise<SonosSpeaker[]> {
     return lastFleet;
   }
   try {
-    const devices = m.Devices;
+    // Refresh the invisible-member set (stereo-pair satellites) before filtering the fleet.
+    invisibleUuids = await readInvisibleUuids(m);
+    // Drop the hidden half of stereo pairs / surround satellites so each zone shows once.
+    const devices = m.Devices.filter((d) => !invisibleUuids.has(d.Uuid));
     discoveredCount = devices.length;
     const speakers = await Promise.all(
       devices.map(async (d) => {
@@ -506,23 +555,56 @@ function favoriteStreamUrl(uri: string): string | null {
   return null; // x-sonosapi-stream / service URIs can't be replayed as a plain stream
 }
 
+/** A non-radio favourite the owner has saved (e.g. a Spotify/SoundCloud playlist) that we
+ *  CANNOT add as a radio station — surfaced so the Import tab can explain the empty list. */
+export interface SonosSkippedFavorite {
+  title: string;
+  /** Best-effort service label derived from the container URI (Spotify / SoundCloud / …). */
+  service: string | null;
+}
+
+/** Derive a friendly service name from a Sonos favourite URI (best-effort, for the UI hint). */
+function favoriteServiceName(uri: string): string | null {
+  const u = uri.toLowerCase();
+  if (u.includes('spotify')) return 'Spotify';
+  if (u.includes('soundcloud')) return 'SoundCloud';
+  if (u.includes('tidal')) return 'Tidal';
+  if (u.includes('deezer')) return 'Deezer';
+  if (u.includes('amazon') || u.includes('prime')) return 'Amazon Music';
+  if (u.includes('apple')) return 'Apple Music';
+  if (u.includes('youtube')) return 'YouTube Music';
+  if (/^x-rincon-cpcontainer:/i.test(uri)) return 'a streaming service';
+  return null;
+}
+
+export interface SonosRadioFavoritesResult {
+  /** The radio-type favourites that CAN be imported. */
+  radio: SonosFavorite[];
+  /** The non-radio favourites (playlists etc.) that were skipped — to explain an empty list. */
+  skipped: SonosSkippedFavorite[];
+}
+
 /**
  * Read the Sonos system's own radio favourites (for the "Import from Sonos" feature).
  * Merges GetFavoriteRadioStations + the audioBroadcast entries of GetFavorites, deduped by
- * title. Returns [] when Sonos isn't reachable.
+ * title. ALSO reports the non-radio favourites it skipped (Spotify/SoundCloud playlists,
+ * `x-rincon-cpcontainer:` URIs that Sonos rejects over local control — UPnPError 402) so
+ * the UI can explain a legitimately-empty radio list instead of looking broken. Returns
+ * empty lists when Sonos isn't reachable.
  */
-export async function getSonosRadioFavorites(): Promise<SonosFavorite[]> {
+export async function getSonosRadioFavorites(): Promise<SonosRadioFavoritesResult> {
   const m = await getManager();
-  if (!m || m.Devices.length === 0) return [];
+  if (!m || m.Devices.length === 0) return { radio: [], skipped: [] };
   const d = m.Devices[0];
-  const out: SonosFavorite[] = [];
+  const radio: SonosFavorite[] = [];
+  const skipped: SonosSkippedFavorite[] = [];
   const seen = new Set<string>();
   const add = (title: unknown, uri: unknown) => {
     if (typeof title !== 'string' || typeof uri !== 'string' || !uri) return;
     const key = title.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ title: title || 'Station', uri, streamUrl: favoriteStreamUrl(uri) });
+    radio.push({ title: title || 'Station', uri, streamUrl: favoriteStreamUrl(uri) });
   };
   // Radio favourites (R: container).
   try {
@@ -531,20 +613,24 @@ export async function getSonosRadioFavorites(): Promise<SonosFavorite[]> {
   } catch {
     /* not all systems expose this; fall through to GetFavorites */
   }
-  // General favourites — keep only the radio/audioBroadcast ones.
+  // General favourites — keep the radio/audioBroadcast ones; report everything else as skipped.
   try {
     const f = await d.GetFavorites();
     if (Array.isArray(f.Result)) {
       for (const t of f.Result) {
-        const isRadio =
-          (t.UpnpClass ?? '').includes('audioBroadcast') || /^x-rincon-mp3radio:|^x-sonosapi-stream:/i.test(t.TrackUri ?? '');
-        if (isRadio) add(t.Title, t.TrackUri);
+        const uri = t.TrackUri ?? '';
+        const isRadio = (t.UpnpClass ?? '').includes('audioBroadcast') || /^x-rincon-mp3radio:|^x-sonosapi-stream:/i.test(uri);
+        if (isRadio) {
+          add(t.Title, uri);
+        } else if (typeof t.Title === 'string' && t.Title) {
+          skipped.push({ title: t.Title, service: favoriteServiceName(uri) });
+        }
       }
     }
   } catch {
     /* best-effort */
   }
-  return out;
+  return { radio, skipped };
 }
 
 /**
