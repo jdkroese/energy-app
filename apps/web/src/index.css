@@ -24,8 +24,10 @@
   /* text */
   --text-1: #e9f5f2;
   --text-2: #9bb0ad;
-  --text-3: #5f7672;
-  --text-disabled: #41534f;
+  /* A3: lifted for WCAG AA on surfaces (was #5f7672 ≈ 3.76:1 → 5.49:1 on --surface-1) */
+  --text-3: #7d918d;
+  /* A3: lifted for WCAG AA on surfaces (was #41534f ≈ 2.24:1 → 4.73:1 on --surface-1) */
+  --text-disabled: #728680;
   --text-inverse: #06090b;
 
   /* energy palette */
@@ -44,13 +46,34 @@
   --accent: var(--solar);
   --accent-dim: var(--solar-dim);
   --accent-contrast: #06090b;
+  /* brightened hover/active states (A1: was hardcoded in dsStyles.ts) */
+  --accent-bright: #48f0b1;
+  --slider-thumb: #eafff6;
 
   /* semantic */
   --success: #2ee6a0;
   --warning: #f5a524;
   --danger: #ff5d5d;
   --danger-dim: #b53e3e;
+  --danger-bright: #ff7575;
   --info: #38d9f5;
+
+  /* chart series palette (A1: was hardcoded hex in DayChart.tsx).
+     Read at render via getComputedStyle so a future light theme can override. */
+  --series-production: #2ee6a0;
+  --series-consumption: #c4a6ff;
+  --series-charge: #38d9f5;
+  --series-discharge: #f5736b;
+  --series-grid-export: #f5a524;
+  --series-grid-import: #ff6b8a;
+  --series-soc-combined: #2dd4bf;
+  --series-soc-sonnen: #8bd450;
+  --series-soc-tesla: #5ac8fa;
+
+  /* tariff-band fills (A1: was hardcoded hex in DayChart.tsx BAND_COLOR) */
+  --band-p1: #f5a524;
+  --band-p2: #5f7672;
+  --band-p3: #2ee6a0;
 
   /* tinted washes */
   --solar-wash: rgba(46, 230, 160, 0.12);
@@ -58,6 +81,10 @@
   --grid-wash: rgba(245, 165, 36, 0.12);
   --home-wash: rgba(196, 166, 255, 0.12);
   --danger-wash: rgba(255, 93, 93, 0.12);
+
+  /* tinted accent borders (A1: was hardcoded rgba in Devices.tsx summary tiles) */
+  --border-grid: rgba(245, 165, 36, 0.25);
+  --border-solar: rgba(46, 230, 160, 0.25);
 
   /* semantic surface aliases */
   --surface-card: var(--surface-1);
@@ -297,12 +324,26 @@ h1, h2, h3, h4, p {
   box-shadow: 0 0 0 2px var(--solar), 0 0 14px 2px var(--solar);
 }
 
-/* keyframe used by EnergyFlow / live elements (also defined inline per-component
-   but kept here so reduced-motion override applies globally) */
+/* ---- Global reduced-motion gate (A2) ----------------------------------------
+   Canonical accessibility reset: when the user asks for reduced motion, collapse
+   ALL animations/transitions to a single near-instant pass. This covers every
+   looping/decorative keyframe in the app — whether applied via a class or an
+   inline style={{ animation }} — in one place, because the rule's !important
+   beats inline styles too. Covered loops include: EnergyFlow flow/ring
+   (pwr2move/pwr2ring), live status pulse (pwr-pulse), sync dot (pwrSyncPulse),
+   nav-alarm pulse (pwrNavAlarmPulse), alarm pulse (pwrAlarmPulse), splash pulse
+   (pwr-splash-pulse), button spinner (pwr-btn-spin), skeleton shimmer
+   (pwr-shimmer), PlanTimeline draw/grow/pulse (pt-*), and the overlay
+   fade/rise keyframes (vhFade/vhRise, ruleFade/ruleRise, mmFade/mmRise,
+   installFade/installRise, setupFade).
+   Functional spinners still resolve to a static state rather than looping. */
 @media (prefers-reduced-motion: reduce) {
-  .pwr2__line,
-  .pwr2__hub::after,
-  .pwr-status--live .pwr-status__dot::after {
-    animation: none !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

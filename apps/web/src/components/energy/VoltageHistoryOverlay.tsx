@@ -51,7 +51,7 @@ export function VoltageHistoryOverlay({ wide, onClose }: { wide: boolean; onClos
         alignItems: wide ? 'flex-start' : 'flex-end',
         justifyContent: 'center',
         overflowY: 'auto',
-        animation: 'vhFade .16s ease',
+        animation: 'vhFade var(--dur) var(--ease-out)',
       }}
     >
       <style>{`@keyframes vhFade { from { opacity: 0 } to { opacity: 1 } } @keyframes vhRise { from { transform: translateY(14px); opacity: .7 } to { transform: translateY(0); opacity: 1 } }`}</style>
@@ -68,7 +68,7 @@ export function VoltageHistoryOverlay({ wide, onClose }: { wide: boolean; onClos
           border: '1px solid var(--border-2)',
           borderRadius: wide ? 18 : '18px 18px 0 0',
           boxShadow: '0 -8px 40px rgba(0,0,0,.5)',
-          animation: 'vhRise .2s cubic-bezier(.2,.7,.3,1)',
+          animation: 'vhRise var(--dur) var(--ease-out)',
         }}
       >
         {!wide && <div style={{ width: 38, height: 4, borderRadius: 999, background: 'var(--border-3)', margin: '10px auto 2px' }} />}

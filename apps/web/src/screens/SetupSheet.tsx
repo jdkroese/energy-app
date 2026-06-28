@@ -242,7 +242,7 @@ export function SetupSheet({ device, wide, customTypes, initialName, initialType
   return (
     <div onClick={onClose}
       style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(3px)',
-        display: 'flex', alignItems: wide ? 'stretch' : 'flex-end', justifyContent: wide ? 'flex-end' : 'center', animation: 'setupFade .16s ease' }}>
+        display: 'flex', alignItems: wide ? 'stretch' : 'flex-end', justifyContent: wide ? 'flex-end' : 'center', animation: 'setupFade var(--dur) var(--ease-out)' }}>
       <style>{`@keyframes setupFade { from { opacity: 0 } to { opacity: 1 } }`}</style>
       <div onClick={(e) => e.stopPropagation()}
         style={{ width: '100%', maxWidth: wide ? 440 : 560, maxHeight: wide ? '100%' : '92vh', overflowY: 'auto',

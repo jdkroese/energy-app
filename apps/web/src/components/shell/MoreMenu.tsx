@@ -50,7 +50,7 @@ export function MoreMenu({ open, onClose }: { open: boolean; onClose: () => void
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'flex-end',
-        animation: 'mmFade .18s ease',
+        animation: 'mmFade var(--dur) var(--ease-out)',
       }}
     >
       <style>{`
@@ -68,7 +68,7 @@ export function MoreMenu({ open, onClose }: { open: boolean; onClose: () => void
           borderTopLeftRadius: 18,
           borderTopRightRadius: 18,
           padding: '8px 12px calc(14px + env(safe-area-inset-bottom))',
-          animation: 'mmRise .22s cubic-bezier(.2,.7,.3,1)',
+          animation: 'mmRise var(--dur) var(--ease-out)',
           maxHeight: '82vh',
           overflowY: 'auto',
         }}

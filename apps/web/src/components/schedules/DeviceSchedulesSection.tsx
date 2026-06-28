@@ -166,7 +166,7 @@ function DevicePicker({ units, wide, onPick, onCancel }: {
       role="dialog"
       aria-modal="true"
       aria-label="Choose a device to schedule"
-      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: wide ? 'center' : 'flex-end', justifyContent: 'center', padding: wide ? 16 : 0, animation: 'ruleFade .16s ease' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: wide ? 'center' : 'flex-end', justifyContent: 'center', padding: wide ? 16 : 0, animation: 'ruleFade var(--dur) var(--ease-out)' }}
     >
       <style>{`@keyframes ruleFade { from { opacity: 0 } to { opacity: 1 } }`}</style>
       <div

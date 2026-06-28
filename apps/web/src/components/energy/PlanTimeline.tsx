@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { PlanAction } from '../../lib/types';
+import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion';
 
 /* ============================================================================
  * PlanTimeline — the brain's next-24 h plan, top → bottom:
@@ -61,18 +62,6 @@ type Props = {
   /** desktop vs mobile (drives hit-target sizing + hover vs tap) */
   wide?: boolean;
 };
-
-function usePrefersReducedMotion(): boolean {
-  const [reduce, setReduce] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const on = () => setReduce(mq.matches);
-    on();
-    mq.addEventListener?.('change', on);
-    return () => mq.removeEventListener?.('change', on);
-  }, []);
-  return reduce;
-}
 
 /** Greedy row-stacking: place each bar in the first lane whose last bar ended. */
 function stackRows(actions: PlanAction[]): number[] {

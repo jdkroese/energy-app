@@ -176,7 +176,7 @@ export function InstallSheet({ onClose }: { onClose: () => void }) {
         position: 'fixed', inset: 0, zIndex: 1000,
         background: 'rgba(0,0,0,.62)', backdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-        animation: 'installFade .18s ease',
+        animation: 'installFade var(--dur) var(--ease-out)',
       }}
     >
       <style>{`
@@ -193,7 +193,7 @@ export function InstallSheet({ onClose }: { onClose: () => void }) {
           background: 'var(--surface-1, #14181d)',
           border: '1px solid var(--border-2)', borderRadius: 18,
           boxShadow: '0 -8px 40px rgba(0,0,0,.5)',
-          animation: 'installRise .22s cubic-bezier(.2,.7,.3,1)',
+          animation: 'installRise var(--dur) var(--ease-out)',
           maxHeight: '88vh', overflowY: 'auto',
         }}
       >
