@@ -104,23 +104,35 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   const plan = planBatteryPriority(snap, store.get().control.batteryPriority, baseReserve, gr.socFloorPct);
 
   // ---- Tesla (policy layer) ----
-  const teslaMode = favoursArbitrage(scenario) ? 'autonomous' : 'self_consumption';
-  await issue('tesla', 'mode', teslaMode, `${reason}: scenario favours ${teslaMode}`, snap);
-
-  // Discharge-priority may HOLD the Tesla by raising its reserve to its SoC so the
-  // Sonnen discharges first. In shadow we log the intended hold but issue the base.
-  let teslaReserve = baseReserve;
-  let reserveReason = `${reason}: scenario reserve floor`;
+  // Discharge-priority HOLD intent: when the rule wants the Sonnen to discharge first
+  // (and we're not in an arbitrage scenario), put the Tesla in `backup` mode so it
+  // refuses to discharge for the house. The Sonnen load-following branch in
+  // coordinateSonnen() then covers the whole house draw, so the Tesla idles and holds
+  // its charge. The mode is re-issued EVERY tick, so it auto-reverts to self_consumption
+  // the moment the hold releases (Sonnen depleted / throughput cap / surplus / offline).
   const dp = plan.discharge;
-  if (dp.active && dp.holdTesla && dp.reserveHoldPct !== null) {
-    if (dp.authority === 'auto') {
-      teslaReserve = dp.reserveHoldPct;
-      reserveReason = `${reason}: discharge-priority — ${dp.reason}`;
-    } else {
-      logShadow('tesla', 'reserve', `discharge-priority (shadow): ${dp.reason}`, `would hold reserve at ${dp.reserveHoldPct}% (issuing base ${baseReserve}%)`);
-    }
+  const wantHold = dp.active && dp.holdTesla && !favoursArbitrage(scenario);
+
+  const teslaMode = favoursArbitrage(scenario)
+    ? 'autonomous'
+    : wantHold && dp.authority === 'auto'
+      ? 'backup'
+      : 'self_consumption';
+  await issue(
+    'tesla',
+    'mode',
+    teslaMode,
+    `${reason}: ${teslaMode === 'backup' ? 'discharge-priority hold (Tesla backup-only, Sonnen discharges first)' : `scenario favours ${teslaMode}`}`,
+    snap,
+  );
+  if (wantHold && dp.authority === 'shadow') {
+    logShadow('tesla', 'mode', `discharge-priority (shadow): ${dp.reason}`, 'would set Tesla → backup (hold for Sonnen-first)');
   }
-  await issue('tesla', 'reserve', teslaReserve, reserveReason, snap);
+
+  // Tesla reserve: always the scenario floor. We no longer raise the reserve to hold the
+  // Tesla (the Tesla often ignored that write and the cap was only 80%) — the `backup`
+  // mode above + the Sonnen load-following primary mechanism do the holding now.
+  await issue('tesla', 'reserve', baseReserve, `${reason}: scenario reserve floor`, snap);
 
   const enableGridCharge = scenario.gridCharge && band === 'P3';
   await issue(
@@ -509,6 +521,50 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
       return;
     }
     logShadow('sonnen', 'mode', `charge-priority (shadow): ${cp.reason}`, 'would idle Sonnen (manual 0 W) so Tesla charges first');
+  }
+
+  // ---- Discharge-priority (Sonnen-first) load-following ----------------------
+  // PRIMARY mechanism for "discharge the Sonnen before the Tesla". When the rule wants
+  // to hold the Tesla and the house is drawing (deficit regime, no meaningful export),
+  // force-discharge the Sonnen to cover the WHOLE non-PV house draw, re-tracked each tick.
+  // The Sonnen then supplies everything, so the Tesla (in backup/self_consumption) sees
+  // ~no residual demand and idles → it holds its charge. Needs ZERO Tesla cooperation.
+  const dp = plan.discharge;
+  // Deficit regime only (no meaningful export). Compute the whole non-PV draw the
+  // batteries+grid are currently covering; making the Sonnen supply all of it leaves the
+  // Tesla with ~nothing to do, so it idles and holds its charge.
+  const notExporting = snap.gridExportKw <= 0.2;
+  if (dp.active && dp.holdTesla && notExporting) {
+    const sonnenDisW = s.dir === 'discharging' ? s.kw * 1000 : 0;
+    const teslaDisW = snap.tesla && snap.tesla.dir === 'discharging' ? snap.tesla.kw * 1000 : 0;
+    const drawW = sonnenDisW + teslaDisW + snap.gridImportKw * 1000; // total non-PV draw
+    const targetW = checkSonnenWatts(
+      Math.min(drawW, store.get().control.guardrails.sonnenMaxW),
+      'discharge',
+      snap,
+    ).value;
+    if (dp.authority === 'auto') {
+      if (targetW > 150) {
+        // Sonnen covers the whole house; Tesla idles and holds.
+        await issue('sonnen', 'mode', '1', `${reason}: discharge-priority — Sonnen covers house so Tesla holds`, snap);
+        await issue('sonnen', 'discharge', targetW, `${reason}: discharge-priority ${targetW}W (draw ${Math.round(drawW)}W) — Sonnen first`, snap);
+        return;
+      }
+      // Negligible draw: don't force; fall through to self-consumption.
+    } else {
+      logShadow('sonnen', 'discharge', `discharge-priority (shadow): ${dp.reason}`, `would force-discharge Sonnen ~${targetW}W (draw ${Math.round(drawW)}W) so Tesla idles`);
+      // shadow → fall through to normal self-consumption (current behaviour) for comparison.
+    }
+  }
+
+  // SAFETY REVERT: if we're NOT force-discharging this tick but the Sonnen is still in a
+  // manual DISCHARGE we left behind (hold released / surplus appeared / draw gone), hand it
+  // back to self-consumption with a PRIORITY write so a stale setpoint can't strand. Gated
+  // on dir === 'discharging' so it never touches a manual CHARGE (soak-export / arbitrage,
+  // which return early in the export/valley regime above).
+  if (s.mode === 'manual' && s.dir === 'discharging') {
+    await issue('sonnen', 'mode', '2', `${reason}: end discharge-priority — back to self-consumption`, snap, { priority: true });
+    return;
   }
 
   // Keep Sonnen in self-consumption — it discharges to cover the house load.

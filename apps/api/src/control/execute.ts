@@ -173,7 +173,7 @@ async function issueTesla(
     await tesla.setMode(to);
     markWritten('tesla', lever);
     const after = await tesla.readControlConfig();
-    return confirm('tesla', lever, cur.mode, to, after.mode, reason);
+    return confirmTeslaMode('tesla', lever, cur.mode, to, after.mode, reason);
   }
 
   if (lever === 'reserve') {
@@ -332,6 +332,39 @@ function confirmTeslaReserve(
       : pendingLag
         ? `issued ${to}% — pending (Tesla read-back still ${readBack}%, cloud lag)`
         : `read-back MISMATCH: wanted ${to}, device reports ${readBack}`;
+  logEntry(device, lever, from, readBack, reason, ok, detail);
+  return { ok, skipped: false, reason, from, to: readBack };
+}
+
+/**
+ * Read-back confirm for the Tesla MODE lever, TOLERANT of /site_info read-back lag.
+ * The Tesla now flips default_real_mode between self_consumption / backup / autonomous
+ * every tick, and /site_info can lag a /operation write (same as the reserve /backup
+ * write). An immediate read-back that still equals the PRE-write mode (`from`) is the
+ * cloud not having propagated yet — treat as pending SUCCESS (no lastError); a later
+ * tick confirms the real value. Exact match = confirmed.
+ *
+ * Trade-off (mirrors confirmTeslaReserve): if the device GENUINELY refuses the mode and
+ * stays at the old one, this no longer errors after the first tick. Acceptable here — the
+ * shadow-first rollout + the Sonnen load-following PRIMARY mechanism cover us if the Tesla
+ * ignores the mode write.
+ */
+function confirmTeslaMode(
+  device: ControlDevice,
+  lever: Lever,
+  from: string | number | null,
+  to: string,
+  readBack: string,
+  reason: string,
+): IssueResult {
+  const exact = readBack === to;
+  const pendingLag = !exact && readBack === from;
+  const ok = exact || pendingLag;
+  const detail = exact
+    ? `confirmed ${to}`
+    : pendingLag
+      ? `issued ${to} — pending (Tesla read-back still ${readBack}, cloud lag)`
+      : `read-back MISMATCH: wanted ${to}, device reports ${readBack}`;
   logEntry(device, lever, from, readBack, reason, ok, detail);
   return { ok, skipped: false, reason, from, to: readBack };
 }

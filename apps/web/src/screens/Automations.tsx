@@ -529,7 +529,7 @@ function BatteryRuleCard({ meta, rule, live, socFloorPct, canWrite, onSave }: {
       if (exportKw > 0.2) preview = `Solar surplus now (+${exportKw} kW) — discharge priority idle.`;
       else if (sonnenSoc <= socFloorPct) preview = `Sonnen ${sonnenSoc}% at floor — Tesla released to share the load.`;
       else if (importKw > thr) preview = `Grid import ${importKw} kW > ${thr} kW — Tesla joins in.`;
-      else { active = true; preview = `Would hold Tesla at ~${teslaSoc}% — Sonnen covers the house first.`; }
+      else { active = true; preview = `Sonnen covers the house first; Tesla held in backup so it stays charged (${teslaSoc}%).`; }
     } else {
       if (exportKw <= 0.2) preview = 'No solar surplus now — charge priority idle.';
       else if (teslaSoc >= 100) preview = 'Tesla full — Sonnen free to charge.';
