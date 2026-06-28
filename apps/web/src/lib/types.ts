@@ -603,10 +603,20 @@ export interface Action {
   positionPct?: number;
 }
 
+export type TimeAnchor = 'fixed' | 'sunrise' | 'sunset';
+
 export interface ScheduleWindow {
-  /** Local "HH:MM". `end <= start` ⇒ the window wraps past midnight. */
+  /** Local "HH:MM". Used when anchor is 'fixed'; kept as display/fallback for solar anchors. */
   start: string;
   end: string;
+  /** Anchor for start time. 'fixed' (default) uses `start` HH:MM directly. */
+  startAnchor?: TimeAnchor;
+  /** Minutes added to solar anchor (negative = before). Default 0. */
+  startOffsetMin?: number;
+  /** Anchor for end time. 'fixed' (default) uses `end` HH:MM directly. */
+  endAnchor?: TimeAnchor;
+  /** Minutes added to solar anchor (negative = before). Default 0. */
+  endOffsetMin?: number;
   /** Optional per-window override; inherits the rule's `action`. */
   action?: Partial<Action>;
 }

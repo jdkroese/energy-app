@@ -2,7 +2,7 @@
 // plus small display helpers shared by the schedule components. The editor uses
 // checkRuleOverlap to block Save; the server re-validates on write.
 
-import type { Action, DeviceType, RunCondition, Schedule, ScheduleWindow } from './types';
+import type { Action, DeviceType, RunCondition, Schedule, ScheduleWindow, TimeAnchor } from './types';
 
 export interface DaySegment {
   day: number; // 0=Sun..6=Sat
@@ -99,9 +99,19 @@ export function actionSummary(s: Schedule): string {
   return parts.join(' · ');
 }
 
+function anchorLabel(hhmm: string, anchor?: TimeAnchor, offsetMin?: number): string {
+  if (!anchor || anchor === 'fixed') return hhmm;
+  const base = anchor === 'sunrise' ? 'Sunrise' : 'Sunset';
+  const off = offsetMin ?? 0;
+  if (off === 0) return base;
+  return off > 0 ? `${base}+${off}m` : `${base}${off}m`;
+}
+
 /** Window list rendered compactly, e.g. "14:00–17:00 · 20:00–23:00". */
 export function windowsSummary(windows: ScheduleWindow[]): string {
-  return windows.map((w) => `${w.start}–${w.end}`).join(' · ');
+  return windows
+    .map((w) => `${anchorLabel(w.start, w.startAnchor, w.startOffsetMin)}–${anchorLabel(w.end, w.endAnchor, w.endOffsetMin)}`)
+    .join(' · ');
 }
 
 /** Condition tag text + tone, or null when 'always'. */
