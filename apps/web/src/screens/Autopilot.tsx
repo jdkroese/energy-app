@@ -11,6 +11,7 @@ import type {
   ControlLogEntry,
   ControlMode,
   ControlStatus,
+  LiveResponse,
 } from '../lib/types';
 import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Card, StatTile } from '../components/ui';
 import { PlanTimeline } from '../components/energy/PlanTimeline';
@@ -167,6 +168,10 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
 
   const { data: planData, stale: planStale, updatedAt: planAt } = usePolling<BrainPlanResponse>(api.brainPlan, 60_000);
   const plan = planData || MOCK_PLAN;
+
+  // Live snapshot — for the relocated "Backup · Tesla only" card on the Status tab
+  // (backup energy + autonomy hours live on /api/live, not on ControlStatus).
+  const { data: live } = usePolling<LiveResponse>(api.live, 10_000);
 
   const pushToast = useCallback((kind: 'ok' | 'err', text: string) => {
     const id = ++toastId.current;
@@ -549,6 +554,21 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
               <GuardTile label="Grid import cap" value={`${status.guardrails.gridImportCapKw} kW`} />
             </div>
           </div>
+
+          {/* backup · Tesla only — relocated from the Live page (data on /api/live) */}
+          {live && (
+            <div style={{ ...panelCard, borderColor: 'var(--battery)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Eyebrow>Backup · Tesla only</Eyebrow>
+                <Icon name="shield-check" size={18} color="var(--battery)" />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 600, color: 'var(--battery)' }}>{live.tesla.backupKwh}</span>
+                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>kWh · ≈ {live.tesla.backupHours} h autonomy</span>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-3)' }}>Sonnen excluded — no backup module installed</div>
+            </div>
+          )}
         </>
       ) : connecting)}
 

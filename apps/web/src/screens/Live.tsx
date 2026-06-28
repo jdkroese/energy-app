@@ -256,6 +256,12 @@ export function Live({ ctx }: { ctx: ShellContext }) {
           <EnergyFlow flow={flow} />
         </Card>
 
+        {/* batteries */}
+        <BatteriesCard live={live} />
+
+        {/* notifications */}
+        <NotificationsWidget />
+
         {/* tariff */}
         <Card style={{ padding: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -271,47 +277,6 @@ export function Live({ ctx }: { ctx: ShellContext }) {
             </span>
           </div>
           <TariffBand current={hour} />
-        </Card>
-
-        {/* backup */}
-        <Card accent="battery" style={{ padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Eyebrow>Backup · Tesla only</Eyebrow>
-            <Icon name="shield-check" size={17} color="var(--battery)" />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 26, fontWeight: 600, color: 'var(--battery)' }}>{live.tesla.backupKwh}</span>
-            <span style={{ fontSize: 12, color: 'var(--text-2)' }}>kWh · ≈ {live.tesla.backupHours} h autonomy</span>
-          </div>
-          <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--text-3)' }}>Sonnen excluded — no backup module</div>
-        </Card>
-
-        {/* batteries */}
-        <Card title="Batteries" style={{ padding: 16 }}>
-          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-            {[
-              { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh, dir: live.sonnen.dir },
-              { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh, dir: live.tesla.dir },
-            ].map((b) => (
-              <div key={b.name} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                <RadialGauge value={b.soc} tone="battery" label={b.name} size={92} />
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{b.kwh} kWh · {dirLabel(b.dir)}</div>
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>
-              <span>Self-sufficiency</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{live.today.selfSufficiencyPct}%</span>
-            </div>
-            <ProgressBar
-              height={6}
-              segments={[
-                { value: live.today.selfSufficiencyPct, tone: 'solar' },
-                { value: 100 - live.today.selfSufficiencyPct, tone: 'grid' },
-              ]}
-            />
-          </div>
         </Card>
 
         {/* insight */}
@@ -330,9 +295,6 @@ export function Live({ ctx }: { ctx: ShellContext }) {
           );
         })()}
 
-        {/* notifications */}
-        <NotificationsWidget />
-
         {/* day chart */}
         <DayChartCard height={190} subtitle="5-min · kW left · SoC % right" />
       </div>
@@ -345,7 +307,7 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {stale && <StaleBanner updatedAt={null} />}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 14 }}>
         <Card>
           <StatTile label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote="today" />
         </Card>
@@ -361,95 +323,95 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
         <Card>
           <StatTile label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
         </Card>
+        {/* Live grid voltage/current/power (#77) — kept on desktop after the right-column
+            tile grid was removed in the redesign. */}
+        <Card>
+          <GridVoltageStat live={live} />
+        </Card>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.18fr 1fr', gap: 20 }}>
-        <Card title="Live energy flow" subtitle="Updated just now" accent="solar" icon={<Icon name="zap" />} actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live</Badge>}>
-          <EnergyFlow flow={flow} size="lg" />
+      {/* Row 2 — live energy flow (left) · Batteries + Notifications (right) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1fr', gap: 20, alignItems: 'stretch' }}>
+        <Card
+          title="Live energy flow"
+          subtitle="Updated just now"
+          accent="solar"
+          icon={<Icon name="zap" />}
+          actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live</Badge>}
+          style={{ display: 'flex', flexDirection: 'column' }}
+        >
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <EnergyFlow flow={flow} size="lg" />
+          </div>
         </Card>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignContent: 'start' }}>
-          <Card glow accent="solar">
-            <StatTile label="Solar now" value={live.solar.kw.toFixed(1)} unit="kW" tone="solar" icon={<Icon name="sun" />} footnote="18.2 kWp · 2 arrays" />
-          </Card>
-          <Card accent="home">
-            <StatTile label="Home load" value={live.home.kw.toFixed(1)} unit="kW" tone="home" icon={<Icon name="house" />} footnote="all-electric" />
-          </Card>
-          <div style={{ gridColumn: 'span 2' }}>
-            <Card accent="grid">
-              <GridVoltageStat live={live} />
-            </Card>
-          </div>
-          <div style={{ gridColumn: 'span 2' }}>
-            <Card style={{ display: 'flex', flexDirection: 'column' }}>
-              <Eyebrow>Tariff · 2.0TD</Eyebrow>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 600 }}>{t.band}</span>
-                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
-                  {bandLabel(t.band)} · <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{t.rateEur.toFixed(3)}</span>/kWh
-                </span>
-              </div>
-              <TariffBand current={new Date(live.ts).getHours()} height={10} />
-              <div style={{ marginTop: 12, fontSize: 12, color: 'var(--grid)', fontFamily: 'var(--font-mono)' }}>
-                Next · {t.nextBand} in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
-              </div>
-            </Card>
-          </div>
-          <div style={{ gridColumn: 'span 2' }}>
-            <Card accent="battery" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Eyebrow>Backup · Tesla only</Eyebrow>
-                <Icon name="shield-check" size={18} color="var(--battery)" />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 600, color: 'var(--battery)' }}>{live.tesla.backupKwh}</span>
-                <span style={{ fontSize: 13, color: 'var(--text-2)' }}>kWh · ≈ {live.tesla.backupHours} h autonomy</span>
-              </div>
-              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-3)' }}>Sonnen excluded — no backup module installed</div>
-            </Card>
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <BatteriesCard live={live} />
+          <NotificationsWidget />
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20 }}>
-        <Card title="Batteries" subtitle="Sonnen + Tesla · combined 36 kWh" icon={<Icon name="battery-charging" />}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {[
-              { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh, dir: live.sonnen.dir },
-              { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh, dir: live.tesla.dir },
-            ].map((b, i) => (
-              <div key={b.name} style={{ display: 'contents' }}>
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 16 }}>
-                  <RadialGauge value={b.soc} tone="battery" label={b.name} size={104} />
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 500 }}>{b.kwh} kWh</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{dirLabel(b.dir)}</div>
-                  </div>
-                </div>
-                {i === 0 && <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-1)' }} />}
-              </div>
-            ))}
+      {/* Tariff + Insight — displaced by moving Batteries up */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        <Card style={{ display: 'flex', flexDirection: 'column' }}>
+          <Eyebrow>Tariff · 2.0TD</Eyebrow>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 600 }}>{t.band}</span>
+            <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
+              {bandLabel(t.band)} · <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{t.rateEur.toFixed(3)}</span>/kWh
+            </span>
           </div>
-          <div style={{ marginTop: 18 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-2)', marginBottom: 7 }}>
-              <span>Self-sufficiency today</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{live.today.selfSufficiencyPct}%</span>
-            </div>
-            <ProgressBar
-              height={6}
-              segments={[
-                { value: live.today.selfSufficiencyPct, tone: 'solar' },
-                { value: 100 - live.today.selfSufficiencyPct, tone: 'grid' },
-              ]}
-            />
+          <TariffBand current={new Date(live.ts).getHours()} height={10} />
+          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--grid)', fontFamily: 'var(--font-mono)' }}>
+            Next · {t.nextBand} in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
           </div>
         </Card>
         <InsightCard live={live} />
       </div>
 
-      <NotificationsWidget />
-
       <DayChartCard height={240} subtitle="5-min · kW left · SoC % right" />
     </div>
+  );
+}
+
+/**
+ * Batteries card — Sonnen + Tesla SoC gauges + kWh/direction text + a
+ * self-sufficiency bar. Shared across desktop (live-flow right column) and
+ * mobile. Both contexts are narrow, so the two gauges stack vertically with
+ * a 92px radius and centered kWh·direction caption — fits gracefully without
+ * overflowing at common desktop right-column and mobile widths.
+ */
+function BatteriesCard({ live }: { live: LiveResponse }) {
+  const batteries = [
+    { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh, dir: live.sonnen.dir },
+    { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh, dir: live.tesla.dir },
+  ];
+  return (
+    <Card title="Batteries" subtitle="Sonnen + Tesla · combined 36 kWh" icon={<Icon name="battery-charging" />}>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 10 }}>
+        {batteries.map((b, i) => (
+          <div key={b.name} style={{ display: 'contents' }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7 }}>
+              <RadialGauge value={b.soc} tone="battery" label={b.name} size={92} />
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', textAlign: 'center' }}>{b.kwh} kWh · {dirLabel(b.dir)}</div>
+            </div>
+            {i === 0 && <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-1)' }} />}
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-2)', marginBottom: 7 }}>
+          <span>Self-sufficiency today</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{live.today.selfSufficiencyPct}%</span>
+        </div>
+        <ProgressBar
+          height={6}
+          segments={[
+            { value: live.today.selfSufficiencyPct, tone: 'solar' },
+            { value: 100 - live.today.selfSufficiencyPct, tone: 'grid' },
+          ]}
+        />
+      </div>
+    </Card>
   );
 }
 
