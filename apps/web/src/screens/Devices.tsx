@@ -200,7 +200,7 @@ function TypeTabs({ active, tabs, needsSetup, wide, onSelect }: {
 
 function SummaryTile({ label, value, color, accent }: { label: string; value: string; color?: string; accent?: 'solar' | 'grid' }) {
   const accentBg = accent === 'grid' ? 'var(--grid-wash)' : accent === 'solar' ? 'var(--solar-wash)' : 'var(--surface-1)';
-  const accentBorder = accent === 'grid' ? 'rgba(245,165,36,0.25)' : accent === 'solar' ? 'rgba(46,230,160,0.25)' : 'var(--border-1)';
+  const accentBorder = accent === 'grid' ? 'var(--border-grid)' : accent === 'solar' ? 'var(--border-solar)' : 'var(--border-1)';
   const eyebrowColor = accent === 'grid' ? 'var(--grid)' : accent === 'solar' ? 'var(--solar-dim)' : 'var(--text-3)';
   return (
     <div style={{
