@@ -27,7 +27,7 @@ export function Avatar({ size = 38 }: { size?: number }) {
         placeItems: 'center',
         fontWeight: 700,
         fontSize: 13,
-        color: '#06090b',
+        color: 'var(--text-inverse)',
       }}
     >
       JK
