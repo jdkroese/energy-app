@@ -219,7 +219,7 @@ function WeatherConfig({ cfg }: { cfg: IntegrationsConfig; reload: () => void })
         <DetailLine label="Location" value={`${cfg.weather.lat}, ${cfg.weather.lon}`} />
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-        Set the coordinates from the map in the <strong style={{ color: 'var(--text-2)' }}>Site location</strong> card above.
+        Set the coordinates from the map in the <strong style={{ color: 'var(--text-2)' }}>Site location</strong> card on the <strong style={{ color: 'var(--text-2)' }}>System</strong> tab.
       </div>
     </div>
   );
@@ -1144,6 +1144,12 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
           </div>
         )}
 
+        {connected && status && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+            {status.deviceCount} device{status.deviceCount === 1 ? '' : 's'} connected · {status.deviceCount - (status.needsSetupCount ?? 0)} configured · {status.needsSetupCount ?? 0} not yet configured
+          </div>
+        )}
+
         {connected && (status?.needsSetupCount ?? 0) > 0 && (
           <button
             type="button"
@@ -1469,7 +1475,6 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
     <>
       {active === 'Connections' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <SiteLocationCard />
           <ConnectionsCard connections={s.connections} />
         </div>
       )}
@@ -1489,6 +1494,8 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
 
       {active === 'System' && (
         <>
+          <SiteLocationCard />
+
           <Card title="Tariff · Spain 2.0TD" style={{ padding: 0 }}>
             <div style={{ padding: '4px 16px 14px' }}>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
