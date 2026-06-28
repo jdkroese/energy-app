@@ -751,12 +751,32 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     selectType(target);
   };
 
+  // A set-up generic device can be pointed at a BUILT-IN bespoke type (Cooling /
+  // Heating / Lighting / Blinds) from the setup sheet — not just Switching/custom.
+  // Those bespoke tabs render their own native fleet, so the configured devices
+  // assigned to them would otherwise be orphaned (counted in the tab, never shown).
+  // Render them via the generic group BELOW the native fleet so they always appear.
+  const bespokeExtras = (t: HubView) => {
+    const extras = configuredByType(t);
+    if (extras.length === 0) return null;
+    return (
+      <GenericGroup
+        devices={extras}
+        wide={wide}
+        canWrite={isAdmin}
+        onWrite={writeCap}
+        onOpen={(id) => nav(`/devices/generic/${id}`)}
+        emptyMeta={{ label: '', icon: 'plug', hue: 'var(--text-3)' }}
+      />
+    );
+  };
+
   const content = (t: HubView) => {
     if (t === 'needs-setup') return <DiscoveredInbox wide={wide} canTriage={isAdmin} onSetupDone={onSetupDone} />;
-    if (t === 'cooling') return coolingContent;
-    if (t === 'heating') return heatingContent;
-    if (t === 'lighting') return <LightsPanel ctx={ctx} />;
-    if (t === 'blinds') return <BlindsPanel ctx={ctx} />;
+    if (t === 'cooling') return <>{coolingContent}{bespokeExtras(t)}</>;
+    if (t === 'heating') return <>{heatingContent}{bespokeExtras(t)}</>;
+    if (t === 'lighting') return <><LightsPanel ctx={ctx} />{bespokeExtras(t)}</>;
+    if (t === 'blinds') return <><BlindsPanel ctx={ctx} />{bespokeExtras(t)}</>;
     // Switching (built-in generic bucket) + any custom type → the generic group.
     const meta = resolveTypeMeta(t, customTypes);
     return (
