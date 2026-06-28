@@ -68,9 +68,23 @@ function dir(): string {
   return dirPath;
 }
 
-/** Path to a single invoice's stored PDF. */
+/**
+ * Sanitise a (possibly client-controlled) invoice id into a filesystem-safe slug.
+ * Strips EVERYTHING that isn't `[A-Za-z0-9_-]` — so `/`, `\`, `.`, `..`, and any path
+ * separator can never appear — and caps the length. Empty after stripping → a timestamp
+ * fallback. This is the single chokepoint that makes id→path traversal-proof.
+ */
+export function safeId(raw: string): string {
+  const slug = String(raw)
+    .replace(/[^A-Za-z0-9_-]/g, '_')
+    .slice(0, 80);
+  return slug || `inv-${Date.now()}`;
+}
+
+/** Path to a single invoice's stored PDF. ALWAYS sanitises the id, so every caller
+ *  (readPdf/savePdf/remove) is traversal-proof regardless of where the id came from. */
 export function pdfPath(id: string): string {
-  return resolve(dir(), `${id}.pdf`);
+  return resolve(dir(), `${safeId(id)}.pdf`);
 }
 
 function load(): InvoicesFile {

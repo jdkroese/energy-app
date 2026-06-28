@@ -110,7 +110,11 @@ export function postSave(req: Request, res: Response): void {
   };
   // Stable id from the factura number when present, else a timestamp id.
   const merged = { ...parsed, ...(body.edits ?? {}) };
-  const id = merged.facturaNum?.trim() || `inv-${Date.now()}`;
+  // The id is derived from the (client-controllable) factura number, so it MUST be
+  // sanitised before it becomes a filesystem path key — otherwise a facturaNum like
+  // `../../state` would let a save write/read outside the invoices dir. The raw
+  // facturaNum is preserved as a DISPLAY field on `parsed`; only the path key is slugged.
+  const id = invoices.safeId(merged.facturaNum?.trim() || `inv-${Date.now()}`);
   const inv: invoices.Invoice = {
     id,
     uploadedAt: new Date().toISOString(),
@@ -156,14 +160,21 @@ export function getDetail(req: Request, res: Response): void {
 
 /** GET /api/invoices/:id/pdf — serve the stored PDF blob. */
 export function getPdf(req: Request, res: Response): void {
-  const id = String(req.params.id);
-  const buf = invoices.readPdf(id);
+  // Validate the id against a STORED record first, so this only ever serves a known
+  // invoice's blob (defence in depth: pdfPath() also sanitises, but matching a stored
+  // record means a traversal param can never even reach the filesystem read).
+  const inv = invoices.get(String(req.params.id));
+  if (!inv) {
+    res.status(404).json({ error: 'invoice not found', code: 'NOT_FOUND' });
+    return;
+  }
+  const buf = invoices.readPdf(inv.id);
   if (!buf) {
     res.status(404).json({ error: 'PDF not found', code: 'NOT_FOUND' });
     return;
   }
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `inline; filename="${id}.pdf"`);
+  res.setHeader('Content-Disposition', `inline; filename="${inv.id}.pdf"`);
   res.send(buf);
 }
 
