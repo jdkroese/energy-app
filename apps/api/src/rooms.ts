@@ -183,6 +183,13 @@ export async function seedRoomsIfNeeded(): Promise<number> {
     return 0; // can't enumerate (no connectors) — leave unseeded so it retries next boot
   }
 
+  // Don't burn the one-shot seed on an empty fleet: enumerateDevices() soft-fails to []
+  // when a connector is momentarily unreachable OR before any device type is connected. If
+  // we marked roomsSeeded now, a user who opens Rooms before onboarding their devices would
+  // never get auto-seeded rooms. Leave it unseeded so the seed fires the first time there's
+  // actually a fleet to organize.
+  if (devices.length === 0) return 0;
+
   // Build distinct rooms by normalized key, first-seen order. Map each device → its room id.
   const byKey = new Map<string, Room>();
   const assign = new Map<string, string>(); // deviceId → roomId
