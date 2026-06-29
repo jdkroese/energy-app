@@ -303,6 +303,7 @@ export const api = {
     updateScene: (id: string, s: Partial<LightScene>) => putJSON<{ scene: LightScene }>(`/api/lights/scenes/${enc(id)}`, s),
     deleteScene: (id: string) => delJSON<{ ok: boolean }>(`/api/lights/scenes/${enc(id)}`),
     applyScene: (id: string, on = true) => postJSON<{ ts: string; applied: number; failed: number }>(`/api/lights/scenes/${enc(id)}/apply`, { on }),
+    favoriteScene: (id: string, favorite: boolean) => postJSON<{ scene: LightScene }>(`/api/lights/scenes/${enc(id)}/favorite`, { favorite }),
 
     // Schedules (lights/scenes at time windows; writes admin).
     schedules: () => getJSON<LightSchedulesResponse>('/api/lights/schedules'),

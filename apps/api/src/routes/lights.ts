@@ -289,6 +289,7 @@ export function createScene(body: Partial<store.LightScene>): unknown {
     id: newId('scene'),
     name: body.name?.trim() || 'New scene',
     icon: typeof body.icon === 'string' ? body.icon : 'sparkles',
+    ...(body.favorite ? { favorite: true as const } : {}),
     members: sanitizeMembers(body.members),
   };
   store.update((s) => {
@@ -302,14 +303,33 @@ export function updateScene(id: string, body: Partial<store.LightScene>): unknow
     const idx = s.lightScenes.findIndex((x) => x.id === id);
     if (idx < 0) return null;
     const cur = s.lightScenes[idx];
+    const favorite = body.favorite !== undefined ? Boolean(body.favorite) : cur.favorite;
     const merged: store.LightScene = {
       ...cur,
       name: body.name?.trim() || cur.name,
       icon: typeof body.icon === 'string' ? body.icon : cur.icon,
+      ...(favorite ? { favorite: true as const } : {}),
       members: body.members !== undefined ? sanitizeMembers(body.members) : cur.members,
     };
+    // Un-starring must drop the key, not leave a stale `true` (spread only adds it).
+    if (!favorite) delete merged.favorite;
     s.lightScenes[idx] = merged;
     return merged;
+  });
+  if (!saved) throw badInput(`scene ${id} not found`);
+  return { ts: new Date().toISOString(), scene: saved };
+}
+
+/** Star / un-star a light scene — a lightweight write (kiosk-or-admin) so a quick
+ *  star tap need not re-send the whole scene. `favorite` defaults to true if omitted. */
+export function favoriteScene(id: string, favorite: boolean): unknown {
+  const saved = store.update((s) => {
+    const idx = s.lightScenes.findIndex((x) => x.id === id);
+    if (idx < 0) return null;
+    const cur = s.lightScenes[idx];
+    if (favorite) cur.favorite = true;
+    else delete cur.favorite;
+    return cur;
   });
   if (!saved) throw badInput(`scene ${id} not found`);
   return { ts: new Date().toISOString(), scene: saved };
