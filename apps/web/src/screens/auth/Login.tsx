@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { auth, ApiError } from '../../lib/api';
 import type { OtpChannel } from '../../lib/types';
-import { Button, Input } from '../../components/ui';
+import { Button, Input, Switch } from '../../components/ui';
 import { useAuth } from '../../auth/AuthProvider';
 import { AuthShell, AuthError, AuthNote } from './AuthShell';
 
@@ -110,10 +110,11 @@ export function Login() {
             value={code}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
           />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, color: 'var(--text-2)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={trustDevice} onChange={(e) => setTrustDevice(e.target.checked)} style={{ accentColor: 'var(--solar)', width: 16, height: 16 }} />
-            Trust this device for 60 days
-          </label>
+          <Switch
+            label="Trust this device for 60 days"
+            checked={trustDevice}
+            onChange={(e) => setTrustDevice(e.target.checked)}
+          />
           <Button type="submit" block loading={busy} disabled={code.length !== 6}>
             Verify
           </Button>
