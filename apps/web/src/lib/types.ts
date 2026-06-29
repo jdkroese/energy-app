@@ -1057,6 +1057,8 @@ export interface IntegrationsConfig {
 export interface ProbeResult {
   ok: boolean;
   detail: string;
+  /** A LAN scan located the controller at this IP — the UI offers to switch to it. */
+  suggestedHost?: string;
 }
 
 /* ============================================================================
