@@ -319,6 +319,20 @@ const CSS = `
    the tap target vertically to ~44px but keep it within the button's own width, so
    adjacent steppers' invisible hit zones can't overlap and steal each other's taps. */
 .pwr-ifx-hit--tight::after{ width:100%; height:44px; min-width:0; }
+
+/* InlineReveal — jank-free expand/collapse via the grid-rows 0fr→1fr trick. The
+   outer grid animates its single row track; the inner wrapper clips overflow and
+   fades. Collapsed = 0fr (no height, not focusable visually). Reduced-motion
+   snaps instantly. */
+.pwr-reveal{ display:grid; grid-template-rows:0fr; opacity:0;
+  transition:grid-template-rows var(--dur) var(--ease-out), opacity var(--dur) var(--ease-out); }
+.pwr-reveal--open{ grid-template-rows:1fr; opacity:1; }
+.pwr-reveal__inner{ min-height:0; overflow:hidden; }
+.pwr-reveal--instant{ transition:none; }
+/* In a flex row, take the remaining width only while open; collapse to 0 width when
+   closed so sibling display content can occupy the row. */
+.pwr-reveal--flex1{ flex:0 1 0; min-width:0; }
+.pwr-reveal--flex1.pwr-reveal--open{ flex:1 1 auto; }
 `;
 
 let injected = false;

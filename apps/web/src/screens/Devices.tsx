@@ -6,7 +6,7 @@ import type {
   DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse, SpeakersResponse,
   ConfiguredResponse, ConfiguredDeviceView, Capability,
 } from '../lib/types';
-import { Card, Icon, Switch, Button, EmptyState, ErrorState, LoadingState, SegmentedControl } from '../components/ui';
+import { Card, Icon, Switch, Button, EmptyState, ErrorState, LoadingState, SegmentedControl, Input, InlineReveal } from '../components/ui';
 import { Gauge } from '../components/Gauge';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -507,6 +507,8 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(d.name);
   const [saving, setSaving] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) nameInputRef.current?.focus(); }, [editing]);
   // Local optimistic overlay for the Power switch: snaps immediately on tap, then
   // reconciles (drops) once the live /configured read-back catches up (Tuya cloud
   // read lags a few seconds; the fleet only polls every 20s).
@@ -556,19 +558,15 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
     <Card padded style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Header: name (inline-editable for admins) + chevron to detail */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {editing ? (
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              autoFocus
+        <InlineReveal open={editing} className="pwr-reveal--flex1">
+          <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 2 }}>
+            <Input
+              ref={nameInputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') setEditing(false); }}
               disabled={saving}
-              style={{
-                flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-1)',
-                background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 8,
-                padding: '5px 8px', outline: 'none',
-              }}
+              style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600 }}
             />
             <button type="button" aria-label="Save name" onClick={() => void save()} disabled={saving}
               style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>
@@ -579,7 +577,8 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
               <Icon name="x" size={16} color="var(--text-3)" />
             </button>
           </div>
-        ) : (
+        </InlineReveal>
+        {!editing && (
           <>
             <button type="button" onClick={onOpen} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>

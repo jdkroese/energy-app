@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { LightUnit, LightsResponse, LightLever, LightHsv, ScenesResponse } from '../lib/types';
-import { Card, Icon, Switch, Slider, SegmentedControl, Input } from '../components/ui';
+import { Card, Icon, Switch, Slider, SegmentedControl, Input, InlineReveal } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -54,6 +54,10 @@ function LightCard({
   const on = d.power;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(d.name);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  // InlineReveal keeps the field mounted, so focus it on open (autoFocus only
+  // fires on first mount).
+  useEffect(() => { if (editing) nameInputRef.current?.focus(); }, [editing]);
   const tint = on
     ? d.workMode === 'colour' && d.color
       ? hsvToCss(d.color)
@@ -85,10 +89,10 @@ function LightCard({
           <Icon name="lightbulb" size={19} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {editing ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <InlineReveal open={editing}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 2 }}>
               <Input
-                autoFocus
+                ref={nameInputRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditing(false); }}
@@ -97,16 +101,17 @@ function LightCard({
               />
               <button type="button" aria-label="Save name" onMouseDown={(e) => e.preventDefault()} onClick={saveName} style={{ background: 'none', border: 'none', color: 'var(--solar)', cursor: 'pointer', padding: 2 }}><Icon name="check" size={15} /></button>
             </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <div title={d.name} style={{ fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</div>
-              {canControl && (
-                <button type="button" aria-label="Rename" onClick={() => { setDraft(d.name); setEditing(true); }} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2, flex: 'none' }}><Icon name="pencil" size={12} /></button>
-              )}
-            </div>
-          )}
+          </InlineReveal>
           {!editing && (
-            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{d.online ? (on ? 'on' : 'off') : 'offline'}</div>
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <div title={d.name} style={{ fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</div>
+                {canControl && (
+                  <button type="button" aria-label="Rename" onClick={() => { setDraft(d.name); setEditing(true); }} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2, flex: 'none' }}><Icon name="pencil" size={12} /></button>
+                )}
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{d.online ? (on ? 'on' : 'off') : 'offline'}</div>
+            </>
           )}
         </div>
         {onOpenDetail && (
