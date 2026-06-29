@@ -1191,7 +1191,7 @@ function RainbirdConnection({ first, open, onToggle }: { first?: boolean; open: 
         </div>
         {isAdmin ? (
           <>
-            <Input label="Module host / IP" value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.159" />
+            <Input label="Module host / IP" value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.158" />
             <Input
               label="Controller password"
               type="password"

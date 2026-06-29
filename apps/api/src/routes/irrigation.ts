@@ -199,27 +199,34 @@ export async function testRainbird(
   return probeRainbird(host, password);
 }
 
-/** PUT /api/integrations/rainbird — PROBE the box, then persist on success only. */
+/** PUT /api/integrations/rainbird — persist the host+password, then probe.
+ *  The probe is ADVISORY, not a gate: a transient miss or a protocol-decode quirk
+ *  against the real box must never lock the owner out of saving the correct host
+ *  (use Test for an explicit connectivity check). We still validate the host format
+ *  and require a password. */
 export async function setRainbird(
   hostRaw?: unknown,
   passwordRaw?: unknown,
 ): Promise<unknown> {
   const host = String(hostRaw ?? "").trim();
   if (!host || !HOST_RE.test(host))
-    throw badInput("Enter a valid host/IP (e.g. 192.168.1.159)");
+    throw badInput("Enter a valid host/IP (e.g. 192.168.1.158)");
   // Allow keeping the stored password when the form leaves it blank (edit host only).
   const password = passwordRaw ? String(passwordRaw) : rainbird.password();
   if (!password) throw badInput("Enter the Rain Bird controller password");
-  const probe = await probeRainbird(host, password);
-  if (!probe.ok)
-    throw badInput(`Could not reach Rain Bird at ${host} — ${probe.detail}`);
+  // Persist FIRST so a failing probe can't block changing the host.
   store.update((s) => {
     s.integrations = s.integrations ?? { intesis: null };
     s.integrations.rainbird = { host, password };
   });
+  // Probe for feedback only — report reachability without throwing.
+  const probe = await probeRainbird(host, password);
   return {
     ts: new Date().toISOString(),
-    ...probe,
+    ok: probe.ok,
+    detail: probe.ok
+      ? probe.detail
+      : `Saved ${host}, but couldn't reach it yet — ${probe.detail}`,
     config: await getRainbirdIntegration(),
   };
 }

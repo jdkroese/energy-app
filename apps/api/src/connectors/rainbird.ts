@@ -4,7 +4,7 @@
 // the reference is pyrainbird (github.com/allenporter/pyrainbird). The wire crypto,
 // opcode table, and HTTP transport live under ./rainbird/.
 //
-// Hardware: LNK module default IP 192.168.1.159 (owner-confirmed). The host is
+// Hardware: LNK module default IP 192.168.1.158 (owner-confirmed). The host is
 // configurable; the PASSWORD is required to talk to the box and is NEVER hardcoded.
 //
 // The LNK accepts ONE request at a time — the transport serializes all calls; this
@@ -24,7 +24,7 @@ import {
 } from "./rainbird/sip";
 
 /** Owner-confirmed LNK module IP. Onboarding then only needs the password. */
-const DEFAULT_HOST = "192.168.1.159";
+const DEFAULT_HOST = "192.168.1.158";
 
 /** Host: Settings store → env → known default (read defensively in case the store
  *  type predates the `rainbird` integration field). */
