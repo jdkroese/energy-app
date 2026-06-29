@@ -31,6 +31,7 @@ import { issueClimate, _resetClimateRateLimits } from './climate-execute';
 import { takeClimateSnapshot, type RichClimateSnapshot } from './climate-snapshot';
 import { COMPRESSOR_START_KW } from './climate-guardrails';
 import { evaluateBlindSchedules } from './blinds-coordinator';
+import { evaluateEvSurplus } from './ev-surplus';
 import { sunriseSunsetMin } from '../solar-model';
 import { config } from '../config';
 
@@ -495,6 +496,20 @@ async function tick(): Promise<void> {
       return;
     }
 
+    // EV (car) solar/P3 charging runs FIRST (docs/33): the car claims surplus before cooling.
+    // It returns the draw it has reserved on the breaker(s) it holds ON; we subtract that from
+    // the surplus the cooling/heating evaluations see, so AC only runs on the leftover. A no-op
+    // (reservedW = 0) unless a breaker is opted into solarP3Only. Never throws into the tick.
+    let reservedW = 0;
+    try {
+      ({ reservedW } = await evaluateEvSurplus(snap));
+    } catch (e) {
+      console.error('[climate] ev-surplus eval failed:', (e as Error).message);
+    }
+    // The surplus the cooling/heating rules reason about, net of the car's reserved draw.
+    const coolingSnap: RichClimateSnapshot =
+      reservedW > 0 ? { ...snap, surplusW: snap.surplusW - reservedW } : snap;
+
     // Schedules are the floor; the surplus automation runs after and may pre-condition
     // earlier or push harder when free solar is available. Schedules keep their prior
     // cooling-only reach (Airzone underfloor is excluded here).
@@ -502,9 +517,9 @@ async function tick(): Promise<void> {
 
     for (const a of automations) {
       if (a.type === 'solar_surplus_precool') {
-        await evaluateSolarSurplusPrecool(a, fleet, snap);
+        await evaluateSolarSurplusPrecool(a, fleet, coolingSnap);
       } else if (a.type === 'solar_surplus_preheat') {
-        await evaluateSolarSurplusPreheat(a, fleet, snap);
+        await evaluateSolarSurplusPreheat(a, fleet, coolingSnap);
       }
     }
   } catch (e) {

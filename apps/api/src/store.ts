@@ -256,6 +256,25 @@ export interface SoakExportRule {
   socCeilingPct: number;
 }
 
+// ---- EV (car) solar / P3 charging tunables (docs/33) ------------------------
+// Global tunables for the EV-surplus rule that gates a metered circuit breaker (the car
+// charger) on solar surplus OR the cheap P3 band. Per-device opt-in via
+// deviceSettings[id].solarP3Only; auto-learned draw in deviceSettings[id].learnedDrawW.
+export interface EvSurplusTunables {
+  /** Conservative seed for a charger's draw (W) before any is learned. */
+  estimateW: number;
+  /** Start margin (W): solar start threshold = learnedDrawW + this. */
+  startMarginW: number;
+  /** Stop hysteresis (W): once on for the solar reason, stay on until surplus < learnedDrawW − this. */
+  stopHysteresisW: number;
+  /** Surplus must stay below the stop band for this long (s) before switching off. */
+  surplusClearSec: number;
+  /** Minimum minutes between breaker on→off / off→on toggles (anti-chatter). */
+  minCycleMin: number;
+  /** Only update learnedDrawW from measured power above this floor (W) — ignore standby. */
+  learnFloorW: number;
+}
+
 export interface ControlState {
   /** Master safety switch — DISARMED by default; nothing is ever written until armed. */
   armed: boolean;
@@ -406,6 +425,19 @@ export interface DeviceSettings {
   comfortFloorC?: number;
   /** Blinds only: flip 0/100 so the app's "% open" matches the motor's direction. */
   invertPosition?: boolean;
+  /**
+   * Circuit breaker (EV charger) only: when true, the EV-surplus rule owns this breaker —
+   * it turns the breaker ON only on solar surplus OR the cheap P3 band (armed+auto), and OFF
+   * otherwise. Default/undefined = false = MAX charging (rule never touches the breaker, today's
+   * manual/schedule behaviour). See control/ev-surplus.ts.
+   */
+  solarP3Only?: boolean;
+  /**
+   * Circuit breaker (EV charger) only: auto-learned charger draw (W), an EMA of the breaker's
+   * measured power while it was on (above evSurplus.learnFloorW). Seeded from evSurplus.estimateW.
+   * Used as the surplus start threshold and the reserved draw the cooling rule must yield.
+   */
+  learnedDrawW?: number;
 }
 
 export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
@@ -792,6 +824,26 @@ export interface DevicesState {
    * also protects remote-/schedule-started units that never touched our API.)
    */
   surplusStartedIds: string[];
+  /** Global EV (car) solar/P3-charging tunables (docs/33). */
+  evSurplus: EvSurplusTunables;
+  /** Per-breaker runtime state for the EV-surplus rule (provenance + timestamps + live state).
+   *  Keyed by Tuya device id. Persisted so minCycle / provenance survive a restart. */
+  evState: Record<string, EvBreakerState>;
+}
+
+/** Per-breaker runtime state the EV-surplus rule tracks. */
+export interface EvBreakerState {
+  /** True iff the EV-surplus rule itself switched this breaker ON (provenance — only the
+   *  rule's own ON's are ever switched off; manual/schedule control is never fought). */
+  ruleOn: boolean;
+  /** Epoch ms of the last on→off OR off→on toggle the rule made (for minCycleMin). */
+  lastSwitchTs: number;
+  /** Epoch ms the surplus first dropped below the stop band (for surplusClearSec), or 0. */
+  surplusClearedSince: number;
+  /** Last live decision, for the UI status line. */
+  reason: 'surplus' | 'p3' | 'waiting' | 'off';
+  /** Last reserved draw (W) the rule subtracted from the cooling surplus (0 when off). */
+  reservedW: number;
 }
 
 // ---- Lights: scenes + schedules --------------------------------------------
@@ -1175,6 +1227,19 @@ export function defaultSoakExport(): SoakExportRule {
   return { enabled: true, startW: 400, stopW: 150, socCeilingPct: 98 };
 }
 
+/** EV (car) solar/P3-charging tunables — docs/33 owner defaults. The rule is OPT-IN
+ *  per breaker (deviceSettings[id].solarP3Only, default false) so these are inert until used. */
+export function defaultEvSurplus(): EvSurplusTunables {
+  return {
+    estimateW: 3700,
+    startMarginW: 300,
+    stopHysteresisW: 300,
+    surplusClearSec: 180,
+    minCycleMin: 5,
+    learnFloorW: 500,
+  };
+}
+
 /** DISARMED, mode 'off' — the safe default for the devices/climate layer. */
 export function defaultDevices(): DevicesState {
   return {
@@ -1192,6 +1257,8 @@ export function defaultDevices(): DevicesState {
     },
     manualOverrides: {},
     surplusStartedIds: [],
+    evSurplus: defaultEvSurplus(),
+    evState: {},
   };
 }
 
@@ -1916,7 +1983,30 @@ function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState
     surplusStartedIds: Array.isArray(p.surplusStartedIds)
       ? [...new Set(p.surplusStartedIds.filter((id): id is string => typeof id === 'string'))]
       : [],
+    // EV-surplus tunables: merge persisted over defaults so a new field gains its default
+    // and a deploy preserves any owner-tuned values.
+    evSurplus: { ...base.evSurplus, ...(p.evSurplus ?? {}) },
+    evState:
+      p.evState && typeof p.evState === 'object' ? hydrateEvState(p.evState) : {},
   };
+}
+
+/** Coerce persisted EV per-breaker runtime state; drops malformed entries. */
+function hydrateEvState(p: Record<string, unknown>): Record<string, EvBreakerState> {
+  const out: Record<string, EvBreakerState> = {};
+  for (const [id, raw] of Object.entries(p)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Partial<EvBreakerState>;
+    out[id] = {
+      ruleOn: r.ruleOn === true,
+      lastSwitchTs: typeof r.lastSwitchTs === 'number' ? r.lastSwitchTs : 0,
+      surplusClearedSince: typeof r.surplusClearedSince === 'number' ? r.surplusClearedSince : 0,
+      reason:
+        r.reason === 'surplus' || r.reason === 'p3' || r.reason === 'waiting' ? r.reason : 'off',
+      reservedW: typeof r.reservedW === 'number' ? r.reservedW : 0,
+    };
+  }
+  return out;
 }
 
 /**

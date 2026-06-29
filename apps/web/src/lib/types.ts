@@ -1268,6 +1268,12 @@ export interface ConfiguredDeviceView {
   roomId?: string | null;
   roomName?: string | null;
   setupAt: string;
+  /** EV (car) breaker: "Solar / P3 charging only" opt-in (docs/33). */
+  solarP3Only?: boolean;
+  /** EV breaker: auto-learned charger draw (W), or null if none learned yet. */
+  learnedDrawW?: number | null;
+  /** EV breaker: live rule state — null when not opted in. */
+  evState?: { reason: 'surplus' | 'p3' | 'waiting' | 'off'; ruleOn: boolean; reservedW: number } | null;
 }
 
 export interface ConfiguredResponse {
