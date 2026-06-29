@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import { MOCK_PLAN } from '../lib/mock';
 import { useAuth } from '../auth/AuthProvider';
 import type {
-  BrainPlanResponse,
   ControlCommandValue,
   ControlDevice,
   ControlLever,
@@ -13,17 +11,18 @@ import type {
   ControlStatus,
   LiveResponse,
 } from '../lib/types';
-import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Card, StatTile, Modal, ScreenHeader } from '../components/ui';
-import { PlanTimeline } from '../components/energy/PlanTimeline';
-import { StaleBanner } from './_shared';
+import { Button, Switch, SegmentedControl, Slider, Badge, Eyebrow, Icon, Modal, ScreenHeader } from '../components/ui';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * Autopilot — the battery-control screen, organised into four tabs:
- *   Summary  · the plan (hero) + which systems are armed and in what mode
+ * Autopilot — the battery-control screen, organised into three tabs:
  *   Status   · live device truth + always-on guardrails
  *   Events   · the command audit log ("what the boss did")
  *   Settings · arm/mode/kill + manual levers (admin only)
+ *
+ * The forward-looking 24 h plan + forecast KPIs that used to lead here now live on
+ * the Live dashboard (components/energy/PlanSummary). Summary is owned by the
+ * Automations host (AutomationsSummary), not this component.
  *
  * It commands REAL Sonnen + Tesla hardware, so the armed state and kill switch
  * are pinned in the header on every tab, and every write runs through a confirm
@@ -35,7 +34,7 @@ import type { ShellContext } from '../components/shell/AppShell';
  * ==========================================================================*/
 
 const POLL_MS = 5_000;
-export type TabKey = 'summary' | 'status' | 'events' | 'settings';
+export type TabKey = 'status' | 'events' | 'settings';
 
 /* ---- small toast bus (local to this screen) ------------------------------ */
 type Toast = { id: number; kind: 'ok' | 'err'; text: string };
@@ -81,29 +80,6 @@ function armTone(s: ControlStatus | null): { c: string; wash: string; label: str
   return { c: 'var(--solar)', wash: 'var(--solar-wash)', label: 'AUTO', icon: 'sparkles', live: true };
 }
 
-/* ---- compact status pill + 2×2 grid cell (Summary control block) --------- */
-function StatePill({ label, tone, dot }: { label: string; tone: string; dot?: boolean }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999, fontSize: 11, fontWeight: 600, flex: 'none', background: `color-mix(in srgb, var(--${tone}) 14%, transparent)`, color: `var(--${tone})` }}>
-      {dot && <span style={{ width: 6, height: 6, borderRadius: '50%', background: `var(--${tone})`, boxShadow: `0 0 6px var(--${tone})` }} />}
-      {label}
-    </span>
-  );
-}
-
-function StatusCell({ icon, name, sub, label, tone, dot }: { icon: string; name: string; sub: ReactNode; label: string; tone: string; dot?: boolean }) {
-  return (
-    <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Icon name={icon} size={16} color={`var(--${tone})`} />
-        <span style={{ fontSize: 13, fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        <StatePill label={label} tone={tone} dot={dot} />
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.4 }}>{sub}</div>
-    </div>
-  );
-}
-
 function TargetRow({ label, value, mono = true }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 0', borderTop: '1px solid var(--border-1)' }}>
@@ -139,9 +115,6 @@ function fmtVal(v: string | number | boolean | null): string {
   if (typeof v === 'string') return prettyMode(v);
   return String(v);
 }
-function hhmm(h: number): string {
-  return `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.round((h % 1) * 60)).padStart(2, '0')}`;
-}
 
 /* ============================================================================
  * The screen
@@ -153,7 +126,7 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
 
   // When embedded, the host owns tab state and passes it in; otherwise we keep
   // our own internal state and render our own tab strip.
-  const [tabState, setTabState] = useState<TabKey>('summary');
+  const [tabState, setTabState] = useState<TabKey>('status');
   const tab = tabProp ?? tabState;
   const [status, setStatus] = useState<ControlStatus | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -163,9 +136,6 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
   const [reserveDraft, setReserveDraft] = useState<number | null>(null);
   const [logFilter, setLogFilter] = useState<'changes' | 'all' | 'errors'>('changes');
   const toastId = useRef(0);
-
-  const { data: planData, stale: planStale, updatedAt: planAt } = usePolling<BrainPlanResponse>(api.brainPlan, 60_000);
-  const plan = planData || MOCK_PLAN;
 
   // Live snapshot — for the relocated "Backup · Tesla only" card on the Status tab
   // (backup energy + autonomy hours live on /api/live, not on ControlStatus).
@@ -322,22 +292,8 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
     });
   };
 
-  /* ---- derived for Summary --------------------------------------------- */
+  // Armed-state tone — drives the slim armed strip pinned atop every tab.
   const at = armTone(status);
-  const sysLabel = at.label === 'OFF' ? 'Off' : at.label === 'MANUAL' ? 'Manual' : 'Auto';
-  const nowH = plan.now;
-  const solarNow = plan.forecast.solarKw[Math.min(plan.forecast.solarKw.length - 1, Math.max(0, Math.round(nowH)))] ?? 0;
-  const nextAction = plan.actions.find((a) => a.h > nowH) ?? plan.actions[0];
-  const nextRel = nextAction
-    ? nextAction.h > nowH
-      ? `in ${Math.floor(nextAction.h - nowH)}h ${String(Math.round(((nextAction.h - nowH) % 1) * 60)).padStart(2, '0')}m`
-      : 'now'
-    : '';
-
-  // Day totals for the KPI row (sum the first 24 hourly buckets).
-  const sum24 = (a: number[]) => a.slice(0, 24).reduce((s, v) => s + (v || 0), 0);
-  const genKwhTotal = Math.round(sum24(plan.forecast.genKwh));
-  const usageKwhTotal = Math.round(sum24(plan.forecast.usageKwh));
 
   /* ---- connecting placeholder ------------------------------------------ */
   const connecting = (
@@ -346,60 +302,16 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
     </div>
   );
 
-  // Summary control grid (armed state / battery autopilot / solar / next move) — rendered
-  // BELOW the KPI row on the Summary tab (see the summary section).
-  const controlGrid = (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-      {/* cell 1 — armed state + what it means */}
-      <div style={{ background: at.live ? at.wash : 'var(--surface-2)', border: `1px solid ${at.live ? at.c : 'transparent'}`, borderRadius: 12, padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ position: 'relative', width: 10, height: 10, flex: 'none' }}>
-            <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 8px ${at.c}` : 'none' }} />
-            {at.live && <span style={{ position: 'absolute', inset: -4, borderRadius: '50%', background: at.c, opacity: 0.5, animation: 'pwr-pulse 1.8s var(--ease-out) infinite' }} />}
-          </span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13.5, letterSpacing: '.03em', color: at.c, flex: 1, minWidth: 0 }}>{!status ? 'CONNECTING…' : at.label === 'OFF' ? 'DISARMED' : `${at.label} — running`}</span>
-          {isAdmin && armed && <Button size="sm" variant="danger" onClick={onKill}>Disarm</Button>}
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>
-          {armed
-            ? 'Power is sending live commands to your Sonnen + Tesla — guardrails stay enforced.'
-            : 'Read-only: no commands reach your batteries. Arm it in Settings to let Power control them.'}
-        </div>
-      </div>
-
-      {/* cell 2 — battery autopilot */}
-      <StatusCell icon="cpu" name="Battery autopilot" sub="Sonnen + Tesla authority" label={sysLabel} tone={at.label === 'OFF' ? 'text-3' : at.label === 'MANUAL' ? 'battery' : 'solar'} dot={at.live} />
-
-      {/* cell 3 — solar */}
-      <StatusCell icon="sun" name="Solar self-consumption" sub={`cloud-adjusted · ~${solarNow.toFixed(1)} kW · ${plan.weather.cloudAvgPct}% cloud`} label={armed ? sysLabel : 'Producing'} tone="solar" dot />
-
-      {/* cell 4 — next move */}
-      {nextAction && (
-        <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <Icon name={nextAction.icon} size={16} color="var(--battery)" />
-            <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--text-3)', flex: 1 }}>Next move</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--battery)', background: 'var(--surface-3)', borderRadius: 999, padding: '2px 8px' }}>{hhmm(nextAction.h)} · {nextRel}</span>
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{nextAction.title}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.4 }}>{nextAction.why}</div>
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: embedded ? undefined : 1100, margin: embedded ? undefined : '0 auto', width: '100%', padding: embedded ? 0 : wide ? 0 : '8px 14px 22px' }}>
       {/* mobile header — host renders the page header when embedded */}
       {!wide && !embedded && <ScreenHeader eyebrow="Live control" title="Autopilot" padding="4px 2px 0" />}
-      {planStale && <StaleBanner updatedAt={planAt} />}
 
       {/* tab bar — host renders the tab strip when embedded */}
       {!embedded && (
         <SegmentedControl
           block
           options={[
-            { value: 'summary', label: 'Summary' },
             { value: 'status', label: 'Status' },
             { value: 'events', label: 'Events' },
             { value: 'settings', label: 'Settings' },
@@ -409,10 +321,8 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
         />
       )}
 
-      {/* armed strip — slim status row at the top on non-summary tabs (on Summary the
-          control block is rendered below the KPI row instead) */}
-      {tab !== 'summary' && (
-        <div style={{ borderRadius: 'var(--radius-card)', border: '1px solid var(--border-1)', background: 'var(--surface-1)', padding: 12 }}>
+      {/* armed strip — slim status row pinned atop every tab */}
+      <div style={{ borderRadius: 'var(--radius-card)', border: '1px solid var(--border-1)', background: 'var(--surface-1)', padding: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
             <span style={{ position: 'relative', width: 11, height: 11, flex: 'none' }}>
               <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: at.c, boxShadow: at.live ? `0 0 9px ${at.c}` : 'none' }} />
@@ -425,90 +335,6 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
             {isAdmin && armed && <Button size="sm" variant="danger" iconLeft={<Icon name="power-off" />} onClick={onKill}>Disarm</Button>}
           </div>
         </div>
-      )}
-
-      {/* ============================= SUMMARY ============================= */}
-      {tab === 'summary' && (
-        <>
-          {/* the plan — hero */}
-          <Card
-            title="The plan · next 24 h"
-            subtitle={`sun forecast · predicted generation · battery trajectory · tariff bands — cloud-adjusted (${plan.weather.source === 'live' ? 'Open-Meteo, Jávea' : 'estimate'}), ${plan.weather.cloudAvgPct}% avg cloud`}
-            icon={<Icon name="brain" />}
-            actions={
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Badge tone="battery" variant="soft" icon={<Icon name="graduation-cap" size={12} />}>
-                  {`${plan.model.month} roof model · ${plan.model.confidencePct}% (${plan.model.days}d)`}
-                </Badge>
-                <Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live plan</Badge>
-              </div>
-            }
-          >
-            <PlanTimeline
-              solar={plan.forecast.solarKw}
-              load={plan.forecast.loadKw}
-              soc={plan.socPct}
-              tariff={plan.tariff}
-              sunIntensityPct={plan.forecast.sunIntensityPct}
-              genKwh={plan.forecast.genKwh}
-              actions={plan.actions}
-              now={plan.now}
-              wide={wide}
-            />
-            <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-2)', flexWrap: 'wrap', marginTop: 10 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 12, height: 8, borderRadius: 2, background: 'linear-gradient(var(--sun-lit-3),var(--sun-lit-1))' }} /> Sun intensity</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--solar)' }} /> Solar (cloud-adjusted)</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--home)' }} /> House load</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><i style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--battery)' }} /> Battery SoC</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto', color: 'var(--text-3)' }}><Icon name="cloud" size={13} /> {plan.weather.cloudAvgPct}% cloud</span>
-            </div>
-          </Card>
-
-          {/* today's impact — 5-metric KPI row (one row desktop, 2-up mobile) */}
-          <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(5,1fr)' : '1fr 1fr', gap: wide ? 12 : 10 }}>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Production & usage" value={`${genKwhTotal} / ${usageKwhTotal}`} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote="forecast today" /></Card>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Self-sufficiency" value={String(plan.projected.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} footnote="solar + stored" /></Card>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="P1 avoided" value={plan.projected.p1AvoidedKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="trending-down" />} footnote="moved to P3" /></Card>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Free climatization" value={plan.projected.freeClimatizationKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="snowflake" />} footnote="surplus → HVAC" /></Card>
-            <Card style={wide ? undefined : { padding: 14 }}><StatTile size={wide ? 'md' : 'sm'} label="Projected savings" value={`€${plan.projected.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs vendor default" /></Card>
-          </div>
-
-          {/* control block — armed state + autopilot + solar + next move (moved below the KPI row) */}
-          <div style={{ borderRadius: 'var(--radius-card)', border: '1px solid var(--border-1)', background: 'var(--surface-1)', padding: 12 }}>
-            {controlGrid}
-          </div>
-
-          {/* today's moves + why now */}
-          <div style={{ display: 'grid', gridTemplateColumns: wide ? '1.25fr 1fr' : '1fr', gap: wide ? 14 : 12 }}>
-            <Card title="Today's moves" subtitle="scheduled by the brain" icon={<Icon name="list-checks" />} style={{ padding: '16px 18px 6px' }}>
-              {plan.actions.map((a, i) => (
-                <div key={i} style={{ display: 'flex', gap: 12, padding: '12px 2px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
-                  <span style={{ width: 24, height: 24, borderRadius: '50%', flex: 'none', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, background: `color-mix(in srgb, var(--${a.tone}) 18%, transparent)`, color: `var(--${a.tone})` }}>{i + 1}</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-3)' }}>{hhmm(a.startH)}–{hhmm(a.endH)}</span>
-                      <Icon name={a.icon} size={15} color={`var(--${a.tone})`} />
-                      <span style={{ fontSize: 14, fontWeight: 500 }}>{a.title}</span>
-                    </div>
-                    <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 3, lineHeight: 1.45 }}>{a.why}</div>
-                  </div>
-                </div>
-              ))}
-            </Card>
-            <Card accent="battery" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--battery-wash)', color: 'var(--battery)' }}><Icon name="brain" size={18} /></span>
-                <div>
-                  <Eyebrow>Why now · {hhmm(plan.now)}</Eyebrow>
-                  <div style={{ fontSize: 15, fontWeight: 600, marginTop: 2 }}>{plan.whyNow.title}</div>
-                </div>
-              </div>
-              <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.55 }}>{plan.whyNow.body}</div>
-              <div style={{ marginTop: 'auto', display: 'flex', gap: 8, fontSize: 12, color: 'var(--text-3)' }}><Icon name="cpu" size={14} /> Re-planned every 10 min · MPC over 36 h</div>
-            </Card>
-          </div>
-        </>
-      )}
 
       {/* ============================== STATUS ============================= */}
       {tab === 'status' && (status ? (

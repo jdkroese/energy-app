@@ -6,7 +6,7 @@ import type {
   Automation, AutomationsResponse, DevicesResponse, DevicesStatus,
   LiveResponse, SolarSurplusPrecoolParams, TariffArbitrageParams,
   ControlStatus, BatteryPriorityKey, BatteryPriorityRule, SoakExportRule,
-  ArbitrageEvent, ArbitrageStats, ArbitrageEventType,
+  ArbitrageEvent, ArbitrageStats, ArbitrageEventType, SchedulesResponse,
 } from '../lib/types';
 import { isTariffArbitrage } from '../lib/types';
 import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
@@ -713,12 +713,134 @@ function SoakRuleCard({ rule, live, canWrite, onSave }: {
   );
 }
 
-// Merged screen: Autopilot's tabs (Summary · Events · Status · Settings) + the two
-// Automations tabs (Schedules · Smart Rules), in the approved strip order below.
+/* ============================================================================
+ * Automations Summary — the section's at-a-glance hub. The forward-looking 24 h
+ * plan, forecast KPIs and live "today's moves" now live on the Live dashboard;
+ * this tab summarises everything that RUNS the home (Smart Rules · Schedules ·
+ * Events · Status · Settings) and links into each. Every tile is a button that
+ * jumps to its tab.
+ * ==========================================================================*/
+function SummaryChip({ children, tone }: { children: ReactNode; tone?: string }) {
+  return (
+    <span className="pwr-mono" style={{ fontSize: 11.5, background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 7, padding: '3px 9px', color: tone ?? 'var(--text-2)' }}>{children}</span>
+  );
+}
+
+function SummaryTile({ icon, tone, title, sub, state, stateTone, chips, onClick }: {
+  icon: string; tone: string; title: string; sub: string;
+  state: string; stateTone: string; chips: ReactNode; onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} className="pwr-press" style={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%', display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-card)', padding: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+        <span style={{ width: 34, height: 34, borderRadius: 10, flex: 'none', display: 'grid', placeItems: 'center', background: `color-mix(in srgb, ${tone} 14%, transparent)`, color: tone }}><Icon name={icon} size={18} /></span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>{title}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{sub}</div>
+        </div>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: stateTone, whiteSpace: 'nowrap' }}>{state}</span>
+        <Icon name="chevron-right" size={16} color="var(--text-3)" />
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>{chips}</div>
+    </button>
+  );
+}
+
+function AutomationsSummary({ wide, setTab, ctrl, climateAutomations, arbAutomations, climateStatus }: {
+  wide: boolean; setTab: (t: AutoTab) => void; ctrl: ControlStatus | null;
+  climateAutomations: Automation[]; arbAutomations: Automation[]; climateStatus: DevicesStatus | null;
+}) {
+  const { data: schedData } = usePolling<SchedulesResponse>(api.schedules.list, 0);
+  const schedules = schedData?.schedules ?? [];
+  const schedOn = schedules.filter((s) => s.enabled).length;
+
+  const armed = !!ctrl?.armed && ctrl.mode !== 'off';
+  const modeLabel = !ctrl ? '…' : !armed ? 'Disarmed' : ctrl.mode === 'manual' ? 'Manual' : 'Auto';
+  const modeTone = !armed ? 'var(--text-3)' : ctrl?.mode === 'manual' ? 'var(--battery)' : 'var(--solar)';
+
+  // Smart Rules — battery priority (2) + soak (1) + arbitrage + climate.
+  const bp = ctrl?.batteryPriority ?? null;
+  const batRules = bp ? [bp.dischargeSonnenFirst, bp.chargeTeslaFirst] : [];
+  const batTotal = batRules.length + (ctrl?.soakExport ? 1 : 0);
+  const batOn = batRules.filter((r) => r.enabled).length + (ctrl?.soakExport?.enabled ? 1 : 0);
+  const arbOn = arbAutomations.filter((a) => a.enabled).length;
+  const climOn = climateAutomations.filter((a) => a.enabled).length;
+  const rulesTotal = batTotal + arbAutomations.length + climateAutomations.length;
+  const rulesOn = batOn + arbOn + climOn;
+
+  // Events — most recent command + a meaningful-change count.
+  const log = ctrl?.log ?? [];
+  const changes = log.filter((r) => !(r.ok && String(r.from) === String(r.to)));
+  const latest = changes[0] ?? log[0] ?? null;
+  const errs = log.filter((r) => !r.ok).length;
+  const latestDevice = latest ? latest.device.charAt(0).toUpperCase() + latest.device.slice(1) : '';
+
+  // Climate device authority (a separate arm from the battery autopilot).
+  const climArmed = !!climateStatus?.armed && climateStatus.mode !== 'off';
+  const climMode = !climateStatus ? '…' : !climArmed ? 'Read-only' : climateStatus.mode === 'auto' ? 'Auto' : 'Manual';
+
+  const g = ctrl?.guardrails;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 13px' }}>
+        <Icon name="info" size={15} color="var(--text-3)" />
+        <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+          The next-24 h plan, forecast KPIs and live moves now live on the{' '}
+          <Link to="/" style={{ color: 'var(--solar)' }}>Live</Link> dashboard. This is the control room for everything that runs your home.
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1fr' : '1fr', gap: 12 }}>
+        {/* Battery autopilot → Settings */}
+        <SummaryTile icon="cpu" tone="var(--solar)" title="Battery autopilot" sub="Sonnen + Tesla authority" state={modeLabel} stateTone={modeTone} onClick={() => setTab('settings')}
+          chips={armed
+            ? <><SummaryChip tone="var(--solar)">commanding live</SummaryChip><SummaryChip>guardrails enforced</SummaryChip></>
+            : <><SummaryChip>read-only</SummaryChip><SummaryChip>arm in Settings</SummaryChip></>} />
+
+        {/* Smart Rules → rules */}
+        <SummaryTile icon="sliders-horizontal" tone="var(--battery)" title="Smart Rules" sub="battery + climate automations" state={`${rulesOn}/${rulesTotal} on`} stateTone={rulesOn > 0 ? 'var(--solar)' : 'var(--text-3)'} onClick={() => setTab('rules')}
+          chips={<>
+            <SummaryChip tone={batOn ? 'var(--battery)' : undefined}>battery {batOn}/{batTotal}</SummaryChip>
+            <SummaryChip tone={climOn ? 'var(--battery)' : undefined}>climate {climOn}/{climateAutomations.length}</SummaryChip>
+            {arbAutomations.length > 0 && <SummaryChip tone={arbOn ? 'var(--ev)' : undefined}>arbitrage {arbOn}/{arbAutomations.length}</SummaryChip>}
+          </>} />
+
+        {/* Schedules → schedules */}
+        <SummaryTile icon="calendar-clock" tone="var(--home)" title="Schedules" sub="time-based device rules" state={`${schedOn}/${schedules.length} on`} stateTone={schedOn > 0 ? 'var(--solar)' : 'var(--text-3)'} onClick={() => setTab('schedules')}
+          chips={schedules.length === 0
+            ? <SummaryChip>none yet</SummaryChip>
+            : <SummaryChip>{schedOn} active · {schedules.length - schedOn} paused</SummaryChip>} />
+
+        {/* Events → events */}
+        <SummaryTile icon="history" tone="var(--text-2)" title="Events" sub="autopilot command log" state={errs > 0 ? `${errs} error${errs === 1 ? '' : 's'}` : 'clean'} stateTone={errs > 0 ? 'var(--danger)' : 'var(--solar)'} onClick={() => setTab('events')}
+          chips={latest
+            ? <><SummaryChip>{changes.length} change{changes.length === 1 ? '' : 's'}</SummaryChip><SummaryChip>last: {latestDevice} · {latest.lever}</SummaryChip></>
+            : <SummaryChip>no commands yet</SummaryChip>} />
+
+        {/* Status → status */}
+        <SummaryTile icon="shield-check" tone="var(--solar)" title="Status & guardrails" sub="live device truth" state="always on" stateTone="var(--solar)" onClick={() => setTab('status')}
+          chips={g
+            ? <><SummaryChip>SoC floor {g.socFloorPct}%</SummaryChip><SummaryChip>reserve {g.teslaReserveMinPct}%</SummaryChip><SummaryChip>cap {g.gridImportCapKw} kW</SummaryChip></>
+            : <SummaryChip>connecting…</SummaryChip>} />
+
+        {/* Climate authority → rules (the climate arm card lives there) */}
+        <SummaryTile icon="snowflake" tone="var(--battery)" title="Climate control" sub="Intesis HVAC authority" state={climMode} stateTone={climArmed ? 'var(--solar)' : 'var(--text-3)'} onClick={() => setTab('rules')}
+          chips={climateStatus?.lastError
+            ? <SummaryChip tone="var(--danger)">{climateStatus.lastError}</SummaryChip>
+            : climArmed ? <SummaryChip tone="var(--solar)">writes permitted</SummaryChip> : <SummaryChip>nothing written</SummaryChip>} />
+      </div>
+    </div>
+  );
+}
+
+// Merged screen: Autopilot's tabs (Events · Status · Settings) + the Automations
+// tabs (Summary · Schedules · Smart Rules), in the approved strip order below.
 type AutoTab = 'summary' | 'schedules' | 'rules' | 'events' | 'status' | 'settings';
 const AUTO_TABS: readonly AutoTab[] = ['summary', 'schedules', 'rules', 'events', 'status', 'settings'];
 // Tabs hosted by the embedded Autopilot — their keys line up 1:1 with its TabKey.
-const AUTOPILOT_TABS: readonly AutoTab[] = ['summary', 'events', 'status', 'settings'];
+// (Summary is now owned by this screen — see AutomationsSummary.)
+const AUTOPILOT_TABS: readonly AutoTab[] = ['events', 'status', 'settings'];
 
 export function Automations({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
@@ -838,7 +960,16 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
   // Full-width like every other page — the tab strip, graphs, and every panel use the
   // whole content area. The embedded Autopilot fills the host (its own 1100 wrapper is
   // dropped when embedded), and Schedules / Smart Rules fill it too.
-  const panel = AUTOPILOT_TABS.includes(tab) ? (
+  const panel = tab === 'summary' ? (
+    <AutomationsSummary
+      wide={wide}
+      setTab={setTab}
+      ctrl={ctrl ?? null}
+      climateAutomations={climateAutomations}
+      arbAutomations={arbAutomations}
+      climateStatus={status ?? null}
+    />
+  ) : AUTOPILOT_TABS.includes(tab) ? (
     <Autopilot ctx={ctx} embedded tab={tab as AutopilotTabKey} />
   ) : tab === 'schedules' ? (
     <SchedulesPanel ctx={ctx} />
