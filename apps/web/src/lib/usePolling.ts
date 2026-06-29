@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface PollingState<T> {
   /** Last successfully-fetched value (kept on error → keep-last-good). */
@@ -11,8 +11,8 @@ export interface PollingState<T> {
   stale: boolean;
   /** Timestamp (ms) of the last successful fetch. */
   updatedAt: number | null;
-  /** Force an immediate refetch. */
-  refetch: () => void;
+  /** Force an immediate refetch; resolves when that fetch settles. */
+  refetch: () => Promise<void>;
 }
 
 /**
@@ -33,10 +33,12 @@ export function usePolling<T>(
   const [error, setError] = useState<Error | null>(null);
   const [stale, setStale] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
-  const [tick, setTick] = useState(0);
 
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
+  // Holds the current effect's fetch routine so refetch() can invoke it directly
+  // and return its promise (so callers can `await refetch()`).
+  const runRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
     let alive = true;
@@ -56,19 +58,34 @@ export function usePolling<T>(
         if (alive) setLoading(false);
       }
     };
-    run();
+    runRef.current = run;
+    run(); // initial fetch fires regardless of tab visibility
     if (intervalMs > 0) {
-      const id = setInterval(run, intervalMs);
+      // Skip ticks while the tab is hidden — no point polling a backgrounded
+      // app (saves network + battery). On return to foreground, refetch at once
+      // so the user sees fresh data instead of waiting up to a full interval.
+      const id = setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        run();
+      }, intervalMs);
+      const onVisible = () => {
+        if (typeof document !== 'undefined' && !document.hidden) run();
+      };
+      const hasDoc = typeof document !== 'undefined';
+      if (hasDoc) document.addEventListener('visibilitychange', onVisible);
       return () => {
         alive = false;
         clearInterval(id);
+        if (hasDoc) document.removeEventListener('visibilitychange', onVisible);
       };
     }
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intervalMs, tick, ...deps]);
+  }, [intervalMs, ...deps]);
 
-  return { data, loading, error, stale, updatedAt, refetch: () => setTick((t) => t + 1) };
+  const refetch = useCallback(() => runRef.current(), []);
+
+  return { data, loading, error, stale, updatedAt, refetch };
 }

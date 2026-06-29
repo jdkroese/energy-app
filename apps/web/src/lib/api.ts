@@ -133,7 +133,8 @@ function notifyUnauthorized(): void {
   onUnauthorized?.();
 }
 
-export async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
+/** Actual fetch + error decoding, with no caching. */
+async function rawJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: "same-origin", ...init });
   if (!res.ok) {
     let body: unknown;
@@ -155,23 +156,66 @@ export async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/* ---- GET request de-duplication ------------------------------------------
+ * Many screens poll the same endpoints on independent intervals, and a single
+ * screen often reads one endpoint from several components at once. Without
+ * coordination each call is its own network request. We coalesce GETs by URL
+ * within a short window: concurrent and near-simultaneous reads of the same
+ * path share one in-flight request and its result for GET_DEDUPE_MS. The window
+ * (1.5s) sits far below every poll interval (8–60s), so freshness is unaffected
+ * — it only collapses the redundant bursts. Any mutation clears the cache so the
+ * next read reflects new server state; failed requests are never cached. */
+const GET_DEDUPE_MS = 1500;
+const getCache = new Map<string, { ts: number; promise: Promise<unknown> }>();
+
+export function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  // Only plain GETs are de-duplicated; anything with a body or another method
+  // (a mutation) goes straight to the network.
+  if (method !== "GET" || init?.body != null) return rawJSON<T>(path, init);
+
+  const now = Date.now();
+  const hit = getCache.get(path);
+  if (hit && now - hit.ts < GET_DEDUPE_MS) return hit.promise as Promise<T>;
+
+  const promise = rawJSON<T>(path, init);
+  getCache.set(path, { ts: now, promise });
+  // Don't let a failed request poison the window — drop it so the next poll retries.
+  promise.catch(() => {
+    if (getCache.get(path)?.promise === promise) getCache.delete(path);
+  });
+  return promise;
+}
+
+/** Invalidate the GET de-dupe cache (after any mutation changes server state). */
+function invalidateGetCache(): void {
+  getCache.clear();
+}
+
 /** Generic typed mutation helper — sends a JSON body with the given method. */
 async function sendJSON<T>(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<T> {
-  return getJSON<T>(path, {
+  const result = await rawJSON<T>(path, {
     method,
     credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  invalidateGetCache();
+  return result;
 }
 
 /** DELETE helper (some endpoints return no body). */
 async function delJSON<T>(path: string): Promise<T> {
-  return getJSON<T>(path, { method: "DELETE", credentials: "same-origin" });
+  const result = await rawJSON<T>(path, {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  invalidateGetCache();
+  return result;
 }
 
 export const postJSON = <T>(path: string, body?: unknown) =>
