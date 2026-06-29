@@ -24,6 +24,7 @@ const META: Record<string, { eyebrow: string; title: string }> = {
   '/settings': { eyebrow: 'Settings', title: 'System' },
   '/scenarios': { eyebrow: 'Scenarios', title: 'Strategy profiles' },
   '/automations': { eyebrow: 'Power', title: 'Automations' },
+  '/button-test': { eyebrow: 'Debug', title: 'Scene switch — button 1' },
 };
 
 const RAIL_KEY = 'power.rail.expanded';

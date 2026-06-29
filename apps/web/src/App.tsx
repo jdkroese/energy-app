@@ -12,6 +12,7 @@ import { Irrigation } from './screens/Irrigation';
 import { GenericDeviceDetail } from './screens/GenericDeviceDetail';
 import { RoomsManage } from './screens/RoomsManage';
 import { Automations } from './screens/Automations';
+import { ButtonTest } from './screens/ButtonTest';
 import { AlarmScreen, AlarmActiveBanner } from './screens/Speakers';
 import { Login } from './screens/auth/Login';
 import { Setup } from './screens/auth/Setup';
@@ -61,6 +62,8 @@ function AppRoutes() {
               back-compat redirect to the Schedules tab for bookmarks/links. */}
           <Route path="/schedules" element={<Navigate to="/automations?tab=schedules" replace />} />
           <Route path="/automations" element={<Automations ctx={ctx} />} />
+          {/* Throwaway spike: scene-switch button-1 detector (More ▸ Button test). */}
+          <Route path="/button-test" element={<ButtonTest ctx={ctx} />} />
           {/* House-alarm panic page — a big trigger/STOP button for a phone shortcut. */}
           <Route path="/alarm" element={<AlarmScreen ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}
