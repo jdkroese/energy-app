@@ -15,5 +15,22 @@ export default defineConfig({
       '/api': { target: API_PROXY, changeOrigin: true },
     },
   },
-  build: { outDir: 'dist', emptyOutDir: true },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Split the rarely-changing vendor code into its own chunks so frequent
+        // app edits don't bust their cache. lucide-react is imported as a whole
+        // barrel by Icon.tsx (names are resolved at runtime, so it can't be
+        // tree-shaken) — isolating it means a deploy only re-downloads the small
+        // app chunk, not the ~500KB icon set. Leaflet stays a lazy chunk (loaded
+        // only by the Settings map), out of both this and the main bundle.
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'icons-vendor': ['lucide-react'],
+        },
+      },
+    },
+  },
 });

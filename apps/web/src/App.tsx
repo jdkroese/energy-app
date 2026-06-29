@@ -1,25 +1,35 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AppShell, type ShellContext } from './components/shell/AppShell';
-import { Live } from './screens/Live';
-import { Reports } from './screens/Reports';
-import { Settings } from './screens/Settings';
-import { Scenarios } from './screens/Scenarios';
-import { Batteries } from './screens/Batteries';
-import { BatteryDetail } from './screens/BatteryDetail';
-import { Devices } from './screens/Devices';
-import { DeviceDetail } from './screens/DeviceDetail';
-import { Irrigation } from './screens/Irrigation';
-import { GenericDeviceDetail } from './screens/GenericDeviceDetail';
-import { RoomsManage } from './screens/RoomsManage';
-import { Automations } from './screens/Automations';
-import { ButtonTest } from './screens/ButtonTest';
-import { AlarmScreen, AlarmActiveBanner } from './screens/Speakers';
 import { Login } from './screens/auth/Login';
 import { Setup } from './screens/auth/Setup';
 import { Reset } from './screens/auth/Reset';
 import { PowerMark } from './screens/auth/AuthShell';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { ThemeProvider } from './lib/ThemeProvider';
+
+// Route screens are code-split: each loads its own chunk on first navigation so
+// the initial bundle stays small. Auth screens + the shell stay eager (critical
+// path). lazy() needs a default export, so we adapt our named exports inline.
+const Live = lazy(() => import('./screens/Live').then((m) => ({ default: m.Live })));
+const Reports = lazy(() => import('./screens/Reports').then((m) => ({ default: m.Reports })));
+const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })));
+const Scenarios = lazy(() => import('./screens/Scenarios').then((m) => ({ default: m.Scenarios })));
+const Batteries = lazy(() => import('./screens/Batteries').then((m) => ({ default: m.Batteries })));
+const BatteryDetail = lazy(() => import('./screens/BatteryDetail').then((m) => ({ default: m.BatteryDetail })));
+const Devices = lazy(() => import('./screens/Devices').then((m) => ({ default: m.Devices })));
+const DeviceDetail = lazy(() => import('./screens/DeviceDetail').then((m) => ({ default: m.DeviceDetail })));
+const Irrigation = lazy(() => import('./screens/Irrigation').then((m) => ({ default: m.Irrigation })));
+const GenericDeviceDetail = lazy(() =>
+  import('./screens/GenericDeviceDetail').then((m) => ({ default: m.GenericDeviceDetail })),
+);
+const RoomsManage = lazy(() => import('./screens/RoomsManage').then((m) => ({ default: m.RoomsManage })));
+const Automations = lazy(() => import('./screens/Automations').then((m) => ({ default: m.Automations })));
+const AlarmScreen = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.AlarmScreen })));
+// AlarmActiveBanner renders on every authed page but shares a module with the
+// Radio/Speakers panels (~1k lines). Lazy-load it with a null fallback so it
+// doesn't drag that code into the main bundle and doesn't gate the page paint.
+const AlarmActiveBanner = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.AlarmActiveBanner })));
 
 const PUBLIC_PATHS = ['/login', '/setup', '/reset'];
 const isPublic = (path: string) => PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + '/'));
@@ -41,7 +51,10 @@ function AppRoutes() {
     <AppShell>
       {(ctx: ShellContext) => (
         <>
-        <AlarmActiveBanner />
+        <Suspense fallback={null}>
+          <AlarmActiveBanner />
+        </Suspense>
+        <Suspense fallback={<Splash />}>
         <Routes>
           <Route path="/" element={<Live ctx={ctx} />} />
           <Route path="/reports" element={<Reports ctx={ctx} />} />
@@ -62,14 +75,13 @@ function AppRoutes() {
               back-compat redirect to the Schedules tab for bookmarks/links. */}
           <Route path="/schedules" element={<Navigate to="/automations?tab=schedules" replace />} />
           <Route path="/automations" element={<Automations ctx={ctx} />} />
-          {/* Throwaway spike: scene-switch button-1 detector (More ▸ Button test). */}
-          <Route path="/button-test" element={<ButtonTest ctx={ctx} />} />
           {/* House-alarm panic page — a big trigger/STOP button for a phone shortcut. */}
           <Route path="/alarm" element={<AlarmScreen ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
         </>
       )}
     </AppShell>
