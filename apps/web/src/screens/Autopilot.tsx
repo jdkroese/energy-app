@@ -136,6 +136,10 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
   const [reserveDraft, setReserveDraft] = useState<number | null>(null);
   const [logFilter, setLogFilter] = useState<'changes' | 'all' | 'errors'>('changes');
   const toastId = useRef(0);
+  // Track auto-dismiss timers so they can be cleared on unmount (avoids a stray
+  // setState after the screen closes).
+  const toastTimers = useRef<number[]>([]);
+  useEffect(() => () => toastTimers.current.forEach((t) => clearTimeout(t)), []);
 
   // Live snapshot — for the relocated "Backup · Tesla only" card on the Status tab
   // (backup energy + autonomy hours live on /api/live, not on ControlStatus).
@@ -144,7 +148,11 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
   const pushToast = useCallback((kind: 'ok' | 'err', text: string) => {
     const id = ++toastId.current;
     setToasts((t) => [...t, { id, kind, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
+    const handle = window.setTimeout(() => {
+      setToasts((t) => t.filter((x) => x.id !== id));
+      toastTimers.current = toastTimers.current.filter((h) => h !== handle);
+    }, 4200);
+    toastTimers.current.push(handle);
   }, []);
 
   // poll control status (~5s)

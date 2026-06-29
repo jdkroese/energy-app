@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon, Button, Modal, Input } from '../ui';
 import type { Action, Capability, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, VaneSetting } from '../../lib/types';
 import { checkRuleOverlap, expandSegments, selfOverlaps, wouldOverlapUnit, TYPE_LABEL } from '../../lib/scheduleRules';
@@ -63,7 +63,14 @@ export function EditRuleOverlay({
   const [name, setName] = useState(rule.name);
   const [action, setAction] = useState<Action>(rule.action);
   const [days, setDays] = useState<number[]>(rule.days);
-  const [windows, setWindows] = useState(rule.windows.length ? rule.windows : [{ start: '14:00', end: '17:00' }]);
+  // Each window carries a transient `_k` (local-only, stripped before save) so
+  // React keys on a stable identity instead of the array index — without it,
+  // removing a window shifts indices and React mis-associates inputs (lost focus
+  // / wrong values on the rows below the one removed).
+  const winKey = useRef(0);
+  const [windows, setWindows] = useState<Array<ScheduleWindow & { _k: number }>>(() =>
+    (rule.windows.length ? rule.windows : [{ start: '14:00', end: '17:00' }]).map((w) => ({ ...w, _k: winKey.current++ })),
+  );
   const [condition, setCondition] = useState<RunCondition>(rule.condition);
   const [copyTo, setCopyTo] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -92,11 +99,12 @@ export function EditRuleOverlay({
   const toggleDay = (store: number) => setDays((p) => (p.includes(store) ? p.filter((x) => x !== store) : [...p, store].sort()));
   const setWindow = (i: number, patch: Partial<ScheduleWindow>) =>
     setWindows((ws) => ws.map((w, j) => (j === i ? { ...w, ...patch } : w)));
-  const addWindow = () => setWindows((ws) => [...ws, { start: '20:00', end: '23:00' }]);
+  const addWindow = () => setWindows((ws) => [...ws, { start: '20:00', end: '23:00', _k: winKey.current++ }]);
   const removeWindow = (i: number) => setWindows((ws) => (ws.length > 1 ? ws.filter((_, j) => j !== i) : ws));
 
   const draft: Schedule = useMemo(
-    () => ({ ...rule, name: name.trim() || 'Rule', action, days, windows, condition }),
+    // Strip the transient `_k` so the persisted payload is exactly { start, end }.
+    () => ({ ...rule, name: name.trim() || 'Rule', action, days, windows: windows.map(({ start, end }) => ({ start, end })), condition }),
     [rule, name, action, days, windows, condition],
   );
 
@@ -225,7 +233,7 @@ export function EditRuleOverlay({
       }>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {windows.map((w, i) => (
-            <div key={i} style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div key={w._k} style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
               {/* Start */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ fontSize: 10.5, color: 'var(--text-3)', width: 28, flex: 'none' }}>from</span>
