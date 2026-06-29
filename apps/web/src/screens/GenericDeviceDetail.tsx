@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { Capability, ConfiguredResponse, DeviceDiagnosticsResponse, Schedule, SchedulesResponse } from '../lib/types';
-import { Card, Icon, Button } from '../components/ui';
+import { Card, Icon, Button, Input } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -102,13 +102,13 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
               <div style={{ minWidth: 0, flex: 1 }}>
                 {editingName ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <input
+                    <Input
                       autoFocus
                       value={nameDraft}
                       onChange={(e) => setNameDraft(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void saveName(device.id, device.name); if (e.key === 'Escape') setEditingName(false); }}
                       disabled={savingName}
-                      style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: 600, color: 'var(--text-1)', background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 8, padding: '5px 8px', outline: 'none' }}
+                      style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: 600 }}
                     />
                     <button type="button" aria-label="Save name" onClick={() => void saveName(device.id, device.name)} disabled={savingName}
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>

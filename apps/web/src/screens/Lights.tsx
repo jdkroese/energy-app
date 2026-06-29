@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { LightUnit, LightsResponse, LightLever, LightHsv, ScenesResponse } from '../lib/types';
-import { Card, Icon, Switch, Slider, SegmentedControl } from '../components/ui';
+import { Card, Icon, Switch, Slider, SegmentedControl, Input } from '../components/ui';
 import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -87,13 +87,13 @@ function LightCard({
         <div style={{ flex: 1, minWidth: 0 }}>
           {editing ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input
+              <Input
                 autoFocus
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditing(false); }}
                 onBlur={saveName}
-                style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, color: 'var(--text-1)', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 6, padding: '3px 7px', outline: 'none' }}
+                style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500 }}
               />
               <button type="button" aria-label="Save name" onMouseDown={(e) => e.preventDefault()} onClick={saveName} style={{ background: 'none', border: 'none', color: 'var(--solar)', cursor: 'pointer', padding: 2 }}><Icon name="check" size={15} /></button>
             </div>
