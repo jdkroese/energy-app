@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_LIVE, MOCK_HISTORY_DAY } from '../lib/mock';
 import type { FlowDir, HistoryDayResponse, LiveResponse, VoltageMonitor } from '../lib/types';
-import { Card, StatTile, RadialGauge, ProgressBar, Badge, Eyebrow, Icon } from '../components/ui';
+import { Card, StatTile, Badge, Eyebrow, Icon } from '../components/ui';
 import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
 import { VoltageHistoryOverlay } from '../components/energy/VoltageHistoryOverlay';
@@ -41,11 +41,6 @@ function toFlow(d: LiveResponse): FlowData {
 
 function bandLabel(b: string) {
   return b === 'P1' ? 'peak' : b === 'P2' ? 'shoulder' : 'off-peak';
-}
-
-/** Live battery status word from its flow direction (was hardcoded "idle"). */
-function dirLabel(dir: string) {
-  return dir === 'charging' ? 'charging' : dir === 'discharging' ? 'discharging' : 'idle';
 }
 
 /**
@@ -278,6 +273,23 @@ export function Live({ ctx }: { ctx: ShellContext }) {
       <MobileHeader eyebrow="Live · Jávea · 26° sunny" title="Your home" right={<Avatar />} />
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
+        {/* 24 h plan — lead */}
+        <PlanHero plan={plan} wide={false} />
+
+        {/* live flow */}
+        <Card accent="solar" glow style={{ padding: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+            <Eyebrow>Live flow</Eyebrow>
+            <Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>
+              Live
+            </Badge>
+          </div>
+          <EnergyFlow flow={flow} />
+        </Card>
+
+        {/* forecast — production & consumption (measured + forecast) */}
+        <DayChartCard height={190} subtitle="today · 5-min · measured + forecast · kW left · SoC % right" />
+
         {/* today totals */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <Card style={{ padding: 14 }}>
@@ -304,27 +316,11 @@ export function Live({ ctx }: { ctx: ShellContext }) {
           </div>
         </div>
 
-        {/* live flow */}
-        <Card accent="solar" glow style={{ padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-            <Eyebrow>Live flow</Eyebrow>
-            <Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>
-              Live
-            </Badge>
-          </div>
-          <EnergyFlow flow={flow} />
-        </Card>
-
-        {/* batteries */}
-        <BatteriesCard live={live} />
-
-        {/* notifications */}
-        <NotificationsWidget />
-
-        {/* autopilot state + 24 h plan (moved from Automations → Summary) */}
-        <ControlGrid plan={plan} />
-        <PlanHero plan={plan} wide={false} />
+        {/* forecast KPIs */}
         <PlanKpis plan={plan} wide={false} />
+
+        {/* autopilot state + today's moves */}
+        <ControlGrid plan={plan} />
         <TodaysMoves plan={plan} />
 
         {/* tariff */}
@@ -360,8 +356,8 @@ export function Live({ ctx }: { ctx: ShellContext }) {
           );
         })()}
 
-        {/* day chart */}
-        <DayChartCard height={190} subtitle="5-min · kW left · SoC % right" />
+        {/* notifications — moved down */}
+        <NotificationsWidget />
       </div>
     </>
   );
@@ -372,6 +368,28 @@ function LiveDesktop({ live, flow, plan, stale }: { live: LiveResponse; flow: Fl
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {stale && <StaleBanner updatedAt={null} />}
+
+      {/* 24 h plan — lead */}
+      <PlanHero plan={plan} wide />
+
+      {/* live energy flow (40%) · forecast — production & consumption (60%) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)', gap: 20, alignItems: 'stretch' }}>
+        <Card
+          title="Live energy flow"
+          subtitle="Updated just now"
+          accent="solar"
+          icon={<Icon name="zap" />}
+          actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live</Badge>}
+          style={{ display: 'flex', flexDirection: 'column' }}
+        >
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <EnergyFlow flow={flow} size="lg" />
+          </div>
+        </Card>
+        <DayChartCard height={300} subtitle="today · 5-min · measured + forecast · kW left · SoC % right" />
+      </div>
+
+      {/* today's actuals — 6 KPI tiles */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 14 }}>
         <Card>
           <StatTile label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote="today" />
@@ -388,40 +406,20 @@ function LiveDesktop({ live, flow, plan, stale }: { live: LiveResponse; flow: Fl
         <Card>
           <StatTile label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
         </Card>
-        {/* Live grid voltage/current/power (#77) — kept on desktop after the right-column
-            tile grid was removed in the redesign. */}
+        {/* Live grid voltage/current/power (#77) */}
         <Card>
           <GridVoltageStat live={live} wide />
         </Card>
       </div>
 
-      {/* Row 2 — live energy flow (left) · Batteries + Notifications (right) */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1fr', gap: 20, alignItems: 'stretch' }}>
-        <Card
-          title="Live energy flow"
-          subtitle="Updated just now"
-          accent="solar"
-          icon={<Icon name="zap" />}
-          actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live</Badge>}
-          style={{ display: 'flex', flexDirection: 'column' }}
-        >
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <EnergyFlow flow={flow} size="lg" />
-          </div>
-        </Card>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <BatteriesCard live={live} />
-          <NotificationsWidget />
-        </div>
-      </div>
-
-      {/* Autopilot state + the brain's 24 h plan (moved from Automations → Summary) */}
-      <ControlGrid plan={plan} />
-      <PlanHero plan={plan} wide />
+      {/* forecast KPIs */}
       <PlanKpis plan={plan} wide />
+
+      {/* autopilot state + today's moves */}
+      <ControlGrid plan={plan} />
       <TodaysMoves plan={plan} />
 
-      {/* Tariff + Insight — displaced by moving Batteries up */}
+      {/* Tariff + Insight */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
         <Card style={{ display: 'flex', flexDirection: 'column' }}>
           <Eyebrow>Tariff · 2.0TD</Eyebrow>
@@ -439,50 +437,9 @@ function LiveDesktop({ live, flow, plan, stale }: { live: LiveResponse; flow: Fl
         <InsightCard live={live} />
       </div>
 
-      <DayChartCard height={240} subtitle="5-min · kW left · SoC % right" />
+      {/* notifications — moved down */}
+      <NotificationsWidget />
     </div>
-  );
-}
-
-/**
- * Batteries card — Sonnen + Tesla SoC gauges + kWh/direction text + a
- * self-sufficiency bar. Shared across desktop (live-flow right column) and
- * mobile. Both contexts are narrow, so the two gauges stack vertically with
- * a 92px radius and centered kWh·direction caption — fits gracefully without
- * overflowing at common desktop right-column and mobile widths.
- */
-function BatteriesCard({ live }: { live: LiveResponse }) {
-  const batteries = [
-    { name: 'Sonnen', soc: live.sonnen.soc, kwh: live.sonnen.kwh, dir: live.sonnen.dir },
-    { name: 'Tesla', soc: live.tesla.soc, kwh: live.tesla.kwh, dir: live.tesla.dir },
-  ];
-  return (
-    <Card title="Batteries" subtitle="Sonnen + Tesla · combined 36 kWh" icon={<Icon name="battery-charging" />}>
-      <div style={{ display: 'flex', alignItems: 'stretch', gap: 10 }}>
-        {batteries.map((b, i) => (
-          <div key={b.name} style={{ display: 'contents' }}>
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7 }}>
-              <RadialGauge value={b.soc} tone="battery" label={b.name} size={92} />
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', textAlign: 'center' }}>{b.kwh} kWh · {dirLabel(b.dir)}</div>
-            </div>
-            {i === 0 && <div style={{ width: 1, alignSelf: 'stretch', background: 'var(--border-1)' }} />}
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-2)', marginBottom: 7 }}>
-          <span>Self-sufficiency today</span>
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{live.today.selfSufficiencyPct}%</span>
-        </div>
-        <ProgressBar
-          height={6}
-          segments={[
-            { value: live.today.selfSufficiencyPct, tone: 'solar' },
-            { value: 100 - live.today.selfSufficiencyPct, tone: 'grid' },
-          ]}
-        />
-      </div>
-    </Card>
   );
 }
 
