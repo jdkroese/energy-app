@@ -36,7 +36,7 @@ export function TopBar({ eyebrow, title, actions }: Props) {
               borderRadius: 'var(--radius-pill)',
               background: 'var(--surface-1)',
               border: '1px solid var(--border-1)',
-              fontSize: 13,
+              fontSize: 'var(--fs-sm)',
               color: 'var(--text-2)',
             }}
           >
@@ -53,7 +53,7 @@ export function TopBar({ eyebrow, title, actions }: Props) {
               display: 'grid',
               placeItems: 'center',
               fontWeight: 700,
-              fontSize: 13,
+              fontSize: 'var(--fs-sm)',
               color: 'var(--text-inverse)',
             }}
           >
