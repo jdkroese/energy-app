@@ -10,6 +10,8 @@ import { VoltageHistoryOverlay } from '../components/energy/VoltageHistoryOverla
 import { TariffBand, DEFAULT_TARIFF_24 } from '../components/energy/TariffBand';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { NotificationsWidget } from '../components/Notifications';
+import { usePlan, ControlGrid, PlanHero, PlanKpis, TodaysMoves } from '../components/energy/PlanSummary';
+import type { BrainPlanResponse } from '../lib/types';
 import type { ShellContext } from '../components/shell/AppShell';
 
 const fmtKw = (kw: number) => (Math.abs(kw) >= 10 ? Math.abs(kw).toFixed(1) : Math.abs(kw).toFixed(1));
@@ -262,13 +264,14 @@ function DayChartCard({ height, subtitle }: { height: number; subtitle: string }
 
 export function Live({ ctx }: { ctx: ShellContext }) {
   const { data, loading, stale, updatedAt } = usePolling<LiveResponse>(api.live, 10_000);
+  const { plan } = usePlan();
   const d = data || (loading ? null : MOCK_LIVE);
   const live = d || MOCK_LIVE;
   const flow = toFlow(live);
   const t = live.tariff;
   const hour = new Date(live.ts).getHours();
 
-  if (ctx.desktop) return <LiveDesktop live={live} flow={flow} stale={stale} />;
+  if (ctx.desktop) return <LiveDesktop live={live} flow={flow} plan={plan} stale={stale} />;
 
   return (
     <>
@@ -318,6 +321,12 @@ export function Live({ ctx }: { ctx: ShellContext }) {
         {/* notifications */}
         <NotificationsWidget />
 
+        {/* autopilot state + 24 h plan (moved from Automations → Summary) */}
+        <ControlGrid plan={plan} />
+        <PlanHero plan={plan} wide={false} />
+        <PlanKpis plan={plan} wide={false} />
+        <TodaysMoves plan={plan} />
+
         {/* tariff */}
         <Card style={{ padding: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -358,7 +367,7 @@ export function Live({ ctx }: { ctx: ShellContext }) {
   );
 }
 
-function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData; stale: boolean }) {
+function LiveDesktop({ live, flow, plan, stale }: { live: LiveResponse; flow: FlowData; plan: BrainPlanResponse; stale: boolean }) {
   const t = live.tariff;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -405,6 +414,12 @@ function LiveDesktop({ live, flow, stale }: { live: LiveResponse; flow: FlowData
           <NotificationsWidget />
         </div>
       </div>
+
+      {/* Autopilot state + the brain's 24 h plan (moved from Automations → Summary) */}
+      <ControlGrid plan={plan} />
+      <PlanHero plan={plan} wide />
+      <PlanKpis plan={plan} wide />
+      <TodaysMoves plan={plan} />
 
       {/* Tariff + Insight — displaced by moving Batteries up */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
