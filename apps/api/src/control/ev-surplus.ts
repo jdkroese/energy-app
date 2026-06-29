@@ -112,11 +112,21 @@ async function switchBreaker(d: TuyaDevice, powerCap: Capability, spec: TuyaSpec
   }
 }
 
-/** The set of configured breakers opted into the EV rule, mapped to their live device. */
-function enrolledBreakers(all: TuyaDevice[]): TuyaDevice[] {
+/** The set of configured breakers opted into the EV rule, mapped to their live device. A breaker
+ *  that's opted in but missing from the bulk fleet (e.g. its cloud link blipped out of
+ *  /associated-users/devices) is recovered with a direct per-device read so the rule can still
+ *  act on it once it's reachable. */
+async function enrolledBreakers(all: TuyaDevice[]): Promise<TuyaDevice[]> {
   const settings = store.get().deviceSettings;
   const configured = store.get().deviceOnboarding.configured;
-  return all.filter((d) => configured[d.id] && settings[d.id]?.solarP3Only === true);
+  const byId = new Map(all.map((d) => [d.id, d]));
+  const out: TuyaDevice[] = [];
+  for (const id of Object.keys(configured)) {
+    if (settings[id]?.solarP3Only !== true) continue;
+    const d = byId.get(id) ?? (await tuya.getDeviceDirect(id));
+    if (d) out.push(d);
+  }
+  return out;
 }
 
 /**
@@ -139,7 +149,7 @@ export async function evaluateEvSurplus(snap: RichClimateSnapshot): Promise<{ re
   } catch {
     return { reservedW: 0 }; // can't read the fleet — reserve nothing this tick
   }
-  const breakers = enrolledBreakers(all);
+  const breakers = await enrolledBreakers(all);
   if (breakers.length === 0) return { reservedW: 0 };
 
   const tun = dev.evSurplus;

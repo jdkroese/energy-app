@@ -1319,6 +1319,9 @@ export interface DeviceDiagnosticsResponse {
   ts: string;
   connected: boolean;
   fleetError?: string | null;
+  /** True when the device was recovered via a direct per-device read (i.e. it had fallen out
+   *  of the bulk fleet list — usually because its Tuya cloud link dropped). */
+  viaDirect?: boolean;
   device: DeviceDiagnostics | null;
 }
 
