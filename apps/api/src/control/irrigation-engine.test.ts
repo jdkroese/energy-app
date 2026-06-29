@@ -25,7 +25,8 @@ import {
   type DayWeather,
 } from "./irrigation-engine";
 import type { IrrigationZoneConfig } from "../store";
-import { __test } from "./irrigation-coordinator";
+import { __test, liveAllowed } from "./irrigation-coordinator";
+import type { StoreSchema } from "../store";
 
 // ---- Fixtures ---------------------------------------------------------------
 
@@ -331,4 +332,23 @@ test("windowFavorable reflects the chosen preference", () => {
   assert.equal(__test.windowFavorable(mk("solar-surplus"), 500).ok, true);
   assert.equal(__test.windowFavorable(mk("solar-surplus"), 0).ok, false);
   assert.equal(__test.windowFavorable(mk("none"), 0).ok, true);
+});
+
+// ---- Coordinator shadow/live gate -------------------------------------------
+
+test("liveAllowed actuates ONLY in mode live AND armed AND devices not off", () => {
+  const mk = (mode: string, armed: boolean, devicesMode: string): StoreSchema =>
+    ({
+      irrigation: { mode },
+      devices: { armed, mode: devicesMode },
+    }) as unknown as StoreSchema;
+
+  // The one true path: live + armed + a real devices mode.
+  assert.equal(liveAllowed(mk("live", true, "auto")), true);
+
+  // SHADOW-FIRST defence: any of the three conditions failing → no actuation.
+  assert.equal(liveAllowed(mk("shadow", true, "auto")), false); // not live
+  assert.equal(liveAllowed(mk("off", true, "auto")), false); // not live
+  assert.equal(liveAllowed(mk("live", false, "auto")), false); // disarmed
+  assert.equal(liveAllowed(mk("live", true, "off")), false); // devices layer off
 });

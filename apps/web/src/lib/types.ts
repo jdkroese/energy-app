@@ -1732,13 +1732,13 @@ export interface CostLine {
   key: string;
   label: string;
   eur: number;
-  source: 'billed' | 'modelled';
+  source: "billed" | "modelled";
   unpredictable?: boolean;
 }
 
 /** A named cost group + its € subtotal (Phase 1.5). */
 export interface CostGroup {
-  key: 'energy' | 'fixed' | 'regTax' | 'credits';
+  key: "energy" | "fixed" | "regTax" | "credits";
   label: string;
   eur: number;
   lines: CostLine[];
