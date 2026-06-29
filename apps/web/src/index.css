@@ -463,6 +463,16 @@ h1, h2, h3, h4, p {
 @keyframes pwrModalFade { from { opacity: 0 } to { opacity: 1 } }
 @keyframes pwrModalRise { from { transform: translateY(14px); opacity: .7 } to { transform: translateY(0); opacity: 1 } }
 
+/* Shared <PageTransition> (Track D · Motion I) — subtle fade + small rise as the
+   routed screen body swaps on navigation. Transform/opacity only (no layout
+   participation, no scroll jank). The global reduced-motion gate below collapses
+   this to a near-instant pass; the component additionally skips the animation
+   outright when prefers-reduced-motion is set. */
+@keyframes pwrPageEnter {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* ---- Map (Leaflet) — Site location picker -------------------------------- */
 .pwr-map {
   height: 240px;
@@ -513,8 +523,8 @@ h1, h2, h3, h4, p {
    (pwr-splash-pulse), button spinner (pwr-btn-spin), skeleton shimmer
    (pwr-shimmer), PlanTimeline draw/grow/pulse (pt-*), and the overlay
    fade/rise keyframes (vhFade/vhRise, ruleFade/ruleRise, mmFade/mmRise,
-   installFade/installRise, setupFade, and the shared Modal primitive's
-   pwrModalFade/pwrModalRise).
+   installFade/installRise, setupFade, the shared Modal primitive's
+   pwrModalFade/pwrModalRise, and the shared PageTransition pwrPageEnter).
    Functional spinners still resolve to a static state rather than looping. */
 @media (prefers-reduced-motion: reduce) {
   *,

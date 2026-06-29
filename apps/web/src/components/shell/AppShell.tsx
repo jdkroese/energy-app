@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { Rail } from './Rail';
 import { TabBar } from './TabBar';
 import { TopBar } from './TopBar';
+import { PageTransition } from './PageTransition';
 import { MobileAlarmFab } from './NavAlarm';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
@@ -87,7 +88,12 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
               ) : null
             }
           />
-          <div style={{ flex: 1, overflowY: 'auto', padding: '22px 28px 40px' }}>{children(ctx)}</div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '22px 28px 40px' }}>
+            {/* Keyed on pathname so the body re-animates on each navigation. The
+                persistent shell (Rail / TopBar) above stays steady — only this
+                scroll-container body fades+rises in. */}
+            <PageTransition key={location.pathname}>{children(ctx)}</PageTransition>
+          </div>
         </div>
       </div>
     );
@@ -95,7 +101,10 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', paddingTop: 'env(safe-area-inset-top)' }}>
-      <div style={{ flex: 1, overflowY: 'auto' }}>{children(ctx)}</div>
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {/* Mobile: same shared transition; TabBar / FAB below stay steady. */}
+        <PageTransition key={location.pathname}>{children(ctx)}</PageTransition>
+      </div>
       <MobileAlarmFab />
       <TabBar />
     </div>
