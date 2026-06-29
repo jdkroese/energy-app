@@ -237,7 +237,7 @@ export const api = {
       postJSON<{ ts: string; results: unknown[] }>('/api/devices/bulk-command', { ids, lever, value }),
     setSettings: (
       id: string,
-      patch: { room?: string; roomId?: string | null; automationEnabled?: boolean; solarCoolEnabled?: boolean; solarHeatEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number; invertPosition?: boolean },
+      patch: { room?: string; roomId?: string | null; automationEnabled?: boolean; solarCoolEnabled?: boolean; solarHeatEnabled?: boolean; comfortCeilingC?: number; comfortFloorC?: number; invertPosition?: boolean; solarP3Only?: boolean },
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
     // Assign / clear a device's room (cross-cutting Rooms model). null = Unassigned.
     setRoom: (id: string, roomId: string | null) =>

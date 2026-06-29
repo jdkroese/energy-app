@@ -627,6 +627,16 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
         </div>
       )}
 
+      {/* Solar/P3 charging chip — shown when this breaker is opted into the
+          EV-surplus rule (docs/33); reflects the live rule state. */}
+      {d.solarP3Only && (
+        <div style={{ display: 'flex' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, padding: '2px 7px', borderRadius: 999, border: `1px solid ${evChip(d.evState).color}`, color: evChip(d.evState).color, whiteSpace: 'nowrap' }}>
+            <Icon name="sun" size={11} color="var(--ev, var(--accent))" /> {evChip(d.evState).label}
+          </span>
+        </div>
+      )}
+
       {/* Gauges row — only the metering gauges this breaker actually exposes.
           Non-metering breakers (e.g. heatpump cut-offs) have neither and show no
           gauges row at all, instead of two empty "—" gauges that look broken. */}
@@ -646,6 +656,16 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
       </div>
     </Card>
   );
+}
+
+/** Compact label + color for the breaker card's Solar/P3 charging chip (docs/33). */
+function evChip(evState: ConfiguredDeviceView['evState']): { label: string; color: string } {
+  switch (evState?.reason ?? 'off') {
+    case 'surplus': return { label: 'Solar surplus', color: 'var(--ev, var(--accent))' };
+    case 'p3': return { label: 'P3 charging', color: 'var(--grid, var(--accent))' };
+    case 'waiting': return { label: 'Solar/P3 · waiting', color: 'var(--text-3)' };
+    default: return { label: 'Solar/P3 only', color: 'var(--text-3)' };
+  }
 }
 
 /** The content for a type tab populated by configured generic devices (Switching /

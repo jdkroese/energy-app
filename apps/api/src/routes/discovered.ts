@@ -227,6 +227,28 @@ export interface ConfiguredDeviceView {
   roomId: string | null;
   roomName: string | null;
   setupAt: string;
+  /** EV (car) breaker: "Solar / P3 charging only" opt-in (docs/33). */
+  solarP3Only: boolean;
+  /** EV breaker: auto-learned charger draw (W), or null if none learned yet. */
+  learnedDrawW: number | null;
+  /** EV breaker: the rule's live state — what it's doing right now. null when not opted in. */
+  evState: { reason: 'surplus' | 'p3' | 'waiting' | 'off'; ruleOn: boolean; reservedW: number } | null;
+}
+
+/** EV per-breaker view fields from deviceSettings + the rule's runtime state. */
+function evViewFor(id: string): Pick<ConfiguredDeviceView, 'solarP3Only' | 'learnedDrawW' | 'evState'> {
+  const ds = store.get().deviceSettings[id];
+  const solarP3Only = ds?.solarP3Only === true;
+  const learnedDrawW = typeof ds?.learnedDrawW === 'number' ? ds.learnedDrawW : null;
+  if (!solarP3Only) return { solarP3Only: false, learnedDrawW, evState: null };
+  const rt = store.get().devices.evState[id];
+  return {
+    solarP3Only: true,
+    learnedDrawW,
+    evState: rt
+      ? { reason: rt.reason, ruleOn: rt.ruleOn, reservedW: rt.reservedW }
+      : { reason: 'off', ruleOn: false, reservedW: 0 },
+  };
 }
 
 /**
@@ -253,7 +275,7 @@ export async function getConfigured(): Promise<unknown> {
       const d = byId.get(id);
       if (!d) {
         // Configured but the fleet no longer reports it (offline project / removed device).
-        return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, ...roomFor(id), setupAt: cfg.setupAt };
+        return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, ...roomFor(id), setupAt: cfg.setupAt, ...evViewFor(id) };
       }
       const spec = await specFor(id);
       const caps = applyOverrides(deriveCapabilities(d, spec), cfg.capOverrides);
@@ -264,7 +286,7 @@ export async function getConfigured(): Promise<unknown> {
       }
       return {
         id, name: cfg.name, typeId: cfg.typeId, category: d.category, online: d.online,
-        capabilities: caps, values, roomGuess: toDiscovered(d, spec).roomGuess, ...roomFor(id), setupAt: cfg.setupAt,
+        capabilities: caps, values, roomGuess: toDiscovered(d, spec).roomGuess, ...roomFor(id), setupAt: cfg.setupAt, ...evViewFor(id),
       };
     }),
   );

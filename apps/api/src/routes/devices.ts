@@ -423,7 +423,15 @@ export function setDeviceSettings(id: string, patch: Partial<DeviceSettings>): u
       comfortCeilingC: patch.comfortCeilingC ?? existing.comfortCeilingC,
       comfortFloorC: patch.comfortFloorC ?? existing.comfortFloorC,
       invertPosition: patch.invertPosition ?? existing.invertPosition,
+      // EV (car) breaker: "Solar / P3 charging only" opt-in. Only override when the patch
+      // explicitly carries it (so other setting writes don't clear it). When the owner turns
+      // it OFF, clear any rule-owned runtime so the rule fully releases the breaker.
+      solarP3Only: patch.solarP3Only !== undefined ? patch.solarP3Only : existing.solarP3Only,
+      // learnedDrawW is auto-maintained by the EV rule — preserve it across setting writes.
+      learnedDrawW: patch.learnedDrawW ?? existing.learnedDrawW,
     };
+    // Opting a breaker OUT releases the EV rule's ownership/reservation immediately.
+    if (patch.solarP3Only === false) delete s.devices.evState[id];
     s.deviceSettings[id] = merged;
     return merged;
   });
