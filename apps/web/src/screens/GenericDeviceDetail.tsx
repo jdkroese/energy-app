@@ -534,7 +534,18 @@ function DiagnosticsSection({ id, isAdmin }: { id: string; isAdmin: boolean }) {
               )}
             </>
           )}
-          {data && !dev && !loading && !err && <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No device data (Tuya not connected or device not reported).</div>}
+          {data && !dev && !loading && !err && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+              {data.connected === false
+                ? 'Tuya is not connected — set the cloud credentials in Settings.'
+                : 'This device is no longer reported by Tuya. It’s likely removed from the cloud project, or its cloud link is down — power-cycle the device (or re-link it in the Tuya app), then Re-test.'}
+            </div>
+          )}
+          {data && dev && data.viaDirect && (
+            <div style={{ fontSize: 11.5, color: 'var(--warn, var(--text-3))', marginTop: 4 }}>
+              Recovered via a direct read — this device dropped out of Tuya’s device list (its cloud link likely dropped). Live control may be unreliable until it reconnects to the Tuya cloud.
+            </div>
+          )}
         </div>
       )}
     </Card>

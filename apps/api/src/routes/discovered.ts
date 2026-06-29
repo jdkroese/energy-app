@@ -272,9 +272,12 @@ export async function getConfigured(): Promise<unknown> {
 
   const devices: ConfiguredDeviceView[] = await Promise.all(
     Object.entries(onboarding.configured).map(async ([id, cfg]) => {
-      const d = byId.get(id);
+      // Prefer the bulk fleet entry; if this configured device is missing from it (e.g. its
+      // cloud link dropped so it fell out of /associated-users/devices), recover it with a
+      // direct per-device read so it still renders with its real caps + last-known state.
+      const d = byId.get(id) ?? (await tuya.getDeviceDirect(id));
       if (!d) {
-        // Configured but the fleet no longer reports it (offline project / removed device).
+        // Truly not reported by the fleet OR the direct read (removed from the cloud project).
         return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, ...roomFor(id), setupAt: cfg.setupAt, ...evViewFor(id) };
       }
       const spec = await specFor(id);
@@ -329,8 +332,12 @@ export async function getDeviceDiagnostics(id: string): Promise<unknown> {
   } catch (e) {
     return { ts: new Date().toISOString(), connected: true, fleetError: (e as Error).message, device: null };
   }
-  const d = all.find((x) => x.id === deviceId);
-  if (!d) return { ts: new Date().toISOString(), connected: true, fleetError: null, device: null };
+  // Fall back to a direct per-device read if it's missing from the bulk fleet list. `viaDirect`
+  // tells the UI the device was recovered this way (i.e. its cloud link likely dropped); a null
+  // device after the fallback means it's genuinely de-associated from the cloud project.
+  const inFleet = all.find((x) => x.id === deviceId);
+  const d = inFleet ?? (await tuya.getDeviceDirect(deviceId));
+  if (!d) return { ts: new Date().toISOString(), connected: true, fleetError: null, viaDirect: false, device: null };
 
   const spec = await specFor(deviceId);
   const cfg = store.get().deviceOnboarding.configured[deviceId];
@@ -362,7 +369,7 @@ export async function getDeviceDiagnostics(id: string): Promise<unknown> {
       value: statusMap.get(c.dp) ?? null,
     })),
   };
-  return { ts: new Date().toISOString(), connected: true, fleetError: null, device };
+  return { ts: new Date().toISOString(), connected: true, fleetError: null, viaDirect: !inFleet, device };
 }
 
 /**
