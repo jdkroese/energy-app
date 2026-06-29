@@ -35,6 +35,35 @@ function viewZone(z: rainbird.IrrigationZone): IrrigationZoneView {
   return { ...z, name, roomId, roomName };
 }
 
+/** Turn an opaque transport error into something diagnosable. Node's `fetch` collapses
+ *  every network failure to "fetch failed" and hides the real reason in `error.cause.code`
+ *  — which is exactly what we need to tell "wrong IP / isolated WiFi" (EHOSTUNREACH) from
+ *  "nothing listening on the Rain Bird port" (ECONNREFUSED) from "box asleep" (timeout).
+ *  Non-network errors (wrong password, HTTP status, SIP error) pass through unchanged. */
+function describeReachError(e: unknown, host: string): string {
+  const err = e as {
+    name?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
+  if (err?.name === "TimeoutError" || err?.name === "AbortError")
+    return `no response from ${host} within timeout — controller asleep/off, wrong IP, or WiFi client-isolation blocking the mini`;
+  switch (err?.cause?.code) {
+    case "ECONNREFUSED":
+      return `connection refused at ${host} — something is at this IP but not answering on the Rain Bird port (wrong device at this IP, or the LNK web service is off)`;
+    case "EHOSTUNREACH":
+    case "ENETUNREACH":
+      return `${host} unreachable — the mini can't route to it (LNK on a different subnet / isolated IoT-WiFi, or wrong IP)`;
+    case "ETIMEDOUT":
+      return `timed out reaching ${host} — no reply (LNK off/asleep, wrong IP, or WiFi client-isolation)`;
+    case "ENOTFOUND":
+      return `${host} did not resolve — check the host/IP`;
+    case "ECONNRESET":
+      return `${host} reset the connection — often the Rain Bird mobile app is open and holding the single allowed connection`;
+  }
+  return err?.cause?.message || err?.message || "unreachable";
+}
+
 /** GET /api/irrigation — zones + controller state. Inert (empty) when not connected. */
 export async function getIrrigation(): Promise<unknown> {
   const dev = store.get().devices;
@@ -61,7 +90,7 @@ export async function getIrrigation(): Promise<unknown> {
     rainDelayDays = await rainbird.getRainDelay();
     running = await rainbird.getIrrigationState();
   } catch (e) {
-    error = (e as Error).message;
+    error = describeReachError(e, rainbird.host());
   }
   return {
     ts: new Date().toISOString(),
@@ -80,10 +109,21 @@ export async function getIrrigation(): Promise<unknown> {
 export async function getIrrigationZone(id: string): Promise<unknown> {
   if (!rainbird.isConfigured())
     return { ts: new Date().toISOString(), connected: false, zone: null };
-  const zones = (await rainbird.getZones()).map(viewZone);
-  const zone = zones.find((z) => z.id === id) ?? null;
-  const rainDelayDays = await rainbird.getRainDelay();
-  return { ts: new Date().toISOString(), connected: true, zone, rainDelayDays };
+  try {
+    const zones = (await rainbird.getZones()).map(viewZone);
+    const zone = zones.find((z) => z.id === id) ?? null;
+    const rainDelayDays = await rainbird.getRainDelay();
+    return { ts: new Date().toISOString(), connected: true, zone, rainDelayDays };
+  } catch (e) {
+    // Don't 500 the detail poll when the box is unreachable — degrade with the reason.
+    return {
+      ts: new Date().toISOString(),
+      connected: true,
+      zone: null,
+      rainDelayDays: 0,
+      lastError: describeReachError(e, rainbird.host()),
+    };
+  }
 }
 
 // ---- Commands (admin + arm) -------------------------------------------------
@@ -152,7 +192,7 @@ export async function getRainbirdIntegration(): Promise<unknown> {
       };
       status = { ok: true, detail: `model ${info.model} · v${info.version}` };
     } catch (e) {
-      status = { ok: false, detail: (e as Error).message };
+      status = { ok: false, detail: describeReachError(e, rainbird.host()) };
     }
   }
   return {
@@ -182,7 +222,7 @@ async function probeRainbird(
     const model = decodeModelAndVersion(hex);
     return { ok: true, detail: `model ${model.modelId} · v${model.version}` };
   } catch (e) {
-    return { ok: false, detail: (e as Error).message || "unreachable" };
+    return { ok: false, detail: describeReachError(e, host) };
   }
 }
 
