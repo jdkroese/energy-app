@@ -3,7 +3,6 @@ import { config } from "./config";
 import * as sonnen from "./connectors/sonnen";
 import * as tesla from "./connectors/tesla";
 import { getLive } from "./routes/live";
-import { getButtonTestState, resetButtonTest } from "./routes/button-test";
 import { getBatteries } from "./routes/batteries";
 import { getHistory } from "./routes/history";
 import { getHistoryDay } from "./routes/history-day";
@@ -278,10 +277,6 @@ app.get(
   "/api/tesla/live",
   wrap(() => tesla.getLiveStatus()),
 );
-
-// THROWAWAY SPIKE — scene-switch button-1 detector (debug page). No control logic.
-app.get("/api/button-test", wrap(() => getButtonTestState()));
-app.post("/api/button-test/reset", wrap(() => resetButtonTest()));
 
 // Normalized frontend contract.
 app.get(

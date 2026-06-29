@@ -38,7 +38,6 @@ export const NAV_AUTOMATION: NavItem[] = [
   // Status · Settings); /brain redirects there. Keeps Autopilot's sparkles icon.
   { to: '/automations', label: 'Automations', icon: 'sparkles' },
   { to: '/scenarios', label: 'Scenarios', icon: 'sliders-horizontal' },
-  { to: '/button-test', label: 'Button test', icon: 'radio' },
 ];
 
 /** Settings — pinned to the bottom of the rail next to Sign out / Collapse. */
