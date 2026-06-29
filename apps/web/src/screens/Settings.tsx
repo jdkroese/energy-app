@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
@@ -16,7 +16,11 @@ import { useNavigate } from 'react-router-dom';
 import { SegmentedControl } from '../components/ui';
 import type { ShellContext } from '../components/shell/AppShell';
 import { settingsTabsFor, type SettingsTabLabel } from '../components/shell/nav';
-import { SiteLocationCard } from '../components/SiteLocationCard';
+// Leaflet (map + CSS, ~150KB) is heavy and only used by this one card — load it
+// on demand so it never enters the main bundle.
+const SiteLocationCard = lazy(() =>
+  import('../components/SiteLocationCard').then((m) => ({ default: m.SiteLocationCard })),
+);
 import { useTheme } from '../lib/ThemeProvider';
 import type { Theme } from '../lib/theme';
 import { isKioskEnabled, setKioskEnabled } from '../lib/kiosk';
@@ -1678,7 +1682,9 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
 
       {active === 'System' && (
         <>
-          <SiteLocationCard />
+          <Suspense fallback={null}>
+            <SiteLocationCard />
+          </Suspense>
 
           <Card title="Tariff · Spain 2.0TD" style={{ padding: 0 }}>
             <div style={{ padding: '4px 16px 14px' }}>

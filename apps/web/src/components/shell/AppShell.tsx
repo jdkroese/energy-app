@@ -1,10 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Rail } from './Rail';
 import { TabBar } from './TabBar';
 import { TopBar } from './TopBar';
 import { PageTransition } from './PageTransition';
-import { TabletShell } from './TabletShell';
+// Kiosk frame + its 4 tablet screens (~1k lines) only load when wall-tablet mode
+// is on — lazy so normal web/mobile users never download them.
+const TabletShell = lazy(() => import('./TabletShell').then((m) => ({ default: m.TabletShell })));
 import { MobileAlarmFab } from './NavAlarm';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
@@ -73,7 +75,12 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
 
   // Wall-tablet (kiosk) mode swaps the whole frame — its own nav + routes, so it
   // renders standalone (no children render-prop). Checked before desktop/mobile.
-  if (kiosk) return <TabletShell />;
+  if (kiosk)
+    return (
+      <Suspense fallback={null}>
+        <TabletShell />
+      </Suspense>
+    );
 
   if (desktop) {
     return (
