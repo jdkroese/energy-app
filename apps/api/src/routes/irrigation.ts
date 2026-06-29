@@ -14,6 +14,30 @@ import {
   issueIrrigation,
   type IrrigationLever,
 } from "../control/irrigation-execute";
+import * as weather from "../connectors/weather";
+import {
+  computeTrims,
+  scheduledMinForDay,
+  liveAllowed,
+} from "../control/irrigation-coordinator";
+import {
+  rollupDayWeather,
+  flowLpmFor,
+  kcFor,
+  daySavedPct,
+  type DayWeather,
+} from "../control/irrigation-engine";
+import { savePhoto, readPhoto, deletePhoto } from "../irrigation/photos";
+import { randomBytes } from "node:crypto";
+import type {
+  IrrigationMode,
+  IrrigationWindow,
+  IrrigationZoneConfig,
+  IrrigationWateringTime,
+  IrrigationPlantType,
+  IrrigationEmitterType,
+  IrrigationManagedBy,
+} from "../store";
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -320,4 +344,389 @@ export function disconnectRainbird(): unknown {
     if (s.integrations) s.integrations.rainbird = null;
   });
   return { ts: new Date().toISOString(), connected: false };
+}
+
+// ===========================================================================
+// Phase 2 — smart watering plan (zones config, schedules, ET trim, mode, photos).
+// The APP owns the optimized plan; the coordinator actuates it ONLY in mode 'live'
+// + armed (dead-man's-switch suppression of the controller's onboard program). All
+// of this is additive and inert when Rain Bird is unconfigured.
+// ===========================================================================
+
+const PLANT_TYPES: IrrigationPlantType[] = [
+  "lawn",
+  "shrubs",
+  "flowers",
+  "vegetables",
+  "trees",
+  "groundcover",
+  "succulents",
+  "hedge",
+];
+const EMITTER_TYPES: IrrigationEmitterType[] = [
+  "spray",
+  "rotor",
+  "drip",
+  "bubbler",
+  "soaker",
+];
+const MODES: IrrigationMode[] = ["off", "shadow", "live"];
+const WINDOWS: IrrigationWindow[] = [
+  "early-morning",
+  "solar-surplus",
+  "off-peak-P3",
+  "none",
+];
+
+/** A zone config enriched with the LIVE station view + derived plan figures for the UI. */
+export interface IrrigationPlanZone {
+  zoneId: string;
+  name: string;
+  station: number;
+  available: boolean;
+  active: boolean;
+  plantType: IrrigationPlantType;
+  emitterType: IrrigationEmitterType;
+  flowLpm: number; // effective (override or emitter default)
+  kc: number; // effective
+  areaM2: number | null;
+  sunExposure: number | null;
+  managedBy: IrrigationManagedBy;
+  heatTopupEnabled: boolean;
+  rainSkipMm: number | null;
+  photoId: string | null;
+  photoUrl: string | null;
+  wateringTimes: IrrigationWateringTime[];
+  deficitMm: number;
+  /** Today's scheduled (ceiling) minutes for this zone. */
+  scheduledMinToday: number;
+  /** Weather-trimmed minutes the coordinator would run today. */
+  trimmedMinToday: number;
+  savedPctToday: number;
+  /** ≈ litres for the trimmed run today. */
+  litersToday: number;
+  trimReasons: string[];
+  nextRun: { startTime: string; weekday: number } | null;
+}
+
+function photoUrl(photoId: string | undefined): string | null {
+  return photoId
+    ? `/api/irrigation/photos/${encodeURIComponent(photoId)}`
+    : null;
+}
+
+/** Find the next watering time (start) for a zone, scanning the next 7 days. */
+function nextRunFor(
+  zone: IrrigationZoneConfig,
+): { startTime: string; weekday: number } | null {
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  for (let d = 0; d < 7; d++) {
+    const weekday = (now.getDay() + d) % 7;
+    const times = zone.wateringTimes
+      .filter((w) => w.days[weekday])
+      .map((w) => ({ w, min: hhmm(w.startTime) }))
+      .filter(({ min }) => d > 0 || min > nowMin)
+      .sort((a, b) => a.min - b.min);
+    if (times.length) return { startTime: times[0].w.startTime, weekday };
+  }
+  return null;
+}
+
+function hhmm(s: string): number {
+  const [h, m] = s.split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/** Roll the (cached-ish) forecast into the day-weather the engine reasons about. */
+async function dayWeather(): Promise<{ day: DayWeather; ok: boolean }> {
+  const wf = await weather.getForecast();
+  if (!wf)
+    return {
+      day: { et0Mm: 0, precipMm: 0, precipProbabilityPct: 0, peakHourEt0Mm: 0 },
+      ok: false,
+    };
+  return { day: rollupDayWeather(wf), ok: true };
+}
+
+/** GET /api/irrigation/plan — the full Phase-2 plan: mode, global rules, per-zone config +
+ *  live state + today's ET trim, weather rollup, drift flag, header stats, and the log. */
+export async function getIrrigationPlan(): Promise<unknown> {
+  const s = store.get();
+  const irr = s.irrigation;
+  const connected = rainbird.isConfigured();
+
+  // Live station view (best-effort; empty when not connected/unreachable).
+  let stations: rainbird.IrrigationZone[] = [];
+  let liveError: string | null = null;
+  if (connected) {
+    try {
+      stations = await rainbird.getZones();
+    } catch (e) {
+      liveError = (e as Error).message;
+    }
+  }
+  const stationById = new Map(stations.map((z) => [z.id, z]));
+
+  const { day, ok: weatherOk } = await dayWeather();
+  const weekday = new Date().getDay();
+  const trims = computeTrims(irr, weekday, day);
+  const trimById = new Map(trims.map((t) => [t.zoneId, t]));
+
+  const zones: IrrigationPlanZone[] = Object.values(irr.zones)
+    .map((z): IrrigationPlanZone => {
+      const st = stationById.get(z.zoneId);
+      const trim = trimById.get(z.zoneId);
+      const scheduled = scheduledMinForDay(z, weekday);
+      return {
+        zoneId: z.zoneId,
+        name: z.name,
+        station: st?.station ?? (Number(z.zoneId.replace("rb-", "")) || 0),
+        available: st?.available ?? false,
+        active: st?.active ?? false,
+        plantType: z.plantType,
+        emitterType: z.emitterType,
+        flowLpm: flowLpmFor(z),
+        kc: kcFor(z),
+        areaM2: z.areaM2 ?? null,
+        sunExposure: z.sunExposure ?? null,
+        managedBy: z.managedBy,
+        heatTopupEnabled: z.heatTopupEnabled,
+        rainSkipMm: z.rainSkipMm ?? null,
+        photoId: z.photoId ?? null,
+        photoUrl: photoUrl(z.photoId),
+        wateringTimes: z.wateringTimes,
+        deficitMm: irr.deficits[z.zoneId]?.mm ?? 0,
+        scheduledMinToday: scheduled,
+        trimmedMinToday: trim?.trimmedMin ?? scheduled,
+        savedPctToday: trim?.savedPct ?? 0,
+        litersToday: trim?.volumeL ?? 0,
+        trimReasons: trim?.reasons ?? [],
+        nextRun: nextRunFor(z),
+      };
+    })
+    .sort((a, b) => a.station - b.station);
+
+  // Header stats.
+  const plannedTodayMin = zones.reduce((s2, z) => s2 + z.trimmedMinToday, 0);
+  const next =
+    zones
+      .map((z) => z.nextRun)
+      .filter((n): n is { startTime: string; weekday: number } => n !== null)
+      .sort((a, b) => hhmm(a.startTime) - hhmm(b.startTime))[0] ?? null;
+
+  return {
+    ts: new Date().toISOString(),
+    connected,
+    mode: irr.mode,
+    liveAllowed: liveAllowed(s),
+    armed: s.devices.armed,
+    devicesMode: s.devices.mode,
+    globalRainSkipMm: irr.globalRainSkipMm,
+    rainSkipProbabilityPct: irr.rainSkipProbabilityPct,
+    window: irr.window,
+    zones,
+    baselineMirror: irr.baselineMirror,
+    baselineDrift: irr.baselineDrift,
+    weather: weatherOk
+      ? {
+          et0Mm: Math.round(day.et0Mm * 100) / 100,
+          precipMm: Math.round(day.precipMm * 10) / 10,
+          precipProbabilityPct: Math.round(day.precipProbabilityPct),
+        }
+      : null,
+    stats: {
+      zoneCount: zones.length,
+      plannedTodayMin,
+      savedPctToday: daySavedPct(trims),
+      nextRun: next,
+    },
+    log: irr.log.slice(-50).reverse(),
+    lastError: irr.lastError ?? liveError,
+    lastTickAt: irr.lastTickAt,
+  };
+}
+
+/** PUT /api/irrigation/mode — { mode }. Live requires Devices armed (re-checked in coordinator). */
+export function setIrrigationMode(rawMode: unknown): unknown {
+  const mode = String(rawMode) as IrrigationMode;
+  if (!MODES.includes(mode))
+    throw badInput(`mode must be one of ${MODES.join("|")}`);
+  store.update((s) => {
+    s.irrigation.mode = mode;
+    s.irrigation.updatedAt = Date.now();
+  });
+  return { ts: new Date().toISOString(), mode };
+}
+
+/** PUT /api/irrigation/settings — global rules { globalRainSkipMm?, rainSkipProbabilityPct?, window? }. */
+export function setIrrigationGlobal(patch: {
+  globalRainSkipMm?: unknown;
+  rainSkipProbabilityPct?: unknown;
+  window?: unknown;
+}): unknown {
+  store.update((s) => {
+    if (patch.globalRainSkipMm !== undefined) {
+      const v = Number(patch.globalRainSkipMm);
+      if (Number.isFinite(v))
+        s.irrigation.globalRainSkipMm = Math.max(0, Math.min(100, v));
+    }
+    if (patch.rainSkipProbabilityPct !== undefined) {
+      const v = Number(patch.rainSkipProbabilityPct);
+      if (Number.isFinite(v))
+        s.irrigation.rainSkipProbabilityPct = Math.max(0, Math.min(100, v));
+    }
+    if (patch.window !== undefined) {
+      const w = String(patch.window) as IrrigationWindow;
+      if (WINDOWS.includes(w)) s.irrigation.window = w;
+    }
+    s.irrigation.updatedAt = Date.now();
+  });
+  return { ts: new Date().toISOString(), settings: store.get().irrigation };
+}
+
+function defaultZoneConfig(
+  zoneId: string,
+  name?: string,
+): IrrigationZoneConfig {
+  return {
+    zoneId,
+    name: name || `Zone ${zoneId.replace("rb-", "")}`,
+    plantType: "shrubs",
+    emitterType: "spray",
+    managedBy: "app",
+    heatTopupEnabled: false,
+    wateringTimes: [],
+  };
+}
+
+/** PUT /api/irrigation/zones/:id — upsert per-zone agronomic + scheduling config. Validated. */
+export function setIrrigationZone(
+  zoneId: string,
+  patch: Partial<IrrigationZoneConfig>,
+): unknown {
+  if (!/^rb-\d+$/.test(zoneId)) throw badInput("zoneId must be rb-<n>");
+  store.update((s) => {
+    const cur = s.irrigation.zones[zoneId] ?? defaultZoneConfig(zoneId);
+    const next: IrrigationZoneConfig = { ...cur };
+    if (
+      patch.name !== undefined &&
+      typeof patch.name === "string" &&
+      patch.name.trim()
+    )
+      next.name = patch.name.trim();
+    if (
+      patch.plantType !== undefined &&
+      PLANT_TYPES.includes(patch.plantType as IrrigationPlantType)
+    )
+      next.plantType = patch.plantType as IrrigationPlantType;
+    if (
+      patch.emitterType !== undefined &&
+      EMITTER_TYPES.includes(patch.emitterType as IrrigationEmitterType)
+    )
+      next.emitterType = patch.emitterType as IrrigationEmitterType;
+    if (patch.flowLpm !== undefined)
+      next.flowLpm =
+        typeof patch.flowLpm === "number" && patch.flowLpm > 0
+          ? patch.flowLpm
+          : undefined;
+    if (patch.areaM2 !== undefined)
+      next.areaM2 =
+        typeof patch.areaM2 === "number" && patch.areaM2 > 0
+          ? patch.areaM2
+          : undefined;
+    if (patch.sunExposure !== undefined)
+      next.sunExposure =
+        typeof patch.sunExposure === "number"
+          ? Math.max(0, Math.min(1, patch.sunExposure))
+          : undefined;
+    if (patch.kc !== undefined)
+      next.kc =
+        typeof patch.kc === "number" && patch.kc > 0 ? patch.kc : undefined;
+    if (patch.managedBy !== undefined)
+      next.managedBy = patch.managedBy === "controller" ? "controller" : "app";
+    if (patch.heatTopupEnabled !== undefined)
+      next.heatTopupEnabled = patch.heatTopupEnabled === true;
+    if (patch.rainSkipMm !== undefined)
+      next.rainSkipMm =
+        typeof patch.rainSkipMm === "number" && patch.rainSkipMm >= 0
+          ? patch.rainSkipMm
+          : undefined;
+    if (Array.isArray(patch.wateringTimes))
+      next.wateringTimes = patch.wateringTimes
+        .map((w) => coerceWateringTime(w))
+        .filter((w): w is IrrigationWateringTime => w !== null);
+    s.irrigation.zones[zoneId] = next;
+    s.irrigation.updatedAt = Date.now();
+  });
+  return {
+    ts: new Date().toISOString(),
+    zone: store.get().irrigation.zones[zoneId],
+  };
+}
+
+function coerceWateringTime(raw: unknown): IrrigationWateringTime | null {
+  if (!raw || typeof raw !== "object") return null;
+  const w = raw as Partial<IrrigationWateringTime>;
+  if (typeof w.startTime !== "string" || !/^\d{1,2}:\d{2}$/.test(w.startTime))
+    return null;
+  const days =
+    Array.isArray(w.days) && w.days.length === 7
+      ? w.days.map((d) => d === true)
+      : [false, true, true, true, true, true, false];
+  return {
+    id:
+      typeof w.id === "string" && w.id
+        ? w.id
+        : `wt-${randomBytes(4).toString("hex")}`,
+    startTime: w.startTime,
+    durationMin:
+      typeof w.durationMin === "number" && w.durationMin > 0
+        ? Math.min(600, Math.round(w.durationMin))
+        : 10,
+    days,
+  };
+}
+
+/** DELETE /api/irrigation/zones/:id — remove a zone config (and its photo blob). */
+export function deleteIrrigationZone(zoneId: string): unknown {
+  store.update((s) => {
+    const z = s.irrigation.zones[zoneId];
+    if (z?.photoId) deletePhoto(z.photoId);
+    delete s.irrigation.zones[zoneId];
+    delete s.irrigation.deficits[zoneId];
+    s.irrigation.updatedAt = Date.now();
+  });
+  return { ts: new Date().toISOString(), zoneId, removed: true };
+}
+
+// ---- Photo upload / serve ----------------------------------------------------
+
+/** Persist an uploaded photo buffer for a zone and bind it (replacing any previous). */
+export function attachZonePhoto(
+  zoneId: string,
+  buf: Buffer,
+  mime: string,
+): unknown {
+  if (!/^rb-\d+$/.test(zoneId)) throw badInput("zoneId must be rb-<n>");
+  const saved = savePhoto(buf, mime); // throws BAD_INPUT on bad type/size
+  store.update((s) => {
+    const cur = s.irrigation.zones[zoneId] ?? defaultZoneConfig(zoneId);
+    if (cur.photoId) deletePhoto(cur.photoId); // drop the replaced blob
+    s.irrigation.zones[zoneId] = { ...cur, photoId: saved.photoId };
+    s.irrigation.updatedAt = Date.now();
+  });
+  return {
+    ts: new Date().toISOString(),
+    zoneId,
+    photoId: saved.photoId,
+    photoUrl: photoUrl(saved.photoId),
+  };
+}
+
+/** Read a stored photo (route serves the bytes). Returns null when absent. */
+export function getZonePhoto(
+  photoId: string,
+): { buf: Buffer; contentType: string } | null {
+  return readPhoto(photoId);
 }

@@ -205,3 +205,137 @@ The codec is validated against pyrainbird vectors, but the live ESP-TM2 should c
   zone shows as active in the mask (so the UI "watering" state and `activeStationId` are correct).
 - **`StopIrrigation` (`40`)** stops a manual run cleanly (vs only program runs).
 - **`RainDelaySet`/`Get`** units are **days** on this firmware.
+
+---
+
+# Rain Bird irrigation — Phase 2 (smart-watering brain) — BUILT
+
+Phase 2 turns the Phase-1 dumb actuator into a weather-trimming, app-owned watering planner.
+It ships **SHADOW-first** (mode `off` by default; actuates nothing) and is **owner-reviewed,
+not auto-merged** — it can autonomously open valves once enabled.
+
+## Architecture (locked with the owner) — dead-man's-switch reliability
+
+The controller's **onboard program + keypad/switch is the autonomous FLOOR** — we NEVER clear
+or disable it (the earlier Phase-1 note about "clearing the onboard program" is **superseded**).
+The app sits ABOVE it:
+
+- **App/mini HEALTHY + Live →** the coordinator holds a rolling **1-day rain-delay** on the LNK
+  (refreshed every tick) to **SUPPRESS** the onboard program, and runs our **own per-zone,
+  weather-trimmed plan**, firing each zone via `ManuallyRunStation(zone, minutes)` at its
+  scheduled minute (the Phase-1 `issueIrrigation('rb-<n>','run',min)` path).
+- **App/mini/LAN/deploy FAILS →** the rain-delay lapses within ≤1 day → the **controller's
+  onboard program RESUMES on its own**. Fail-safe — the garden never goes dry.
+- The LNK cannot reliably write the controller's program, so we never try. Only writes used:
+  `ManuallyRunStation`, `StopIrrigation`, `RainDelaySet` (all Phase-1).
+
+**Sync (single-writer-per-thing):** the app owns the OPTIMIZED plan (zones, schedules,
+durations, photos, weather rules, suppression delay) and is its only writer. The baseline
+program is owned by the KEYPAD — we **read & mirror it (~daily)**, surface drift
+**non-destructively** (`baselineDrift`), and **never overwrite** it. Live state (active zone,
+rain-delay, manual runs at the unit) is read & reflected each tick. The physical keypad wins.
+
+**SHADOW-FIRST gate:** the coordinator actuates ONLY when `irrigation.mode === 'live'` **AND**
+the Devices layer is armed (`devices.armed && devices.mode !== 'off'`). `issueIrrigation`
+re-checks the arm gate (defence-in-depth). In `shadow` it computes + LOGS the full plan but
+refreshes nothing and fires nothing. It never opens a valve on boot (`last` baseline tick).
+
+## ET / weather engine (`control/irrigation-engine.ts`, pure + unit-tested)
+
+- `weather.ts` extended (Open-Meteo, no key) to also fetch `et0_fao_evapotranspiration`,
+  `precipitation`, `precipitation_probability`, `relative_humidity_2m`, `wind_speed_10m`
+  (existing fields kept; all padded/clamped defensively).
+- Per-zone water-need: **ETc = ET₀ × Kc × sunExposure** (Kc by plant type, override-able);
+  **effective rainfall = precip × 0.8** reduces need; a rolling per-zone **soil-water-balance
+  deficit (mm)** = Σ(ETc − effective_rain − applied), clamped ≥ 0 (`advanceDeficit`).
+- The schedule duration is the **CEILING**; weather only **TRIMS down**: rain-skip (precip ≥
+  threshold or probability ≥ threshold → 0), low-ET reduction (run sized to deficit ÷ the
+  zone's precip-rate mm/min, never above the ceiling), optional **heat top-up** (opted-in zones
+  on a hot/high-ET day, still ≤ ceiling). A real soil-moisture reading (when present) overrides
+  the model. Exposes **saved-vs-plan %** (`daySavedPct`).
+
+## Data model (`store.ts`, additive + defensively migrated)
+
+`irrigation: IrrigationState` — `mode` (off|shadow|live), `globalRainSkipMm`,
+`rainSkipProbabilityPct`, `window` (early-morning|solar-surplus|off-peak-P3|none), per-zone
+`zones` (name, plant type, emitter, flow L/min or emitter default, area m², sun, Kc, managed-by
+app|controller, heat-topup, rain-skip override, **photoId**, **weekly `wateringTimes`** =
+`{startTime, durationMin, days[7]}`), per-zone `deficits`, `soilMoisture` (future-sensor
+interface), `baselineMirror` + `baselineDrift`, a pruned `log`, `lastError`, `lastTickAt`.
+Defaults are **inert** (mode `off`, no zones). `hydrateIrrigation` validates/clamps every field
+so a malformed or pre-Phase-2 `state.json` can never break the coordinator.
+
+## Photo storage (`irrigation/photos.ts` + routes)
+
+One garden photo per zone, stored **on disk** at `<dataDir>/irrigation-photos/<token>.<ext>`
+(opaque id; never the user filename) — kept OUT of the hot `state.json`. Upload validates type
+(JPEG/PNG/WebP) + size (≤ 8 MB) and replaces the previous blob. **Photos are never sent to the
+controller.** Served back at `GET /api/irrigation/photos/:photoId`.
+
+## Coordinator (`control/irrigation-coordinator.ts`, registered in `index.ts`)
+
+`startIrrigationCoordinator()`, shaped like the other coordinators, ticks ~60s:
+
+- Reads live controller state (active zone + rain-delay) and reflects it; alerts + sets
+  `lastError` if the box stops answering (unreachable). All LNK I/O is serialized (single-
+  request rule) — reads/writes issued sequentially, never in parallel.
+- `mode==='live' && healthy` → refresh the suppression rain-delay (only writes when it has
+  drifted below the 1-day target; a manually-set longer delay at the keypad is left) → fire due
+  zones (edge-triggered at each watering-time start, incl. the midnight straddle) for the
+  weather-trimmed minutes → **read back the active station to CONFIRM** the valve opened (logs a
+  `confirm` ok/not) → pay down the zone's deficit by applied depth.
+- `mode==='shadow'` (or live-but-disarmed/unreachable) → compute + **log** what it WOULD do.
+- Prefers the owner's watering window via `tariff.ts bandFor` + live `climateSurplusW` — but
+  only as a log annotation/tie-breaker, **never** deferring a due run at the expense of plant
+  health.
+- Mirrors the baseline (~daily) for non-destructive drift surfacing. Forecast cached 30 min so
+  a 60 s tick doesn't hammer Open-Meteo. The whole tick is wrapped — it never throws into boot.
+
+## HTTP surface (`routes/irrigation.ts`, registered in `index.ts`)
+
+Reads any-authed; plan writes admin-gated. Literal sub-paths registered **before** the bare
+`:id` so they aren't captured:
+
+- `GET /api/irrigation/plan` — full plan: mode, liveAllowed, armed, global rules, per-zone
+  config + live state + today's trim (scheduled/trimmed/saved%/≈L/reasons/nextRun), weather
+  rollup, drift flag, header stats, recent log.
+- `PUT /api/irrigation/mode` `{mode}` · `PUT /api/irrigation/settings` (global rules) ·
+  `PUT /api/irrigation/zones/:id` (upsert zone config + schedule) · `DELETE …/zones/:id` ·
+  `POST …/zones/:id/photo` (multipart `photo`) · `GET …/photos/:photoId`.
+
+## Irrigation screen (web + mobile, `screens/Irrigation.tsx`)
+
+Rebuilt to the approved design, branching on `ctx.desktop`, "Power" system:
+
+- **Header stats** (next run, planned today, weather-saved %, zones) + a **mode control**
+  (Off / Shadow / **Live**) — Live behind admin **and** the Devices arm, with an explicit
+  confirm modal. Global watering-window + rain-skip rules. Baseline-drift + lastError surfaced.
+- **Photo zone grid** — each card = the garden photo (or placeholder), name, plant type, trim
+  chips, next run, ≈L, a running indicator, and a **Water-now / Stop** (admin + armed).
+- **Zone editor** (modal) — real **upload-and-change photo** flow, agronomic config (plant /
+  emitter / managed-by / heat-topup), and a **schedule editor** of watering-time cards: start
+  time + a prominent duration **stepper (− min +)** with a live ≈L estimate + **weekday toggle
+  pills**.
+- A **recent-decisions** log (shadow/live badge per entry).
+
+## Done / verification
+
+- `pnpm -C apps/api typecheck` + `pnpm -C apps/web typecheck` clean; `pnpm -C apps/web build`
+  succeeds; Prettier clean on all touched files.
+- **Unit tests** (`control/irrigation-engine.test.ts`, tsx node:test) — 21/21 pass: Kc/ETc/
+  precip-rate/deficit math, all TRIM rules (rain-skip mm + probability + per-zone override,
+  low-ET reduction, heat top-up, soil-moisture override, **ceiling invariant**), `daySavedPct`,
+  and the coordinator's pure helpers (edge `crossed` incl. midnight straddle, `dueWateringTimes`,
+  `scheduledMinForDay`, `windowFavorable`). Phase-1 `rainbird.test.ts` still 10/10.
+- Ships SHADOW (mode `off`) by default; inert when Rain Bird is unconfigured; does not touch
+  `/api/devices`, rooms, or the Phase-1 manual run/stop/rain-delay path.
+
+### Owner must verify against the REAL controller before going Live
+
+- **RainDelay-as-suppression:** confirm a 1-day `RainDelaySet` actually pauses the onboard
+  program (and that it lapses → the program resumes) — this is the dead-man's switch.
+- **`ManuallyRunStation` duration units** = minutes (a "10" run waters ~10 min, not seconds).
+- **Read-back active-station** shows the fired zone as active during a manual run (so the
+  `confirm` step is meaningful and the UI running indicator is correct).
+- Per-zone **flow L/min** (or emitter defaults) and **area m²** so the ≈L estimates + deficit
+  sizing are realistic; tune Kc/rain-skip thresholds for the Jávea garden.

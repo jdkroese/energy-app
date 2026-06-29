@@ -8,9 +8,15 @@
 //   production → /opt/energy/state.json (writable by the jdkroese01 service user)
 //   dev        → <repoRoot>/.data/state.json
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import type { Band } from './tariff';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, resolve } from "node:path";
+import type { Band } from "./tariff";
 
 // ---- Types --------------------------------------------------------------
 
@@ -36,7 +42,7 @@ export interface RuleState {
   enabled: boolean;
 }
 
-export type AlertStatus = 'new' | 'ack' | 'resolved';
+export type AlertStatus = "new" | "ack" | "resolved";
 export interface AlertOverride {
   status: AlertStatus;
 }
@@ -78,13 +84,13 @@ export interface ScenarioDef {
   /** Allow charging the battery from the grid (cheap P3 windows). */
   gridCharge: boolean;
   /** Export policy hint shown in the UI / used by the shadow plan. */
-  exportRule: 'never' | 'surplus' | 'always';
+  exportRule: "never" | "surplus" | "always";
   /** EV charging policy hint. */
-  ev: 'solar-only' | 'cheap-grid' | 'asap';
+  ev: "solar-only" | "cheap-grid" | "asap";
   /** Thermal pre-conditioning before P1 peaks. */
   precondition: boolean;
   /** How the scenario is activated. */
-  activation: 'manual' | 'auto';
+  activation: "manual" | "auto";
   /** Optional auto-activation trigger description. */
   trigger: string;
 }
@@ -106,9 +112,9 @@ export interface VapidKeys {
 
 // ---- Auth ---------------------------------------------------------------
 
-export type UserRole = 'admin' | 'user' | 'kiosk';
-export type TwoFactorChannel = 'whatsapp' | 'email';
-export type OtpPurpose = 'login' | 'reset';
+export type UserRole = "admin" | "user" | "kiosk";
+export type TwoFactorChannel = "whatsapp" | "email";
+export type OtpPurpose = "login" | "reset";
 
 export interface AuthUser {
   id: string;
@@ -188,8 +194,8 @@ export interface AuthState {
 
 // ---- Battery control --------------------------------------------------------
 
-export type ControlMode = 'off' | 'manual' | 'auto';
-export type ControlDevice = 'sonnen' | 'tesla';
+export type ControlMode = "off" | "manual" | "auto";
+export type ControlDevice = "sonnen" | "tesla";
 
 export interface ControlLogEntry {
   ts: number;
@@ -223,7 +229,7 @@ export interface ControlGuardrails {
 // Each has its own enable + authority (shadow logs only / auto writes) and a
 // throughput cap (kW) beyond which the OTHER battery is allowed to join in.
 
-export type BatteryPriorityAuthority = 'shadow' | 'auto';
+export type BatteryPriorityAuthority = "shadow" | "auto";
 
 export interface BatteryPriorityRule {
   enabled: boolean;
@@ -313,10 +319,15 @@ export const LOG_RETENTION_MS = 48 * 60 * 60 * 1000;
 export const LOG_MAX_ENTRIES = 5000;
 
 /** Prune a ts-stamped log to the 48h retention window, with a hard safety ceiling on count. */
-export function pruneLog<T extends { ts: number }>(log: T[], now: number = Date.now()): T[] {
+export function pruneLog<T extends { ts: number }>(
+  log: T[],
+  now: number = Date.now(),
+): T[] {
   const cutoff = now - LOG_RETENTION_MS;
   const recent = log.filter((e) => e.ts >= cutoff);
-  return recent.length > LOG_MAX_ENTRIES ? recent.slice(-LOG_MAX_ENTRIES) : recent;
+  return recent.length > LOG_MAX_ENTRIES
+    ? recent.slice(-LOG_MAX_ENTRIES)
+    : recent;
 }
 
 // ---- Devices / Climate ------------------------------------------------------
@@ -394,7 +405,15 @@ export interface AlarmConfig {
 /** Sensible defaults: enabled, all speakers + all lights, 80% volume, ~1 Hz blink
  *  (500 ms half-period), 10-min safety cap. */
 export function defaultAlarmConfig(): AlarmConfig {
-  return { enabled: true, speakerIds: [], volumePct: 80, lightIds: [], blinkMs: 500, autoStopSec: 600, volumeBumpedTo80: true };
+  return {
+    enabled: true,
+    speakerIds: [],
+    volumePct: 80,
+    lightIds: [],
+    blinkMs: 500,
+    autoStopSec: 600,
+    volumeBumpedTo80: true,
+  };
 }
 
 /** Per-device user-facing settings, merged onto the connector's normalized view. */
@@ -440,14 +459,21 @@ export interface DeviceSettings {
   learnedDrawW?: number;
 }
 
-export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
+export type ClimateMode = "auto" | "heat" | "dry" | "fan" | "cool";
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers' | 'irrigation';
+export type DeviceType =
+  | "cooling"
+  | "heating"
+  | "lighting"
+  | "circuit"
+  | "blinds"
+  | "speakers"
+  | "irrigation";
 
 /** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
-export type FanSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
-export type VaneSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
+export type FanSetting = "auto" | 1 | 2 | 3 | 4 | 5;
+export type VaneSetting = "auto" | 1 | 2 | 3 | 4 | 5;
 
 /** The device action a rule applies during its windows. Type-adaptive: climate
  *  units read mode/setpoint/fan/vanes; blinds read only positionPct (the climate
@@ -469,7 +495,7 @@ export interface Action {
   direction?: string;
 }
 
-export type TimeAnchor = 'fixed' | 'sunrise' | 'sunset';
+export type TimeAnchor = "fixed" | "sunrise" | "sunset";
 
 export interface ScheduleWindow {
   /** Local "HH:MM". Used when anchor is 'fixed'; kept as display/fallback for solar anchors. */
@@ -488,14 +514,14 @@ export interface ScheduleWindow {
 }
 
 export type RunCondition =
-  | { kind: 'always' }
-  | { kind: 'warmerThan'; thresholdC: number } // run only if room temp > threshold (cooling)
-  | { kind: 'coolerThan'; thresholdC: number }; // run only if room temp < threshold (heating)
+  | { kind: "always" }
+  | { kind: "warmerThan"; thresholdC: number } // run only if room temp > threshold (cooling)
+  | { kind: "coolerThan"; thresholdC: number }; // run only if room temp < threshold (heating)
 
 /** A rule targets ONE unit (or a single named group), never an array of devices. */
 export type ScheduleScope =
-  | { kind: 'unit'; deviceId: string }
-  | { kind: 'group'; groupId: string };
+  | { kind: "unit"; deviceId: string }
+  | { kind: "group"; groupId: string };
 
 /**
  * A scheduling RULE (called a "rule" in the UI). Belongs to a single unit/group
@@ -525,7 +551,10 @@ export interface Schedule {
 // either. The two rules share ONE param shape (below) to minimise churn: a cooling rule
 // reads the cooling fields (roomTempLimitC → targetSetpointC) and a heating rule reads the
 // heating fields (heatRoomFloorC → heatTargetSetpointC).
-export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat' | 'tariff_arbitrage';
+export type AutomationType =
+  | "solar_surplus_precool"
+  | "solar_surplus_preheat"
+  | "tariff_arbitrage";
 
 /**
  * Params shared by both single-direction solar-surplus rules. A rule reads only the
@@ -597,7 +626,7 @@ export interface TariffArbitrageParams {
    * valley grid-charge (spends money). The owner reviews the captured advisory data, then
    * flips to 'active'. Any persisted rule missing this field hydrates to 'advisory'.
    */
-  executionMode: 'advisory' | 'active';
+  executionMode: "advisory" | "active";
   /**
    * CERTAINTY GATE (item 2): only pre-buy when ≥ this % sure the next peak's solar falls short.
    * The forecast solar over the peak is inflated to its optimistic percentile (z(p)·σ above the
@@ -636,12 +665,17 @@ export interface TariffArbitrageParams {
 // state.json). See control/arbitrage-log.ts for the writer. Advisory (modelled) vs active
 // (realized) savings are tracked apart so the UI can label them.
 
-export type ArbitrageEventType = 'plan' | 'engage' | 'revert' | 'standdown' | 'deviation';
+export type ArbitrageEventType =
+  | "plan"
+  | "engage"
+  | "revert"
+  | "standdown"
+  | "deviation";
 
 export interface ArbitrageEvent {
   ts: number;
   type: ArbitrageEventType;
-  executionMode: 'advisory' | 'active';
+  executionMode: "advisory" | "active";
   band: Band;
   /** P1−P3 spread (€/kWh) at the event. */
   spreadEur: number;
@@ -671,7 +705,7 @@ export interface ArbitrageEvent {
   /** Forecast-vs-actual divergence that triggered a re-plan (item 4). Only set on `deviation`
    *  events; null otherwise. `input` = which forecast input crossed its tolerance. */
   deviation?: {
-    input: 'solar' | 'load' | 'solar+load';
+    input: "solar" | "load" | "solar+load";
     solarForecastKw: number;
     solarLiveKw: number;
     loadForecastKw: number;
@@ -706,7 +740,9 @@ export interface ArbitrageStats {
 
 /** Discriminated automation params: the surplus rules carry the climate shape; the
  *  tariff-arbitrage rule carries the battery shape. The coordinator narrows on `type`. */
-export type AutomationParams = SolarSurplusPrecoolParams | TariffArbitrageParams;
+export type AutomationParams =
+  | SolarSurplusPrecoolParams
+  | TariffArbitrageParams;
 
 export interface Automation {
   id: string;
@@ -724,7 +760,7 @@ export interface Automation {
 export function isTariffArbitrage(
   a: Automation,
 ): a is Automation & { params: TariffArbitrageParams } {
-  return a.type === 'tariff_arbitrage';
+  return a.type === "tariff_arbitrage";
 }
 
 /**
@@ -733,14 +769,14 @@ export function isTariffArbitrage(
  * keys off these. Older installs may carry a different persisted id for the same rule;
  * the de-dupe collapses by `type` so a relabeled instance is treated as the same rule.
  */
-export const SOLAR_SURPLUS_COOL_AUTOMATION_ID = 'solar-surplus-cool';
-export const SOLAR_SURPLUS_HEAT_AUTOMATION_ID = 'solar-surplus-heat';
+export const SOLAR_SURPLUS_COOL_AUTOMATION_ID = "solar-surplus-cool";
+export const SOLAR_SURPLUS_HEAT_AUTOMATION_ID = "solar-surplus-heat";
 /** @deprecated kept for back-compat with any importers of the pre-split single id. */
 export const SOLAR_SURPLUS_AUTOMATION_ID = SOLAR_SURPLUS_COOL_AUTOMATION_ID;
 
 /** STABLE canonical id for the seeded tariff-arbitrage default (task #15). Pinned so a
  *  relabel never drifts the id; the dismissal + de-dupe logic keys off it (and its type). */
-export const TARIFF_ARBITRAGE_AUTOMATION_ID = 'tariff-arbitrage';
+export const TARIFF_ARBITRAGE_AUTOMATION_ID = "tariff-arbitrage";
 
 /** Conservative default params for the tariff-arbitrage rule. Defaults match the
  *  owner-approved proposal; valley/peak default to the live tariff bands (P3/P1). */
@@ -752,11 +788,11 @@ export function defaultTariffArbitrageParams(): TariffArbitrageParams {
     dischargeFloorPct: 20,
     solarShortfallOnly: true,
     surplusOverridesGridCharge: true,
-    valleyBand: 'P3',
-    peakBand: 'P1',
+    valleyBand: "P3",
+    peakBand: "P1",
     // Production rollout: ship in ADVISORY (shadow) mode — observe & log, never command
     // the battery. The owner flips to 'active' after reviewing the captured data.
-    executionMode: 'advisory',
+    executionMode: "advisory",
     solarConfidencePct: 70,
     prePeakSurplusGuardHours: 2,
     prePeakSurplusMarginPct: 30,
@@ -890,7 +926,7 @@ export interface HomeSceneClimateMember {
 export interface HomeSceneBlindMember {
   /** Tuya blind id, OR the sentinel '*' meaning "all blinds" (used by all-off scenes). */
   blindId: string;
-  action: 'open' | 'close' | 'position';
+  action: "open" | "close" | "position";
   /** Target % open (0–100) when action is 'position'; null/undefined otherwise. */
   positionPct?: number | null;
 }
@@ -904,7 +940,7 @@ export interface HomeScene {
   favorite?: boolean;
   /** When set, apply turns ALL lights + climate off and (optionally) closes blinds —
    *  no explicit member IDs needed (works on any install). 'all-off' is the only kind. */
-  special?: 'all-off';
+  special?: "all-off";
   /** Per-light targets (reuses the existing light-scene member shape). */
   lights: LightSceneMember[];
   /** Per-climate-unit targets (power + optional mode/setpoint). */
@@ -914,8 +950,8 @@ export interface HomeScene {
 }
 
 export type LightScheduleTarget =
-  | { kind: 'scene'; sceneId: string }
-  | { kind: 'lights'; members: LightSceneMember[] };
+  | { kind: "scene"; sceneId: string }
+  | { kind: "lights"; members: LightSceneMember[] };
 
 export interface LightSchedule {
   id: string;
@@ -1019,6 +1055,158 @@ export interface RadioNowPlaying {
   startedAt: string;
 }
 
+// ---- Irrigation (Rain Bird Phase 2: smart-watering brain) -----------------
+// The APP owns the optimized plan; the controller's onboard weekly program is the
+// autonomous reliability FLOOR. When healthy the coordinator SUPPRESSES that program
+// with a rolling 1-day rain-delay and fires each zone itself; if the app/mini fails
+// the delay lapses and the controller resumes on its own (dead-man's switch).
+
+/** Mode of the irrigation coordinator:
+ *  - 'off'    : coordinator does nothing (no suppression, no firing). Controller's onboard
+ *               program runs (whatever the keypad set). Default.
+ *  - 'shadow' : computes + LOGS the full plan every tick but actuates NOTHING (no delay
+ *               refresh, no zone firing). SHADOW-FIRST safety — ships here.
+ *  - 'live'   : refreshes the suppression rain-delay and fires zones per the trimmed plan.
+ *               Gated behind the SAME arm model as the other coordinators (armed+mode!=off). */
+export type IrrigationMode = "off" | "shadow" | "live";
+
+/** Plant / crop type → drives the crop coefficient (Kc) used in the ETc calc. */
+export type IrrigationPlantType =
+  | "lawn"
+  | "shrubs"
+  | "flowers"
+  | "vegetables"
+  | "trees"
+  | "groundcover"
+  | "succulents"
+  | "hedge";
+
+/** Emitter type → a rough default flow (L/min) when the owner hasn't measured one. */
+export type IrrigationEmitterType =
+  | "spray"
+  | "rotor"
+  | "drip"
+  | "bubbler"
+  | "soaker";
+
+/** Who owns a zone's schedule: the APP (we fire it) or the CONTROLLER baseline (keypad). */
+export type IrrigationManagedBy = "app" | "controller";
+
+/** One watering time on a zone's weekly schedule: a start time, a duration CEILING, and
+ *  the weekdays it runs. The ET engine only ever TRIMS the duration down from here. */
+export interface IrrigationWateringTime {
+  id: string;
+  /** Local "HH:MM" start. */
+  startTime: string;
+  /** Scheduled (max) duration in minutes — the ceiling the ET engine trims from. */
+  durationMin: number;
+  /** Weekdays this time runs on (index 0=Sun..6=Sat). */
+  days: boolean[];
+}
+
+/** Per-zone agronomic + scheduling config, keyed by station id (`rb-<n>`). */
+export interface IrrigationZoneConfig {
+  /** Station device id (`rb-<station>`). */
+  zoneId: string;
+  /** Friendly zone name (overrides the bare "Zone N"). */
+  name: string;
+  plantType: IrrigationPlantType;
+  emitterType: IrrigationEmitterType;
+  /** Emitter flow in L/min. When undefined the emitter-type default is used. */
+  flowLpm?: number;
+  /** Zone area in m² (optional; used for volume/precip-rate context). */
+  areaM2?: number;
+  /** Sun exposure 0..1 (1 = full sun) — scales the ET demand. */
+  sunExposure?: number;
+  /** Crop coefficient override. When undefined the plant-type default Kc is used. */
+  kc?: number;
+  /** App fires this zone, or the controller baseline owns it (we never fire it). */
+  managedBy: IrrigationManagedBy;
+  /** Allow a HEAT top-up (add minutes back) on very hot/high-ET days. Default off. */
+  heatTopupEnabled: boolean;
+  /** Per-zone rain-skip threshold (mm of forecast precip). Falls back to the global one. */
+  rainSkipMm?: number;
+  /** Photo asset id (served from /api/irrigation/photos/<id>). Never sent to the controller. */
+  photoId?: string;
+  /** The zone's weekly watering times (the ceiling schedule). */
+  wateringTimes: IrrigationWateringTime[];
+}
+
+/** A rolling per-zone soil-water-balance deficit (mm), updated as runs are applied/logged. */
+export interface IrrigationDeficit {
+  /** Current modelled deficit in mm (Σ ETc − effective rain − applied irrigation; ≥ 0). */
+  mm: number;
+  /** ISO timestamp the deficit was last advanced. */
+  updatedAt: string;
+}
+
+/** A future soil-moisture-sensor reading interface (not yet wired to hardware). When
+ *  present for a zone it OVERRIDES the modelled deficit; the ET model is the fallback. */
+export interface SoilMoistureReading {
+  zoneId: string;
+  /** Volumetric moisture 0..100 (%). */
+  pct: number;
+  ts: string;
+}
+
+/** A non-destructive snapshot of the controller's baseline program, mirrored ~daily so
+ *  we can surface drift ("baseline changed — update mirror?") without ever overwriting it. */
+export interface IrrigationBaselineMirror {
+  /** ISO timestamp the mirror was last refreshed from the controller. */
+  ts: string;
+  /** Rain-delay days the controller reported (our suppression delay shows up here too). */
+  rainDelayDays: number;
+  /** Station ids the controller reported as available, for drift detection. */
+  availableStationIds: string[];
+}
+
+/** Preferred window to bias watering into (never at the expense of plant health). */
+export type IrrigationWindow =
+  | "early-morning"
+  | "solar-surplus"
+  | "off-peak-P3"
+  | "none";
+
+/** One logged coordinator decision (shadow or live) for the irrigation activity feed. */
+export interface IrrigationLogEntry {
+  ts: number;
+  zoneId: string;
+  /** What the coordinator did / would do. */
+  action: "plan" | "fire" | "trim" | "skip" | "suppress" | "confirm" | "alert";
+  /** True = actually actuated (live); false = shadow / would-do / informational. */
+  live: boolean;
+  ok: boolean;
+  detail: string;
+}
+
+/** The whole irrigation Phase-2 state block. Additive + defensively migrated. */
+export interface IrrigationState {
+  mode: IrrigationMode;
+  /** Global rain-skip threshold (mm forecast precip ⇒ skip). Per-zone may override. */
+  globalRainSkipMm: number;
+  /** Global precip-probability skip threshold (%). */
+  rainSkipProbabilityPct: number;
+  /** Preferred watering window the coordinator biases into. */
+  window: IrrigationWindow;
+  /** Per-zone configs keyed by zoneId (`rb-<n>`). */
+  zones: Record<string, IrrigationZoneConfig>;
+  /** Per-zone rolling soil-water-balance deficit (mm). */
+  deficits: Record<string, IrrigationDeficit>;
+  /** Latest soil-moisture sensor readings by zoneId (future hardware; usually empty). */
+  soilMoisture: Record<string, SoilMoistureReading>;
+  /** Mirror of the controller's baseline program + a drift flag. */
+  baselineMirror: IrrigationBaselineMirror | null;
+  /** True when the last baseline re-read differed from the mirror (surfaced, non-destructive). */
+  baselineDrift: boolean;
+  /** Coordinator activity log (shadow + live decisions), pruned like devices.log. */
+  log: IrrigationLogEntry[];
+  /** Last error surfaced from a coordinator tick (e.g. box unreachable), or null. */
+  lastError: string | null;
+  /** ISO timestamp of the last successful coordinator tick. */
+  lastTickAt: string | null;
+  updatedAt: number;
+}
+
 export interface StoreSchema {
   channels: Channels;
   rules: RuleState[];
@@ -1069,6 +1257,10 @@ export interface StoreSchema {
   radioSchedules: RadioSchedule[];
   /** The active radio now-playing session (with the real target speakers), or null. */
   radioNowPlaying: RadioNowPlaying | null;
+  /** Rain Bird Phase-2 smart-watering state (zones, schedules, deficits, mode). The
+   *  coordinator ships in 'shadow' by default — it actuates nothing until the owner
+   *  flips it to 'live' AND the Devices layer is armed. */
+  irrigation: IrrigationState;
 }
 
 /**
@@ -1081,7 +1273,14 @@ export interface CapabilityOverride {
   /** The Tuya DP code this override targets. */
   dp: string;
   /** Force a different capability kind (e.g. an `action` the user knows is a `switch`). */
-  kind?: 'switch' | 'range' | 'enum' | 'action' | 'color' | 'measure' | 'status';
+  kind?:
+    | "switch"
+    | "range"
+    | "enum"
+    | "action"
+    | "color"
+    | "measure"
+    | "status";
   /** Custom label (replaces the inferred one). */
   label?: string;
   /** Hide this capability from the control surface entirely. */
@@ -1124,14 +1323,14 @@ export interface DeviceOnboardingState {
 // ---- Defaults -----------------------------------------------------------
 
 export const DEFAULT_RULES: RuleState[] = [
-  { id: 'rule-grid-charge', enabled: true },
-  { id: 'rule-reserve', enabled: true },
-  { id: 'rule-offline', enabled: true },
-  { id: 'rule-outage', enabled: true },
-  { id: 'rule-export', enabled: false },
+  { id: "rule-grid-charge", enabled: true },
+  { id: "rule-reserve", enabled: true },
+  { id: "rule-offline", enabled: true },
+  { id: "rule-outage", enabled: true },
+  { id: "rule-export", enabled: false },
   // The voltage rule's enable-state is owned by voltageMonitor.enabled (its own config),
   // but it appears in the rules list so it surfaces in the feed/labels like the others.
-  { id: 'rule-voltage', enabled: true },
+  { id: "rule-voltage", enabled: true },
 ];
 
 /** Grid-voltage monitor defaults — ENABLED, band 190–240 V, breaker auto-picked. */
@@ -1141,56 +1340,56 @@ export function defaultVoltageMonitor(): VoltageMonitor {
 
 export const DEFAULT_SCENARIOS: Record<string, ScenarioDef> = {
   balanced: {
-    name: 'Balanced',
-    icon: 'scale',
+    name: "Balanced",
+    icon: "scale",
     weights: { save: 0.4, self: 0.3, indep: 0.2, comfort: 0.1 },
     reserve: 20,
     dynReserve: false,
     gridCharge: false,
-    exportRule: 'surplus',
-    ev: 'solar-only',
+    exportRule: "surplus",
+    ev: "solar-only",
     precondition: true,
-    activation: 'manual',
-    trigger: '',
+    activation: "manual",
+    trigger: "",
   },
-  'max-savings': {
-    name: 'Max savings',
-    icon: 'piggy-bank',
+  "max-savings": {
+    name: "Max savings",
+    icon: "piggy-bank",
     weights: { save: 0.7, self: 0.2, indep: 0.05, comfort: 0.05 },
     reserve: 10,
     dynReserve: false,
     gridCharge: true,
-    exportRule: 'surplus',
-    ev: 'cheap-grid',
+    exportRule: "surplus",
+    ev: "cheap-grid",
     precondition: true,
-    activation: 'manual',
-    trigger: '',
+    activation: "manual",
+    trigger: "",
   },
-  'self-sufficient': {
-    name: 'Self-sufficient',
-    icon: 'leaf',
+  "self-sufficient": {
+    name: "Self-sufficient",
+    icon: "leaf",
     weights: { save: 0.2, self: 0.5, indep: 0.25, comfort: 0.05 },
     reserve: 20,
     dynReserve: true,
     gridCharge: false,
-    exportRule: 'never',
-    ev: 'solar-only',
+    exportRule: "never",
+    ev: "solar-only",
     precondition: true,
-    activation: 'manual',
-    trigger: '',
+    activation: "manual",
+    trigger: "",
   },
-  'storm-ready': {
-    name: 'Storm-ready',
-    icon: 'shield',
+  "storm-ready": {
+    name: "Storm-ready",
+    icon: "shield",
     weights: { save: 0.15, self: 0.25, indep: 0.5, comfort: 0.1 },
     reserve: 50,
     dynReserve: true,
     gridCharge: true,
-    exportRule: 'never',
-    ev: 'asap',
+    exportRule: "never",
+    ev: "asap",
     precondition: false,
-    activation: 'auto',
-    trigger: 'Storm watch or red weather warning for the area',
+    activation: "auto",
+    trigger: "Storm watch or red weather warning for the area",
   },
 };
 
@@ -1198,7 +1397,7 @@ export const DEFAULT_SCENARIOS: Record<string, ScenarioDef> = {
 export function defaultControl(): ControlState {
   return {
     armed: false,
-    mode: 'off',
+    mode: "off",
     updatedAt: Date.now(),
     lastError: null,
     log: [],
@@ -1220,8 +1419,12 @@ export function defaultControl(): ControlState {
  *  intended actions and write nothing until promoted to 'auto' in the UI. */
 export function defaultBatteryPriority(): BatteryPriority {
   return {
-    dischargeSonnenFirst: { enabled: true, authority: 'shadow', throughputKw: 3.0 },
-    chargeTeslaFirst: { enabled: true, authority: 'shadow', throughputKw: 3.0 },
+    dischargeSonnenFirst: {
+      enabled: true,
+      authority: "shadow",
+      throughputKw: 3.0,
+    },
+    chargeTeslaFirst: { enabled: true, authority: "shadow", throughputKw: 3.0 },
   };
 }
 
@@ -1248,7 +1451,7 @@ export function defaultEvSurplus(): EvSurplusTunables {
 export function defaultDevices(): DevicesState {
   return {
     armed: false,
-    mode: 'off',
+    mode: "off",
     updatedAt: Date.now(),
     lastError: null,
     log: [],
@@ -1277,9 +1480,9 @@ export function defaultAutomations(): Automation[] {
   return [
     {
       id: SOLAR_SURPLUS_COOL_AUTOMATION_ID,
-      name: 'Solar-surplus cooling',
+      name: "Solar-surplus cooling",
       enabled: false,
-      type: 'solar_surplus_precool',
+      type: "solar_surplus_precool",
       params: {
         roomTempLimitC: 25,
         targetSetpointC: 23,
@@ -1287,16 +1490,16 @@ export function defaultAutomations(): Automation[] {
         heatTargetSetpointC: 21,
         surplusClearSec: 120,
         bandRestrictionEnabled: true,
-        exitBand: 'P1',
+        exitBand: "P1",
         startThresholdW: 800,
       },
       lastEval: null,
     },
     {
       id: SOLAR_SURPLUS_HEAT_AUTOMATION_ID,
-      name: 'Solar-surplus heating',
+      name: "Solar-surplus heating",
       enabled: false,
-      type: 'solar_surplus_preheat',
+      type: "solar_surplus_preheat",
       params: {
         roomTempLimitC: 25,
         targetSetpointC: 23,
@@ -1304,7 +1507,7 @@ export function defaultAutomations(): Automation[] {
         heatTargetSetpointC: 21,
         surplusClearSec: 120,
         bandRestrictionEnabled: true,
-        exitBand: 'P1',
+        exitBand: "P1",
         startThresholdW: 800,
       },
       lastEval: null,
@@ -1313,9 +1516,9 @@ export function defaultAutomations(): Automation[] {
       // Tariff arbitrage (task #15) — battery rule. SEEDED DISABLED: shipping it must NOT
       // change battery behavior. It only ever acts when enabled && armed && mode==='auto'.
       id: TARIFF_ARBITRAGE_AUTOMATION_ID,
-      name: 'Tariff arbitrage',
+      name: "Tariff arbitrage",
       enabled: false,
-      type: 'tariff_arbitrage',
+      type: "tariff_arbitrage",
       params: defaultTariffArbitrageParams(),
       lastEval: null,
     },
@@ -1333,22 +1536,22 @@ export function defaultAutomations(): Automation[] {
 export function defaultHomeScenes(): HomeScene[] {
   return [
     {
-      id: 'home-scene-good-night',
-      name: 'Good night',
-      icon: 'moon',
-      special: 'all-off',
+      id: "home-scene-good-night",
+      name: "Good night",
+      icon: "moon",
+      special: "all-off",
       lights: [],
       climate: [],
-      blinds: [{ blindId: '*', action: 'close' }],
+      blinds: [{ blindId: "*", action: "close" }],
     },
     {
-      id: 'home-scene-away',
-      name: 'Away',
-      icon: 'door-exit',
-      special: 'all-off',
+      id: "home-scene-away",
+      name: "Away",
+      icon: "door-exit",
+      special: "all-off",
       lights: [],
       climate: [],
-      blinds: [{ blindId: '*', action: 'close' }],
+      blinds: [{ blindId: "*", action: "close" }],
     },
   ];
 }
@@ -1356,14 +1559,14 @@ export function defaultHomeScenes(): HomeScene[] {
 function defaults(): StoreSchema {
   return {
     channels: {
-      whatsapp: { number: '+34 612 345 197', enabled: true },
+      whatsapp: { number: "+34 612 345 197", enabled: true },
       push: { enabled: true },
-      email: { address: 'j.kroese@levante.nl', enabled: false },
+      email: { address: "j.kroese@levante.nl", enabled: false },
     },
     rules: DEFAULT_RULES.map((r) => ({ ...r })),
     voltageMonitor: defaultVoltageMonitor(),
     alertOverrides: {},
-    activeScenario: 'balanced',
+    activeScenario: "balanced",
     scenarios: structuredClone(DEFAULT_SCENARIOS),
     pushSubscriptions: [],
     vapid: null,
@@ -1388,6 +1591,27 @@ function defaults(): StoreSchema {
     radioFavorites: [],
     radioSchedules: [],
     radioNowPlaying: null,
+    irrigation: defaultIrrigation(),
+  };
+}
+
+/** Irrigation Phase-2 defaults — SHADOW-FIRST and inert: mode 'off' (the coordinator does
+ *  nothing), no zones configured, no deficits. The owner adds zones + flips to shadow/live. */
+export function defaultIrrigation(): IrrigationState {
+  return {
+    mode: "off",
+    globalRainSkipMm: 5,
+    rainSkipProbabilityPct: 60,
+    window: "early-morning",
+    zones: {},
+    deficits: {},
+    soilMoisture: {},
+    baselineMirror: null,
+    baselineDrift: false,
+    log: [],
+    lastError: null,
+    lastTickAt: null,
+    updatedAt: Date.now(),
   };
 }
 
@@ -1407,14 +1631,20 @@ export function defaultAuth(): AuthState {
 
 function statePath(): string {
   if (process.env.STATE_FILE) return process.env.STATE_FILE;
-  if (process.env.NODE_ENV === 'production') return '/opt/energy/state.json';
+  if (process.env.NODE_ENV === "production") return "/opt/energy/state.json";
   // repoRoot = three levels up from apps/api/src in the CJS prod bundle. Under
   // tsx/ESM dev __dirname is undefined, so derive it from cwd (apps/api).
   const repoRoot =
-    typeof __dirname !== 'undefined'
-      ? resolve(__dirname, '..', '..', '..')
-      : resolve(process.cwd(), '..', '..');
-  return resolve(repoRoot, '.data', 'state.json');
+    typeof __dirname !== "undefined"
+      ? resolve(__dirname, "..", "..", "..")
+      : resolve(process.cwd(), "..", "..");
+  return resolve(repoRoot, ".data", "state.json");
+}
+
+/** The writable data DIRECTORY holding state.json (and sibling app assets, e.g. irrigation
+ *  garden photos). Same resolution as statePath() so on-disk assets land beside the state. */
+export function dataDir(): string {
+  return dirname(statePath());
 }
 
 // ---- Load / persist -----------------------------------------------------
@@ -1438,93 +1668,120 @@ function genId(prefix: string): string {
 }
 
 function coerceFan(v: unknown): FanSetting {
-  return v === 1 || v === 2 || v === 3 || v === 4 || v === 5 ? v : 'auto';
+  return v === 1 || v === 2 || v === 3 || v === 4 || v === 5 ? v : "auto";
 }
 function coerceVane(v: unknown): VaneSetting {
-  return v === 1 || v === 2 || v === 3 || v === 4 || v === 5 ? v : 'auto';
+  return v === 1 || v === 2 || v === 3 || v === 4 || v === 5 ? v : "auto";
 }
 function coerceMode(v: unknown): ClimateMode {
-  return v === 'auto' || v === 'heat' || v === 'dry' || v === 'fan' || v === 'cool' ? v : 'cool';
+  return v === "auto" ||
+    v === "heat" ||
+    v === "dry" ||
+    v === "fan" ||
+    v === "cool"
+    ? v
+    : "cool";
 }
 function coerceAction(raw: unknown): Action {
   const a = (raw ?? {}) as Partial<Action>;
   return {
-    power: typeof a.power === 'boolean' ? a.power : true,
+    power: typeof a.power === "boolean" ? a.power : true,
     mode: coerceMode(a.mode),
-    setpointC: typeof a.setpointC === 'number' ? a.setpointC : 24,
+    setpointC: typeof a.setpointC === "number" ? a.setpointC : 24,
     fan: coerceFan(a.fan),
     vaneUpDown: coerceVane(a.vaneUpDown),
     vaneLeftRight: coerceVane(a.vaneLeftRight),
-    ...(typeof a.positionPct === 'number'
+    ...(typeof a.positionPct === "number"
       ? { positionPct: Math.min(100, Math.max(0, Math.round(a.positionPct))) }
       : {}),
-    ...(typeof a.speed === 'number' ? { speed: Math.round(a.speed) } : {}),
-    ...(typeof a.direction === 'string' && a.direction ? { direction: a.direction } : {}),
+    ...(typeof a.speed === "number" ? { speed: Math.round(a.speed) } : {}),
+    ...(typeof a.direction === "string" && a.direction
+      ? { direction: a.direction }
+      : {}),
   };
 }
 function coerceCondition(raw: unknown): RunCondition {
   const c = raw as { kind?: string; thresholdC?: number } | undefined;
-  if (c?.kind === 'warmerThan' && typeof c.thresholdC === 'number') return { kind: 'warmerThan', thresholdC: c.thresholdC };
-  if (c?.kind === 'coolerThan' && typeof c.thresholdC === 'number') return { kind: 'coolerThan', thresholdC: c.thresholdC };
-  return { kind: 'always' };
+  if (c?.kind === "warmerThan" && typeof c.thresholdC === "number")
+    return { kind: "warmerThan", thresholdC: c.thresholdC };
+  if (c?.kind === "coolerThan" && typeof c.thresholdC === "number")
+    return { kind: "coolerThan", thresholdC: c.thresholdC };
+  return { kind: "always" };
 }
 function coerceDays(v: unknown): number[] {
-  return Array.isArray(v) ? v.filter((d) => typeof d === 'number' && d >= 0 && d <= 6) : [1, 2, 3, 4, 5];
+  return Array.isArray(v)
+    ? v.filter((d) => typeof d === "number" && d >= 0 && d <= 6)
+    : [1, 2, 3, 4, 5];
 }
 function coerceWindows(v: unknown): ScheduleWindow[] {
   const list = Array.isArray(v) ? v : [];
   const out: ScheduleWindow[] = [];
   for (const w of list) {
-    if (w && typeof w.start === 'string' && typeof w.end === 'string') {
+    if (w && typeof w.start === "string" && typeof w.end === "string") {
       const win: ScheduleWindow = {
         start: w.start,
         end: w.end,
         ...(w.action ? { action: w.action as Partial<Action> } : {}),
       };
-      if (w.startAnchor === 'sunrise' || w.startAnchor === 'sunset') {
+      if (w.startAnchor === "sunrise" || w.startAnchor === "sunset") {
         win.startAnchor = w.startAnchor;
-        win.startOffsetMin = typeof w.startOffsetMin === 'number' ? Math.round(w.startOffsetMin) : 0;
+        win.startOffsetMin =
+          typeof w.startOffsetMin === "number"
+            ? Math.round(w.startOffsetMin)
+            : 0;
       }
-      if (w.endAnchor === 'sunrise' || w.endAnchor === 'sunset') {
+      if (w.endAnchor === "sunrise" || w.endAnchor === "sunset") {
         win.endAnchor = w.endAnchor;
-        win.endOffsetMin = typeof w.endOffsetMin === 'number' ? Math.round(w.endOffsetMin) : 0;
+        win.endOffsetMin =
+          typeof w.endOffsetMin === "number" ? Math.round(w.endOffsetMin) : 0;
       }
       out.push(win);
     }
   }
-  return out.length ? out : [{ start: '08:00', end: '22:00' }];
+  return out.length ? out : [{ start: "08:00", end: "22:00" }];
 }
 
 /** True for a legacy (pre-rule) schedule shape that must be migrated. */
 function isLegacySchedule(s: Record<string, unknown>): boolean {
-  return !Array.isArray(s.windows) && (typeof s.start === 'string' || Array.isArray((s.scope as { deviceIds?: unknown })?.deviceIds));
+  return (
+    !Array.isArray(s.windows) &&
+    (typeof s.start === "string" ||
+      Array.isArray((s.scope as { deviceIds?: unknown })?.deviceIds))
+  );
 }
 
 /** Migrate one legacy schedule into 0..N unit-scoped rules (one per device). */
 function migrateLegacySchedule(s: Record<string, unknown>): Schedule[] {
   const scope = s.scope as { deviceIds?: unknown } | undefined;
-  const ids = Array.isArray(scope?.deviceIds) ? (scope!.deviceIds as string[]) : [];
+  const ids = Array.isArray(scope?.deviceIds)
+    ? (scope!.deviceIds as string[])
+    : [];
   if (ids.length === 0) return []; // bound to no unit — it did nothing; drop on migrate.
   const action: Action = {
     power: true,
     mode: coerceMode(s.mode),
-    setpointC: typeof s.setpointC === 'number' ? s.setpointC : 24,
+    setpointC: typeof s.setpointC === "number" ? s.setpointC : 24,
     fan: coerceFan(s.fan),
-    vaneUpDown: 'auto',
-    vaneLeftRight: 'auto',
+    vaneUpDown: "auto",
+    vaneLeftRight: "auto",
   };
   const condition: RunCondition =
-    typeof s.roomTempAboveC === 'number' ? { kind: 'warmerThan', thresholdC: s.roomTempAboveC } : { kind: 'always' };
+    typeof s.roomTempAboveC === "number"
+      ? { kind: "warmerThan", thresholdC: s.roomTempAboveC }
+      : { kind: "always" };
   const windows: ScheduleWindow[] = [
-    { start: typeof s.start === 'string' ? s.start : '08:00', end: typeof s.end === 'string' ? s.end : '22:00' },
+    {
+      start: typeof s.start === "string" ? s.start : "08:00",
+      end: typeof s.end === "string" ? s.end : "22:00",
+    },
   ];
-  const baseId = typeof s.id === 'string' ? s.id : genId('sched');
+  const baseId = typeof s.id === "string" ? s.id : genId("sched");
   return ids.map((deviceId, i) => ({
     id: ids.length > 1 ? `${baseId}-${i}` : baseId,
-    name: typeof s.name === 'string' ? s.name : 'Schedule',
-    enabled: typeof s.enabled === 'boolean' ? s.enabled : true,
-    type: 'cooling' as DeviceType,
-    scope: { kind: 'unit', deviceId },
+    name: typeof s.name === "string" ? s.name : "Schedule",
+    enabled: typeof s.enabled === "boolean" ? s.enabled : true,
+    type: "cooling" as DeviceType,
+    scope: { kind: "unit", deviceId },
     days: coerceDays(s.days),
     windows,
     action,
@@ -1534,16 +1791,26 @@ function migrateLegacySchedule(s: Record<string, unknown>): Schedule[] {
 
 /** Coerce one already-migrated rule, defaulting any missing fields. */
 function coerceSchedule(s: Record<string, unknown>): Schedule | null {
-  const rawScope = s.scope as { kind?: string; deviceId?: string; groupId?: string } | undefined;
+  const rawScope = s.scope as
+    | { kind?: string; deviceId?: string; groupId?: string }
+    | undefined;
   let scope: ScheduleScope;
-  if (rawScope?.kind === 'group' && typeof rawScope.groupId === 'string') scope = { kind: 'group', groupId: rawScope.groupId };
-  else if (rawScope?.kind === 'unit' && typeof rawScope.deviceId === 'string') scope = { kind: 'unit', deviceId: rawScope.deviceId };
+  if (rawScope?.kind === "group" && typeof rawScope.groupId === "string")
+    scope = { kind: "group", groupId: rawScope.groupId };
+  else if (rawScope?.kind === "unit" && typeof rawScope.deviceId === "string")
+    scope = { kind: "unit", deviceId: rawScope.deviceId };
   else return null;
-  const type = s.type === 'heating' || s.type === 'lighting' || s.type === 'circuit' || s.type === 'blinds' ? s.type : 'cooling';
+  const type =
+    s.type === "heating" ||
+    s.type === "lighting" ||
+    s.type === "circuit" ||
+    s.type === "blinds"
+      ? s.type
+      : "cooling";
   return {
-    id: typeof s.id === 'string' ? s.id : genId('sched'),
-    name: typeof s.name === 'string' ? s.name : 'Rule',
-    enabled: typeof s.enabled === 'boolean' ? s.enabled : true,
+    id: typeof s.id === "string" ? s.id : genId("sched"),
+    name: typeof s.name === "string" ? s.name : "Rule",
+    enabled: typeof s.enabled === "boolean" ? s.enabled : true,
     type: type as DeviceType,
     scope,
     days: coerceDays(s.days),
@@ -1557,7 +1824,7 @@ function migrateSchedules(raw: unknown): Schedule[] {
   if (!Array.isArray(raw)) return [];
   const out: Schedule[] = [];
   for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
+    if (!item || typeof item !== "object") continue;
     const s = item as Record<string, unknown>;
     if (isLegacySchedule(s)) out.push(...migrateLegacySchedule(s));
     else {
@@ -1577,7 +1844,7 @@ function sameRuleAsDefault(a: Automation, b: Automation): boolean {
 
 /** The old (pre-split) unified canonical id. A persisted rule under this id is the former
  *  bidirectional "solar climate" automation and is migrated into the two split rules. */
-const LEGACY_UNIFIED_AUTOMATION_ID = 'solar-surplus-precool';
+const LEGACY_UNIFIED_AUTOMATION_ID = "solar-surplus-precool";
 
 /**
  * MIGRATION (split): convert a legacy persisted UNIFIED solar-surplus rule — the old
@@ -1590,23 +1857,30 @@ const LEGACY_UNIFIED_AUTOMATION_ID = 'solar-surplus-precool';
  * unchanged when there's nothing to migrate.
  */
 function migrateSplitSurplus(persisted: Automation[]): Automation[] {
-  const hasPreheat = persisted.some((a) => a.type === 'solar_surplus_preheat');
+  const hasPreheat = persisted.some((a) => a.type === "solar_surplus_preheat");
   const out: Automation[] = [];
   for (const a of persisted) {
     const isLegacyUnified =
-      a.type === 'solar_surplus_precool' && a.id === LEGACY_UNIFIED_AUTOMATION_ID && !hasPreheat;
+      a.type === "solar_surplus_precool" &&
+      a.id === LEGACY_UNIFIED_AUTOMATION_ID &&
+      !hasPreheat;
     if (!isLegacyUnified) {
       out.push(a);
       continue;
     }
     // Split: re-key the cooling half to the new canonical cool id, and add a heating half
     // (same params + enabled state) so the prior bidirectional behaviour is preserved.
-    out.push({ ...a, id: SOLAR_SURPLUS_COOL_AUTOMATION_ID, name: 'Solar-surplus cooling', type: 'solar_surplus_precool' });
+    out.push({
+      ...a,
+      id: SOLAR_SURPLUS_COOL_AUTOMATION_ID,
+      name: "Solar-surplus cooling",
+      type: "solar_surplus_precool",
+    });
     out.push({
       ...a,
       id: SOLAR_SURPLUS_HEAT_AUTOMATION_ID,
-      name: 'Solar-surplus heating',
-      type: 'solar_surplus_preheat',
+      name: "Solar-surplus heating",
+      type: "solar_surplus_preheat",
       params: { ...a.params },
       lastEval: null,
     });
@@ -1625,10 +1899,16 @@ function migrateSplitSurplus(persisted: Automation[]): Automation[] {
  *     a default keeps it gone across restarts. Newly shipped defaults still appear on
  *     existing installs (seeded disabled, so a re-appearing card never acts on its own).
  */
-function mergeAutomations(raw: unknown, base: Automation[], dismissed: string[]): Automation[] {
+function mergeAutomations(
+  raw: unknown,
+  base: Automation[],
+  dismissed: string[],
+): Automation[] {
   // 0. SPLIT migration — convert a legacy unified precool into the two split rules first,
   //    so de-dupe/re-seed below see the post-split shape.
-  const persisted = migrateSplitSurplus(Array.isArray(raw) ? (raw as Automation[]) : []);
+  const persisted = migrateSplitSurplus(
+    Array.isArray(raw) ? (raw as Automation[]) : [],
+  );
   const dismissedSet = new Set(dismissed);
   // A dismissed LEGACY unified id suppresses BOTH split defaults — dismissing the old
   // single card keeps the split pair gone too (don't resurrect it as two new cards).
@@ -1661,7 +1941,8 @@ function mergeAutomations(raw: unknown, base: Automation[], dismissed: string[])
 
   // 2. Re-seed defaults that are neither present (by canonical id or type) nor dismissed.
   const toSeed = base.filter(
-    (b) => !dismissedSet.has(b.id) && !deduped.some((a) => sameRuleAsDefault(a, b)),
+    (b) =>
+      !dismissedSet.has(b.id) && !deduped.some((a) => sameRuleAsDefault(a, b)),
   );
   return [...deduped, ...toSeed];
 }
@@ -1670,9 +1951,11 @@ function mergeAutomations(raw: unknown, base: Automation[], dismissed: string[])
  *  (e.g. `rule-voltage`) that aren't in the persisted list yet, so existing installs
  *  pick up new rules with their default enable-state. */
 function mergeRules(raw: unknown, base: RuleState[]): RuleState[] {
-  if (!Array.isArray(raw) || raw.length === 0) return base.map((r) => ({ ...r }));
+  if (!Array.isArray(raw) || raw.length === 0)
+    return base.map((r) => ({ ...r }));
   const persisted = raw.filter(
-    (r): r is RuleState => !!r && typeof r === 'object' && typeof (r as RuleState).id === 'string',
+    (r): r is RuleState =>
+      !!r && typeof r === "object" && typeof (r as RuleState).id === "string",
   );
   const have = new Set(persisted.map((r) => r.id));
   const missing = base.filter((r) => !have.has(r.id)).map((r) => ({ ...r }));
@@ -1685,22 +1968,26 @@ function hydrateVoltageMonitor(
   p: Partial<VoltageMonitor> | undefined,
   base: VoltageMonitor,
 ): VoltageMonitor {
-  if (!p || typeof p !== 'object') return { ...base };
-  const minV = typeof p.minV === 'number' && Number.isFinite(p.minV) ? p.minV : base.minV;
-  const maxV = typeof p.maxV === 'number' && Number.isFinite(p.maxV) ? p.maxV : base.maxV;
+  if (!p || typeof p !== "object") return { ...base };
+  const minV =
+    typeof p.minV === "number" && Number.isFinite(p.minV) ? p.minV : base.minV;
+  const maxV =
+    typeof p.maxV === "number" && Number.isFinite(p.maxV) ? p.maxV : base.maxV;
   const valid = minV >= 0 && maxV > minV;
   return {
-    enabled: typeof p.enabled === 'boolean' ? p.enabled : base.enabled,
+    enabled: typeof p.enabled === "boolean" ? p.enabled : base.enabled,
     minV: valid ? minV : base.minV,
     maxV: valid ? maxV : base.maxV,
-    ...(typeof p.breakerId === 'string' && p.breakerId ? { breakerId: p.breakerId } : {}),
+    ...(typeof p.breakerId === "string" && p.breakerId
+      ? { breakerId: p.breakerId }
+      : {}),
   };
 }
 
 /** Merge persisted JSON onto defaults so new fields appear with sane values. */
 function hydrate(raw: unknown): StoreSchema {
   const base = defaults();
-  if (!raw || typeof raw !== 'object') return base;
+  if (!raw || typeof raw !== "object") return base;
   const p = raw as Partial<StoreSchema>;
   return {
     channels: {
@@ -1709,11 +1996,16 @@ function hydrate(raw: unknown): StoreSchema {
       email: { ...base.channels.email, ...(p.channels?.email ?? {}) },
     },
     rules: mergeRules(p.rules, base.rules),
-    voltageMonitor: hydrateVoltageMonitor(p.voltageMonitor, base.voltageMonitor),
+    voltageMonitor: hydrateVoltageMonitor(
+      p.voltageMonitor,
+      base.voltageMonitor,
+    ),
     alertOverrides: p.alertOverrides ?? base.alertOverrides,
     activeScenario: p.activeScenario ?? base.activeScenario,
     scenarios:
-      p.scenarios && Object.keys(p.scenarios).length ? p.scenarios : base.scenarios,
+      p.scenarios && Object.keys(p.scenarios).length
+        ? p.scenarios
+        : base.scenarios,
     pushSubscriptions: Array.isArray(p.pushSubscriptions)
       ? p.pushSubscriptions
       : base.pushSubscriptions,
@@ -1725,8 +2017,8 @@ function hydrate(raw: unknown): StoreSchema {
     integrations: {
       intesis:
         p.integrations?.intesis &&
-        typeof p.integrations.intesis.username === 'string' &&
-        typeof p.integrations.intesis.password === 'string'
+        typeof p.integrations.intesis.username === "string" &&
+        typeof p.integrations.intesis.password === "string"
           ? p.integrations.intesis
           : base.integrations.intesis,
       // Carry over Settings-configured overrides so they survive a restart.
@@ -1734,52 +2026,297 @@ function hydrate(raw: unknown): StoreSchema {
       ...(p.integrations?.tesla ? { tesla: p.integrations.tesla } : {}),
       ...(p.integrations?.weather ? { weather: p.integrations.weather } : {}),
       ...(p.integrations?.airzone ? { airzone: p.integrations.airzone } : {}),
+      // Carry over the Rain Bird config (host + password) so a connected controller
+      // survives a restart/deploy (Phase 1 omitted this, so the config was lost on reboot).
+      ...(p.integrations?.rainbird
+        ? { rainbird: p.integrations.rainbird }
+        : {}),
       ...(p.integrations?.tuya ? { tuya: p.integrations.tuya } : {}),
-      ...(p.integrations?.panasonic ? { panasonic: p.integrations.panasonic } : {}),
+      ...(p.integrations?.panasonic
+        ? { panasonic: p.integrations.panasonic }
+        : {}),
       ...(p.integrations?.sonos ? { sonos: p.integrations.sonos } : {}),
     },
-    deviceSettings: hydrateDeviceSettings(p.deviceSettings, base.deviceSettings),
+    deviceSettings: hydrateDeviceSettings(
+      p.deviceSettings,
+      base.deviceSettings,
+    ),
     schedules: migrateSchedules(p.schedules),
-    dismissedDefaultAutomationIds: Array.isArray(p.dismissedDefaultAutomationIds)
-      ? [...new Set(p.dismissedDefaultAutomationIds.filter((id): id is string => typeof id === 'string'))]
+    dismissedDefaultAutomationIds: Array.isArray(
+      p.dismissedDefaultAutomationIds,
+    )
+      ? [
+          ...new Set(
+            p.dismissedDefaultAutomationIds.filter(
+              (id): id is string => typeof id === "string",
+            ),
+          ),
+        ]
       : base.dismissedDefaultAutomationIds,
     automations: mergeAutomations(
       p.automations,
       base.automations,
       Array.isArray(p.dismissedDefaultAutomationIds)
-        ? p.dismissedDefaultAutomationIds.filter((id): id is string => typeof id === 'string')
+        ? p.dismissedDefaultAutomationIds.filter(
+            (id): id is string => typeof id === "string",
+          )
         : [],
     ),
     devices: hydrateDevices(p.devices, base.devices),
-    lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
-    lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,
+    lightScenes: Array.isArray(p.lightScenes)
+      ? p.lightScenes
+      : base.lightScenes,
+    lightSchedules: Array.isArray(p.lightSchedules)
+      ? p.lightSchedules
+      : base.lightSchedules,
     // Back-compat: an on-disk state.json predating whole-home scenes lacks the key —
     // fall back to the seeded starter set (an existing array, even empty, is preserved).
     homeScenes: Array.isArray(p.homeScenes) ? p.homeScenes : base.homeScenes,
-    deviceOnboarding: hydrateDeviceOnboarding(p.deviceOnboarding, base.deviceOnboarding),
+    deviceOnboarding: hydrateDeviceOnboarding(
+      p.deviceOnboarding,
+      base.deviceOnboarding,
+    ),
     alarmActive: hydrateAlarmActive(p.alarmActive),
     alarmConfig: hydrateAlarmConfig(p.alarmConfig, base.alarmConfig),
     rooms: hydrateRooms(p.rooms),
-    roomsSeeded: typeof p.roomsSeeded === 'boolean' ? p.roomsSeeded : false,
+    roomsSeeded: typeof p.roomsSeeded === "boolean" ? p.roomsSeeded : false,
     radioFavorites: hydrateRadioFavorites(p.radioFavorites),
     radioSchedules: hydrateRadioSchedules(p.radioSchedules),
     radioNowPlaying: hydrateRadioNowPlaying(p.radioNowPlaying),
+    irrigation: hydrateIrrigation(p.irrigation),
+  };
+}
+
+/** Coerce + migrate persisted irrigation state onto fresh defaults. Defensive: an on-disk
+ *  state.json predating Phase 2 lacks the key → returns clean defaults (mode 'off'). Every
+ *  field is validated/clamped so a malformed persisted blob can never break the coordinator. */
+function hydrateIrrigation(p: unknown): IrrigationState {
+  const base = defaultIrrigation();
+  if (!p || typeof p !== "object") return base;
+  const r = p as Partial<IrrigationState>;
+  const mode: IrrigationMode =
+    r.mode === "shadow" || r.mode === "live" || r.mode === "off"
+      ? r.mode
+      : base.mode;
+  const window: IrrigationWindow =
+    r.window === "solar-surplus" ||
+    r.window === "off-peak-P3" ||
+    r.window === "none" ||
+    r.window === "early-morning"
+      ? r.window
+      : base.window;
+
+  const zones: Record<string, IrrigationZoneConfig> = {};
+  if (r.zones && typeof r.zones === "object") {
+    for (const [id, raw] of Object.entries(
+      r.zones as Record<string, unknown>,
+    )) {
+      const z = hydrateIrrigationZone(id, raw);
+      if (z) zones[id] = z;
+    }
+  }
+
+  const deficits: Record<string, IrrigationDeficit> = {};
+  if (r.deficits && typeof r.deficits === "object") {
+    for (const [id, raw] of Object.entries(
+      r.deficits as Record<string, unknown>,
+    )) {
+      const d = (raw ?? {}) as Partial<IrrigationDeficit>;
+      if (typeof d.mm === "number" && Number.isFinite(d.mm)) {
+        deficits[id] = {
+          mm: Math.max(0, d.mm),
+          updatedAt:
+            typeof d.updatedAt === "string"
+              ? d.updatedAt
+              : new Date().toISOString(),
+        };
+      }
+    }
+  }
+
+  const soilMoisture: Record<string, SoilMoistureReading> = {};
+  if (r.soilMoisture && typeof r.soilMoisture === "object") {
+    for (const [id, raw] of Object.entries(
+      r.soilMoisture as Record<string, unknown>,
+    )) {
+      const s = (raw ?? {}) as Partial<SoilMoistureReading>;
+      if (typeof s.pct === "number" && Number.isFinite(s.pct)) {
+        soilMoisture[id] = {
+          zoneId: id,
+          pct: Math.max(0, Math.min(100, s.pct)),
+          ts: typeof s.ts === "string" ? s.ts : new Date().toISOString(),
+        };
+      }
+    }
+  }
+
+  let baselineMirror: IrrigationBaselineMirror | null = null;
+  const bm = r.baselineMirror as
+    | Partial<IrrigationBaselineMirror>
+    | null
+    | undefined;
+  if (bm && typeof bm === "object" && typeof bm.ts === "string") {
+    baselineMirror = {
+      ts: bm.ts,
+      rainDelayDays:
+        typeof bm.rainDelayDays === "number" ? bm.rainDelayDays : 0,
+      availableStationIds: Array.isArray(bm.availableStationIds)
+        ? bm.availableStationIds.filter(
+            (x): x is string => typeof x === "string",
+          )
+        : [],
+    };
+  }
+
+  const log = Array.isArray(r.log)
+    ? pruneLog(
+        r.log.filter(
+          (e): e is IrrigationLogEntry =>
+            Boolean(e) && typeof (e as IrrigationLogEntry).ts === "number",
+        ),
+      )
+    : [];
+
+  return {
+    mode,
+    globalRainSkipMm: clampNum(
+      r.globalRainSkipMm,
+      base.globalRainSkipMm,
+      0,
+      100,
+    ),
+    rainSkipProbabilityPct: clampNum(
+      r.rainSkipProbabilityPct,
+      base.rainSkipProbabilityPct,
+      0,
+      100,
+    ),
+    window,
+    zones,
+    deficits,
+    soilMoisture,
+    baselineMirror,
+    baselineDrift:
+      typeof r.baselineDrift === "boolean" ? r.baselineDrift : false,
+    log,
+    lastError: typeof r.lastError === "string" ? r.lastError : null,
+    lastTickAt: typeof r.lastTickAt === "string" ? r.lastTickAt : null,
+    updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : Date.now(),
+  };
+}
+
+function clampNum(
+  v: unknown,
+  fallback: number,
+  lo: number,
+  hi: number,
+): number {
+  return typeof v === "number" && Number.isFinite(v)
+    ? Math.max(lo, Math.min(hi, v))
+    : fallback;
+}
+
+const PLANT_TYPES: IrrigationPlantType[] = [
+  "lawn",
+  "shrubs",
+  "flowers",
+  "vegetables",
+  "trees",
+  "groundcover",
+  "succulents",
+  "hedge",
+];
+const EMITTER_TYPES: IrrigationEmitterType[] = [
+  "spray",
+  "rotor",
+  "drip",
+  "bubbler",
+  "soaker",
+];
+
+/** Coerce one persisted zone config; null if structurally unusable. */
+function hydrateIrrigationZone(
+  zoneId: string,
+  raw: unknown,
+): IrrigationZoneConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const z = raw as Partial<IrrigationZoneConfig>;
+  const plantType = PLANT_TYPES.includes(z.plantType as IrrigationPlantType)
+    ? (z.plantType as IrrigationPlantType)
+    : "shrubs";
+  const emitterType = EMITTER_TYPES.includes(
+    z.emitterType as IrrigationEmitterType,
+  )
+    ? (z.emitterType as IrrigationEmitterType)
+    : "spray";
+  const wateringTimes: IrrigationWateringTime[] = Array.isArray(z.wateringTimes)
+    ? z.wateringTimes
+        .map((w) => hydrateWateringTime(w))
+        .filter((w): w is IrrigationWateringTime => w !== null)
+    : [];
+  return {
+    zoneId,
+    name:
+      typeof z.name === "string" && z.name.trim()
+        ? z.name
+        : `Zone ${zoneId.replace("rb-", "")}`,
+    plantType,
+    emitterType,
+    flowLpm:
+      typeof z.flowLpm === "number" && z.flowLpm > 0 ? z.flowLpm : undefined,
+    areaM2: typeof z.areaM2 === "number" && z.areaM2 > 0 ? z.areaM2 : undefined,
+    sunExposure:
+      typeof z.sunExposure === "number"
+        ? Math.max(0, Math.min(1, z.sunExposure))
+        : undefined,
+    kc: typeof z.kc === "number" && z.kc > 0 ? z.kc : undefined,
+    managedBy: z.managedBy === "controller" ? "controller" : "app",
+    heatTopupEnabled: z.heatTopupEnabled === true,
+    rainSkipMm:
+      typeof z.rainSkipMm === "number" && z.rainSkipMm >= 0
+        ? z.rainSkipMm
+        : undefined,
+    photoId: typeof z.photoId === "string" && z.photoId ? z.photoId : undefined,
+    wateringTimes,
+  };
+}
+
+function hydrateWateringTime(raw: unknown): IrrigationWateringTime | null {
+  if (!raw || typeof raw !== "object") return null;
+  const w = raw as Partial<IrrigationWateringTime>;
+  if (typeof w.startTime !== "string" || !/^\d{1,2}:\d{2}$/.test(w.startTime))
+    return null;
+  const days =
+    Array.isArray(w.days) && w.days.length === 7
+      ? w.days.map((d) => d === true)
+      : [false, true, true, true, true, true, false];
+  return {
+    id:
+      typeof w.id === "string" && w.id
+        ? w.id
+        : `wt-${Math.random().toString(36).slice(2, 9)}`,
+    startTime: w.startTime,
+    durationMin:
+      typeof w.durationMin === "number" && w.durationMin > 0
+        ? Math.min(600, Math.round(w.durationMin))
+        : 10,
+    days,
   };
 }
 
 /** Rehydrate the rooms map, coercing each entry + dropping malformed ones. */
 function hydrateRooms(p: unknown): Record<string, Room> {
-  if (!p || typeof p !== 'object') return {};
+  if (!p || typeof p !== "object") return {};
   const out: Record<string, Room> = {};
   let i = 0;
   for (const [id, raw] of Object.entries(p as Record<string, unknown>)) {
     const r = (raw ?? {}) as Partial<Room>;
-    if (typeof r.name !== 'string' || !r.name.trim()) continue;
+    if (typeof r.name !== "string" || !r.name.trim()) continue;
     out[id] = {
       id,
       name: r.name.trim(),
-      icon: typeof r.icon === 'string' && r.icon ? r.icon : 'home',
-      order: typeof r.order === 'number' ? r.order : i,
+      icon: typeof r.icon === "string" && r.icon ? r.icon : "home",
+      order: typeof r.order === "number" ? r.order : i,
     };
     i++;
   }
@@ -1792,15 +2329,23 @@ function hydrateRadioFavorites(raw: unknown): RadioStation[] {
   const out: RadioStation[] = [];
   for (const item of raw) {
     const r = (item ?? {}) as Partial<RadioStation>;
-    if (typeof r.id !== 'string' || typeof r.streamUrl !== 'string' || !r.streamUrl) continue;
-    const slot = typeof r.slot === 'number' ? Math.max(0, Math.min(RADIO_FAVORITE_SLOTS - 1, Math.round(r.slot))) : 0;
+    if (
+      typeof r.id !== "string" ||
+      typeof r.streamUrl !== "string" ||
+      !r.streamUrl
+    )
+      continue;
+    const slot =
+      typeof r.slot === "number"
+        ? Math.max(0, Math.min(RADIO_FAVORITE_SLOTS - 1, Math.round(r.slot)))
+        : 0;
     out.push({
       id: r.id,
       slot,
-      name: typeof r.name === 'string' && r.name ? r.name : 'Station',
+      name: typeof r.name === "string" && r.name ? r.name : "Station",
       streamUrl: r.streamUrl,
-      ...(typeof r.logo === 'string' && r.logo ? { logo: r.logo } : {}),
-      ...(typeof r.codec === 'string' && r.codec ? { codec: r.codec } : {}),
+      ...(typeof r.logo === "string" && r.logo ? { logo: r.logo } : {}),
+      ...(typeof r.codec === "string" && r.codec ? { codec: r.codec } : {}),
     });
   }
   return out;
@@ -1813,18 +2358,28 @@ function hydrateRadioSchedules(raw: unknown): RadioSchedule[] {
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
   for (const item of raw) {
     const r = (item ?? {}) as Partial<RadioSchedule>;
-    if (typeof r.id !== 'string' || typeof r.stationId !== 'string') continue;
-    if (typeof r.onTime !== 'string' || !HHMM.test(r.onTime)) continue;
+    if (typeof r.id !== "string" || typeof r.stationId !== "string") continue;
+    if (typeof r.onTime !== "string" || !HHMM.test(r.onTime)) continue;
     out.push({
       id: r.id,
-      name: typeof r.name === 'string' && r.name ? r.name : 'Radio schedule',
-      enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
-      days: Array.isArray(r.days) ? r.days.filter((d) => typeof d === 'number' && d >= 0 && d <= 6) : [1, 2, 3, 4, 5],
+      name: typeof r.name === "string" && r.name ? r.name : "Radio schedule",
+      enabled: typeof r.enabled === "boolean" ? r.enabled : true,
+      days: Array.isArray(r.days)
+        ? r.days.filter((d) => typeof d === "number" && d >= 0 && d <= 6)
+        : [1, 2, 3, 4, 5],
       onTime: r.onTime,
-      offTime: typeof r.offTime === 'string' && HHMM.test(r.offTime) ? r.offTime : null,
+      offTime:
+        typeof r.offTime === "string" && HHMM.test(r.offTime)
+          ? r.offTime
+          : null,
       stationId: r.stationId,
-      speakerIds: Array.isArray(r.speakerIds) ? r.speakerIds.filter((x): x is string => typeof x === 'string') : [],
-      volumePct: typeof r.volumePct === 'number' ? Math.max(0, Math.min(100, Math.round(r.volumePct))) : 25,
+      speakerIds: Array.isArray(r.speakerIds)
+        ? r.speakerIds.filter((x): x is string => typeof x === "string")
+        : [],
+      volumePct:
+        typeof r.volumePct === "number"
+          ? Math.max(0, Math.min(100, Math.round(r.volumePct)))
+          : 25,
     });
   }
   return out;
@@ -1832,32 +2387,46 @@ function hydrateRadioSchedules(raw: unknown): RadioSchedule[] {
 
 /** Coerce the persisted radio now-playing session; null when absent/malformed. */
 function hydrateRadioNowPlaying(raw: unknown): RadioNowPlaying | null {
-  if (!raw || typeof raw !== 'object') return null;
+  if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<RadioNowPlaying>;
-  if (typeof r.name !== 'string') return null;
+  if (typeof r.name !== "string") return null;
   return {
     name: r.name,
-    stationId: typeof r.stationId === 'string' ? r.stationId : null,
-    speakerIds: Array.isArray(r.speakerIds) ? r.speakerIds.filter((x): x is string => typeof x === 'string') : [],
-    wholeHouse: typeof r.wholeHouse === 'boolean' ? r.wholeHouse : false,
-    coordinator: typeof r.coordinator === 'string' ? r.coordinator : null,
-    startedAt: typeof r.startedAt === 'string' ? r.startedAt : new Date().toISOString(),
+    stationId: typeof r.stationId === "string" ? r.stationId : null,
+    speakerIds: Array.isArray(r.speakerIds)
+      ? r.speakerIds.filter((x): x is string => typeof x === "string")
+      : [],
+    wholeHouse: typeof r.wholeHouse === "boolean" ? r.wholeHouse : false,
+    coordinator: typeof r.coordinator === "string" ? r.coordinator : null,
+    startedAt:
+      typeof r.startedAt === "string" ? r.startedAt : new Date().toISOString(),
   };
 }
 
 /** Rehydrate the alarm config, clamping the blink floor and coercing types. */
 function hydrateAlarmConfig(p: unknown, base: AlarmConfig): AlarmConfig {
-  if (!p || typeof p !== 'object') return base;
+  if (!p || typeof p !== "object") return base;
   const a = p as Partial<AlarmConfig>;
-  const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   const result: AlarmConfig = {
-    enabled: typeof a.enabled === 'boolean' ? a.enabled : base.enabled,
+    enabled: typeof a.enabled === "boolean" ? a.enabled : base.enabled,
     speakerIds: strArr(a.speakerIds),
-    volumePct: typeof a.volumePct === 'number' ? Math.max(0, Math.min(100, Math.round(a.volumePct))) : base.volumePct,
+    volumePct:
+      typeof a.volumePct === "number"
+        ? Math.max(0, Math.min(100, Math.round(a.volumePct)))
+        : base.volumePct,
     lightIds: strArr(a.lightIds),
-    blinkMs: typeof a.blinkMs === 'number' ? Math.max(ALARM_BLINK_FLOOR_MS, Math.round(a.blinkMs)) : base.blinkMs,
-    autoStopSec: typeof a.autoStopSec === 'number' && a.autoStopSec >= 0 ? Math.round(a.autoStopSec) : base.autoStopSec,
-    volumeBumpedTo80: typeof a.volumeBumpedTo80 === 'boolean' ? a.volumeBumpedTo80 : false,
+    blinkMs:
+      typeof a.blinkMs === "number"
+        ? Math.max(ALARM_BLINK_FLOOR_MS, Math.round(a.blinkMs))
+        : base.blinkMs,
+    autoStopSec:
+      typeof a.autoStopSec === "number" && a.autoStopSec >= 0
+        ? Math.round(a.autoStopSec)
+        : base.autoStopSec,
+    volumeBumpedTo80:
+      typeof a.volumeBumpedTo80 === "boolean" ? a.volumeBumpedTo80 : false,
   };
   // ONE-TIME migration: the default siren volume was raised 70 → 80. If this config
   // predates the change (flag absent) and is still sitting on the OLD default (70) —
@@ -1872,13 +2441,15 @@ function hydrateAlarmConfig(p: unknown, base: AlarmConfig): AlarmConfig {
 
 /** Rehydrate a persisted alarm session, dropping anything malformed (→ idle). */
 function hydrateAlarmActive(p: unknown): AlarmActive | null {
-  if (!p || typeof p !== 'object') return null;
+  if (!p || typeof p !== "object") return null;
   const a = p as Partial<AlarmActive>;
-  if (typeof a.startedAt !== 'string') return null;
+  if (typeof a.startedAt !== "string") return null;
   return {
     startedAt: a.startedAt,
-    durationMs: typeof a.durationMs === 'number' ? a.durationMs : null,
-    lightIds: Array.isArray(a.lightIds) ? a.lightIds.filter((x): x is string => typeof x === 'string') : [],
+    durationMs: typeof a.durationMs === "number" ? a.durationMs : null,
+    lightIds: Array.isArray(a.lightIds)
+      ? a.lightIds.filter((x): x is string => typeof x === "string")
+      : [],
     siren: a.siren !== false,
   };
 }
@@ -1889,37 +2460,60 @@ function hydrateDeviceOnboarding(
   p: Partial<DeviceOnboardingState> | undefined,
   base: DeviceOnboardingState,
 ): DeviceOnboardingState {
-  if (!p || typeof p !== 'object') return base;
+  if (!p || typeof p !== "object") return base;
   const ignored = Array.isArray(p.ignored)
-    ? [...new Set(p.ignored.filter((id): id is string => typeof id === 'string'))]
+    ? [
+        ...new Set(
+          p.ignored.filter((id): id is string => typeof id === "string"),
+        ),
+      ]
     : base.ignored;
 
   const configured: Record<string, ConfiguredDevice> = {};
-  if (p.configured && typeof p.configured === 'object') {
+  if (p.configured && typeof p.configured === "object") {
     for (const [id, raw] of Object.entries(p.configured)) {
       const c = raw as Partial<ConfiguredDevice> | undefined;
-      if (!c || typeof c.typeId !== 'string' || typeof c.name !== 'string') continue;
+      if (!c || typeof c.typeId !== "string" || typeof c.name !== "string")
+        continue;
       configured[id] = {
         typeId: c.typeId,
         name: c.name,
-        setupAt: typeof c.setupAt === 'string' ? c.setupAt : new Date().toISOString(),
-        ...(Array.isArray(c.capOverrides) ? { capOverrides: c.capOverrides.filter(isCapOverride) } : {}),
+        setupAt:
+          typeof c.setupAt === "string" ? c.setupAt : new Date().toISOString(),
+        ...(Array.isArray(c.capOverrides)
+          ? { capOverrides: c.capOverrides.filter(isCapOverride) }
+          : {}),
       };
     }
   }
 
-  const customDeviceTypes: CustomDeviceType[] = Array.isArray(p.customDeviceTypes)
+  const customDeviceTypes: CustomDeviceType[] = Array.isArray(
+    p.customDeviceTypes,
+  )
     ? p.customDeviceTypes
-        .filter((t): t is CustomDeviceType =>
-          !!t && typeof t === 'object' && typeof (t as CustomDeviceType).id === 'string' && typeof (t as CustomDeviceType).label === 'string')
-        .map((t) => ({ id: t.id, label: t.label, icon: typeof t.icon === 'string' ? t.icon : 'plug' }))
+        .filter(
+          (t): t is CustomDeviceType =>
+            !!t &&
+            typeof t === "object" &&
+            typeof (t as CustomDeviceType).id === "string" &&
+            typeof (t as CustomDeviceType).label === "string",
+        )
+        .map((t) => ({
+          id: t.id,
+          label: t.label,
+          icon: typeof t.icon === "string" ? t.icon : "plug",
+        }))
     : base.customDeviceTypes;
 
   return { ignored, configured, customDeviceTypes };
 }
 
 function isCapOverride(o: unknown): o is CapabilityOverride {
-  return !!o && typeof o === 'object' && typeof (o as CapabilityOverride).dp === 'string';
+  return (
+    !!o &&
+    typeof o === "object" &&
+    typeof (o as CapabilityOverride).dp === "string"
+  );
 }
 
 /**
@@ -1929,8 +2523,9 @@ function isCapOverride(o: unknown): o is CapabilityOverride {
  * for a deliberately-safe boot when a release changes control logic; confirm that
  * with the owner before shipping it (see CLAUDE.md §5).
  */
-const FORCE_DISARM_ON_BOOT = process.env.ENERGY_BOOT_DISARMED === '1';
-const isControlMode = (m: unknown): m is ControlMode => m === 'off' || m === 'manual' || m === 'auto';
+const FORCE_DISARM_ON_BOOT = process.env.ENERGY_BOOT_DISARMED === "1";
+const isControlMode = (m: unknown): m is ControlMode =>
+  m === "off" || m === "manual" || m === "auto";
 
 /**
  * Coerce + migrate persisted per-device settings. MIGRATION: the single legacy
@@ -1944,17 +2539,21 @@ function hydrateDeviceSettings(
   p: Record<string, DeviceSettings> | undefined,
   base: Record<string, DeviceSettings>,
 ): Record<string, DeviceSettings> {
-  if (!p || typeof p !== 'object') return base;
+  if (!p || typeof p !== "object") return base;
   const out: Record<string, DeviceSettings> = {};
   for (const [id, raw] of Object.entries(p)) {
-    if (!raw || typeof raw !== 'object') continue;
+    if (!raw || typeof raw !== "object") continue;
     const legacyOn = raw.automationEnabled === true;
     out[id] = {
       ...raw,
       solarCoolEnabled:
-        typeof raw.solarCoolEnabled === 'boolean' ? raw.solarCoolEnabled : legacyOn,
+        typeof raw.solarCoolEnabled === "boolean"
+          ? raw.solarCoolEnabled
+          : legacyOn,
       solarHeatEnabled:
-        typeof raw.solarHeatEnabled === 'boolean' ? raw.solarHeatEnabled : legacyOn,
+        typeof raw.solarHeatEnabled === "boolean"
+          ? raw.solarHeatEnabled
+          : legacyOn,
     };
   }
   return out;
@@ -1966,26 +2565,45 @@ function hydrateDeviceSettings(
  * persist a disarm, so a deploy resumes where it left off. FORCE_DISARM_ON_BOOT
  * overrides to a safe DISARMED/'off' boot. Guardrails + log are preserved.
  */
-function hydrateDevices(p: Partial<DevicesState> | undefined, base: DevicesState): DevicesState {
-  if (!p || typeof p !== 'object') return base;
+function hydrateDevices(
+  p: Partial<DevicesState> | undefined,
+  base: DevicesState,
+): DevicesState {
+  if (!p || typeof p !== "object") return base;
   return {
-    armed: FORCE_DISARM_ON_BOOT ? false : typeof p.armed === 'boolean' ? p.armed : base.armed,
-    mode: FORCE_DISARM_ON_BOOT ? 'off' : isControlMode(p.mode) ? p.mode : base.mode,
-    updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
-    lastError: typeof p.lastError === 'string' ? p.lastError : null,
+    armed: FORCE_DISARM_ON_BOOT
+      ? false
+      : typeof p.armed === "boolean"
+        ? p.armed
+        : base.armed,
+    mode: FORCE_DISARM_ON_BOOT
+      ? "off"
+      : isControlMode(p.mode)
+        ? p.mode
+        : base.mode,
+    updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : base.updatedAt,
+    lastError: typeof p.lastError === "string" ? p.lastError : null,
     log: Array.isArray(p.log) ? pruneLog(p.log) : base.log,
     guardrails: {
       ...base.guardrails,
       ...(p.guardrails ?? {}),
     },
     manualOverrides:
-      p.manualOverrides && typeof p.manualOverrides === 'object' ? p.manualOverrides : {},
+      p.manualOverrides && typeof p.manualOverrides === "object"
+        ? p.manualOverrides
+        : {},
     // Rule provenance persists across restarts: a unit the surplus rule started stays
     // rule-owned (auto-managed) on boot, while everything else powered-on is treated as
     // manual. (Legacy installs that persisted a `manualOn` map carry nothing forward —
     // ownership is now derived purely from this provenance set.)
     surplusStartedIds: Array.isArray(p.surplusStartedIds)
-      ? [...new Set(p.surplusStartedIds.filter((id): id is string => typeof id === 'string'))]
+      ? [
+          ...new Set(
+            p.surplusStartedIds.filter(
+              (id): id is string => typeof id === "string",
+            ),
+          ),
+        ]
       : [],
     // EV-surplus tunables: merge persisted over defaults so a new field gains its default
     // and a deploy preserves any owner-tuned values.
@@ -2019,29 +2637,49 @@ function hydrateEvState(p: Record<string, unknown>): Record<string, EvBreakerSta
  * disarm persists armed=false and stays that way. FORCE_DISARM_ON_BOOT overrides to
  * a safe DISARMED/'off' boot. Guardrails + log are preserved.
  */
-function hydrateControl(p: Partial<ControlState> | undefined, base: ControlState): ControlState {
-  if (!p || typeof p !== 'object') return base;
+function hydrateControl(
+  p: Partial<ControlState> | undefined,
+  base: ControlState,
+): ControlState {
+  if (!p || typeof p !== "object") return base;
   const result: ControlState = {
-    armed: FORCE_DISARM_ON_BOOT ? false : typeof p.armed === 'boolean' ? p.armed : base.armed,
-    mode: FORCE_DISARM_ON_BOOT ? 'off' : isControlMode(p.mode) ? p.mode : base.mode,
-    updatedAt: typeof p.updatedAt === 'number' ? p.updatedAt : base.updatedAt,
-    lastError: typeof p.lastError === 'string' ? p.lastError : null,
+    armed: FORCE_DISARM_ON_BOOT
+      ? false
+      : typeof p.armed === "boolean"
+        ? p.armed
+        : base.armed,
+    mode: FORCE_DISARM_ON_BOOT
+      ? "off"
+      : isControlMode(p.mode)
+        ? p.mode
+        : base.mode,
+    updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : base.updatedAt,
+    lastError: typeof p.lastError === "string" ? p.lastError : null,
     log: Array.isArray(p.log) ? pruneLog(p.log) : base.log,
     guardrails: { ...base.guardrails, ...(p.guardrails ?? {}) },
-    batteryPriority: hydrateBatteryPriority(p.batteryPriority, base.batteryPriority),
+    batteryPriority: hydrateBatteryPriority(
+      p.batteryPriority,
+      base.batteryPriority,
+    ),
     soakExport: hydrateSoakExport(p.soakExport, base.soakExport),
     arbitrageLog: Array.isArray(p.arbitrageLog)
       ? p.arbitrageLog.slice(-ARBITRAGE_LOG_RING_MAX)
       : base.arbitrageLog,
-    arbitrageStats: hydrateArbitrageStats(p.arbitrageStats, base.arbitrageStats),
-    dischargeV2Shadowed: typeof p.dischargeV2Shadowed === 'boolean' ? p.dischargeV2Shadowed : false,
+    arbitrageStats: hydrateArbitrageStats(
+      p.arbitrageStats,
+      base.arbitrageStats,
+    ),
+    dischargeV2Shadowed:
+      typeof p.dischargeV2Shadowed === "boolean"
+        ? p.dischargeV2Shadowed
+        : false,
   };
   // ONE-TIME migration: the Sonnen-first discharge actuation changed materially
   // (load-following force-discharge + Tesla backup hold, replacing the reserve-raise).
   // Force the rule back to SHADOW once so the new actuation re-validates before going
   // live, even if the persisted authority was 'auto'. Runs exactly once (flag flips true).
   if (!result.dischargeV2Shadowed) {
-    result.batteryPriority.dischargeSonnenFirst.authority = 'shadow';
+    result.batteryPriority.dischargeSonnenFirst.authority = "shadow";
     result.dischargeV2Shadowed = true;
   }
   return result;
@@ -2051,11 +2689,13 @@ function hydrateArbitrageStats(
   p: Partial<ArbitrageStats> | undefined,
   base: ArbitrageStats,
 ): ArbitrageStats {
-  if (!p || typeof p !== 'object') return base;
-  const num = (v: unknown, fb: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fb);
+  if (!p || typeof p !== "object") return base;
+  const num = (v: unknown, fb: number) =>
+    typeof v === "number" && Number.isFinite(v) ? v : fb;
   return {
     sinceTs: num(p.sinceTs, base.sinceTs),
-    lastEventTs: typeof p.lastEventTs === 'number' ? p.lastEventTs : base.lastEventTs,
+    lastEventTs:
+      typeof p.lastEventTs === "number" ? p.lastEventTs : base.lastEventTs,
     engagementsActive: num(p.engagementsActive, base.engagementsActive),
     engagementsAdvisory: num(p.engagementsAdvisory, base.engagementsAdvisory),
     valleyKwhActive: num(p.valleyKwhActive, base.valleyKwhActive),
@@ -2069,12 +2709,15 @@ function hydrateSoakExport(
   p: Partial<SoakExportRule> | undefined,
   base: SoakExportRule,
 ): SoakExportRule {
-  if (!p || typeof p !== 'object') return base;
+  if (!p || typeof p !== "object") return base;
   return {
-    enabled: typeof p.enabled === 'boolean' ? p.enabled : base.enabled,
-    startW: typeof p.startW === 'number' ? p.startW : base.startW,
-    stopW: typeof p.stopW === 'number' ? p.stopW : base.stopW,
-    socCeilingPct: typeof p.socCeilingPct === 'number' ? p.socCeilingPct : base.socCeilingPct,
+    enabled: typeof p.enabled === "boolean" ? p.enabled : base.enabled,
+    startW: typeof p.startW === "number" ? p.startW : base.startW,
+    stopW: typeof p.stopW === "number" ? p.stopW : base.stopW,
+    socCeilingPct:
+      typeof p.socCeilingPct === "number"
+        ? p.socCeilingPct
+        : base.socCeilingPct,
   };
 }
 
@@ -2082,11 +2725,15 @@ function hydrateRule(
   p: Partial<BatteryPriorityRule> | undefined,
   base: BatteryPriorityRule,
 ): BatteryPriorityRule {
-  if (!p || typeof p !== 'object') return base;
+  if (!p || typeof p !== "object") return base;
   return {
-    enabled: typeof p.enabled === 'boolean' ? p.enabled : base.enabled,
-    authority: p.authority === 'auto' || p.authority === 'shadow' ? p.authority : base.authority,
-    throughputKw: typeof p.throughputKw === 'number' ? p.throughputKw : base.throughputKw,
+    enabled: typeof p.enabled === "boolean" ? p.enabled : base.enabled,
+    authority:
+      p.authority === "auto" || p.authority === "shadow"
+        ? p.authority
+        : base.authority,
+    throughputKw:
+      typeof p.throughputKw === "number" ? p.throughputKw : base.throughputKw,
   };
 }
 
@@ -2094,24 +2741,36 @@ function hydrateBatteryPriority(
   p: Partial<BatteryPriority> | undefined,
   base: BatteryPriority,
 ): BatteryPriority {
-  if (!p || typeof p !== 'object') return base;
+  if (!p || typeof p !== "object") return base;
   return {
-    dischargeSonnenFirst: hydrateRule(p.dischargeSonnenFirst, base.dischargeSonnenFirst),
+    dischargeSonnenFirst: hydrateRule(
+      p.dischargeSonnenFirst,
+      base.dischargeSonnenFirst,
+    ),
     chargeTeslaFirst: hydrateRule(p.chargeTeslaFirst, base.chargeTeslaFirst),
   };
 }
 
-function hydrateAuth(p: Partial<AuthState> | undefined, base: AuthState): AuthState {
-  if (!p || typeof p !== 'object') return base;
+function hydrateAuth(
+  p: Partial<AuthState> | undefined,
+  base: AuthState,
+): AuthState {
+  if (!p || typeof p !== "object") return base;
   return {
     users: Array.isArray(p.users) ? p.users : base.users,
     sessions: Array.isArray(p.sessions) ? p.sessions : base.sessions,
-    trustedDevices: Array.isArray(p.trustedDevices) ? p.trustedDevices : base.trustedDevices,
+    trustedDevices: Array.isArray(p.trustedDevices)
+      ? p.trustedDevices
+      : base.trustedDevices,
     otps: Array.isArray(p.otps) ? p.otps : base.otps,
-    resetTokens: Array.isArray(p.resetTokens) ? p.resetTokens : base.resetTokens,
-    setupTokens: Array.isArray(p.setupTokens) ? p.setupTokens : base.setupTokens,
+    resetTokens: Array.isArray(p.resetTokens)
+      ? p.resetTokens
+      : base.resetTokens,
+    setupTokens: Array.isArray(p.setupTokens)
+      ? p.setupTokens
+      : base.setupTokens,
     loginAttempts:
-      p.loginAttempts && typeof p.loginAttempts === 'object'
+      p.loginAttempts && typeof p.loginAttempts === "object"
         ? p.loginAttempts
         : base.loginAttempts,
   };
@@ -2122,13 +2781,13 @@ function load(): StoreSchema {
   const f = file();
   try {
     if (existsSync(f)) {
-      cache = hydrate(JSON.parse(readFileSync(f, 'utf8')));
+      cache = hydrate(JSON.parse(readFileSync(f, "utf8")));
     } else {
       cache = defaults();
       persist(cache);
     }
   } catch (e) {
-    console.error('[store] load failed, using defaults:', (e as Error).message);
+    console.error("[store] load failed, using defaults:", (e as Error).message);
     cache = defaults();
   }
   return cache;
@@ -2140,10 +2799,10 @@ function persist(state: StoreSchema): void {
     const dir = dirname(f);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const tmp = `${f}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+    writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
     renameSync(tmp, f); // atomic on the same filesystem
   } catch (e) {
-    console.error('[store] persist failed:', (e as Error).message);
+    console.error("[store] persist failed:", (e as Error).message);
   }
 }
 
