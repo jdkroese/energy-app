@@ -4,7 +4,7 @@ import { usePolling } from '../../lib/usePolling';
 import { MOCK_PLAN } from '../../lib/mock';
 import { useAuth } from '../../auth/AuthProvider';
 import type { BrainPlanResponse, ControlStatus } from '../../lib/types';
-import { Card, StatTile, Badge, Eyebrow, Icon, Button, Modal } from '../ui';
+import { Card, StatTile, Badge, Icon, Button, Modal } from '../ui';
 import { PlanTimeline } from './PlanTimeline';
 
 /* ============================================================================

@@ -1,8 +1,6 @@
 import type { ComponentType } from 'react';
 import { icons, type LucideProps } from 'lucide-react';
 
-export type IconName = keyof typeof icons;
-
 type Props = LucideProps & {
   /** lucide icon name in kebab-case, e.g. "battery-charging" */
   name: string;

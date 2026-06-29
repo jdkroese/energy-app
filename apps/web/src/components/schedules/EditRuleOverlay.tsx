@@ -1,6 +1,6 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon, Button, Modal, Input } from '../ui';
-import type { Action, Capability, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, TimeAnchor, VaneSetting } from '../../lib/types';
+import type { Action, Capability, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, VaneSetting } from '../../lib/types';
 import { checkRuleOverlap, expandSegments, selfOverlaps, wouldOverlapUnit, TYPE_LABEL } from '../../lib/scheduleRules';
 import { AnchorPicker, OffsetStepper } from './TimeAnchorControls';
 

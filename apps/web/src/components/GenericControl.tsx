@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Capability } from '../lib/types';
 import { Switch, Slider, SegmentedControl, Button, Badge, Icon } from './ui';
 import { ConfirmDialog } from './ConfirmDialog';

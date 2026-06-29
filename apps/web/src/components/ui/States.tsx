@@ -121,8 +121,9 @@ export function ErrorState({
   );
 }
 
-/** Simple skeleton block for loading states (shared shimmer). */
-export function Skeleton({ height = 120, style }: { height?: number; style?: CSSProperties }) {
+/** Simple skeleton block for loading states (shared shimmer). Used internally
+ *  by LoadingState; not part of the public ui barrel. */
+function Skeleton({ height = 120, style }: { height?: number; style?: CSSProperties }) {
   return (
     <div
       style={{

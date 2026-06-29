@@ -79,7 +79,6 @@ export function wouldOverlapUnit(candidate: Schedule, deviceId: string, all: Sch
 
 // ---- Display helpers --------------------------------------------------------
 
-const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 const fanLabel = (f: Action['fan']): string => (f === 'auto' ? 'auto' : `fan ${f}`);
 
 /** Blinds target → label: "open" / "close" / "to 40%". */
