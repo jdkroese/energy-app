@@ -473,8 +473,17 @@ export async function getIrrigationPlan(): Promise<unknown> {
   const trims = computeTrims(irr, weekday, day);
   const trimById = new Map(trims.map((t) => [t.zoneId, t]));
 
-  const zones: IrrigationPlanZone[] = Object.values(irr.zones)
-    .map((z): IrrigationPlanZone => {
+  // Seed a zone for EVERY station the controller reports (so all stations show up
+  // immediately on first connect, ready to name/photo/schedule), merging any saved
+  // per-zone config on top. Union with configured zones so a saved zone still renders
+  // even if its station momentarily drops from the live read. Falls back to configured
+  // zones alone when not connected/unreachable.
+  const zoneIds = Array.from(
+    new Set([...stations.map((st) => st.id), ...Object.keys(irr.zones)]),
+  );
+  const zones: IrrigationPlanZone[] = zoneIds
+    .map((zoneId): IrrigationPlanZone => {
+      const z = irr.zones[zoneId] ?? defaultZoneConfig(zoneId);
       const st = stationById.get(z.zoneId);
       const trim = trimById.get(z.zoneId);
       const scheduled = scheduledMinForDay(z, weekday);
