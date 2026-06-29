@@ -285,22 +285,24 @@ export async function setDatapoint(
   uid: number,
   value: number,
 ): Promise<SetDatapointResult> {
-  const session = await login();
-  if (!session.serverIP || !session.serverPort) {
-    throw new Error('AC Cloud push socket coordinates unavailable');
-  }
-  // The AC Cloud push server keys on ONE shared account token and the set_ack
-  // carries no seqNo we can match, so two sockets open at once contend: a second
-  // connect_req can drop the first before its ack, and acks can be misattributed.
-  // Serialize every push-socket write so flipping several units in quick succession
-  // queues cleanly instead of colliding (which previously surfaced as the second
-  // toggle reverting). See connectors/write-queue.ts.
+  // Serialize the WHOLE write — login included. The AC Cloud rotates the push token
+  // on each login, so two commands that log in concurrently invalidate each other's
+  // token and both sockets drop before set_ack. Doing login+connect+set+ack one at a
+  // time per (de-facto single-account) push session removes that contention. The
+  // earlier serialization wrapped only the socket write, leaving the logins to race —
+  // which is why flipping several units still failed. See connectors/write-queue.ts.
   return serialize('intesis:push', async () => {
-    // The push socket can transiently drop before set_ack (server-side). Retry
-    // with a fresh socket a couple of times; a genuine cloud rejection is not.
+    // A push token can also go stale after an idle period: the first socket then drops
+    // before set_ack. Reusing the same session across retries just hits the same dead
+    // token, so re-login fresh on EVERY attempt — a cold/expired session self-heals on
+    // the next try. A genuine cloud rejection (rpc_error) is not retried.
     let lastErr: Error | null = null;
     for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
       try {
+        const session = await login();
+        if (!session.serverIP || !session.serverPort) {
+          throw new Error('AC Cloud push socket coordinates unavailable');
+        }
         return await writeOverSocket(session, deviceId, uid, value);
       } catch (e) {
         lastErr = e as Error;
