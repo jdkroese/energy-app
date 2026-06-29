@@ -21,6 +21,7 @@ export const NAV_MORE: NavItem[] = [
   // Autopilot folded into Automations (Summary · Schedules · Smart Rules · Events ·
   // Status · Settings); /brain redirects there. Keeps Autopilot's sparkles icon.
   { to: '/automations', label: 'Automations', icon: 'sparkles' },
+  { to: '/button-test', label: 'Button test', icon: 'radio' },
 ];
 
 /**
