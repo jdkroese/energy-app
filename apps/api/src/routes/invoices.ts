@@ -14,7 +14,15 @@ import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import { parseInvoicePdf, type ParsedInvoice } from '../invoices/parse';
 import * as invoices from '../invoices/store';
-import { reconcile, effectiveParsed, type Reconciliation } from '../invoices/model';
+import {
+  reconcile,
+  effectiveParsed,
+  costBreakdown,
+  costSplit,
+  type Reconciliation,
+  type CostBreakdown,
+  type CostSplit,
+} from '../invoices/model';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -32,6 +40,8 @@ export interface InvoiceSummary {
   periodEnd?: string;
   total?: number;
   bandKwh: { P1: number | null; P2: number | null; P3: number | null };
+  /** Compact metered-energy vs other-costs split (Phase 1.5) — for list trend + chips. */
+  split: CostSplit;
   /** True if a read looks estimated or the reconciliation total delta is large. */
   flagged: boolean;
   flagReason?: string;
@@ -44,6 +54,8 @@ export interface InvoiceDetail {
   confirmed: boolean;
   parsed: ParsedInvoice;
   reconciliation: Reconciliation;
+  /** Phase 1.5 — metered-energy vs other-costs decomposition (4 groups). */
+  breakdown: CostBreakdown;
 }
 
 const LARGE_DELTA_PCT = 5; // a |total delta| beyond this flags the card
@@ -76,6 +88,7 @@ function summarize(inv: invoices.Invoice): InvoiceSummary {
     periodEnd: p.periodEnd,
     total: p.total,
     bandKwh,
+    split: costSplit(inv),
     flagged,
     flagReason,
   };
@@ -154,6 +167,7 @@ export function getDetail(req: Request, res: Response): void {
     confirmed: inv.confirmed,
     parsed: effectiveParsed(inv),
     reconciliation: reconcile(inv),
+    breakdown: costBreakdown(inv),
   };
   res.json(detail);
 }

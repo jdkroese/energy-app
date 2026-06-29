@@ -1524,6 +1524,16 @@ export interface ParsedInvoice {
   warnings: string[];
 }
 
+/** Compact metered-energy vs other-costs split carried on each list row (Phase 1.5). */
+export interface CostSplit {
+  energyEur: number;
+  fixedEur: number;
+  regTaxEur: number;
+  creditsEur: number;
+  otherEur: number;
+  total: number;
+}
+
 export interface InvoiceSummary {
   id: string;
   uploadedAt: string;
@@ -1534,8 +1544,44 @@ export interface InvoiceSummary {
   periodEnd?: string;
   total?: number;
   bandKwh: { P1: number | null; P2: number | null; P3: number | null };
+  /** Metered-energy vs other-costs decomposition split (Phase 1.5). */
+  split: CostSplit;
   flagged: boolean;
   flagReason?: string;
+}
+
+/** One labelled sub-line inside a cost group (Phase 1.5). */
+export interface CostLine {
+  key: string;
+  label: string;
+  eur: number;
+  source: 'billed' | 'modelled';
+  unpredictable?: boolean;
+}
+
+/** A named cost group + its € subtotal (Phase 1.5). */
+export interface CostGroup {
+  key: 'energy' | 'fixed' | 'regTax' | 'credits';
+  label: string;
+  eur: number;
+  lines: CostLine[];
+}
+
+/** Full per-invoice cost decomposition (4 groups) + energy/other split (Phase 1.5). */
+export interface CostBreakdown {
+  groups: CostGroup[];
+  energyEur: number;
+  fixedEur: number;
+  regTaxEur: number;
+  creditsEur: number;
+  otherEur: number;
+  total: number;
+  billedTotal: number | null;
+  energyPct: number | null;
+  otherPct: number | null;
+  usedModelFallback: boolean;
+  hasUnpredictable: boolean;
+  notes: string[];
 }
 
 export interface ReconcileRow {
@@ -1563,6 +1609,8 @@ export interface InvoiceDetail {
   confirmed: boolean;
   parsed: ParsedInvoice;
   reconciliation: Reconciliation;
+  /** Phase 1.5 — metered-energy vs other-costs decomposition (4 groups). */
+  breakdown: CostBreakdown;
 }
 
 export interface InvoicesListResponse {

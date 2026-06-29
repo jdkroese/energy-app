@@ -6,6 +6,7 @@ import type {
   InvoiceDetail,
   ParsedInvoice,
   ReconcileRow,
+  CostBreakdown,
 } from '../lib/types';
 import { Card, Badge, Button, Icon, Eyebrow, Input } from '../components/ui';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -39,6 +40,19 @@ function fileToBase64(file: File): Promise<string> {
 
 const BAND_TONE: Record<string, string> = { P1: 'var(--grid)', P2: 'var(--home)', P3: 'var(--battery)' };
 
+/** Signed € for the credits line (export credit shows as a negative). */
+const eurSigned = (n: number | null | undefined) =>
+  n == null ? '—' : `${n < 0 ? '−' : ''}€${Math.abs(n).toFixed(2)}`;
+
+/** Cost-group taxonomy → tone + label, shared by the breakdown card and the trend. */
+const COST_GROUPS: { key: 'energy' | 'fixed' | 'regTax' | 'credits'; label: string; tone: string }[] = [
+  { key: 'energy', label: 'Metered energy', tone: 'var(--solar)' },
+  { key: 'fixed', label: 'Fixed / capacity', tone: 'var(--home)' },
+  { key: 'regTax', label: 'Regulatory & tax', tone: 'var(--grid)' },
+  { key: 'credits', label: 'Credits & settlements', tone: 'var(--battery)' },
+];
+const GROUP_TONE: Record<string, string> = Object.fromEntries(COST_GROUPS.map((g) => [g.key, g.tone]));
+
 /* --------------------------------------------------------------- band chips */
 
 function BandChips({ bandKwh, size = 'md' }: { bandKwh: { P1: number | null; P2: number | null; P3: number | null }; size?: 'sm' | 'md' }) {
@@ -70,7 +84,14 @@ function BandChips({ bandKwh, size = 'md' }: { bandKwh: { P1: number | null; P2:
 
 /* ------------------------------------------------------------- trend (mini) */
 
-/** Tiny inline bar trend of total € across saved invoices (oldest → newest). */
+/**
+ * Stacked cost trend across saved invoices (oldest → newest). Each bar stacks the
+ * positive cost groups (metered energy / fixed / regulatory & tax) and still reads the
+ * invoice TOTAL on top; the net credit (excedentes + SSAA, usually negative) is shown
+ * as a small signed caption under the bar so drift in the non-usage part is visible.
+ * Replaces the old total-only trend — total stays legible, other-costs drift is now
+ * decomposed by the group taxonomy.
+ */
 function TrendChart({ invoices, desktop }: { invoices: InvoiceSummary[]; desktop: boolean }) {
   const data = useMemo(
     () =>
@@ -80,30 +101,55 @@ function TrendChart({ invoices, desktop }: { invoices: InvoiceSummary[]; desktop
     [invoices],
   );
   if (data.length < 2) return null;
-  const max = Math.max(...data.map((d) => d.total ?? 0)) || 1;
-  const h = desktop ? 120 : 92;
+  // Scale the stacked-bar height by the largest POSITIVE stack (energy+fixed+regTax)
+  // across all bars, so bars are comparable regardless of the (separate) net credit.
+  const POS_KEYS = ['energy', 'fixed', 'regTax'] as const;
+  const posStack = (s: InvoiceSummary['split']) => POS_KEYS.reduce((sum, k) => sum + Math.max(0, s[`${k}Eur` as const]), 0);
+  const max = Math.max(...data.map((d) => posStack(d.split))) || 1;
+  const h = desktop ? 140 : 108;
   return (
     <Card style={desktop ? undefined : { padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <Eyebrow>Invoice total · trend</Eyebrow>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <Eyebrow>Cost trend · energy vs other</Eyebrow>
         <Icon name="trending-up" size={desktop ? 18 : 16} color="var(--grid)" />
+      </div>
+      {/* Group legend */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+        {COST_GROUPS.map((g) => (
+          <span key={g.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'var(--text-3)' }}>
+            <i style={{ width: 8, height: 8, borderRadius: 2, background: g.tone }} />
+            {g.label}
+          </span>
+        ))}
       </div>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: desktop ? 14 : 8, height: h }}>
         {data.map((d) => {
-          const pct = ((d.total ?? 0) / max) * 100;
+          const s = d.split;
+          const stackPct = (posStack(s) / max) * 100;
           return (
-            <div key={d.id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-2)' }}>{eur(d.total)}</div>
+            <div key={d.id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-1)', fontWeight: 600 }}>{eur(d.total)}</div>
               <div
                 style={{
                   width: '100%',
-                  maxWidth: 46,
-                  height: `${Math.max(6, pct)}%`,
+                  maxWidth: 48,
+                  height: `${Math.max(6, stackPct)}%`,
+                  display: 'flex',
+                  flexDirection: 'column',
                   borderRadius: '5px 5px 2px 2px',
-                  background: 'linear-gradient(180deg,var(--grid),var(--grid-dim,var(--grid)))',
-                  opacity: 0.92,
+                  overflow: 'hidden',
                 }}
-              />
+                title={`Energy €${s.energyEur.toFixed(0)} · Fixed €${s.fixedEur.toFixed(0)} · Reg/tax €${s.regTaxEur.toFixed(0)} · Credits €${s.creditsEur.toFixed(0)}`}
+              >
+                {POS_KEYS.map((k) => {
+                  const v = Math.max(0, s[`${k}Eur` as const]);
+                  const seg = posStack(s) > 0 ? (v / posStack(s)) * 100 : 0;
+                  return seg < 0.5 ? null : <div key={k} style={{ height: `${seg}%`, background: GROUP_TONE[k], opacity: 0.92 }} />;
+                })}
+              </div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9.5, color: s.creditsEur < 0 ? 'var(--battery)' : 'var(--text-3)' }}>
+                {eurSigned(s.creditsEur)}
+              </div>
               <div style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 56 }}>
                 {periodLabel(d.periodStart, d.periodEnd).split('→')[0].trim()}
               </div>
@@ -197,6 +243,144 @@ function ReconcileTable({ rows, desktop }: { rows: ReconcileRow[]; desktop: bool
   );
 }
 
+/* ------------------------------------------------- cost breakdown (Phase 1.5) */
+
+/**
+ * Splits the total into Metered energy vs Other costs — a DIFFERENT lens from the
+ * billed-vs-modelled reconciliation card. The headline shows the X% energy / Y% other
+ * split + a stacked bar; the Other group is broken into its sub-lines (fixed, reg/tax,
+ * credits) so drift in the non-usage part of the bill is legible.
+ */
+function CostBreakdownCard({ b, desktop }: { b: CostBreakdown; desktop: boolean }) {
+  // Stacked bar uses absolute magnitudes so a negative credit still shows a slice.
+  const mags = b.groups.map((g) => ({ key: g.key, mag: Math.abs(g.eur) }));
+  const magTotal = mags.reduce((s, m) => s + m.mag, 0) || 1;
+  const otherGroups = b.groups.filter((g) => g.key !== 'energy');
+
+  return (
+    <Card
+      title={desktop ? 'Cost breakdown' : undefined}
+      subtitle={desktop ? 'metered energy vs other costs — what scales with usage and what does not' : undefined}
+      icon={desktop ? <Icon name="layers" /> : undefined}
+      style={desktop ? undefined : { padding: 14 }}
+    >
+      {!desktop && <Eyebrow>Cost breakdown</Eyebrow>}
+
+      {/* Headline split */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap', marginTop: desktop ? 6 : 10 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 700, color: 'var(--solar)' }}>
+            {b.energyPct == null ? '—' : `${Math.round(b.energyPct)}%`}
+          </span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>energy</span>
+        </div>
+        <span style={{ color: 'var(--text-3)' }}>/</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 700, color: 'var(--text-1)' }}>
+            {b.otherPct == null ? '—' : `${Math.round(b.otherPct)}%`}
+          </span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>other</span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Other costs</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>{eurSigned(b.otherEur)}</div>
+        </div>
+      </div>
+
+      {/* Stacked magnitude bar */}
+      <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', marginTop: 12, background: 'var(--surface-3)' }}>
+        {mags.map((m) =>
+          m.mag < 1e-9 ? null : (
+            <div key={m.key} title={m.key} style={{ width: `${(m.mag / magTotal) * 100}%`, background: GROUP_TONE[m.key], opacity: 0.92 }} />
+          ),
+        )}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 10 }}>
+        {b.groups.map((g) => (
+          <span key={g.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-3)' }}>
+            <i style={{ width: 9, height: 9, borderRadius: 2, background: GROUP_TONE[g.key] }} />
+            {g.label} <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{eurSigned(g.eur)}</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Energy vs Other group rows + Other sub-lines */}
+      <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <GroupRow tone={GROUP_TONE.energy} label="Metered energy" eur={b.energyEur} strong />
+        <div style={{ height: 8 }} />
+        <div style={{ fontSize: 11, color: 'var(--text-3)', letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 4 }}>Other costs</div>
+        {otherGroups.map((g) => (
+          <div key={g.key}>
+            <GroupRow tone={GROUP_TONE[g.key]} label={g.label} eur={g.eur} strong />
+            {g.lines.map((l) => (
+              <div
+                key={l.key}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '3px 0 3px 22px',
+                  fontSize: 12,
+                  color: 'var(--text-3)',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  {l.label}
+                  {l.source === 'modelled' && (
+                    <Badge tone="grid" variant="soft">
+                      est
+                    </Badge>
+                  )}
+                  {l.unpredictable && (
+                    <Badge tone="grid" variant="soft" icon={<Icon name="triangle-alert" size={11} />}>
+                      true-up
+                    </Badge>
+                  )}
+                </span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{eurSigned(l.eur)}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+        <div style={{ height: 8 }} />
+        <GroupRow tone="var(--text-1)" label="Total" eur={b.total} strong total />
+      </div>
+
+      {b.notes.length > 0 && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {b.notes.map((n, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12, color: 'var(--text-2)' }}>
+              <Icon name="info" size={14} color="var(--text-3)" />
+              <span>{n}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function GroupRow({ tone, label, eur, strong, total }: { tone: string; label: string; eur: number; strong?: boolean; total?: boolean }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: total ? '8px 0 0' : '4px 0',
+        borderTop: total ? '1px solid var(--border)' : undefined,
+      }}
+    >
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13.5, fontWeight: strong ? 600 : 400, color: 'var(--text-1)' }}>
+        <i style={{ width: 9, height: 9, borderRadius: 2, background: tone }} />
+        {label}
+      </span>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: total ? 16 : 13.5, fontWeight: strong ? 700 : 400, color: 'var(--text-1)' }}>{eurSigned(eur)}</span>
+    </div>
+  );
+}
+
 /* --------------------------------------------------------------- detail view */
 
 function Detail({ id, onBack, onDeleted, desktop, isAdmin }: { id: string; onBack: () => void; onDeleted: () => void; desktop: boolean; isAdmin: boolean }) {
@@ -273,6 +457,8 @@ function Detail({ id, onBack, onDeleted, desktop, isAdmin }: { id: string; onBac
           <BandChips bandKwh={{ P1: p.energy?.P1?.kwh ?? null, P2: p.energy?.P2?.kwh ?? null, P3: p.energy?.P3?.kwh ?? null }} />
         </div>
       </Card>
+
+      <CostBreakdownCard b={detail.breakdown} desktop={desktop} />
 
       <Card title={desktop ? 'Billed vs modelled' : undefined} subtitle={desktop ? 'reconciliation — our cost model priced against this bill' : undefined} icon={desktop ? <Icon name="scale" /> : undefined} style={desktop ? undefined : { padding: 14 }}>
         {!desktop && <Eyebrow>Billed vs modelled</Eyebrow>}
