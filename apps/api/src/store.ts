@@ -898,6 +898,8 @@ export interface HomeScene {
   name: string;
   /** Lucide icon name (UI wayfinding). */
   icon?: string;
+  /** Starred by the owner — favorites surface first (e.g. the wall-tablet Home). */
+  favorite?: boolean;
   /** When set, apply turns ALL lights + climate off and (optionally) closes blinds —
    *  no explicit member IDs needed (works on any install). 'all-off' is the only kind. */
   special?: 'all-off';

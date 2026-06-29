@@ -93,6 +93,7 @@ export function createHomeScene(body: Partial<store.HomeScene>): unknown {
     id: newId('home-scene'),
     name: body.name?.trim() || 'New scene',
     icon: typeof body.icon === 'string' ? body.icon : 'sparkles',
+    ...(body.favorite ? { favorite: true as const } : {}),
     ...(sanitizeSpecial(body.special) ? { special: 'all-off' as const } : {}),
     lights: sanitizeLights(body.lights),
     climate: sanitizeClimate(body.climate),
@@ -110,10 +111,12 @@ export function updateHomeScene(id: string, body: Partial<store.HomeScene>): unk
     if (idx < 0) return null;
     const cur = s.homeScenes[idx];
     const special = body.special !== undefined ? sanitizeSpecial(body.special) : cur.special;
+    const favorite = body.favorite !== undefined ? Boolean(body.favorite) : cur.favorite;
     const merged: store.HomeScene = {
       ...cur,
       name: body.name?.trim() || cur.name,
       icon: typeof body.icon === 'string' ? body.icon : cur.icon,
+      ...(favorite ? { favorite: true as const } : {}),
       ...(special ? { special: 'all-off' as const } : {}),
       lights: body.lights !== undefined ? sanitizeLights(body.lights) : cur.lights,
       climate: body.climate !== undefined ? sanitizeClimate(body.climate) : cur.climate,
@@ -121,8 +124,25 @@ export function updateHomeScene(id: string, body: Partial<store.HomeScene>): unk
     };
     // Clearing the special flag must actually drop it (the spread above only adds it).
     if (!special) delete merged.special;
+    // Same for favorite — un-starring must remove the key, not leave a stale `true`.
+    if (!favorite) delete merged.favorite;
     s.homeScenes[idx] = merged;
     return merged;
+  });
+  if (!saved) throw badInput(`home scene ${id} not found`);
+  return { ts: new Date().toISOString(), scene: saved };
+}
+
+/** Star / un-star a scene — a lightweight write so the wall tablet (kiosk) can toggle
+ *  a favorite without sending the whole scene. `favorite` defaults to true if omitted. */
+export function favoriteHomeScene(id: string, favorite: boolean): unknown {
+  const saved = store.update((s) => {
+    const idx = s.homeScenes.findIndex((x) => x.id === id);
+    if (idx < 0) return null;
+    const cur = s.homeScenes[idx];
+    if (favorite) cur.favorite = true;
+    else delete cur.favorite;
+    return cur;
   });
   if (!saved) throw badInput(`home scene ${id} not found`);
   return { ts: new Date().toISOString(), scene: saved };

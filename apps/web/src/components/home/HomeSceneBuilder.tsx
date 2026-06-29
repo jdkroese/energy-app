@@ -110,6 +110,17 @@ export function HomeSceneBuilder({ open, onClose, onSaved }: { open: boolean; on
     }
   };
 
+  const toggleFavorite = async (s: HomeScene) => {
+    if (!s.id) return;
+    try {
+      await api.homeScenes.favorite(s.id, !s.favorite);
+      refetchScenes();
+      onSaved?.();
+    } catch {
+      /* best-effort — a failed star toggle is harmless, the next poll re-syncs */
+    }
+  };
+
   const title = draft ? (draft.id ? 'Edit scene' : 'New scene') : 'Scenes';
 
   return (
@@ -124,7 +135,7 @@ export function HomeSceneBuilder({ open, onClose, onSaved }: { open: boolean; on
           onChange={setDraft}
         />
       ) : (
-        <SceneList scenes={scenes} onAdd={startNew} onEdit={startEdit} onRemove={remove} busy={busy} />
+        <SceneList scenes={scenes} onAdd={startNew} onEdit={startEdit} onRemove={remove} onFavorite={toggleFavorite} busy={busy} />
       )}
       {/* Footer actions — vary by mode */}
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', padding: '14px 18px', borderTop: '1px solid var(--border-1)' }}>
@@ -143,8 +154,8 @@ export function HomeSceneBuilder({ open, onClose, onSaved }: { open: boolean; on
 
 /* ---- Scene list (pick / add / delete) ------------------------------------- */
 
-function SceneList({ scenes, onAdd, onEdit, onRemove, busy }: {
-  scenes: HomeScene[]; onAdd: () => void; onEdit: (s: HomeScene) => void; onRemove: (s: HomeScene) => void; busy: boolean;
+function SceneList({ scenes, onAdd, onEdit, onRemove, onFavorite, busy }: {
+  scenes: HomeScene[]; onAdd: () => void; onEdit: (s: HomeScene) => void; onRemove: (s: HomeScene) => void; onFavorite: (s: HomeScene) => void; busy: boolean;
 }) {
   return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -164,6 +175,17 @@ function SceneList({ scenes, onAdd, onEdit, onRemove, busy }: {
                   {s.special === 'all-off' ? 'All-off scene' : `${s.lights.length} lights · ${s.climate.length} climate · ${s.blinds.length} blinds`}
                 </div>
               </div>
+              <button
+                type="button"
+                aria-label={s.favorite ? `Unstar ${s.name}` : `Star ${s.name}`}
+                aria-pressed={!!s.favorite}
+                onClick={() => onFavorite(s)}
+                disabled={busy}
+                title={s.favorite ? 'Favorite — shows first on the tablet' : 'Mark as favorite'}
+                style={iconBtn}
+              >
+                <Icon name="star" size={16} color={s.favorite ? 'var(--solar)' : 'var(--text-3)'} fill={s.favorite ? 'var(--solar)' : 'none'} />
+              </button>
               <button type="button" aria-label={`Edit ${s.name}`} onClick={() => onEdit(s)} disabled={busy} style={iconBtn}><Icon name="pencil" size={15} color="var(--text-2)" /></button>
               <button type="button" aria-label={`Delete ${s.name}`} onClick={() => onRemove(s)} disabled={busy} style={iconBtn}><Icon name="trash-2" size={15} color="var(--danger)" /></button>
             </div>
