@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
@@ -819,42 +819,57 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const configured = configuredData?.devices ?? [];
   const customTypes = configuredData?.customDeviceTypes ?? [];
 
-  const counts = DEVICE_TYPES.reduce((acc, m) => {
-    acc[m.type] = (d?.devices ?? []).filter((x) => classifyDevice(x) === m.type).length;
+  // Per-type device counts — pure derivation of the fleets + configured list.
+  // Memoized so the per-type filters/loops don't re-run on every poll-tick
+  // re-render (only when one of the underlying datasets actually changes).
+  const counts = useMemo(() => {
+    const acc = DEVICE_TYPES.reduce((a, m) => {
+      a[m.type] = (d?.devices ?? []).filter((x) => classifyDevice(x) === m.type).length;
+      return a;
+    }, {} as Record<DeviceType, number>);
+    // Lights and blinds are separate Tuya fleets (not in the climate /api/devices list).
+    acc.lighting = lightsData?.context.deviceCount ?? 0;
+    acc.blinds = blindsData?.context.deviceCount ?? 0;
+    // Speakers are the Sonos fleet (local UPnP, separate from /api/devices).
+    acc.speakers = speakersData?.context.deviceCount ?? 0;
+    // Configured generic devices feed the Switching tab + any custom-type tab.
+    // Skip 'lighting' — those are folded into the /api/lights fleet already, so
+    // acc.lighting (from the fleet) would otherwise double-count them.
+    for (const cfg of configured) {
+      if (cfg.typeId === 'lighting') continue;
+      if (cfg.typeId in acc) (acc as Record<string, number>)[cfg.typeId] += 1;
+    }
+    acc.switching = configured.filter((c) => c.typeId === 'switching').length;
     return acc;
-  }, {} as Record<DeviceType, number>);
-  // Lights and blinds are separate Tuya fleets (not in the climate /api/devices list).
-  counts.lighting = lightsData?.context.deviceCount ?? 0;
-  counts.blinds = blindsData?.context.deviceCount ?? 0;
-  // Speakers are the Sonos fleet (local UPnP, separate from /api/devices).
-  counts.speakers = speakersData?.context.deviceCount ?? 0;
-  // Configured generic devices feed the Switching tab + any custom-type tab.
-  // Skip 'lighting' — those are folded into the /api/lights fleet already, so
-  // counts.lighting (from the fleet) would otherwise double-count them.
-  for (const cfg of configured) {
-    if (cfg.typeId === 'lighting') continue;
-    if (cfg.typeId in counts) (counts as Record<string, number>)[cfg.typeId] += 1;
-  }
-  counts.switching = configured.filter((c) => c.typeId === 'switching').length;
+  }, [d, lightsData, blindsData, speakersData, configured]);
 
   // Devices grouped by their assigned typeId (built-in or custom).
   const configuredByType = (typeId: string) => configured.filter((c) => c.typeId === typeId);
 
   // Tab list = the built-in types + any custom type that has configured devices.
-  const customTabSpecs: TabSpec[] = customTypes
-    .filter((c) => configuredByType(c.id).length > 0)
-    .map((c) => { const m = resolveTypeMeta(c.id, customTypes); return { id: c.id, label: c.label, hue: m.hue, icon: m.icon, count: configuredByType(c.id).length }; });
-  const tabs: TabSpec[] = [
-    ...DEVICE_TYPES.map((m) => ({ id: m.type, label: m.label, hue: m.hue, icon: m.icon, count: counts[m.type] })),
-    ...customTabSpecs,
-  ];
+  const tabs: TabSpec[] = useMemo(() => {
+    const byType = (typeId: string) => configured.filter((c) => c.typeId === typeId);
+    const customTabSpecs: TabSpec[] = customTypes
+      .filter((c) => byType(c.id).length > 0)
+      .map((c) => { const m = resolveTypeMeta(c.id, customTypes); return { id: c.id, label: c.label, hue: m.hue, icon: m.icon, count: byType(c.id).length }; });
+    return [
+      ...DEVICE_TYPES.map((m) => ({ id: m.type, label: m.label, hue: m.hue, icon: m.icon, count: counts[m.type] })),
+      ...customTabSpecs,
+    ];
+  }, [counts, customTypes, configured]);
 
   // Optimistic write for a generic capability — fire-and-refetch.
   const writeCap = (id: string, dp: string, kind: Capability['kind'], value: unknown) =>
     api.devices.commandCap(id, dp, kind, value).finally(() => refetchConfigured());
 
-  const cooling = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'cooling').sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-  const heating = (d?.devices ?? []).filter((x) => classifyDevice(x) === 'heating').sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  const cooling = useMemo(
+    () => (d?.devices ?? []).filter((x) => classifyDevice(x) === 'cooling').sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })),
+    [d],
+  );
+  const heating = useMemo(
+    () => (d?.devices ?? []).filter((x) => classifyDevice(x) === 'heating').sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })),
+    [d],
+  );
   const coolingNow = cooling.filter((x) => x.power && x.mode === 'cool').length;
   const warmest = cooling.reduce<number | null>((m, x) => (x.currentTempC != null && x.currentTempC > (m ?? -Infinity) ? x.currentTempC : m), null);
   const warmestHot = warmest != null && warmest >= 28;

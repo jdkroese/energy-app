@@ -256,8 +256,19 @@ export function DayChart({
   }
 
   // Draw areas first so lines stay readable on top.
-  const drawOrder = [...visible].sort(
-    (a, b) => (a.kind === 'area' ? 0 : 1) - (b.kind === 'area' ? 0 : 1),
+  const drawOrder = useMemo(
+    () => [...visible].sort((a, b) => (a.kind === 'area' ? 0 : 1) - (b.kind === 'area' ? 0 : 1)),
+    [visible],
+  );
+
+  // Path geometry is the expensive part (288-point strings per series) but it
+  // only depends on the data + scale, NOT on hover. Memoize it so moving the
+  // pointer — which updates hoverIdx on every pixel — re-renders just the
+  // crosshair/tooltip instead of rebuilding every series path each frame.
+  const seriesPaths = useMemo(
+    () => drawOrder.map((s) => ({ s, ...paths(s) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [drawOrder, merged, niceMax, forecastOn, nowIdx, plotTop, plotH, plotBottom],
   );
 
   // Peak measured production marker.
@@ -425,8 +436,7 @@ export function DayChart({
           })}
 
           {/* series (measured solid + forecast dashed) */}
-          {drawOrder.map((s) => {
-            const { measLine, fcLine, area } = paths(s);
+          {seriesPaths.map(({ s, measLine, fcLine, area }) => {
             const c = colorOf.get(s.key);
             return (
               <g key={s.key}>
