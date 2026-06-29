@@ -126,6 +126,22 @@ async function getToken(c: TuyaCreds): Promise<string> {
 
 // ---- Authenticated request (retries once on token expiry) -------------------
 
+// Tuya's HMAC signs the request URL with query params sorted alphabetically by
+// key, and the actual request must use that same order — otherwise the API
+// returns `1004 sign invalid`. (Single-param calls are unaffected; this matters
+// for multi-param GETs like device logs.) Canonicalize so signing and URL agree.
+function canonicalQuery(path: string): string {
+  const qi = path.indexOf('?');
+  if (qi < 0) return path;
+  const base = path.slice(0, qi);
+  const params = path
+    .slice(qi + 1)
+    .split('&')
+    .filter(Boolean)
+    .sort((a, b) => (a.split('=')[0] < b.split('=')[0] ? -1 : 1));
+  return `${base}?${params.join('&')}`;
+}
+
 async function request<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
@@ -134,10 +150,11 @@ async function request<T>(
 ): Promise<T> {
   const c = mustCreds();
   const token = await getToken(c);
+  const signedPath = canonicalQuery(path);
   const bodyStr = body === undefined ? '' : JSON.stringify(body);
   const contentSha = body === undefined ? EMPTY_BODY_SHA256 : sha256(bodyStr);
   const t = Date.now().toString();
-  const stringToSign = [method, contentSha, '', path].join('\n');
+  const stringToSign = [method, contentSha, '', signedPath].join('\n');
   const sign = hmac(c.accessId + token + t + stringToSign, c.accessSecret);
 
   const headers: Record<string, string> = {
@@ -150,7 +167,7 @@ async function request<T>(
   };
   if (body !== undefined) headers['content-type'] = 'application/json';
 
-  const res = await fetch(`${host(c.region)}${path}`, {
+  const res = await fetch(`${host(c.region)}${signedPath}`, {
     method,
     headers,
     body: body === undefined ? undefined : bodyStr,
