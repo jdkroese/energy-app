@@ -9,6 +9,7 @@ import { StaleBanner } from './_shared';
 import { AlertRulesCard, VoltageMonitorCard } from '../components/Notifications';
 import { enablePush, getPushStatus, type PushStatus } from '../lib/push';
 import { InstallSheet } from '../components/InstallSheet';
+import { HomeSceneBuilder } from '../components/home/HomeSceneBuilder';
 import { isStandalone } from '../lib/install';
 import { useAuth } from '../auth/AuthProvider';
 import { useNavigate } from 'react-router-dom';
@@ -18,6 +19,7 @@ import { settingsTabsFor, type SettingsTabLabel } from '../components/shell/nav'
 import { SiteLocationCard } from '../components/SiteLocationCard';
 import { useTheme } from '../lib/ThemeProvider';
 import type { Theme } from '../lib/theme';
+import { isKioskEnabled, setKioskEnabled } from '../lib/kiosk';
 
 const Chev = () => <Icon name="chevron-right" size={18} color="var(--text-3)" />;
 const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px' };
@@ -96,6 +98,44 @@ function ThemeRow({ first }: { first?: boolean }) {
           { value: 'system', label: 'System', icon: <Icon name="monitor" size={14} /> },
         ]}
       />
+    </div>
+  );
+}
+
+/** KioskRow — wall-tablet (kiosk) mode toggle; admin-only, provisions then reloads. */
+function KioskRow() {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onToggle = async (on: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      if (on) {
+        await api.kiosk.provision();
+        setKioskEnabled(true);
+      } else {
+        setKioskEnabled(false);
+      }
+      window.location.reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not enable tablet mode');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border-1)', padding: '13px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: 'var(--battery)' }}>
+        <Icon name="tablet" size={17} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14 }}>Wall tablet mode</div>
+        <div style={{ fontSize: 12, color: err ? 'var(--danger)' : 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+          {err || 'Big-button kitchen display'}
+        </div>
+      </div>
+      <Switch checked={isKioskEnabled()} disabled={busy} onChange={(e) => void onToggle(e.target.checked)} />
     </div>
   );
 }
@@ -1479,6 +1519,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [installOpen, setInstallOpen] = useState(false);
+  const [scenesOpen, setScenesOpen] = useState(false);
   const installed = isStandalone();
   const signOut = async () => {
     await logout();
@@ -1554,6 +1595,9 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
 
           <Card title="My system" style={{ padding: 0 }}>
             <LinkRow first icon="layout-grid" tone="solar" name="Rooms" detail="Organize devices by room" onClick={() => navigate('/rooms')} right={<Chev />} />
+            {isAdmin && (
+              <LinkRow icon="sparkles" tone="home" name="Scenes" detail="One-tap whole-home presets for the wall tablet" onClick={() => setScenesOpen(true)} right={<Chev />} />
+            )}
             {s.assets.map((a) => (
               <LinkRow key={a.name} icon={a.icon} tone={a.tone} name={a.name} detail={a.detail} right={<Chev />} />
             ))}
@@ -1577,6 +1621,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
               right={<Button size="sm" variant="ghost" iconLeft={<Icon name="log-out" />} onClick={() => void signOut()}>Sign out</Button>}
             />
             <ThemeRow />
+            {isAdmin && <KioskRow />}
             <LinkRow icon="info" tone="text-2" name="Version" detail="0.1.0 · energy.hirobo.nl" />
           </Card>
         </>
@@ -1594,6 +1639,7 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
       <SegmentedControl block options={tabs} value={active} onChange={ctx.setSettingsTab} />
       {sections}
       {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
+      {isAdmin && <HomeSceneBuilder open={scenesOpen} onClose={() => setScenesOpen(false)} />}
     </div>
   );
 }

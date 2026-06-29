@@ -69,7 +69,7 @@ async function buildAnyLightCommands(
 
 /** Normalize the connected fleet down to lights — native categories PLUS any device
  *  the user set up as lighting (rendered with the same LightUnit shape + card). */
-async function getLightFleet(): Promise<{ units: LightUnit[]; error: string | null }> {
+export async function getLightFleet(): Promise<{ units: LightUnit[]; error: string | null }> {
   const settings = store.get().deviceSettings;
   try {
     const all = await tuya.getDevices();
@@ -326,8 +326,9 @@ export function deleteScene(id: string): unknown {
   return { ts: new Date().toISOString(), ok: true };
 }
 
-/** Push a set of member targets to the real lights. Best-effort per light. */
-async function applyMembers(members: store.LightSceneMember[]): Promise<{ applied: number; failed: number }> {
+/** Push a set of member targets to the real lights. Best-effort per light.
+ *  Exported so the whole-home scene apply can reuse the exact light-apply path. */
+export async function applyMembers(members: store.LightSceneMember[]): Promise<{ applied: number; failed: number }> {
   if (!tuya.isConfigured() || members.length === 0) return { applied: 0, failed: 0 };
   const all = await tuya.getDevices();
   const cfgMap = configuredLightingMap();

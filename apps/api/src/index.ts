@@ -165,8 +165,15 @@ import { serveAlarmClip, startMediaLanListener } from './routes/media';
 import { resumeAlarm } from './control/alarm';
 import * as notify from './notify';
 import { startAlertLoop } from './alert-loop';
-import { authRouter } from './routes/auth';
-import { requireAuth, requireAdmin } from './auth/middleware';
+import { authRouter, provisionKiosk } from './routes/auth';
+import {
+  listHomeScenes,
+  createHomeScene,
+  updateHomeScene,
+  deleteHomeScene,
+  applyHomeScene,
+} from './routes/home-scenes';
+import { requireAuth, requireAdmin, requireKioskOrAdmin } from './auth/middleware';
 import { bootstrapAdmin } from './auth/users';
 import type { ScenarioDef, AlertStatus, ControlDevice, ControlMode } from './store';
 
@@ -383,7 +390,7 @@ app.post(
 );
 app.post(
   '/api/devices/bulk-command',
-  requireAdmin,
+  requireKioskOrAdmin,
   wrap((req) => {
     const body = (req.body ?? {}) as { ids?: string[]; lever?: string; value?: unknown };
     return bulkCommand(body.ids ?? [], body.lever as ClimateLever, body.value);
@@ -391,7 +398,7 @@ app.post(
 );
 app.post(
   '/api/devices/:id/command',
-  requireAdmin,
+  requireKioskOrAdmin,
   wrap((req) => {
     const body = (req.body ?? {}) as { lever?: string; value?: unknown; dp?: string; kind?: string };
     // A capability-oriented body ({ dp, kind, value }) drives a generic (set-up) Tuya
@@ -440,7 +447,7 @@ app.get('/api/lights/scenes', wrap(() => listScenes()));
 app.post('/api/lights/scenes', requireAdmin, wrap((req) => createScene((req.body ?? {}) as never)));
 app.put('/api/lights/scenes/:id', requireAdmin, wrap((req) => updateScene(String(req.params.id), (req.body ?? {}) as never)));
 app.delete('/api/lights/scenes/:id', requireAdmin, wrap((req) => deleteScene(String(req.params.id))));
-app.post('/api/lights/scenes/:id/apply', requireAdmin, wrap((req) => {
+app.post('/api/lights/scenes/:id/apply', requireKioskOrAdmin, wrap((req) => {
   const body = (req.body ?? {}) as { on?: boolean };
   return applyScene(String(req.params.id), body.on !== false);
 }));
@@ -452,7 +459,7 @@ app.delete('/api/lights/schedules/:id', requireAdmin, wrap((req) => deleteLightS
 app.get('/api/lights/:id', wrap((req) => getLight(String(req.params.id))));
 app.post(
   '/api/lights/bulk-command',
-  requireAdmin,
+  requireKioskOrAdmin,
   wrap((req) => {
     const body = (req.body ?? {}) as { ids?: string[]; lever?: string; value?: unknown };
     return bulkCommandLights(body.ids ?? [], body.lever as LightLever, body.value);
@@ -460,7 +467,7 @@ app.post(
 );
 app.post(
   '/api/lights/:id/command',
-  requireAdmin,
+  requireKioskOrAdmin,
   wrap((req) => {
     const body = (req.body ?? {}) as { lever?: string; value?: unknown };
     return commandLight(String(req.params.id), body.lever as LightLever, body.value);
@@ -477,7 +484,7 @@ app.get('/api/blinds', wrap(() => getBlinds()));
 app.get('/api/blinds/:id', wrap((req) => getBlind(String(req.params.id))));
 app.post(
   '/api/blinds/bulk-command',
-  requireAdmin,
+  requireKioskOrAdmin,
   wrap((req) => {
     const body = (req.body ?? {}) as { ids?: string[]; lever?: string; value?: unknown };
     return bulkCommandBlinds(body.ids ?? [], body.lever as BlindLever, body.value);
@@ -485,7 +492,7 @@ app.post(
 );
 app.post(
   '/api/blinds/:id/command',
-  requireAdmin,
+  requireKioskOrAdmin,
   wrap((req) => {
     const body = (req.body ?? {}) as { lever?: string; value?: unknown };
     return commandBlind(String(req.params.id), body.lever as BlindLever, body.value);
@@ -531,7 +538,7 @@ app.delete('/api/invoices/:id', requireAdmin, deleteInvoice);
 app.get('/api/speakers', wrap(() => getSpeakers()));
 app.post(
   '/api/speakers/:id/volume',
-  requireAdmin,
+  requireKioskOrAdmin,
   wrap((req) => {
     const b = (req.body ?? {}) as { pct?: unknown };
     return setSpeakerVolume(String(req.params.id), b.pct);
@@ -540,8 +547,8 @@ app.post(
 app.post('/api/speakers/:id/test', requireAdmin, wrap((req) => testSpeaker(String(req.params.id), req)));
 
 app.get('/api/alarm/status', wrap(() => getAlarmStatusRoute()));
-app.post('/api/alarm/trigger', requireAdmin, wrap((req) => postAlarmTrigger(req.body, req)));
-app.post('/api/alarm/stop', requireAdmin, wrap(() => postAlarmStop()));
+app.post('/api/alarm/trigger', requireKioskOrAdmin, wrap((req) => postAlarmTrigger(req.body, req)));
+app.post('/api/alarm/stop', requireKioskOrAdmin, wrap(() => postAlarmStop()));
 app.get('/api/alarm/config', wrap(() => getAlarmConfig()));
 app.put('/api/alarm/config', requireAdmin, wrap((req) => setAlarmConfig(req.body)));
 
@@ -558,8 +565,8 @@ app.put('/api/radio/favorites/:id', requireAdmin, wrap((req) => updateFavorite(S
 app.delete('/api/radio/favorites/:id', requireAdmin, wrap((req) => deleteFavorite(String(req.params.id))));
 app.get('/api/radio/sonos-favorites', wrap(() => getSonosFavorites()));
 app.get('/api/radio/now-playing', wrap(() => radioNowPlaying()));
-app.post('/api/radio/play', requireAdmin, wrap((req) => playRadio(req.body)));
-app.post('/api/radio/stop', requireAdmin, wrap((req) => stopRadio(req.body)));
+app.post('/api/radio/play', requireKioskOrAdmin, wrap((req) => playRadio(req.body)));
+app.post('/api/radio/stop', requireKioskOrAdmin, wrap((req) => stopRadio(req.body)));
 app.get('/api/radio/schedules', wrap(() => listRadioSchedules()));
 app.post('/api/radio/schedules', requireAdmin, wrap((req) => createRadioSchedule((req.body ?? {}) as never)));
 app.put('/api/radio/schedules/:id', requireAdmin, wrap((req) => updateRadioSchedule(String(req.params.id), (req.body ?? {}) as never)));
@@ -653,9 +660,22 @@ app.delete('/api/automations/:id', requireAdmin, wrap((req) => deleteAutomation(
 app.get('/api/rooms', wrap(() => getRooms()));
 app.post('/api/rooms', requireAdmin, wrap((req) => createRoom(req.body)));
 // Literal sub-path registered before the bare :id so it isn't shadowed.
-app.post('/api/rooms/:id/all-off', requireAdmin, wrap((req) => roomAllOff(String(req.params.id), req.body)));
+app.post('/api/rooms/:id/all-off', requireKioskOrAdmin, wrap((req) => roomAllOff(String(req.params.id), req.body)));
 app.patch('/api/rooms/:id', requireAdmin, wrap((req) => updateRoom(String(req.params.id), req.body)));
 app.delete('/api/rooms/:id', requireAdmin, wrap((req) => deleteRoom(String(req.params.id))));
+
+// ---- Whole-home scenes (cross-domain) — reads any-authed; CRUD admin-gated; apply
+// kiosk-or-admin (a wall tablet may trigger a scene, but not edit it) ----
+app.get('/api/home-scenes', wrap(() => listHomeScenes()));
+app.post('/api/home-scenes', requireAdmin, wrap((req) => createHomeScene((req.body ?? {}) as never)));
+app.put('/api/home-scenes/:id', requireAdmin, wrap((req) => updateHomeScene(String(req.params.id), (req.body ?? {}) as never)));
+app.delete('/api/home-scenes/:id', requireAdmin, wrap((req) => deleteHomeScene(String(req.params.id))));
+app.post('/api/home-scenes/:id/apply', requireKioskOrAdmin, wrap((req) => applyHomeScene(String(req.params.id))));
+
+// ---- Kiosk (wall-tablet) provisioning — admin swaps THIS browser's session to the
+// limited kiosk role. provisionKiosk sends its own response (cookie + JSON), so it's
+// NOT wrapped in `wrap`. ----
+app.post('/api/kiosk/provision', requireAdmin, (req: Request, res: Response) => provisionKiosk(req, res));
 
 // Ensure VAPID keys exist on boot (generate + persist if missing).
 try {

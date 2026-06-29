@@ -286,6 +286,15 @@ export async function bulkCommand(ids: string[], lever: ClimateLever, rawValue: 
   return { ts: new Date().toISOString(), results };
 }
 
+/** Live climate device ids across all connected connectors (best-effort; empty when none
+ *  connected or on a fleet error). Used by the whole-home all-off scene to power every
+ *  climate unit off without the caller needing per-device IDs. */
+export async function listClimateDeviceIds(): Promise<string[]> {
+  if (!anyConnected()) return [];
+  const { fleet } = await getAllUnits();
+  return fleet.map((u) => u.id);
+}
+
 /** Clear a manual-control hold — hand this unit back to automation immediately. */
 export function releaseDevice(id: string): unknown {
   clearManualOverride(id);

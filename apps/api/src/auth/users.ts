@@ -74,6 +74,32 @@ export function createUser(input: CreateUserInput): AuthUser {
   return user;
 }
 
+/**
+ * Ensure the single kiosk (wall-tablet) user exists and return it. The kiosk account has
+ * a fixed identity (email `kiosk@local`, name `Wall tablet`, role `'kiosk'`) and NO
+ * password (passwordHash null) — it can never log in by credentials; a session is minted
+ * for it only via the admin-gated provisioning route. Idempotent: returns the existing
+ * record when already seeded.
+ */
+export function ensureKioskUser(): AuthUser {
+  const email = 'kiosk@local';
+  const existing = findUserByEmail(email);
+  if (existing) return existing;
+  const user: AuthUser = {
+    id: randomUUID(),
+    email,
+    name: 'Wall tablet',
+    role: 'kiosk',
+    passwordHash: null,
+    twoFactor: { enabled: false, channel: 'email' },
+    createdAt: Date.now(),
+  };
+  store.update((s) => {
+    s.auth.users.push(user);
+  });
+  return user;
+}
+
 export function deleteUser(id: string): boolean {
   return store.update((s) => {
     const before = s.auth.users.length;

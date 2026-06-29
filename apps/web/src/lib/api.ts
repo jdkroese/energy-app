@@ -41,6 +41,8 @@ import type {
   LightHsv,
   LightScene,
   LightSchedule,
+  HomeScene,
+  HomeScenesResponse,
   ScenesResponse,
   LightSchedulesResponse,
   TuyaIntegrationStatus,
@@ -418,6 +420,20 @@ export const api = {
       postJSON<InvoiceSaveResponse>('/api/invoices', body),
     remove: (id: string) => delJSON<{ ok: boolean }>(`/api/invoices/${enc(id)}`),
     pdfUrl: (id: string) => `/api/invoices/${enc(id)}/pdf`,
+  },
+
+  /* ---- Home scenes (whole-home: lights + climate + blinds); writes are admin ---- */
+  homeScenes: {
+    list: () => getJSON<HomeScenesResponse>('/api/home-scenes'),
+    create: (body: Partial<HomeScene>) => postJSON<{ scene: HomeScene }>('/api/home-scenes', body),
+    update: (id: string, body: Partial<HomeScene>) => putJSON<{ scene: HomeScene }>(`/api/home-scenes/${enc(id)}`, body),
+    remove: (id: string) => delJSON<{ ok: boolean }>(`/api/home-scenes/${enc(id)}`),
+    apply: (id: string) => postJSON<{ ts: string; applied: number; failed: number }>(`/api/home-scenes/${enc(id)}/apply`, {}),
+  },
+
+  /* ---- Kiosk / wall-tablet mode (admin provisions a kiosk session) ---- */
+  kiosk: {
+    provision: () => postJSON<{ ok: boolean }>('/api/kiosk/provision', {}),
   },
 
   /* ---- Rooms (cross-cutting); create/rename/reorder/delete/all-off are admin ---- */

@@ -49,3 +49,19 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
     next();
   });
 }
+
+/**
+ * requireAuth + (admin OR kiosk role). Gates the SAFE day-to-day control subset a wall
+ * tablet may drive (lights/climate/blinds/rooms/radio/speakers/alarm/scene-apply) while
+ * keeping control-authority + settings admin-only. A kiosk user can act here; everyone
+ * else needs admin.
+ */
+export function requireKioskOrAdmin(req: Request, res: Response, next: NextFunction): void {
+  requireAuth(req, res, () => {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'kiosk') {
+      res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+    next();
+  });
+}
