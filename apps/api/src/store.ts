@@ -106,7 +106,7 @@ export interface VapidKeys {
 
 // ---- Auth ---------------------------------------------------------------
 
-export type UserRole = 'admin' | 'user';
+export type UserRole = 'admin' | 'user' | 'kiosk';
 export type TwoFactorChannel = 'whatsapp' | 'email';
 export type OtpPurpose = 'login' | 'reset';
 
@@ -813,6 +813,47 @@ export interface LightScene {
   members: LightSceneMember[];
 }
 
+// ---- Whole-home scenes -----------------------------------------------------
+// A cross-domain scene: one named "moment" that fans out across lights, climate
+// and blinds at once (reusing the per-light member shape). Applying a scene is
+// best-effort — each device is wrapped in try/catch so one failure never aborts
+// the rest. The `special:'all-off'` variant needs no explicit member IDs: it
+// turns the whole live light + climate fleet off and (if a blinds intent is
+// present) closes the blinds, so it works on any install without per-device setup.
+
+export interface HomeSceneClimateMember {
+  deviceId: string;
+  power: boolean;
+  /** Climate mode to set when power on (e.g. 'cool'/'heat'); omit to leave as-is. */
+  mode?: string;
+  /** Target setpoint °C when power on (clamped 10–32); null/undefined = leave as-is. */
+  setpointC?: number | null;
+}
+
+export interface HomeSceneBlindMember {
+  /** Tuya blind id, OR the sentinel '*' meaning "all blinds" (used by all-off scenes). */
+  blindId: string;
+  action: 'open' | 'close' | 'position';
+  /** Target % open (0–100) when action is 'position'; null/undefined otherwise. */
+  positionPct?: number | null;
+}
+
+export interface HomeScene {
+  id: string;
+  name: string;
+  /** Lucide icon name (UI wayfinding). */
+  icon?: string;
+  /** When set, apply turns ALL lights + climate off and (optionally) closes blinds —
+   *  no explicit member IDs needed (works on any install). 'all-off' is the only kind. */
+  special?: 'all-off';
+  /** Per-light targets (reuses the existing light-scene member shape). */
+  lights: LightSceneMember[];
+  /** Per-climate-unit targets (power + optional mode/setpoint). */
+  climate: HomeSceneClimateMember[];
+  /** Per-blind targets; a single `{ blindId: '*', action: 'close' }` member means "all blinds". */
+  blinds: HomeSceneBlindMember[];
+}
+
 export type LightScheduleTarget =
   | { kind: 'scene'; sceneId: string }
   | { kind: 'lights'; members: LightSceneMember[] };
@@ -949,6 +990,8 @@ export interface StoreSchema {
   /** Tuya light scenes + schedules (self-contained; see types above). */
   lightScenes: LightScene[];
   lightSchedules: LightSchedule[];
+  /** Whole-home (cross-domain) scenes — lights + climate + blinds in one moment. */
+  homeScenes: HomeScene[];
   /** Device-onboarding triage state (the "Discovered devices" inbox). Phase 1
    *  persists only the list of ignored device ids; later phases extend this. */
   deviceOnboarding: DeviceOnboardingState;
@@ -1205,6 +1248,37 @@ export function defaultAutomations(): Automation[] {
   ];
 }
 
+/**
+ * Starter whole-home scenes seeded on first run. Member IDs are install-specific, so we
+ * only seed ID-FREE scenes that work everywhere via the `special:'all-off'` path: it turns
+ * the whole live light + climate fleet off and closes blinds. The single sentinel blind
+ * member `{ blindId: '*', action: 'close' }` is interpreted by applyHomeScene as "all blinds".
+ * Named scenes that need real member IDs (Good morning/Cooking/Movie night) are created later
+ * via the admin builder, so they're NOT seeded here.
+ */
+export function defaultHomeScenes(): HomeScene[] {
+  return [
+    {
+      id: 'home-scene-good-night',
+      name: 'Good night',
+      icon: 'moon',
+      special: 'all-off',
+      lights: [],
+      climate: [],
+      blinds: [{ blindId: '*', action: 'close' }],
+    },
+    {
+      id: 'home-scene-away',
+      name: 'Away',
+      icon: 'door-exit',
+      special: 'all-off',
+      lights: [],
+      climate: [],
+      blinds: [{ blindId: '*', action: 'close' }],
+    },
+  ];
+}
+
 function defaults(): StoreSchema {
   return {
     channels: {
@@ -1231,6 +1305,7 @@ function defaults(): StoreSchema {
     devices: defaultDevices(),
     lightScenes: [],
     lightSchedules: [],
+    homeScenes: defaultHomeScenes(),
     deviceOnboarding: { ignored: [], configured: {}, customDeviceTypes: [] },
     alarmActive: null,
     alarmConfig: defaultAlarmConfig(),
@@ -1604,6 +1679,9 @@ function hydrate(raw: unknown): StoreSchema {
     devices: hydrateDevices(p.devices, base.devices),
     lightScenes: Array.isArray(p.lightScenes) ? p.lightScenes : base.lightScenes,
     lightSchedules: Array.isArray(p.lightSchedules) ? p.lightSchedules : base.lightSchedules,
+    // Back-compat: an on-disk state.json predating whole-home scenes lacks the key —
+    // fall back to the seeded starter set (an existing array, even empty, is preserved).
+    homeScenes: Array.isArray(p.homeScenes) ? p.homeScenes : base.homeScenes,
     deviceOnboarding: hydrateDeviceOnboarding(p.deviceOnboarding, base.deviceOnboarding),
     alarmActive: hydrateAlarmActive(p.alarmActive),
     alarmConfig: hydrateAlarmConfig(p.alarmConfig, base.alarmConfig),

@@ -4,10 +4,12 @@ import { Rail } from './Rail';
 import { TabBar } from './TabBar';
 import { TopBar } from './TopBar';
 import { PageTransition } from './PageTransition';
+import { TabletShell } from './TabletShell';
 import { MobileAlarmFab } from './NavAlarm';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
 import { settingsTabsFor } from './nav';
+import { useKiosk } from '../../lib/kiosk';
 import { useAuth } from '../../auth/AuthProvider';
 
 /** Per-route desktop TopBar metadata. */
@@ -38,6 +40,7 @@ export interface ShellContext {
 
 /** AppShell — responsive frame: TabBar on mobile, collapsing Rail on desktop. */
 export function AppShell({ children }: { children: (ctx: ShellContext) => ReactNode }) {
+  const kiosk = useKiosk();
   const desktop = useMediaQuery('(min-width: 768px)');
   const location = useLocation();
   const [expanded, setExpanded] = useState<boolean>(() => {
@@ -65,6 +68,10 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
     META[location.pathname] ||
     (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Batteries', title: 'Battery detail' } : { eyebrow: 'Power', title: '' });
   const ctx: ShellContext = { desktop, range, setRange, settingsTab: activeSettingsTab, setSettingsTab };
+
+  // Wall-tablet (kiosk) mode swaps the whole frame — its own nav + routes, so it
+  // renders standalone (no children render-prop). Checked before desktop/mobile.
+  if (kiosk) return <TabletShell />;
 
   if (desktop) {
     return (

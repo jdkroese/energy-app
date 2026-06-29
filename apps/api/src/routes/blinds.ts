@@ -43,6 +43,14 @@ async function getBlindFleet(): Promise<{ units: BlindUnit[]; error: string | nu
   }
 }
 
+/** Live blind ids (best-effort; empty when Tuya isn't connected or on a fleet error).
+ *  Used by the whole-home all-off scene to close every blind without per-device IDs. */
+export async function listBlindIds(): Promise<string[]> {
+  if (!tuya.isConfigured()) return [];
+  const { units } = await getBlindFleet();
+  return units.map((u) => u.id);
+}
+
 /** GET /api/blinds — normalized blind fleet + a small context strip. */
 export async function getBlinds(): Promise<unknown> {
   if (!tuya.isConfigured()) {

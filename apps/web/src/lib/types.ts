@@ -550,7 +550,7 @@ export interface BatteriesResponse {
  * Auth contract (see prompt §backend). Cookies carry the session.
  * ==========================================================================*/
 
-export type UserRole = 'admin' | 'member';
+export type UserRole = 'admin' | 'member' | 'kiosk';
 
 export interface AuthUser {
   id: string;
@@ -1387,6 +1387,37 @@ export interface LightSchedule {
 export interface ScenesResponse {
   ts: string;
   scenes: LightScene[];
+}
+
+/* ---- Home scenes (whole-home: lights + climate + blinds in one tap) ---- */
+
+export interface HomeSceneClimateMember {
+  deviceId: string;
+  power: boolean;
+  mode?: string;
+  setpointC?: number | null;
+}
+
+export interface HomeSceneBlindMember {
+  blindId: string;
+  action: 'open' | 'close' | 'position';
+  positionPct?: number | null;
+}
+
+export interface HomeScene {
+  id: string;
+  name: string;
+  icon?: string;
+  /** 'all-off' = the built-in everything-off scene (lights/climate/blinds all off). */
+  special?: 'all-off';
+  lights: LightSceneMember[];
+  climate: HomeSceneClimateMember[];
+  blinds: HomeSceneBlindMember[];
+}
+
+export interface HomeScenesResponse {
+  ts: string;
+  scenes: HomeScene[];
 }
 
 export interface LightSchedulesResponse {

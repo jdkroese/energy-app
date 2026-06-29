@@ -35,6 +35,7 @@ import {
   createSetupToken,
   createUser,
   deleteUser,
+  ensureKioskUser,
   findUserByEmail,
   findUserById,
   isLockedOut,
@@ -385,6 +386,24 @@ authRouter.post('/users', requireAdmin, (req: Request, res: Response) => {
     });
   }
 });
+
+// ---- ADMIN: kiosk (wall-tablet) provisioning ---------------------------
+//
+// Turn the CALLING browser into a limited-role wall tablet: ensure the single kiosk user
+// exists, then mint a session for it and set the `sid` cookie on THIS response — exactly
+// as /login does. The browser's session is swapped to the kiosk role (safe day-to-day
+// controls only), and the ~30-day session persistence keeps it logged in across reboots.
+// Admin-gated at its mount in index.ts.
+export function provisionKiosk(req: Request, res: Response): void {
+  const user = ensureKioskUser();
+  const token = createSession(user.id, ctx(req));
+  setSessionCookie(res, token);
+  res.json({
+    ts: new Date().toISOString(),
+    ok: true,
+    user: publicUser(user),
+  });
+}
 
 authRouter.delete('/users/:id', requireAdmin, (req: Request, res: Response) => {
   const id = String(req.params.id);
