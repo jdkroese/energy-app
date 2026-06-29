@@ -18,6 +18,7 @@
 
 import { cached } from '../cache';
 import * as store from '../store';
+import { serialize } from './write-queue';
 
 const DEFAULT_HOST = '192.168.1.165';
 const PORT = 3000;
@@ -243,8 +244,15 @@ export async function setLever(
     patch.mode = code;
   }
 
-  await api('PUT', '/hvac', patch);
-  // Read the zone back so callers get authoritative post-write state.
-  const back = flattenZones(await api('POST', '/hvac', { systemID, zoneID })).map(normalizeZone)[0];
-  return { ok: true, zone: back, detail: `${lever}=${String(value)} on ${id}` };
+  // The underfloor controller is a small embedded webserver that mishandles
+  // overlapping requests, so serialize writes: flipping several zones off at once
+  // queues one-at-a-time instead of racing (which surfaced as a toggle reverting).
+  // The PUT and its authoritative read-back stay together inside the critical
+  // section so no other write interleaves between them. See write-queue.ts.
+  return serialize('airzone', async () => {
+    await api('PUT', '/hvac', patch);
+    // Read the zone back so callers get authoritative post-write state.
+    const back = flattenZones(await api('POST', '/hvac', { systemID, zoneID })).map(normalizeZone)[0];
+    return { ok: true, zone: back, detail: `${lever}=${String(value)} on ${id}` };
+  });
 }
