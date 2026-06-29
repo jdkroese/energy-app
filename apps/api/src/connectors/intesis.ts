@@ -21,6 +21,7 @@ import net from 'node:net';
 import { config } from '../config';
 import { cached } from '../cache';
 import * as store from '../store';
+import { serialize } from './write-queue';
 
 // AC Cloud Control shares the IntesisHome cloud backend (app id com.intesis.intesishome).
 // Host is overridable in case the account lives on the newer accloud.intesis.com edge.
@@ -288,19 +289,27 @@ export async function setDatapoint(
   if (!session.serverIP || !session.serverPort) {
     throw new Error('AC Cloud push socket coordinates unavailable');
   }
-  // The push socket can transiently drop before set_ack (server-side). Retry
-  // with a fresh socket a couple of times; a genuine cloud rejection is not.
-  let lastErr: Error | null = null;
-  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
-    try {
-      return await writeOverSocket(session, deviceId, uid, value);
-    } catch (e) {
-      lastErr = e as Error;
-      if (/rejected/i.test(lastErr.message)) throw lastErr;
-      if (attempt < MAX_WRITE_ATTEMPTS) await new Promise<void>((r) => setTimeout(r, 200 * attempt));
+  // The AC Cloud push server keys on ONE shared account token and the set_ack
+  // carries no seqNo we can match, so two sockets open at once contend: a second
+  // connect_req can drop the first before its ack, and acks can be misattributed.
+  // Serialize every push-socket write so flipping several units in quick succession
+  // queues cleanly instead of colliding (which previously surfaced as the second
+  // toggle reverting). See connectors/write-queue.ts.
+  return serialize('intesis:push', async () => {
+    // The push socket can transiently drop before set_ack (server-side). Retry
+    // with a fresh socket a couple of times; a genuine cloud rejection is not.
+    let lastErr: Error | null = null;
+    for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
+      try {
+        return await writeOverSocket(session, deviceId, uid, value);
+      } catch (e) {
+        lastErr = e as Error;
+        if (/rejected/i.test(lastErr.message)) throw lastErr;
+        if (attempt < MAX_WRITE_ATTEMPTS) await new Promise<void>((r) => setTimeout(r, 200 * attempt));
+      }
     }
-  }
-  throw lastErr ?? new Error('AC Cloud set failed');
+    throw lastErr ?? new Error('AC Cloud set failed');
+  });
 }
 
 function writeOverSocket(
