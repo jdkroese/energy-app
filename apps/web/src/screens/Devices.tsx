@@ -239,6 +239,7 @@ function ModeChip({ mode, available, disabled, syncing, onCycle }: {
       disabled={!canCycle}
       onClick={(e) => { e.stopPropagation(); onCycle(); }}
       aria-label={`Mode ${mode} — tap to change`}
+      className={`pwr-ifx-press${syncing ? ' pwr-ifx-pending' : ''}`}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 9px', borderRadius: 'var(--radius-pill)',
         border: `1px solid ${hue}`, background: 'transparent', color: hue, fontSize: 11.5, fontWeight: 600,
@@ -262,6 +263,7 @@ function SetpointStepper({ value, lo, hi, step, accent, disabled, syncing, onSte
       disabled={off}
       aria-label={delta < 0 ? 'Lower setpoint' : 'Raise setpoint'}
       onClick={(e) => { e.stopPropagation(); onStep(delta); }}
+      className="pwr-ifx-press pwr-ifx-press--step pwr-ifx-hit pwr-ifx-hit--tight"
       style={{
         width: compact ? 26 : 28, height: compact ? 26 : 28, display: 'grid', placeItems: 'center', borderRadius: 'var(--radius-md)',
         border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: off ? 'var(--text-disabled)' : 'var(--text-1)',
@@ -270,7 +272,7 @@ function SetpointStepper({ value, lo, hi, step, accent, disabled, syncing, onSte
     >{label}</button>
   );
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, opacity: disabled ? 0.5 : 1 }}>
+    <div className={syncing ? 'pwr-ifx-pending-soft' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, opacity: disabled ? 0.5 : 1 }}>
       {stepBtn('−', -step, disabled || v == null || v <= lo)}
       <span className="pwr-mono" style={{ fontSize: 13, fontWeight: 600, color: accent, minWidth: 42, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
         {v == null ? '—' : `${v.toFixed(1)}°`}{syncing && <SyncDot />}
@@ -288,6 +290,7 @@ function PowerToggle({ on, accent, accentWash, disabled, syncing, onToggle }: { 
       disabled={disabled}
       aria-label={on ? 'Turn off' : 'Turn on'}
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      className={`pwr-ifx-press${syncing ? ' pwr-ifx-pending' : ''}`}
       style={{
         width: 44, height: 24, borderRadius: 'var(--radius-pill)', border: '1px solid var(--border-2)', position: 'relative',
         background: on ? accentWash : 'var(--surface-3)', cursor: disabled ? 'default' : 'pointer', flex: 'none', padding: 0,
@@ -328,6 +331,7 @@ function SolarBolt({ dir, enrolled, demand, exporting, canToggle, onToggle }: {
       aria-pressed={enrolled}
       title={title}
       onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
+      className="pwr-ifx-press pwr-ifx-hit pwr-ifx-hit--tight"
       style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', padding: 3, margin: -3, cursor: 'pointer', filter: glow, opacity }}
     >
       {inner}
@@ -456,7 +460,7 @@ function ClimateRow({ d, type, wide, canWrite, canConfig, exporting, pending, se
   // Power · ›. Heating: same MINUS Solar + Manual (underfloor isn't surplus-eligible and
   // manual protection is irrelevant there).
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: isHeat ? HEAT_GRID : COOL_GRID, alignItems: 'center', gap: 10, padding: '10px 10px', borderRadius: 'var(--radius-md)' }}>
+    <div className="pwr-ifx-row" style={{ display: 'grid', gridTemplateColumns: isHeat ? HEAT_GRID : COOL_GRID, alignItems: 'center', gap: 10, padding: '10px 10px', borderRadius: 'var(--radius-md)' }}>
       <button type="button" onClick={onOpen} style={{ minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
         <div style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-1)' }}>{d.name}</div>
         {d.room && d.room !== d.name && (
@@ -623,15 +627,17 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
               </span>
             )}
           </span>
-          <Switch
-            checked={on}
-            disabled={!canWrite}
-            onChange={(e) => {
-              const checked = e.target.checked;
-              setOptimisticOn(checked);
-              void Promise.resolve(onWrite(sw.dp, 'switch', checked));
-            }}
-          />
+          <span className={optimisticOn !== null ? 'pwr-ifx-pending-soft' : undefined} style={{ display: 'inline-flex' }}>
+            <Switch
+              checked={on}
+              disabled={!canWrite}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setOptimisticOn(checked);
+                void Promise.resolve(onWrite(sw.dp, 'switch', checked));
+              }}
+            />
+          </span>
         </div>
       )}
 
