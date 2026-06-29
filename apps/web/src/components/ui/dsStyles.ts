@@ -187,6 +187,13 @@ const CSS = `
 .pwr-seg__count{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:var(--fs-xs); color:var(--text-3); flex:none; }
 .pwr-seg__opt[aria-selected="true"] .pwr-seg__count{ color:var(--text-2); }
 .pwr-seg--sm .pwr-seg__opt{ height:26px; padding:0 10px; font-size:var(--fs-xs); }
+.pwr-seg--wrap{ flex-wrap:wrap; }
+.pwr-seg--wrap .pwr-seg__opt{ flex:1 1 auto; min-width:88px; }
+.pwr-seg__opt--warning{ border:1px solid var(--border-grid-strong); color:var(--text-2); font-weight:var(--fw-semibold); }
+.pwr-seg__opt--warning .pwr-seg__count{ color:var(--grid); }
+.pwr-seg__opt--warning[aria-selected="true"]{ background:var(--grid-wash); color:var(--grid); box-shadow:none; }
+.pwr-seg__opt--warning[aria-selected="true"] .pwr-seg__count{ color:var(--grid); }
+.pwr-seg__opt--warning svg{ color:var(--grid); }
 
 /* ---- Select ---- */
 .pwr-select-field{ display:flex; flex-direction:column; gap:6px; }
