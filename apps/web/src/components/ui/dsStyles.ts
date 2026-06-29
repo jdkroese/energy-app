@@ -267,6 +267,51 @@ const CSS = `
 .pwr-voltage-tile:hover{ background:var(--surface-2); }
 .pwr-voltage-tile:hover .pwr-voltage-tile__chart{ opacity:1; color:var(--grid); }
 .pwr-voltage-tile:focus-visible{ outline:2px solid var(--grid); outline-offset:2px; }
+
+/* ---- Interaction-feedback polish (Track D · Motion II) ----------------------
+   Additive, layout-neutral: smooth hover on interactive surfaces, pressed/active
+   states on the bespoke Devices controls, and a soft pending treatment on the
+   control whose command is in flight. All transition/transform/opacity only —
+   the global reduced-motion gate collapses them to a near-instant pass, and the
+   effects are subtle enough to read fine when collapsed. */
+
+/* Hoverable list rows (climate rows, generic device cards' inner rows). A row
+   opts in with .pwr-ifx-row; the lift is a background wash only (no transform,
+   so it never nudges sibling layout). */
+.pwr-ifx-row{ transition:background-color var(--dur-fast) var(--ease-out); border-radius:var(--radius-md); }
+.pwr-ifx-row:hover{ background:var(--surface-2); }
+
+/* Bespoke pressed controls — mirror .pwr-btn:active. Opt-in class so we don't
+   touch any control's resting layout; only adds a transition + a scale on press.
+   :active is pointer-down feedback; :disabled / [disabled] suppress it. */
+.pwr-ifx-press{ transition:transform var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out); }
+.pwr-ifx-press:not([disabled]):not([aria-disabled="true"]):active{ transform:scale(0.96); }
+
+/* A larger press-scale for the small square stepper buttons reads better than the
+   subtle 0.96 on a 26px target; still transform-only (no layout shift). */
+.pwr-ifx-press--step:not([disabled]):active{ transform:scale(0.90); }
+
+/* Pending treatment — applied to the specific control whose lever is in flight.
+   A soft accent ring + a slight dim so the in-flight control reads as "working"
+   beyond the tiny sync dot. Ring is box-shadow (no layout), dim is opacity. */
+.pwr-ifx-pending{ box-shadow:0 0 0 2px color-mix(in srgb, var(--grid) 40%, transparent); border-radius:var(--radius-pill); transition:box-shadow var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out); }
+
+/* A whole-control pending wrapper that just softly dims its contents (used where a
+   ring would clash with the control's own shape, e.g. the setpoint stepper group). */
+.pwr-ifx-pending-soft{ opacity:0.78; transition:opacity var(--dur-fast) var(--ease-out); }
+
+/* Invisible hit-area extender — grows the tap target of a small control to meet the
+   ~44px touch guideline WITHOUT changing its visible box or the row layout. The
+   ::after overlay sits centred on the button and extends past its edges; it is
+   transparent and only catches pointer events, so the visual stays put. Pair with
+   position:relative on the button (the class sets it). Only meaningful on touch /
+   mobile, but harmless on desktop (the overlay just enlarges the click area). */
+.pwr-ifx-hit{ position:relative; }
+.pwr-ifx-hit::after{ content:""; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:44px; height:44px; min-width:100%; min-height:100%; }
+/* Tighter variant for controls packed close to a sibling (the −/+ steppers): grow
+   the tap target vertically to ~44px but keep it within the button's own width, so
+   adjacent steppers' invisible hit zones can't overlap and steal each other's taps. */
+.pwr-ifx-hit--tight::after{ width:100%; height:44px; min-width:0; }
 `;
 
 let injected = false;
