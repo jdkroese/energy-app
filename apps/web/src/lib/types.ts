@@ -3,14 +3,19 @@
  * shape in parallel (see docs/11-build-spec.md §6). Units: kWh, kW, €, %, kg.
  */
 
-export type FlowDir = 'idle' | 'charging' | 'discharging' | 'importing' | 'exporting';
-export type Band = 'P1' | 'P2' | 'P3';
+export type FlowDir =
+  | "idle"
+  | "charging"
+  | "discharging"
+  | "importing"
+  | "exporting";
+export type Band = "P1" | "P2" | "P3";
 
 export interface LiveResponse {
   ts: string;
   solar: { kw: number; arrays?: { name: string; kw: number }[] };
   home: { kw: number };
-  grid: { kw: number; dir: 'importing' | 'exporting' | 'idle' };
+  grid: { kw: number; dir: "importing" | "exporting" | "idle" };
   sonnen: { soc: number; kwh: number; kw: number; dir: FlowDir; mode?: string };
   tesla: {
     soc: number;
@@ -32,7 +37,13 @@ export interface LiveResponse {
    * or null when none is configured/exposing `cur_voltage`. Drives the Live "GRID
    * VOLTAGE" KPI box. Fluctuates a lot — polled every 10s with /api/live.
    */
-  breaker?: { id: string; name: string; voltageV: number; currentA: number; powerW: number } | null;
+  breaker?: {
+    id: string;
+    name: string;
+    voltageV: number;
+    currentA: number;
+    powerW: number;
+  } | null;
   today: {
     producedKwh: number;
     consumedKwh: number;
@@ -169,8 +180,8 @@ export interface HistoryResponse {
   byLoad: HistoryByLoad[];
 }
 
-export type AlertSeverity = 'danger' | 'warning' | 'info' | 'ok';
-export type AlertStatus = 'new' | 'ack' | 'resolved';
+export type AlertSeverity = "danger" | "warning" | "info" | "ok";
+export type AlertStatus = "new" | "ack" | "resolved";
 
 export interface Alert {
   id: string;
@@ -197,7 +208,7 @@ export interface Channels {
   email: { address: string; enabled: boolean };
 }
 
-export type ChannelType = 'whatsapp' | 'push' | 'email';
+export type ChannelType = "whatsapp" | "push" | "email";
 
 /** Grid-voltage band monitor config (Live KPI + `rule-voltage` alert). */
 export interface VoltageMonitor {
@@ -225,7 +236,7 @@ export interface VoltageHistoryResponse {
 
 // ---- Circuit-breaker usage metering (docs/28) ------------------------------
 
-export type BreakerUsageGranularity = 'raw' | 'hour' | 'day';
+export type BreakerUsageGranularity = "raw" | "hour" | "day";
 
 /** One point in a per-breaker usage series. `ts` is unix SECONDS. */
 export interface BreakerUsagePoint {
@@ -249,7 +260,7 @@ export interface BreakerUsageResponse {
 
 /** GET /api/breakers/usage/summary — per-breaker kWh + share for a period. */
 export interface BreakerUsageSummaryResponse {
-  period: 'today' | 'week' | 'month';
+  period: "today" | "week" | "month";
   available: boolean;
   breakers: Array<{ id: string; name: string; kwh: number; sharePct: number }>;
   totalKwh: number;
@@ -257,7 +268,13 @@ export interface BreakerUsageSummaryResponse {
 
 export interface SettingsResponse {
   ts: string;
-  connections: { name: string; icon: string; tone: string; status: string; detail: string }[];
+  connections: {
+    name: string;
+    icon: string;
+    tone: string;
+    status: string;
+    detail: string;
+  }[];
   /** Grid-voltage band monitor (present so Settings can seed the band controls). */
   voltageMonitor?: VoltageMonitor;
   tariff: {
@@ -310,7 +327,7 @@ export interface BrainPlanResponse {
   actions: PlanAction[];
   now: number;
   whyNow: { title: string; body: string };
-  weather: { source: 'live' | 'synthetic'; cloudAvgPct: number };
+  weather: { source: "live" | "synthetic"; cloudAvgPct: number };
 }
 
 export interface Scenario {
@@ -337,7 +354,7 @@ export interface ScenariosResponse {
 }
 
 /** Editable definition of a scenario (everything but identity/active flag). */
-export type ScenarioDef = Omit<Scenario, 'id' | 'name' | 'icon' | 'active'>;
+export type ScenarioDef = Omit<Scenario, "id" | "name" | "icon" | "active">;
 
 export interface ScenarioPreview {
   selfSufficiencyPct: number;
@@ -355,11 +372,11 @@ export interface VapidPublicResponse {
  * Every arm/command/apply call is cookie-authed AND admin-gated server-side.
  * ==========================================================================*/
 
-export type ControlMode = 'off' | 'manual' | 'auto';
+export type ControlMode = "off" | "manual" | "auto";
 
 /** Lever payloads accepted by POST /api/control/command. */
-export type TeslaMode = 'self_consumption' | 'autonomous' | 'backup';
-export type SonnenMode = 'self_consumption' | 'manual' | 'time_of_use';
+export type TeslaMode = "self_consumption" | "autonomous" | "backup";
+export type SonnenMode = "self_consumption" | "manual" | "time_of_use";
 
 /** The live, on-device state Power reads back from each battery. */
 export interface ControlCurrent {
@@ -385,7 +402,7 @@ export interface ControlGuardrails {
 /** One row of "what the boss did" — newest first in the response. */
 export interface ControlLogEntry {
   ts: string;
-  device: 'tesla' | 'sonnen' | string;
+  device: "tesla" | "sonnen" | string;
   lever: string;
   from: string | number | boolean | null;
   to: string | number | boolean | null;
@@ -395,7 +412,7 @@ export interface ControlLogEntry {
 }
 
 /** A single battery-priority rule (Sonnen-first discharge / Tesla-first charge). */
-export type BatteryPriorityAuthority = 'shadow' | 'auto';
+export type BatteryPriorityAuthority = "shadow" | "auto";
 export interface BatteryPriorityRule {
   enabled: boolean;
   authority: BatteryPriorityAuthority;
@@ -420,11 +437,16 @@ export interface SoakExportRule {
 }
 
 /** A tariff-arbitrage effectiveness event (mirrors the API's ArbitrageEvent). */
-export type ArbitrageEventType = 'plan' | 'engage' | 'revert' | 'standdown' | 'deviation';
+export type ArbitrageEventType =
+  | "plan"
+  | "engage"
+  | "revert"
+  | "standdown"
+  | "deviation";
 export interface ArbitrageEvent {
   ts: number;
   type: ArbitrageEventType;
-  executionMode: 'advisory' | 'active';
+  executionMode: "advisory" | "active";
   band: Band;
   spreadEur: number;
   plan: {
@@ -447,7 +469,7 @@ export interface ArbitrageEvent {
   action: { mode: string; chargeW: number } | null;
   /** Forecast-vs-actual divergence that triggered a re-plan (only on `deviation` events). */
   deviation?: {
-    input: 'solar' | 'load' | 'solar+load';
+    input: "solar" | "load" | "solar+load";
     solarForecastKw: number;
     solarLiveKw: number;
     loadForecastKw: number;
@@ -484,8 +506,8 @@ export interface ControlStatus {
 }
 
 /** Lever a manual command can target on each device. */
-export type ControlDevice = 'tesla' | 'sonnen';
-export type ControlLever = 'reserve' | 'mode' | 'gridCharge';
+export type ControlDevice = "tesla" | "sonnen";
+export type ControlLever = "reserve" | "mode" | "gridCharge";
 export type ControlCommandValue = string | number | boolean;
 
 /* ============================================================================
@@ -494,7 +516,7 @@ export type ControlCommandValue = string | number | boolean;
  * fields are null where the device/API doesn't expose them (UI shows "—").
  * ==========================================================================*/
 
-export type BatteryId = 'sonnen' | 'tesla';
+export type BatteryId = "sonnen" | "tesla";
 
 export interface BatterySpec {
   label: string;
@@ -550,7 +572,7 @@ export interface BatteriesResponse {
  * Auth contract (see prompt §backend). Cookies carry the session.
  * ==========================================================================*/
 
-export type UserRole = 'admin' | 'member' | 'kiosk';
+export type UserRole = "admin" | "member" | "kiosk";
 
 export interface AuthUser {
   id: string;
@@ -567,10 +589,12 @@ export interface MeResponse {
   whatsappAvailable?: boolean;
 }
 
-export type OtpChannel = 'whatsapp' | 'email';
+export type OtpChannel = "whatsapp" | "email";
 
 /** POST /api/auth/login → user (done) | otp step | (401 throws). */
-export type LoginResponse = { user: AuthUser } | { step: 'otp'; channel: OtpChannel };
+export type LoginResponse =
+  | { user: AuthUser }
+  | { step: "otp"; channel: OtpChannel };
 
 export interface SessionInfo {
   id: string;
@@ -612,12 +636,31 @@ export interface CreateUserResponse {
  * any-authed; command/arm/CRUD writes are admin-gated server-side. Boots DISARMED.
  * ==========================================================================*/
 
-export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
-export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan' | 'vaneUpDown' | 'vaneLeftRight';
-export type DeviceWarmth = 'cold' | 'cool' | 'comfortable' | 'warm' | 'hot' | 'unknown';
+export type ClimateMode = "auto" | "heat" | "dry" | "fan" | "cool";
+export type ClimateLever =
+  | "power"
+  | "mode"
+  | "setpoint"
+  | "fan"
+  | "vaneUpDown"
+  | "vaneLeftRight";
+export type DeviceWarmth =
+  | "cold"
+  | "cool"
+  | "comfortable"
+  | "warm"
+  | "hot"
+  | "unknown";
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers' | 'irrigation';
+export type DeviceType =
+  | "cooling"
+  | "heating"
+  | "lighting"
+  | "circuit"
+  | "blinds"
+  | "speakers"
+  | "irrigation";
 
 // ---- Sonos speakers + house alarm ------------------------------------------
 
@@ -877,8 +920,8 @@ export interface DeviceDetailResponse {
 }
 
 /** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
-export type FanSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
-export type VaneSetting = 'auto' | 1 | 2 | 3 | 4 | 5;
+export type FanSetting = "auto" | 1 | 2 | 3 | 4 | 5;
+export type VaneSetting = "auto" | 1 | 2 | 3 | 4 | 5;
 
 /** The device action a rule applies during its windows. Type-adaptive; cooling shown. */
 export interface Action {
@@ -898,7 +941,7 @@ export interface Action {
   direction?: string;
 }
 
-export type TimeAnchor = 'fixed' | 'sunrise' | 'sunset';
+export type TimeAnchor = "fixed" | "sunrise" | "sunset";
 
 export interface ScheduleWindow {
   /** Local "HH:MM". Used when anchor is 'fixed'; kept as display/fallback for solar anchors. */
@@ -917,13 +960,13 @@ export interface ScheduleWindow {
 }
 
 export type RunCondition =
-  | { kind: 'always' }
-  | { kind: 'warmerThan'; thresholdC: number }
-  | { kind: 'coolerThan'; thresholdC: number };
+  | { kind: "always" }
+  | { kind: "warmerThan"; thresholdC: number }
+  | { kind: "coolerThan"; thresholdC: number };
 
 export type ScheduleScope =
-  | { kind: 'unit'; deviceId: string }
-  | { kind: 'group'; groupId: string };
+  | { kind: "unit"; deviceId: string }
+  | { kind: "group"; groupId: string };
 
 /** A scheduling RULE — belongs to a single unit (or named group) of one device type. */
 export interface Schedule {
@@ -993,7 +1036,7 @@ export interface TariffArbitrageParams {
   peakBand: Band;
   /** SAFETY GATE: 'advisory' = observe & log only, no battery commands; 'active' = executes
    *  the valley grid-charge (spends money). Default 'advisory'. */
-  executionMode: 'advisory' | 'active';
+  executionMode: "advisory" | "active";
   /** Certainty gate: only pre-buy when ≥ this % sure the next peak's solar falls short.
    *  Default 70; clamp 50–95. */
   solarConfidencePct: number;
@@ -1010,10 +1053,15 @@ export interface TariffArbitrageParams {
 }
 
 /** COOLING = solar_surplus_precool · HEATING = solar_surplus_preheat · BATTERY = tariff_arbitrage. */
-export type AutomationType = 'solar_surplus_precool' | 'solar_surplus_preheat' | 'tariff_arbitrage';
+export type AutomationType =
+  | "solar_surplus_precool"
+  | "solar_surplus_preheat"
+  | "tariff_arbitrage";
 
 /** Shape depends on `type`: climate params for the surplus rules, battery params for arbitrage. */
-export type AutomationParams = SolarSurplusPrecoolParams | TariffArbitrageParams;
+export type AutomationParams =
+  | SolarSurplusPrecoolParams
+  | TariffArbitrageParams;
 
 export interface Automation {
   id: string;
@@ -1028,7 +1076,7 @@ export interface Automation {
 export function isTariffArbitrage(
   a: Automation,
 ): a is Automation & { params: TariffArbitrageParams } {
-  return a.type === 'tariff_arbitrage';
+  return a.type === "tariff_arbitrage";
 }
 
 export interface AutomationsResponse {
@@ -1094,7 +1142,7 @@ export interface IrrigationZoneDetailResponse {
   rainDelayDays: number;
 }
 
-export type IrrigationLever = 'run' | 'stop' | 'rainDelay';
+export type IrrigationLever = "run" | "stop" | "rainDelay";
 
 /** Rain Bird integration status (host + whether a password is set; never the value). */
 export interface RainbirdIntegrationStatus {
@@ -1107,13 +1155,131 @@ export interface RainbirdIntegrationStatus {
   info: { model: string; version: string; serialNumber: string } | null;
 }
 
+/* ---- Irrigation Phase 2 (smart-watering plan) ----------------------------- */
+
+export type IrrigationMode = "off" | "shadow" | "live";
+export type IrrigationWindow =
+  | "early-morning"
+  | "solar-surplus"
+  | "off-peak-P3"
+  | "none";
+export type IrrigationPlantType =
+  | "lawn"
+  | "shrubs"
+  | "flowers"
+  | "vegetables"
+  | "trees"
+  | "groundcover"
+  | "succulents"
+  | "hedge";
+export type IrrigationEmitterType =
+  | "spray"
+  | "rotor"
+  | "drip"
+  | "bubbler"
+  | "soaker";
+export type IrrigationManagedBy = "app" | "controller";
+
+/** One watering time on a zone's weekly schedule (start + duration ceiling + weekdays). */
+export interface IrrigationWateringTime {
+  id: string;
+  startTime: string; // "HH:MM"
+  durationMin: number;
+  days: boolean[]; // 0=Sun..6=Sat
+}
+
+/** A zone in the plan: config + live state + today's ET-trim figures (from /api/irrigation/plan). */
+export interface IrrigationPlanZone {
+  zoneId: string;
+  name: string;
+  station: number;
+  available: boolean;
+  active: boolean;
+  plantType: IrrigationPlantType;
+  emitterType: IrrigationEmitterType;
+  flowLpm: number;
+  kc: number;
+  areaM2: number | null;
+  sunExposure: number | null;
+  managedBy: IrrigationManagedBy;
+  heatTopupEnabled: boolean;
+  rainSkipMm: number | null;
+  photoId: string | null;
+  photoUrl: string | null;
+  wateringTimes: IrrigationWateringTime[];
+  deficitMm: number;
+  scheduledMinToday: number;
+  trimmedMinToday: number;
+  savedPctToday: number;
+  litersToday: number;
+  trimReasons: string[];
+  nextRun: { startTime: string; weekday: number } | null;
+}
+
+export interface IrrigationLogEntry {
+  ts: number;
+  zoneId: string;
+  action: "plan" | "fire" | "trim" | "skip" | "suppress" | "confirm" | "alert";
+  live: boolean;
+  ok: boolean;
+  detail: string;
+}
+
+export interface IrrigationPlanResponse {
+  ts: string;
+  connected: boolean;
+  mode: IrrigationMode;
+  liveAllowed: boolean;
+  armed: boolean;
+  devicesMode: ControlMode;
+  globalRainSkipMm: number;
+  rainSkipProbabilityPct: number;
+  window: IrrigationWindow;
+  zones: IrrigationPlanZone[];
+  baselineMirror: {
+    ts: string;
+    rainDelayDays: number;
+    availableStationIds: string[];
+  } | null;
+  baselineDrift: boolean;
+  weather: {
+    et0Mm: number;
+    precipMm: number;
+    precipProbabilityPct: number;
+  } | null;
+  stats: {
+    zoneCount: number;
+    plannedTodayMin: number;
+    savedPctToday: number;
+    nextRun: { startTime: string; weekday: number } | null;
+  };
+  log: IrrigationLogEntry[];
+  lastError: string | null;
+  lastTickAt: string | null;
+}
+
+/** A patch for a zone's agronomic + schedule config (all fields optional). */
+export type IrrigationZonePatch = Partial<{
+  name: string;
+  plantType: IrrigationPlantType;
+  emitterType: IrrigationEmitterType;
+  flowLpm: number;
+  areaM2: number;
+  sunExposure: number;
+  kc: number;
+  managedBy: IrrigationManagedBy;
+  heatTopupEnabled: boolean;
+  rainSkipMm: number;
+  wateringTimes: IrrigationWateringTime[];
+}>;
+
 /* ============================================================================
  * Lights (GET /api/lights) — first Tuya device CATEGORY. Reads are any-authed;
  * command writes are admin-gated server-side. Built on the shared Tuya cloud
  * foundation; more categories (covers/switches/breakers/fans) follow this shape.
  * ==========================================================================*/
 
-export type LightLever = 'power' | 'brightness' | 'colorTemp' | 'color';
+export type LightLever = "power" | "brightness" | "colorTemp" | "color";
 
 export interface LightHsv {
   /** Hue 0–360. */
@@ -1166,7 +1332,7 @@ export interface LightDetailResponse {
  * Blinds / curtains (Tuya, category 'cl'/'clkg'). positionPct is 100 = fully OPEN.
  * ==========================================================================*/
 
-export type BlindLever = 'open' | 'close' | 'stop' | 'position';
+export type BlindLever = "open" | "close" | "stop" | "position";
 
 export interface BlindUnit {
   id: string;
@@ -1220,7 +1386,13 @@ export interface TuyaIntegrationStatus {
  * ==========================================================================*/
 
 export type CapabilityKind =
-  | 'switch' | 'range' | 'enum' | 'action' | 'color' | 'measure' | 'status';
+  | "switch"
+  | "range"
+  | "enum"
+  | "action"
+  | "color"
+  | "measure"
+  | "status";
 
 export interface Capability {
   kind: CapabilityKind;
@@ -1316,7 +1488,7 @@ export interface DeviceDiagnosticsResponse {
 
 /** Raw result of a single test command fired through a chosen Tuya API. */
 export interface DeviceCommandProbe {
-  api: 'v1' | 'iot03' | 'v2';
+  api: "v1" | "iot03" | "v2";
   httpOk: boolean;
   success: boolean;
   result: unknown;
@@ -1331,7 +1503,7 @@ export interface DeviceCommandTestResponse {
   probe: DeviceCommandProbe;
 }
 
-export type DiscoveredConfidence = 'high' | 'monitor' | 'review';
+export type DiscoveredConfidence = "high" | "monitor" | "review";
 
 export interface DiscoveredDevice {
   id: string;
@@ -1390,7 +1562,7 @@ export interface RoomAllOffResult {
 export interface RoomAllOffResponse {
   ts: string;
   id: string;
-  scope: 'all' | 'lights';
+  scope: "all" | "lights";
   results: RoomAllOffResult[];
 }
 
@@ -1411,8 +1583,8 @@ export interface LightScene {
 }
 
 export type LightScheduleTarget =
-  | { kind: 'scene'; sceneId: string }
-  | { kind: 'lights'; members: LightSceneMember[] };
+  | { kind: "scene"; sceneId: string }
+  | { kind: "lights"; members: LightSceneMember[] };
 
 export interface LightSchedule {
   id: string;
@@ -1448,7 +1620,7 @@ export interface HomeSceneClimateMember {
 
 export interface HomeSceneBlindMember {
   blindId: string;
-  action: 'open' | 'close' | 'position';
+  action: "open" | "close" | "position";
   positionPct?: number | null;
 }
 
@@ -1457,7 +1629,7 @@ export interface HomeScene {
   name: string;
   icon?: string;
   /** 'all-off' = the built-in everything-off scene (lights/climate/blinds all off). */
-  special?: 'all-off';
+  special?: "all-off";
   lights: LightSceneMember[];
   climate: HomeSceneClimateMember[];
   blinds: HomeSceneBlindMember[];
@@ -1475,7 +1647,7 @@ export interface LightSchedulesResponse {
 
 // ---- Invoice vault (Bills) -------------------------------------------------
 
-export type InvoiceBand = 'P1' | 'P2' | 'P3';
+export type InvoiceBand = "P1" | "P2" | "P3";
 
 export interface InvoiceBandLine {
   kwh?: number;
@@ -1512,7 +1684,12 @@ export interface ParsedInvoice {
   energy?: Record<InvoiceBand, InvoiceBandLine | undefined>;
   power?: { P1?: InvoicePowerLine; P2?: InvoicePowerLine };
   excedentes?: Record<InvoiceBand, InvoiceBandLine | undefined>;
-  adjustments?: Array<{ label: string; kwh?: number; rate?: number; amount?: number }>;
+  adjustments?: Array<{
+    label: string;
+    kwh?: number;
+    rate?: number;
+    amount?: number;
+  }>;
   subtotal?: number;
   iee?: InvoiceIeeLine;
   meterRental?: number;
