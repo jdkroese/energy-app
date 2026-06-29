@@ -139,7 +139,11 @@ function SceneEditor({ lights, scene, onClose, onSaved }: { lights: LightUnit[];
 
 export function ScenesSection({ lights, canControl, onScenesChanged }: { lights: LightUnit[]; canControl: boolean; onScenesChanged?: () => void }) {
   const { data, refetch } = usePolling<ScenesResponse>(api.lights.scenes, 0);
-  const scenes = data?.scenes ?? [];
+  // Favorites first (starred presets sit at the front of the grid); order otherwise preserved.
+  const scenes = useMemo(
+    () => [...(data?.scenes ?? [])].sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite)),
+    [data],
+  );
   const [editing, setEditing] = useState<LightScene | null | undefined>(undefined); // undefined=closed, null=new
   const [busyId, setBusyId] = useState<string | null>(null);
   const byId = useMemo(() => new Map(lights.map((l) => [l.id, l])), [lights]);
@@ -157,6 +161,9 @@ export function ScenesSection({ lights, canControl, onScenesChanged }: { lights:
   const del = async (id: string) => {
     setBusyId(id);
     try { await api.lights.deleteScene(id); } catch { /* ignore */ } finally { setBusyId(null); savedScenes(); }
+  };
+  const toggleFav = async (s: LightScene) => {
+    try { await api.lights.favoriteScene(s.id, !s.favorite); refetch(); } catch { /* best-effort — next poll re-syncs */ }
   };
 
   return (
@@ -177,6 +184,7 @@ export function ScenesSection({ lights, canControl, onScenesChanged }: { lights:
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                   <Icon name={s.icon || 'sparkles'} size={15} color={on ? 'var(--solar)' : 'var(--text-3)'} />
                   <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                  {canControl && <button type="button" aria-label={s.favorite ? 'Unstar scene' : 'Star scene'} aria-pressed={!!s.favorite} title={s.favorite ? 'Favorite' : 'Mark as favorite'} onClick={() => void toggleFav(s)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}><Icon name="star" size={14} color={s.favorite ? 'var(--solar)' : 'var(--text-3)'} fill={s.favorite ? 'var(--solar)' : 'none'} /></button>}
                   {canControl && <button type="button" aria-label="Edit scene" onClick={() => setEditing(s)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2 }}><Icon name="pencil" size={13} /></button>}
                   {canControl && <button type="button" aria-label="Delete scene" onClick={() => void del(s.id)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2 }}><Icon name="trash-2" size={13} /></button>}
                 </div>

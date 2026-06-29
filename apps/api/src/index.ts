@@ -87,6 +87,7 @@ import {
   updateScene,
   deleteScene,
   applyScene,
+  favoriteScene,
   listLightSchedules,
   createLightSchedule,
   updateLightSchedule,
@@ -463,6 +464,8 @@ app.post('/api/lights/scenes/:id/apply', requireKioskOrAdmin, wrap((req) => {
   const body = (req.body ?? {}) as { on?: boolean };
   return applyScene(String(req.params.id), body.on !== false);
 }));
+// Star/un-star — kiosk-or-admin (same gate as apply), a lightweight favorite toggle.
+app.post('/api/lights/scenes/:id/favorite', requireKioskOrAdmin, wrap((req) => favoriteScene(String(req.params.id), (req.body as { favorite?: unknown })?.favorite !== false)));
 app.get('/api/lights/schedules', wrap(() => listLightSchedules()));
 app.post('/api/lights/schedules', requireAdmin, wrap((req) => createLightSchedule((req.body ?? {}) as never)));
 app.put('/api/lights/schedules/:id', requireAdmin, wrap((req) => updateLightSchedule(String(req.params.id), (req.body ?? {}) as never)));

@@ -865,6 +865,8 @@ export interface LightScene {
   name: string;
   /** Lucide icon name (UI wayfinding). */
   icon?: string;
+  /** Starred by the owner — favorites surface first in the Scenes grid. */
+  favorite?: boolean;
   members: LightSceneMember[];
 }
 

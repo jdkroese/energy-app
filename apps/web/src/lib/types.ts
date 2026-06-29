@@ -1418,6 +1418,8 @@ export interface LightScene {
   id: string;
   name: string;
   icon?: string;
+  /** Starred by the owner — favorites surface first in the Scenes grid. */
+  favorite?: boolean;
   members: LightSceneMember[];
 }
 
