@@ -300,12 +300,11 @@ export interface TuyaDeviceLogs {
 }
 
 // Log the first successful logs response once so we can confirm the shape on the mini.
-let loggedFirstLogShape = false;
-
 /**
  * Timestamped datapoint-report history for a device. `type=7` = "data point report"
- * (the rows we need to distinguish repeated identical button presses, which a status
- * poll cannot). Times are epoch-ms. Used by the button-test spike.
+ * — the rows needed to detect momentary events (e.g. scene-switch button presses,
+ * including repeated identical ones, which a status poll cannot distinguish).
+ * Times are epoch-ms. Query params are sorted by request() for Tuya's signature.
  */
 export async function getDeviceLogs(
   id: string,
@@ -313,16 +312,10 @@ export async function getDeviceLogs(
   endMs: number,
   size = 20,
 ): Promise<TuyaDeviceLogs> {
-  const r = await request<TuyaDeviceLogs>(
+  return request<TuyaDeviceLogs>(
     'GET',
     `/v1.0/devices/${id}/logs?type=7&start_time=${startMs}&end_time=${endMs}&size=${size}`,
   );
-  if (!loggedFirstLogShape) {
-    loggedFirstLogShape = true;
-    // eslint-disable-next-line no-console
-    console.log('[button-test] first Tuya device-logs response:', JSON.stringify(r));
-  }
-  return r;
 }
 
 /** Issue one or more datapoint commands to a device (legacy v1.0 command API). */
