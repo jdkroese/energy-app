@@ -2,7 +2,7 @@ import { useCallback, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_LIVE, MOCK_HISTORY_DAY } from '../lib/mock';
-import type { HistoryDayResponse, LiveResponse, VoltageMonitor } from '../lib/types';
+import type { FlowDir, HistoryDayResponse, LiveResponse, VoltageMonitor } from '../lib/types';
 import { Card, StatTile, RadialGauge, ProgressBar, Badge, Eyebrow, Icon } from '../components/ui';
 import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
@@ -14,11 +14,24 @@ import type { ShellContext } from '../components/shell/AppShell';
 
 const fmtKw = (kw: number) => (Math.abs(kw) >= 10 ? Math.abs(kw).toFixed(1) : Math.abs(kw).toFixed(1));
 
+/**
+ * Battery sub-line for the live-flow diagram. The big readout stays SoC %, so the
+ * stored kWh and — crucially — the live charge/discharge rate go here, signed so the
+ * flows visibly balance against Solar/Grid/Home (e.g. "8.9 kWh · +1.2 kW" charging,
+ * "27 kWh · −2.4 kW" discharging, "8.9 kWh · idle" when not flowing).
+ */
+function batterySub(kwh: number, kw: number, dir?: FlowDir): string {
+  const stored = `${kwh} kWh`;
+  if (dir === 'charging') return `${stored} · +${fmtKw(kw)} kW`;
+  if (dir === 'discharging') return `${stored} · −${fmtKw(kw)} kW`;
+  return `${stored} · idle`;
+}
+
 function toFlow(d: LiveResponse): FlowData {
   return {
     solar: { name: 'Solar', val: fmtKw(d.solar.kw), unit: 'kW', sub: `${d.solar.arrays?.length || 2} arrays`, kw: d.solar.kw },
-    sonnen: { name: 'Sonnen', val: String(Math.round(d.sonnen.soc)), unit: '%', sub: `${d.sonnen.kwh} kWh`, kw: d.sonnen.kw, dir: d.sonnen.dir },
-    tesla: { name: 'Tesla', val: String(Math.round(d.tesla.soc)), unit: '%', sub: `${d.tesla.kwh} kWh`, kw: d.tesla.kw, dir: d.tesla.dir },
+    sonnen: { name: 'Sonnen', val: String(Math.round(d.sonnen.soc)), unit: '%', sub: batterySub(d.sonnen.kwh, d.sonnen.kw, d.sonnen.dir), kw: d.sonnen.kw, dir: d.sonnen.dir },
+    tesla: { name: 'Tesla', val: String(Math.round(d.tesla.soc)), unit: '%', sub: batterySub(d.tesla.kwh, d.tesla.kw, d.tesla.dir), kw: d.tesla.kw, dir: d.tesla.dir },
     grid: { name: 'Grid', val: fmtKw(d.grid.kw), unit: 'kW', sub: d.grid.dir === 'exporting' ? 'Export' : d.grid.dir === 'importing' ? 'Import' : 'Idle', kw: d.grid.kw, dir: d.grid.dir },
     home: { name: 'Home', val: fmtKw(d.home.kw), unit: 'kW', sub: 'Load', kw: d.home.kw },
   };
