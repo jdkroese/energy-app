@@ -227,6 +227,28 @@ export interface ConfiguredDeviceView {
   roomId: string | null;
   roomName: string | null;
   setupAt: string;
+  /** EV (car) breaker: "Solar / P3 charging only" opt-in (docs/33). */
+  solarP3Only: boolean;
+  /** EV breaker: auto-learned charger draw (W), or null if none learned yet. */
+  learnedDrawW: number | null;
+  /** EV breaker: the rule's live state — what it's doing right now. null when not opted in. */
+  evState: { reason: 'surplus' | 'p3' | 'waiting' | 'off'; ruleOn: boolean; reservedW: number } | null;
+}
+
+/** EV per-breaker view fields from deviceSettings + the rule's runtime state. */
+function evViewFor(id: string): Pick<ConfiguredDeviceView, 'solarP3Only' | 'learnedDrawW' | 'evState'> {
+  const ds = store.get().deviceSettings[id];
+  const solarP3Only = ds?.solarP3Only === true;
+  const learnedDrawW = typeof ds?.learnedDrawW === 'number' ? ds.learnedDrawW : null;
+  if (!solarP3Only) return { solarP3Only: false, learnedDrawW, evState: null };
+  const rt = store.get().devices.evState[id];
+  return {
+    solarP3Only: true,
+    learnedDrawW,
+    evState: rt
+      ? { reason: rt.reason, ruleOn: rt.ruleOn, reservedW: rt.reservedW }
+      : { reason: 'off', ruleOn: false, reservedW: 0 },
+  };
 }
 
 /**
@@ -250,10 +272,13 @@ export async function getConfigured(): Promise<unknown> {
 
   const devices: ConfiguredDeviceView[] = await Promise.all(
     Object.entries(onboarding.configured).map(async ([id, cfg]) => {
-      const d = byId.get(id);
+      // Prefer the bulk fleet entry; if this configured device is missing from it (e.g. its
+      // cloud link dropped so it fell out of /associated-users/devices), recover it with a
+      // direct per-device read so it still renders with its real caps + last-known state.
+      const d = byId.get(id) ?? (await tuya.getDeviceDirect(id));
       if (!d) {
-        // Configured but the fleet no longer reports it (offline project / removed device).
-        return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, ...roomFor(id), setupAt: cfg.setupAt };
+        // Truly not reported by the fleet OR the direct read (removed from the cloud project).
+        return { id, name: cfg.name, typeId: cfg.typeId, category: '', online: false, capabilities: [], values: {}, roomGuess: null, ...roomFor(id), setupAt: cfg.setupAt, ...evViewFor(id) };
       }
       const spec = await specFor(id);
       const caps = applyOverrides(deriveCapabilities(d, spec), cfg.capOverrides);
@@ -264,7 +289,7 @@ export async function getConfigured(): Promise<unknown> {
       }
       return {
         id, name: cfg.name, typeId: cfg.typeId, category: d.category, online: d.online,
-        capabilities: caps, values, roomGuess: toDiscovered(d, spec).roomGuess, ...roomFor(id), setupAt: cfg.setupAt,
+        capabilities: caps, values, roomGuess: toDiscovered(d, spec).roomGuess, ...roomFor(id), setupAt: cfg.setupAt, ...evViewFor(id),
       };
     }),
   );
@@ -307,8 +332,12 @@ export async function getDeviceDiagnostics(id: string): Promise<unknown> {
   } catch (e) {
     return { ts: new Date().toISOString(), connected: true, fleetError: (e as Error).message, device: null };
   }
-  const d = all.find((x) => x.id === deviceId);
-  if (!d) return { ts: new Date().toISOString(), connected: true, fleetError: null, device: null };
+  // Fall back to a direct per-device read if it's missing from the bulk fleet list. `viaDirect`
+  // tells the UI the device was recovered this way (i.e. its cloud link likely dropped); a null
+  // device after the fallback means it's genuinely de-associated from the cloud project.
+  const inFleet = all.find((x) => x.id === deviceId);
+  const d = inFleet ?? (await tuya.getDeviceDirect(deviceId));
+  if (!d) return { ts: new Date().toISOString(), connected: true, fleetError: null, viaDirect: false, device: null };
 
   const spec = await specFor(deviceId);
   const cfg = store.get().deviceOnboarding.configured[deviceId];
@@ -340,7 +369,7 @@ export async function getDeviceDiagnostics(id: string): Promise<unknown> {
       value: statusMap.get(c.dp) ?? null,
     })),
   };
-  return { ts: new Date().toISOString(), connected: true, fleetError: null, device };
+  return { ts: new Date().toISOString(), connected: true, fleetError: null, viaDirect: !inFleet, device };
 }
 
 /**

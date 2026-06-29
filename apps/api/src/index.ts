@@ -92,6 +92,7 @@ import {
   updateScene,
   deleteScene,
   applyScene,
+  favoriteScene,
   listLightSchedules,
   createLightSchedule,
   updateLightSchedule,
@@ -201,6 +202,7 @@ import {
   updateHomeScene,
   deleteHomeScene,
   applyHomeScene,
+  favoriteHomeScene,
 } from "./routes/home-scenes";
 import {
   requireAuth,
@@ -675,6 +677,17 @@ app.post(
     const body = (req.body ?? {}) as { on?: boolean };
     return applyScene(String(req.params.id), body.on !== false);
   }),
+);
+// Star/un-star — kiosk-or-admin (same gate as apply), a lightweight favorite toggle.
+app.post(
+  "/api/lights/scenes/:id/favorite",
+  requireKioskOrAdmin,
+  wrap((req) =>
+    favoriteScene(
+      String(req.params.id),
+      (req.body as { favorite?: unknown })?.favorite !== false,
+    ),
+  ),
 );
 app.get(
   "/api/lights/schedules",
@@ -1262,6 +1275,17 @@ app.post(
   "/api/home-scenes/:id/apply",
   requireKioskOrAdmin,
   wrap((req) => applyHomeScene(String(req.params.id))),
+);
+// Star/un-star — kiosk-or-admin, so the wall tablet can curate its own favorites.
+app.post(
+  "/api/home-scenes/:id/favorite",
+  requireKioskOrAdmin,
+  wrap((req) =>
+    favoriteHomeScene(
+      String(req.params.id),
+      (req.body as { favorite?: unknown })?.favorite !== false,
+    ),
+  ),
 );
 
 // ---- Kiosk (wall-tablet) provisioning — admin swaps THIS browser's session to the

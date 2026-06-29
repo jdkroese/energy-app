@@ -4,12 +4,13 @@
 // the reference is pyrainbird (github.com/allenporter/pyrainbird). The wire crypto,
 // opcode table, and HTTP transport live under ./rainbird/.
 //
-// Hardware: LNK module default IP 192.168.1.159 (owner-confirmed). The host is
+// Hardware: LNK module default IP 192.168.1.158 (owner-confirmed). The host is
 // configurable; the PASSWORD is required to talk to the box and is NEVER hardcoded.
 //
 // The LNK accepts ONE request at a time — the transport serializes all calls; this
 // connector adds a ~10s read cache (like airzone) so the Devices poll stays cheap.
 
+import net from "node:net";
 import { cached, invalidate } from "../cache";
 import * as store from "../store";
 import { tunnelSip } from "./rainbird/transport";
@@ -24,7 +25,7 @@ import {
 } from "./rainbird/sip";
 
 /** Owner-confirmed LNK module IP. Onboarding then only needs the password. */
-const DEFAULT_HOST = "192.168.1.159";
+const DEFAULT_HOST = "192.168.1.158";
 
 /** Host: Settings store → env → known default (read defensively in case the store
  *  type predates the `rainbird` integration field). */
@@ -121,6 +122,87 @@ export async function getInfo(): Promise<IrrigationInfo> {
   const model = decodeModelAndVersion(await sip("ModelAndVersion"));
   const serialNumber = decodeSerialNumber(await sip("SerialNumber"));
   return { model, serialNumber };
+}
+
+// ---- LAN discovery ----------------------------------------------------------
+// When the configured IP is wrong (e.g. DHCP moved the LNK), a direct probe fails
+// with ECONNREFUSED/timeout. These let the mini SWEEP its /24 to find the real box.
+
+/** Does anything accept a TCP connection on host:port within `ms`? (RST/refused/
+ *  timeout → false.) Used as a cheap first-pass filter before the SIP handshake. */
+function tcpOpen(host: string, port: number, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const sock = net.connect({ host, port });
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      resolve(ok);
+    };
+    sock.setTimeout(ms);
+    sock.once("connect", () => done(true));
+    sock.once("timeout", () => done(false));
+    sock.once("error", () => done(false));
+  });
+}
+
+export interface DiscoveredController {
+  host: string;
+  model: ModelAndVersion;
+}
+
+/**
+ * Scan the /24 around `refHost` for a Rain Bird LNK: TCP-probe :80 across the
+ * subnet in parallel, then confirm each open host with a real ModelAndVersion
+ * handshake (using `pw`). Returns the FIRST host that speaks Rain Bird, or null.
+ * Best-effort and bounded — designed to run on the mini when a direct probe fails.
+ */
+export async function discoverOnLan(
+  pw: string,
+  refHost?: string,
+): Promise<DiscoveredController | null> {
+  const ref = (refHost || host()).trim();
+  const m = /^(\d+)\.(\d+)\.(\d+)\.\d+/.exec(ref);
+  const prefix = m ? `${m[1]}.${m[2]}.${m[3]}` : "192.168.1";
+  const ips = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+
+  // Stage 1: fast parallel TCP sweep on :80 (the LNK serves HTTP there).
+  const open: string[] = [];
+  const BATCH = 32;
+  for (let i = 0; i < ips.length; i += BATCH) {
+    const slice = ips.slice(i, i + BATCH);
+    const oks = await Promise.all(slice.map((ip) => tcpOpen(ip, 80, 600)));
+    slice.forEach((ip, j) => oks[j] && open.push(ip));
+  }
+
+  // Stage 2: confirm which open host actually speaks Rain Bird (serialized through
+  // the transport mutex; short timeout since non-LNK servers answer/err quickly).
+  for (const ip of open) {
+    try {
+      const hex = await tunnelSip(ip, pw, encode("ModelAndVersion"), 3500);
+      return { host: ip, model: decodeModelAndVersion(hex) };
+    } catch {
+      // Not a Rain Bird (or wrong password) — keep scanning.
+    }
+  }
+  return null;
+}
+
+/** TCP-probe a SINGLE host across several ports — used to tell "the box is online
+ *  but its local API isn't on 80" (some open port) from "the LNK server is down"
+ *  (nothing open). Returns the open ports, sorted. */
+export async function probeHostPorts(
+  hostArg: string,
+  ports: number[] = [80, 443, 8080, 8443],
+): Promise<number[]> {
+  const open: number[] = [];
+  await Promise.all(
+    ports.map(async (p) => {
+      if (await tcpOpen(hostArg, p, 1500)) open.push(p);
+    }),
+  );
+  return open.sort((a, b) => a - b);
 }
 
 /** Rain-delay days currently set on the controller (0 = none). */

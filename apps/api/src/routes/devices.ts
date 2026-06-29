@@ -26,6 +26,7 @@ import type {
 } from '../store';
 import type { Band } from '../tariff';
 import { issueClimate, type ClimateLever } from '../control/climate-execute';
+import { applyOptimistic, recordWrite, clearWrite } from '../control/climate-optimistic';
 import { takeClimateSnapshot } from '../control/climate-snapshot';
 import {
   revertClimateToSafe,
@@ -233,13 +234,23 @@ async function getAllUnits(): Promise<{ fleet: ClimateUnit[]; error: string | nu
   return { fleet, error };
 }
 
+/** Drop the cached fleet for whichever connector owns this device id, so the next
+ *  read re-fetches fresh state instead of serving the pre-write TTL snapshot. */
+function invalidateFleetFor(id: string): void {
+  if (id.startsWith('air-')) airzone.invalidateFleet();
+  else if (id.startsWith('pan-')) panasonic.invalidateFleet();
+  else intesis.invalidateFleet();
+}
+
 /** GET /api/devices — normalized fleet + a context strip. */
 export async function getDevices(): Promise<unknown> {
   const dev = store.get().devices;
   const connected = anyConnected();
   const { fleet, error: fleetError } = await getAllUnits();
   const settings = store.get().deviceSettings;
-  const climate = fleet.map((u) => mergeView(u, settings));
+  // Overlay just-written values so a navigate-away/back (or any client) reads the
+  // command result immediately, not the connector's stale pre-write cache.
+  const climate = applyOptimistic(fleet).map((u) => mergeView(u, settings));
   // Irrigation zones merge into the same fleet under type 'irrigation' (soft-fails to []).
   const irrigation = await getIrrigationViews(settings);
   const devices = [...climate, ...irrigation];
@@ -280,7 +291,9 @@ export async function getDevice(id: string): Promise<unknown> {
   const { fleet } = await getAllUnits();
   const u = fleet.find((x) => x.id === id);
   if (!u) return { ts: new Date().toISOString(), connected: true, device: null };
-  const device = mergeView(u, settings);
+  // Same optimistic overlay as the list endpoint so the detail screen is consistent.
+  const [ou] = applyOptimistic([u]);
+  const device = mergeView(ou, settings);
   const schedules = store.get().schedules.filter((s) => ruleTargetsUnit(s, id));
   const automations = device.automationEnabled ? store.get().automations : [];
   return { ts: new Date().toISOString(), connected: true, device, schedules, automations };
@@ -316,6 +329,13 @@ export async function commandDevice(id: string, lever: ClimateLever, rawValue: u
     // power OFF, drop it from provenance so a later remote-on is correctly seen as
     // manual rather than mistaken for a stale rule-started unit.
     if (lever === 'power' && value === false) dropSurplusStarted(id);
+    // Reflect the change immediately on every client: overlay the written value (using
+    // the guardrail-clamped setpoint where it applies) and drop the connector's stale
+    // cache so the real read catches up and reconciles the overlay.
+    recordWrite(id, lever, lever === 'setpoint' && typeof result.to === 'number' ? result.to : value);
+    invalidateFleetFor(id);
+  } else {
+    clearWrite(id, lever); // rejected — don't show a value that didn't take
   }
   return { ts: new Date().toISOString(), result };
 }
@@ -344,6 +364,11 @@ export async function bulkCommand(ids: string[], lever: ClimateLever, rawValue: 
       // Provenance mirrors commandDevice: ON-by-hand is manual automatically; on OFF,
       // drop from provenance so a later remote-on reads as manual.
       if (lever === 'power' && value === false) dropSurplusStarted(id);
+      // Same optimistic read-through as commandDevice so the bulk result shows at once.
+      recordWrite(id, lever, lever === 'setpoint' && typeof r.to === 'number' ? r.to : value);
+      invalidateFleetFor(id);
+    } else {
+      clearWrite(id, lever);
     }
     if (lever === 'power' && value === true && r.ok && !u.power) pendingImportKw += 1.2;
   }
@@ -423,7 +448,15 @@ export function setDeviceSettings(id: string, patch: Partial<DeviceSettings>): u
       comfortCeilingC: patch.comfortCeilingC ?? existing.comfortCeilingC,
       comfortFloorC: patch.comfortFloorC ?? existing.comfortFloorC,
       invertPosition: patch.invertPosition ?? existing.invertPosition,
+      // EV (car) breaker: "Solar / P3 charging only" opt-in. Only override when the patch
+      // explicitly carries it (so other setting writes don't clear it). When the owner turns
+      // it OFF, clear any rule-owned runtime so the rule fully releases the breaker.
+      solarP3Only: patch.solarP3Only !== undefined ? patch.solarP3Only : existing.solarP3Only,
+      // learnedDrawW is auto-maintained by the EV rule — preserve it across setting writes.
+      learnedDrawW: patch.learnedDrawW ?? existing.learnedDrawW,
     };
+    // Opting a breaker OUT releases the EV rule's ownership/reservation immediately.
+    if (patch.solarP3Only === false) delete s.devices.evState[id];
     s.deviceSettings[id] = merged;
     return merged;
   });

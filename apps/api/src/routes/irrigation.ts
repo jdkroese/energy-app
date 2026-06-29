@@ -59,6 +59,35 @@ function viewZone(z: rainbird.IrrigationZone): IrrigationZoneView {
   return { ...z, name, roomId, roomName };
 }
 
+/** Turn an opaque transport error into something diagnosable. Node's `fetch` collapses
+ *  every network failure to "fetch failed" and hides the real reason in `error.cause.code`
+ *  — which is exactly what we need to tell "wrong IP / isolated WiFi" (EHOSTUNREACH) from
+ *  "nothing listening on the Rain Bird port" (ECONNREFUSED) from "box asleep" (timeout).
+ *  Non-network errors (wrong password, HTTP status, SIP error) pass through unchanged. */
+function describeReachError(e: unknown, host: string): string {
+  const err = e as {
+    name?: string;
+    message?: string;
+    cause?: { code?: string; message?: string };
+  };
+  if (err?.name === "TimeoutError" || err?.name === "AbortError")
+    return `no response from ${host} within timeout — controller asleep/off, wrong IP, or WiFi client-isolation blocking the mini`;
+  switch (err?.cause?.code) {
+    case "ECONNREFUSED":
+      return `connection refused at ${host} — something is at this IP but not answering on the Rain Bird port (wrong device at this IP, or the LNK web service is off)`;
+    case "EHOSTUNREACH":
+    case "ENETUNREACH":
+      return `${host} unreachable — the mini can't route to it (LNK on a different subnet / isolated IoT-WiFi, or wrong IP)`;
+    case "ETIMEDOUT":
+      return `timed out reaching ${host} — no reply (LNK off/asleep, wrong IP, or WiFi client-isolation)`;
+    case "ENOTFOUND":
+      return `${host} did not resolve — check the host/IP`;
+    case "ECONNRESET":
+      return `${host} reset the connection — often the Rain Bird mobile app is open and holding the single allowed connection`;
+  }
+  return err?.cause?.message || err?.message || "unreachable";
+}
+
 /** GET /api/irrigation — zones + controller state. Inert (empty) when not connected. */
 export async function getIrrigation(): Promise<unknown> {
   const dev = store.get().devices;
@@ -85,7 +114,7 @@ export async function getIrrigation(): Promise<unknown> {
     rainDelayDays = await rainbird.getRainDelay();
     running = await rainbird.getIrrigationState();
   } catch (e) {
-    error = (e as Error).message;
+    error = describeReachError(e, rainbird.host());
   }
   return {
     ts: new Date().toISOString(),
@@ -104,10 +133,21 @@ export async function getIrrigation(): Promise<unknown> {
 export async function getIrrigationZone(id: string): Promise<unknown> {
   if (!rainbird.isConfigured())
     return { ts: new Date().toISOString(), connected: false, zone: null };
-  const zones = (await rainbird.getZones()).map(viewZone);
-  const zone = zones.find((z) => z.id === id) ?? null;
-  const rainDelayDays = await rainbird.getRainDelay();
-  return { ts: new Date().toISOString(), connected: true, zone, rainDelayDays };
+  try {
+    const zones = (await rainbird.getZones()).map(viewZone);
+    const zone = zones.find((z) => z.id === id) ?? null;
+    const rainDelayDays = await rainbird.getRainDelay();
+    return { ts: new Date().toISOString(), connected: true, zone, rainDelayDays };
+  } catch (e) {
+    // Don't 500 the detail poll when the box is unreachable — degrade with the reason.
+    return {
+      ts: new Date().toISOString(),
+      connected: true,
+      zone: null,
+      rainDelayDays: 0,
+      lastError: describeReachError(e, rainbird.host()),
+    };
+  }
 }
 
 // ---- Commands (admin + arm) -------------------------------------------------
@@ -155,6 +195,9 @@ export function setIrrigationSettings(
 export interface ProbeResult {
   ok: boolean;
   detail: string;
+  /** When a direct probe fails but a LAN scan locates the controller elsewhere,
+   *  the IP it was actually found at — the UI offers to switch the host to this. */
+  suggestedHost?: string;
 }
 
 /** GET /api/integrations/rainbird — effective config + live status (never leaks password). */
@@ -176,7 +219,7 @@ export async function getRainbirdIntegration(): Promise<unknown> {
       };
       status = { ok: true, detail: `model ${info.model} · v${info.version}` };
     } catch (e) {
-      status = { ok: false, detail: (e as Error).message };
+      status = { ok: false, detail: describeReachError(e, rainbird.host()) };
     }
   }
   return {
@@ -206,7 +249,7 @@ async function probeRainbird(
     const model = decodeModelAndVersion(hex);
     return { ok: true, detail: `model ${model.modelId} · v${model.version}` };
   } catch (e) {
-    return { ok: false, detail: (e as Error).message || "unreachable" };
+    return { ok: false, detail: describeReachError(e, host) };
   }
 }
 
@@ -220,30 +263,77 @@ export async function testRainbird(
   const password = passwordRaw ? String(passwordRaw) : rainbird.password();
   if (!host) throw badInput("host required");
   if (!password) throw badInput("password required");
-  return probeRainbird(host, password);
+  const probe = await probeRainbird(host, password);
+  if (probe.ok) return probe;
+
+  // Retry a couple times — the LNK serves ONE connection at a time and can be
+  // briefly busy/intermittent (refused now ≠ gone). ECONNREFUSED returns fast, so
+  // these retries cost little.
+  for (let i = 0; i < 2; i++) {
+    const retry = await probeRainbird(host, password);
+    if (retry.ok) return retry;
+  }
+
+  try {
+    // Is the host up on some OTHER port? Distinguishes "local API not on 80" from
+    // "the LNK web server is down".
+    const openPorts = await rainbird.probeHostPorts(host);
+    if (openPorts.length && !openPorts.includes(80)) {
+      return {
+        ok: false,
+        detail: `${probe.detail}. ${host} is up with open port(s) ${openPorts.join(", ")} but not 80 — the LNK's local API may be on a non-standard port.`,
+      };
+    }
+
+    // IP may be wrong — sweep the /24 for the real controller.
+    const found = await rainbird.discoverOnLan(password, host);
+    if (found && found.host !== host) {
+      return {
+        ok: false,
+        detail: `${probe.detail}. But I found a Rain Bird at ${found.host} (model ${found.model.modelId} · v${found.model.version}) — switch the host to ${found.host} and Save.`,
+        suggestedHost: found.host,
+      };
+    }
+
+    // Online but no usable port / handshake → the LNK's local API isn't answering.
+    return {
+      ok: false,
+      detail: `${probe.detail}. ${host} is online but its Rain Bird local API isn't answering on port 80${openPorts.length ? ` (open ports: ${openPorts.join(", ")})` : " (no common web port open)"} — power-cycle the controller/LNK and fully close the Rain Bird app, then Test again.`,
+    };
+  } catch {
+    // Best-effort diagnostics — fall back to the direct probe result.
+  }
+  return probe;
 }
 
-/** PUT /api/integrations/rainbird — PROBE the box, then persist on success only. */
+/** PUT /api/integrations/rainbird — persist the host+password, then probe.
+ *  The probe is ADVISORY, not a gate: a transient miss or a protocol-decode quirk
+ *  against the real box must never lock the owner out of saving the correct host
+ *  (use Test for an explicit connectivity check). We still validate the host format
+ *  and require a password. */
 export async function setRainbird(
   hostRaw?: unknown,
   passwordRaw?: unknown,
 ): Promise<unknown> {
   const host = String(hostRaw ?? "").trim();
   if (!host || !HOST_RE.test(host))
-    throw badInput("Enter a valid host/IP (e.g. 192.168.1.159)");
+    throw badInput("Enter a valid host/IP (e.g. 192.168.1.158)");
   // Allow keeping the stored password when the form leaves it blank (edit host only).
   const password = passwordRaw ? String(passwordRaw) : rainbird.password();
   if (!password) throw badInput("Enter the Rain Bird controller password");
-  const probe = await probeRainbird(host, password);
-  if (!probe.ok)
-    throw badInput(`Could not reach Rain Bird at ${host} — ${probe.detail}`);
+  // Persist FIRST so a failing probe can't block changing the host.
   store.update((s) => {
     s.integrations = s.integrations ?? { intesis: null };
     s.integrations.rainbird = { host, password };
   });
+  // Probe for feedback only — report reachability without throwing.
+  const probe = await probeRainbird(host, password);
   return {
     ts: new Date().toISOString(),
-    ...probe,
+    ok: probe.ok,
+    detail: probe.ok
+      ? probe.detail
+      : `Saved ${host}, but couldn't reach it yet — ${probe.detail}`,
     config: await getRainbirdIntegration(),
   };
 }

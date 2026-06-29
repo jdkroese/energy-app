@@ -21,6 +21,7 @@ import net from 'node:net';
 import { config } from '../config';
 import { cached } from '../cache';
 import * as store from '../store';
+import { serialize } from './write-queue';
 
 // AC Cloud Control shares the IntesisHome cloud backend (app id com.intesis.intesishome).
 // Host is overridable in case the account lives on the newer accloud.intesis.com edge.
@@ -284,23 +285,33 @@ export async function setDatapoint(
   uid: number,
   value: number,
 ): Promise<SetDatapointResult> {
-  const session = await login();
-  if (!session.serverIP || !session.serverPort) {
-    throw new Error('AC Cloud push socket coordinates unavailable');
-  }
-  // The push socket can transiently drop before set_ack (server-side). Retry
-  // with a fresh socket a couple of times; a genuine cloud rejection is not.
-  let lastErr: Error | null = null;
-  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
-    try {
-      return await writeOverSocket(session, deviceId, uid, value);
-    } catch (e) {
-      lastErr = e as Error;
-      if (/rejected/i.test(lastErr.message)) throw lastErr;
-      if (attempt < MAX_WRITE_ATTEMPTS) await new Promise<void>((r) => setTimeout(r, 200 * attempt));
+  // Serialize the WHOLE write — login included. The AC Cloud rotates the push token
+  // on each login, so two commands that log in concurrently invalidate each other's
+  // token and both sockets drop before set_ack. Doing login+connect+set+ack one at a
+  // time per (de-facto single-account) push session removes that contention. The
+  // earlier serialization wrapped only the socket write, leaving the logins to race —
+  // which is why flipping several units still failed. See connectors/write-queue.ts.
+  return serialize('intesis:push', async () => {
+    // A push token can also go stale after an idle period: the first socket then drops
+    // before set_ack. Reusing the same session across retries just hits the same dead
+    // token, so re-login fresh on EVERY attempt — a cold/expired session self-heals on
+    // the next try. A genuine cloud rejection (rpc_error) is not retried.
+    let lastErr: Error | null = null;
+    for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
+      try {
+        const session = await login();
+        if (!session.serverIP || !session.serverPort) {
+          throw new Error('AC Cloud push socket coordinates unavailable');
+        }
+        return await writeOverSocket(session, deviceId, uid, value);
+      } catch (e) {
+        lastErr = e as Error;
+        if (/rejected/i.test(lastErr.message)) throw lastErr;
+        if (attempt < MAX_WRITE_ATTEMPTS) await new Promise<void>((r) => setTimeout(r, 200 * attempt));
+      }
     }
-  }
-  throw lastErr ?? new Error('AC Cloud set failed');
+    throw lastErr ?? new Error('AC Cloud set failed');
+  });
 }
 
 function writeOverSocket(

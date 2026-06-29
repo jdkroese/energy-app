@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import type { Capability, ConfiguredResponse, DeviceDiagnosticsResponse, Schedule, SchedulesResponse } from '../lib/types';
-import { Card, Icon, Button, Input, InlineReveal } from '../components/ui';
+import type { Capability, ConfiguredDeviceView, ConfiguredResponse, DeviceDiagnosticsResponse, Schedule, SchedulesResponse } from '../lib/types';
+import { Card, Icon, Button, Input, InlineReveal, Switch } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -158,6 +158,19 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
                 breakers (no electrical caps) show no usage section at all. */}
             {isMeteredBreaker(device.capabilities) && <BreakerUsageSection id={device.id} />}
 
+            {/* SOLAR CHARGING — metered switchable breakers (the EV/car charger): the
+                "Solar / P3 charging only" opt-in + live status + a "Daytime only" preset.
+                docs/33. Only meaningful for a metered breaker we can switch on/off. */}
+            {isMeteredBreaker(device.capabilities) && hasPowerSwitch(device.capabilities) && (
+              <SolarChargingSection
+                device={device}
+                isAdmin={isAdmin}
+                existingRules={unitRules}
+                onChanged={refetch}
+                onScheduleCreated={refetchSched}
+              />
+            )}
+
             <MoreControlsSection
               caps={secondaryCapabilities(device.capabilities)}
               values={device.values}
@@ -246,6 +259,131 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
       </div>
     </>
   );
+}
+
+/* ---- Solar charging (EV / car breaker) — docs/33 -------------------------- *
+ * "Solar / P3 charging only" opt-in for a metered switchable breaker. When on,
+ * the EV-surplus rule owns the breaker: it charges on excess solar (before the
+ * surplus-cooling rule) or the cheap P3 band, and is off otherwise. Shows the
+ * live rule state + the auto-learned charger draw, plus a one-tap "Daytime only"
+ * preset that creates a sunrise+1h → sunset−1h schedule. Responsive: a single
+ * Card that reflows (wrap) so it works on both desktop and mobile widths. */
+function SolarChargingSection({
+  device,
+  isAdmin,
+  existingRules,
+  onChanged,
+  onScheduleCreated,
+}: {
+  device: ConfiguredDeviceView;
+  isAdmin: boolean;
+  existingRules: Schedule[];
+  onChanged: () => void;
+  onScheduleCreated: () => void;
+}) {
+  const [on, setOn] = useState(device.solarP3Only === true);
+  const [busy, setBusy] = useState(false);
+  const [presetBusy, setPresetBusy] = useState(false);
+  // Reconcile optimistic state when the polled device view catches up.
+  useEffect(() => { setOn(device.solarP3Only === true); }, [device.solarP3Only]);
+
+  const toggle = async (next: boolean) => {
+    setOn(next); // optimistic
+    setBusy(true);
+    try {
+      await api.devices.setSettings(device.id, { solarP3Only: next });
+      onChanged();
+    } catch {
+      setOn(!next); // revert on failure
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const DAYTIME_NAME = 'Daytime only';
+  const hasDaytime = existingRules.some((r) => r.name === DAYTIME_NAME);
+  const addDaytime = async () => {
+    setPresetBusy(true);
+    try {
+      const draft = newRuleDraft({ type: 'circuit', deviceId: device.id, name: DAYTIME_NAME });
+      const rule: Partial<Schedule> = {
+        ...draft,
+        days: [0, 1, 2, 3, 4, 5, 6],
+        windows: [{
+          start: '08:00', end: '19:00', // fixed fallbacks for display / no-solar days
+          startAnchor: 'sunrise', startOffsetMin: 60,
+          endAnchor: 'sunset', endOffsetMin: -60,
+        }],
+        action: { ...draft.action, power: true },
+      };
+      await api.schedules.create(rule);
+      onScheduleCreated();
+    } finally {
+      setPresetBusy(false);
+    }
+  };
+
+  const draw = typeof device.learnedDrawW === 'number' && device.learnedDrawW > 0 ? device.learnedDrawW : null;
+  const status = evStatusLabel(device.evState, on);
+
+  return (
+    <Card padded style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Icon name="sun" size={16} color="var(--ev, var(--accent))" />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 600 }}>Solar / P3 charging only</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+            Charge only on excess solar or the cheap P3 band. Off = charge whenever powered (max).
+          </div>
+        </div>
+        <Switch checked={on} disabled={!isAdmin || busy} onChange={(e) => toggle(e.target.checked)} />
+      </div>
+
+      {on && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <span style={{ ...evPillStyle, color: status.color, borderColor: status.color }}>{status.label}</span>
+          {draw != null && <span style={evPillStyle}>Learned draw {(draw / 1000).toFixed(1)} kW</span>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-3)', flex: 1, minWidth: 140 }}>
+          Daytime only: charge between sunrise + 1h and sunset − 1h.
+        </span>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!isAdmin || presetBusy || hasDaytime}
+          iconLeft={<Icon name="clock" size={14} />}
+          onClick={addDaytime}
+        >
+          {hasDaytime ? 'Daytime rule added' : 'Add “Daytime only”'}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+const evPillStyle: CSSProperties = {
+  fontSize: 11,
+  padding: '3px 8px',
+  borderRadius: 999,
+  border: '1px solid var(--border)',
+  color: 'var(--text-2)',
+  whiteSpace: 'nowrap',
+};
+
+function evStatusLabel(
+  evState: ConfiguredDeviceView['evState'],
+  on: boolean,
+): { label: string; color: string } {
+  if (!on) return { label: 'Max charging', color: 'var(--text-3)' };
+  switch (evState?.reason ?? 'off') {
+    case 'surplus': return { label: 'Charging on solar surplus', color: 'var(--ev, var(--accent))' };
+    case 'p3': return { label: 'Charging on P3 (cheap grid)', color: 'var(--grid, var(--accent))' };
+    case 'waiting': return { label: 'Waiting for surplus', color: 'var(--text-3)' };
+    default: return { label: 'Idle', color: 'var(--text-3)' };
+  }
 }
 
 /* ---- More controls & configuration (the long tail, collapsed) ------------- *
@@ -396,7 +534,18 @@ function DiagnosticsSection({ id, isAdmin }: { id: string; isAdmin: boolean }) {
               )}
             </>
           )}
-          {data && !dev && !loading && !err && <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No device data (Tuya not connected or device not reported).</div>}
+          {data && !dev && !loading && !err && (
+            <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+              {data.connected === false
+                ? 'Tuya is not connected — set the cloud credentials in Settings.'
+                : 'This device is no longer reported by Tuya. It’s likely removed from the cloud project, or its cloud link is down — power-cycle the device (or re-link it in the Tuya app), then Re-test.'}
+            </div>
+          )}
+          {data && dev && data.viaDirect && (
+            <div style={{ fontSize: 11.5, color: 'var(--warn, var(--text-3))', marginTop: 4 }}>
+              Recovered via a direct read — this device dropped out of Tuya’s device list (its cloud link likely dropped). Live control may be unreliable until it reconnects to the Tuya cloud.
+            </div>
+          )}
         </div>
       )}
     </Card>

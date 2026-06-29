@@ -244,6 +244,26 @@ export function invalidateFleet(): void {
   invalidate(FLEET_KEY);
 }
 
+/**
+ * Direct single-device read (bypasses the bulk associated-users list). Used to RECOVER a
+ * configured device that has fallen out of the fleet list — e.g. its cloud link dropped so it
+ * no longer appears in /associated-users/devices even though it's still registered to the
+ * project. The per-device endpoint still returns its record (with last-known status + the
+ * online flag). Returns null when the device truly isn't on the project, or on any error.
+ * Cached 20s (same TTL as the fleet) so a missing device costs at most one extra call/cycle.
+ */
+export function getDeviceDirect(id: string): Promise<TuyaDevice | null> {
+  if (!isConfigured()) return Promise.resolve(null);
+  return cached(`tuya.device.${id}`, 20_000, async () => {
+    try {
+      const d = await request<TuyaRawDevice>('GET', `/v1.0/devices/${id}`);
+      return d && d.id ? normalizeRaw(d) : null;
+    } catch {
+      return null;
+    }
+  });
+}
+
 /** Fresh per-device status (bypasses the fleet cache). */
 export function getStatus(id: string): Promise<TuyaStatusItem[]> {
   return request<TuyaStatusItem[]>('GET', `/v1.0/devices/${id}/status`);

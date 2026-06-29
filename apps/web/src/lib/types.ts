@@ -1105,6 +1105,8 @@ export interface IntegrationsConfig {
 export interface ProbeResult {
   ok: boolean;
   detail: string;
+  /** A LAN scan located the controller at this IP — the UI offers to switch to it. */
+  suggestedHost?: string;
 }
 
 /* ============================================================================
@@ -1440,6 +1442,12 @@ export interface ConfiguredDeviceView {
   roomId?: string | null;
   roomName?: string | null;
   setupAt: string;
+  /** EV (car) breaker: "Solar / P3 charging only" opt-in (docs/33). */
+  solarP3Only?: boolean;
+  /** EV breaker: auto-learned charger draw (W), or null if none learned yet. */
+  learnedDrawW?: number | null;
+  /** EV breaker: live rule state — null when not opted in. */
+  evState?: { reason: 'surplus' | 'p3' | 'waiting' | 'off'; ruleOn: boolean; reservedW: number } | null;
 }
 
 export interface ConfiguredResponse {
@@ -1483,6 +1491,9 @@ export interface DeviceDiagnosticsResponse {
   ts: string;
   connected: boolean;
   fleetError?: string | null;
+  /** True when the device was recovered via a direct per-device read (i.e. it had fallen out
+   *  of the bulk fleet list — usually because its Tuya cloud link dropped). */
+  viaDirect?: boolean;
   device: DeviceDiagnostics | null;
 }
 
@@ -1579,6 +1590,8 @@ export interface LightScene {
   id: string;
   name: string;
   icon?: string;
+  /** Starred by the owner — favorites surface first in the Scenes grid. */
+  favorite?: boolean;
   members: LightSceneMember[];
 }
 
@@ -1628,6 +1641,8 @@ export interface HomeScene {
   id: string;
   name: string;
   icon?: string;
+  /** Starred by the owner — favorites surface first (e.g. the wall-tablet Home). */
+  favorite?: boolean;
   /** 'all-off' = the built-in everything-off scene (lights/climate/blinds all off). */
   special?: "all-off";
   lights: LightSceneMember[];

@@ -141,7 +141,15 @@ function ScenesRow({ isAdmin }: { isAdmin: boolean }) {
       .finally(() => setBusy(null));
   };
 
-  const scenes = data?.scenes ?? [];
+  const toggleFavorite = (s: { id: string; favorite?: boolean }) => {
+    api.homeScenes.favorite(s.id, !s.favorite).then(refetch).catch(() => undefined);
+  };
+
+  // Favorites first (the handy ones live at the top of the wall), order otherwise preserved.
+  const scenes = useMemo(
+    () => [...(data?.scenes ?? [])].sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite)),
+    [data],
+  );
 
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -163,30 +171,53 @@ function ScenesRow({ isAdmin }: { isAdmin: boolean }) {
             const active = busy === s.id;
             const flash = done === s.id;
             return (
-              <button
-                key={s.id}
-                type="button"
-                disabled={active}
-                onClick={() => apply(s.id)}
-                style={{
-                  minHeight: 92,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  border: `1px solid ${flash ? 'var(--solar)' : 'var(--border-1)'}`,
-                  borderRadius: 'var(--radius-lg)',
-                  background: flash ? 'var(--solar-wash)' : 'var(--surface-2)',
-                  color: 'var(--text-1)',
-                  cursor: active ? 'default' : 'pointer',
-                  opacity: active ? 0.6 : 1,
-                  transition: 'background .2s, border-color .2s',
-                }}
-              >
-                <Icon name={flash ? 'check' : s.icon || 'sparkles'} size={26} color={flash ? 'var(--solar)' : 'var(--text-2)'} />
-                <span style={{ fontSize: 14, fontWeight: 600 }}>{s.name}</span>
-              </button>
+              <div key={s.id} style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  disabled={active}
+                  onClick={() => apply(s.id)}
+                  style={{
+                    width: '100%',
+                    minHeight: 92,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    border: `1px solid ${flash ? 'var(--solar)' : 'var(--border-1)'}`,
+                    borderRadius: 'var(--radius-lg)',
+                    background: flash ? 'var(--solar-wash)' : 'var(--surface-2)',
+                    color: 'var(--text-1)',
+                    cursor: active ? 'default' : 'pointer',
+                    opacity: active ? 0.6 : 1,
+                    transition: 'background .2s, border-color .2s',
+                  }}
+                >
+                  <Icon name={flash ? 'check' : s.icon || 'sparkles'} size={26} color={flash ? 'var(--solar)' : 'var(--text-2)'} />
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{s.name}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-label={s.favorite ? `Unstar ${s.name}` : `Star ${s.name}`}
+                  aria-pressed={!!s.favorite}
+                  onClick={() => toggleFavorite(s)}
+                  style={{
+                    position: 'absolute',
+                    top: 6,
+                    right: 6,
+                    width: 36,
+                    height: 36,
+                    display: 'grid',
+                    placeItems: 'center',
+                    border: 'none',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'transparent',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Icon name="star" size={18} color={s.favorite ? 'var(--solar)' : 'var(--text-3)'} fill={s.favorite ? 'var(--solar)' : 'none'} />
+                </button>
+              </div>
             );
           })}
         </div>

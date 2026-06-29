@@ -1145,7 +1145,11 @@ function RainbirdConnection({ first, open, onToggle }: { first?: boolean; open: 
     setBusy(kind); setErr(null); setRes(null);
     try {
       if (kind === 'test') {
-        setRes(await api.integrations.testRainbird(host.trim(), password || undefined));
+        const r = await api.integrations.testRainbird(host.trim(), password || undefined);
+        setRes(r);
+        // If the scan located the controller at a different IP, fill it in so the
+        // owner can just hit Save.
+        if (r.suggestedHost) setHost(r.suggestedHost);
       } else {
         const r = await api.integrations.setRainbird(host.trim(), password || undefined);
         setRes({ ok: r.ok, detail: r.detail });
@@ -1181,7 +1185,8 @@ function RainbirdConnection({ first, open, onToggle }: { first?: boolean; open: 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={cfgDesc}>
           Rain Bird ESP-TM2 sprinkler controller with an LNK / LNK2 WiFi module — local
-          watering control over the home network. A password is required.
+          watering control over the home network. A password is required. If the IP is
+          wrong, Test scans your network to find the controller.
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <DetailLine label="Status" value={probe ? probe.detail : connected ? 'connected' : 'not connected'} tone={probe?.ok ? 'solar' : 'grid'} />
@@ -1191,7 +1196,7 @@ function RainbirdConnection({ first, open, onToggle }: { first?: boolean; open: 
         </div>
         {isAdmin ? (
           <>
-            <Input label="Module host / IP" value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.159" />
+            <Input label="Module host / IP" value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.158" />
             <Input
               label="Controller password"
               type="password"

@@ -307,6 +307,7 @@ export const api = {
         comfortCeilingC?: number;
         comfortFloorC?: number;
         invertPosition?: boolean;
+        solarP3Only?: boolean;
       },
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),
     // Assign / clear a device's room (cross-cutting Rooms model). null = Unassigned.
@@ -458,6 +459,11 @@ export const api = {
       postJSON<{ ts: string; applied: number; failed: number }>(
         `/api/lights/scenes/${enc(id)}/apply`,
         { on },
+      ),
+    favoriteScene: (id: string, favorite: boolean) =>
+      postJSON<{ scene: LightScene }>(
+        `/api/lights/scenes/${enc(id)}/favorite`,
+        { favorite },
       ),
 
     // Schedules (lights/scenes at time windows; writes admin).
@@ -749,6 +755,10 @@ export const api = {
         `/api/home-scenes/${enc(id)}/apply`,
         {},
       ),
+    favorite: (id: string, favorite: boolean) =>
+      postJSON<{ scene: HomeScene }>(`/api/home-scenes/${enc(id)}/favorite`, {
+        favorite,
+      }),
   },
 
   /* ---- Kiosk / wall-tablet mode (admin provisions a kiosk session) ---- */

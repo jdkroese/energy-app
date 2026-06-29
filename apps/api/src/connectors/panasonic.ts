@@ -10,9 +10,10 @@
 // Reference: https://github.com/lostfields/python-panasonic-comfort-cloud
 
 import * as crypto from 'crypto';
-import { cached } from '../cache';
+import { cached, invalidate } from '../cache';
 import * as store from '../store';
 import type { ClimateUnit } from './intesis';
+import { serialize } from './write-queue';
 
 // ---- Constants ---------------------------------------------------------------
 
@@ -491,6 +492,11 @@ export async function getFleet(): Promise<ClimateUnit[]> {
   return cached('panasonic.fleet', 30_000, () => fetchFleet());
 }
 
+/** Drop the cached fleet so the next read reflects a write immediately (not after TTL). */
+export function invalidateFleet(): void {
+  invalidate('panasonic.fleet');
+}
+
 // ---- Control -----------------------------------------------------------------
 
 export type PanasonicLever = 'power' | 'mode' | 'setpoint' | 'fan' | 'vaneUpDown' | 'vaneLeftRight';
@@ -522,18 +528,22 @@ export async function setLever(
     parameters.airSwingLR = fromVane(Number(value));
   }
 
-  const res = await fetch(`${BASE_ACC}/deviceStatus/control`, {
-    method: 'POST',
-    headers: accHeaders(token.access_token, token.acc_client_id, token.app_version),
-    body: JSON.stringify({ deviceGuid: guid, parameters }),
-    signal: AbortSignal.timeout(15_000),
+  // Comfort Cloud rejects overlapping control calls, so serialize writes — flipping
+  // several units off in quick succession queues instead of racing. See write-queue.ts.
+  return serialize('panasonic:cc', async () => {
+    const res = await fetch(`${BASE_ACC}/deviceStatus/control`, {
+      method: 'POST',
+      headers: accHeaders(token.access_token, token.acc_client_id, token.app_version),
+      body: JSON.stringify({ deviceGuid: guid, parameters }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 401) {
+      invalidateToken();
+      throw new Error('Panasonic CC token expired mid-write — will re-auth next request');
+    }
+    if (!res.ok) throw new Error(`Panasonic CC set → HTTP ${res.status}`);
+    const json = (await res.json()) as { result?: number; message?: string };
+    if (json.result !== 0) throw new Error(`Panasonic CC set rejected: ${json.message ?? String(json.result)}`);
+    return { ok: true, detail: `${lever}=${String(value)} on ${id}` };
   });
-  if (res.status === 401) {
-    invalidateToken();
-    throw new Error('Panasonic CC token expired mid-write — will re-auth next request');
-  }
-  if (!res.ok) throw new Error(`Panasonic CC set → HTTP ${res.status}`);
-  const json = (await res.json()) as { result?: number; message?: string };
-  if (json.result !== 0) throw new Error(`Panasonic CC set rejected: ${json.message ?? String(json.result)}`);
-  return { ok: true, detail: `${lever}=${String(value)} on ${id}` };
 }
