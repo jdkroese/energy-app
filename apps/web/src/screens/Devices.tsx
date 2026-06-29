@@ -182,6 +182,53 @@ function TypeTabs({ active, tabs, needsSetup, wide, onSelect }: {
   );
 }
 
+/** Category-tile overview — the "Other devices" landing (no ?type=). Each tile opens
+ *  that category's listing. Mirrors the type tabs (label · hue · icon · count) and
+ *  appends a warning-toned "Needs setup" tile when discoveries are pending. */
+function DevicesOverview({ tabs, needsSetup, wide, onSelect }: {
+  tabs: TabSpec[]; needsSetup: number; wide: boolean; onSelect: (t: HubView) => void;
+}) {
+  const tiles: (TabSpec & { warn?: boolean })[] = [...tabs];
+  if (needsSetup > 0) {
+    tiles.push({ id: 'needs-setup', label: 'Needs setup', hue: 'var(--grid)', icon: 'sparkles', count: needsSetup, warn: true });
+  }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(3, 1fr)' : 'repeat(2, 1fr)', gap: 10 }}>
+      {tiles.map((t) => {
+        const warn = Boolean(t.warn);
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onSelect(t.id)}
+            className="pwr-ifx-press"
+            title={`Open ${t.label}`}
+            style={{
+              textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 14, padding: 16, minHeight: 116,
+              borderRadius: 'var(--radius-lg)', cursor: 'pointer',
+              border: `1px solid ${warn ? 'var(--border-grid)' : 'var(--border-1)'}`,
+              background: warn ? 'var(--grid-wash)' : 'var(--surface-1)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ width: 40, height: 40, borderRadius: 12, display: 'grid', placeItems: 'center', color: t.hue, background: `color-mix(in srgb, ${t.hue} 16%, var(--surface-2))` }}>
+                <Icon name={t.icon} size={20} />
+              </span>
+              <Icon name="chevron-right" size={16} color="var(--text-3)" />
+            </div>
+            <div>
+              <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-1)' }}>{t.label}</div>
+              <div className="pwr-mono" style={{ fontSize: 11.5, color: warn ? 'var(--grid)' : 'var(--text-3)', marginTop: 2 }}>
+                {warn ? `${t.count} to set up` : `${t.count} device${t.count === 1 ? '' : 's'}`}
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function SummaryTile({ label, value, color, accent }: { label: string; value: string; color?: string; accent?: 'solar' | 'grid' }) {
   const accentBg = accent === 'grid' ? 'var(--grid-wash)' : accent === 'solar' ? 'var(--solar-wash)' : 'var(--surface-1)';
   const accentBorder = accent === 'grid' ? 'var(--border-grid)' : accent === 'solar' ? 'var(--border-solar)' : 'var(--border-1)';
@@ -741,11 +788,16 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   // restores the tab the device lives on (e.g. back from a heating zone → Heating).
   const [params, setParams] = useSearchParams();
   const paramType = params.get('type');
-  const initialType: HubView = paramType || 'cooling';
-  const [activeType, setActiveType] = useState<HubView>(initialType);
+  // The URL is the source of truth: no ?type= → the category-tile overview ("Other
+  // devices"); a ?type= → that category's listing. The rail's category shortcuts and
+  // "Other devices" link drive this directly.
+  const overview = !paramType;
+  const activeType: HubView = paramType || 'cooling';
   const selectType = (t: HubView) => {
-    setActiveType(t);
     setParams((prev) => { const n = new URLSearchParams(prev); n.set('type', t); return n; }, { replace: true });
+  };
+  const showOverview = () => {
+    setParams((prev) => { const n = new URLSearchParams(prev); n.delete('type'); return n; }, { replace: true });
   };
   // Discovered (not-yet-set-up) count — badges the tab.
   const needsSetupCount = useDiscoveredCount();
@@ -1058,8 +1110,18 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
           {lensToggle}
           {lens === 'room' ? (
             <DevicesByRoom wide={wide} canEdit={isAdmin} />
+          ) : overview ? (
+            <DevicesOverview tabs={tabs} needsSetup={needsSetupCount} wide={wide} onSelect={selectType} />
           ) : (
             <>
+              <button
+                type="button"
+                onClick={showOverview}
+                className="pwr-ifx-press"
+                style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-2)', fontSize: 12.5, fontWeight: 600, padding: '2px 0' }}
+              >
+                <Icon name="chevron-left" size={15} /> All devices
+              </button>
               <TypeTabs active={activeType} tabs={tabs} needsSetup={needsSetupCount} wide={wide} onSelect={selectType} />
               {content(activeType)}
             </>

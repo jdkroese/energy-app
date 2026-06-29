@@ -1,8 +1,8 @@
-import type { CSSProperties } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { Fragment, type CSSProperties } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
 import { Eyebrow } from '../ui/Eyebrow';
-import { NAV, NAV_MORE } from './nav';
+import { RAIL_SECTIONS, NAV_SETTINGS, navMatches, type NavItem } from './nav';
 import { RailAlarmButton } from './NavAlarm';
 import { useAuth } from '../../auth/AuthProvider';
 
@@ -11,8 +11,8 @@ type Props = {
   onToggle: () => void;
 };
 
-function railItem(expanded: boolean) {
-  return ({ isActive }: { isActive: boolean }): CSSProperties => ({
+function railItem(expanded: boolean, isActive: boolean): CSSProperties {
+  return {
     display: 'flex',
     alignItems: 'center',
     height: 42,
@@ -29,13 +29,26 @@ function railItem(expanded: boolean) {
     color: isActive ? 'var(--solar)' : 'var(--text-2)',
     background: isActive ? 'var(--solar-wash)' : 'transparent',
     boxShadow: isActive ? 'inset 2px 0 0 var(--solar)' : 'none',
-  });
+  };
 }
+
+/** One rail destination — active state is computed (query-param aware), not NavLink's. */
+function RailLink({ item, expanded, active }: { item: NavItem; expanded: boolean; active: boolean }) {
+  return (
+    <NavLink to={item.to} title={item.label} style={railItem(expanded, active)}>
+      <Icon name={item.icon} size={18} />
+      {expanded && <span>{item.label}</span>}
+    </NavLink>
+  );
+}
+
+const railDivider = <div style={{ height: 1, background: 'var(--border-1)', margin: '10px 8px' }} />;
 
 /** Rail — desktop collapsing icon-rail (74↔232 px), toggle persisted to localStorage. */
 export function Rail({ expanded, onToggle }: Props) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const loc = useLocation();
   const signOut = async () => {
     await logout();
     navigate('/login', { replace: true });
@@ -68,19 +81,16 @@ export function Rail({ expanded, onToggle }: Props) {
         {expanded && <span style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-.02em', color: 'var(--solar)' }}>Power</span>}
       </div>
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        {NAV.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.to === '/'} title={n.label} style={railItem(expanded)}>
-            <Icon name={n.icon} size={18} />
-            {expanded && <span>{n.label}</span>}
-          </NavLink>
-        ))}
-        <div style={{ height: 1, background: 'var(--border-1)', margin: '10px 8px' }} />
-        {NAV_MORE.map((n) => (
-          <NavLink key={n.to} to={n.to} title={n.label} style={railItem(expanded)}>
-            <Icon name={n.icon} size={18} />
-            {expanded && <span>{n.label}</span>}
-          </NavLink>
+      {/* Nav list scrolls if the sections outgrow the rail; the bottom group below
+          (panic · system · Settings · sign out · collapse) stays pinned. */}
+      <nav className="pwr-rail-nav" style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
+        {RAIL_SECTIONS.map((section, si) => (
+          <Fragment key={si}>
+            {si > 0 && railDivider}
+            {section.map((n) => (
+              <RailLink key={n.to} item={n} expanded={expanded} active={navMatches(n.to, loc)} />
+            ))}
+          </Fragment>
         ))}
       </nav>
 
@@ -108,6 +118,8 @@ export function Rail({ expanded, onToggle }: Props) {
             </div>
           </div>
         )}
+        {/* Settings pinned here — next to Sign out / Collapse, away from the nav groups. */}
+        <RailLink item={NAV_SETTINGS} expanded={expanded} active={navMatches(NAV_SETTINGS.to, loc)} />
         <button
           onClick={() => void signOut()}
           title={user ? `Sign out — ${user.email}` : 'Sign out'}

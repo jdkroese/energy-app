@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
-import { MOBILE_TABS, MOBILE_MORE } from './nav';
+import { MOBILE_TABS, MOBILE_MORE_PATHS } from './nav';
 import { MoreMenu } from './MoreMenu';
 
 const itemStyle = (active: boolean) => ({
@@ -23,8 +23,10 @@ export function TabBar() {
   const { pathname } = useLocation();
 
   // Highlight "More" whenever the current route lives behind it (incl. detail pages).
-  const onMoreRoute = MOBILE_MORE.some(
-    (n) => pathname === n.to || (n.to !== '/' && pathname.startsWith(`${n.to}/`)),
+  // Paths shared with a bottom tab (e.g. /devices) are excluded — those light up the
+  // bottom tab itself, not "More".
+  const onMoreRoute = MOBILE_MORE_PATHS.some(
+    (p) => pathname === p || (p !== '/' && pathname.startsWith(`${p}/`)),
   );
 
   return (

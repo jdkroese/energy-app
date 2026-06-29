@@ -1,19 +1,21 @@
-import { useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { Fragment, useEffect } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
 import { Eyebrow } from '../ui/Eyebrow';
-import { MOBILE_MORE } from './nav';
+import { MOBILE_MORE_SECTIONS, navMatches } from './nav';
 import { useAuth } from '../../auth/AuthProvider';
 
 /**
  * MoreMenu — mobile overflow sheet opened from the bottom bar's "More" tab.
- * Lists every destination that isn't a primary tab (Devices, Scenarios,
- * Autopilot, Schedules, Automations, Settings) plus account status + sign out,
- * so the whole app is reachable on iPhone.
+ * Lists every destination that isn't a bottom tab, grouped (Devices · Automation ·
+ * Account) under section headers, plus sign out — so the whole app is reachable
+ * on a phone. The Devices group holds the per-category shortcuts; Settings sits in
+ * Account, just above Sign out.
  */
 export function MoreMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const loc = useLocation();
 
   useEffect(() => {
     if (!open) return;
@@ -74,34 +76,40 @@ export function MoreMenu({ open, onClose }: { open: boolean; onClose: () => void
         }}
       >
         <div style={{ width: 38, height: 4, borderRadius: 99, background: 'var(--border-2)', margin: '4px auto 12px' }} />
-        <div style={{ padding: '0 6px 8px' }}>
-          <Eyebrow>More</Eyebrow>
-        </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          {MOBILE_MORE.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.to === '/'}
-              onClick={onClose}
-              style={({ isActive }) => ({
-                display: 'flex',
-                alignItems: 'center',
-                gap: 11,
-                textDecoration: 'none',
-                padding: '14px 14px',
-                borderRadius: 12,
-                border: `1px solid ${isActive ? 'var(--solar)' : 'var(--border-1)'}`,
-                background: isActive ? 'var(--solar-wash)' : 'var(--surface-1)',
-                color: isActive ? 'var(--solar)' : 'var(--text-1)',
+        {MOBILE_MORE_SECTIONS.map((section, si) => (
+          <Fragment key={section.title}>
+            <div style={{ padding: si === 0 ? '0 6px 8px' : '14px 6px 8px' }}>
+              <Eyebrow>{section.title}</Eyebrow>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {section.items.map((n) => {
+                const active = navMatches(n.to, loc);
+                return (
+                  <NavLink
+                    key={n.to}
+                    to={n.to}
+                    onClick={onClose}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 11,
+                      textDecoration: 'none',
+                      padding: '14px 14px',
+                      borderRadius: 12,
+                      border: `1px solid ${active ? 'var(--solar)' : 'var(--border-1)'}`,
+                      background: active ? 'var(--solar-wash)' : 'var(--surface-1)',
+                      color: active ? 'var(--solar)' : 'var(--text-1)',
+                    }}
+                  >
+                    <Icon name={n.icon} size={20} />
+                    <span style={{ fontSize: 14, fontWeight: 500 }}>{n.label}</span>
+                  </NavLink>
+                );
               })}
-            >
-              <Icon name={n.icon} size={20} />
-              <span style={{ fontSize: 14, fontWeight: 500 }}>{n.label}</span>
-            </NavLink>
-          ))}
-        </div>
+            </div>
+          </Fragment>
+        ))}
 
         <button
           onClick={() => void signOut()}

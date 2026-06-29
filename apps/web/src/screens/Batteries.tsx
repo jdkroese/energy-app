@@ -207,7 +207,7 @@ export function Batteries({ ctx }: { ctx: ShellContext }) {
 
   return (
     <>
-      <MobileHeader eyebrow="Batteries · Jávea" title="Storage" right={<Avatar />} />
+      <MobileHeader eyebrow="Charging · Jávea" title="Storage" right={<Avatar />} />
       {stale && <StaleBanner updatedAt={updatedAt} />}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
         <CombinedSummary d={view} wide={false} />
