@@ -1467,6 +1467,8 @@ export interface HomeScene {
   id: string;
   name: string;
   icon?: string;
+  /** Starred by the owner — favorites surface first (e.g. the wall-tablet Home). */
+  favorite?: boolean;
   /** 'all-off' = the built-in everything-off scene (lights/climate/blinds all off). */
   special?: 'all-off';
   lights: LightSceneMember[];

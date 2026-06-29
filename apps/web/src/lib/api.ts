@@ -454,6 +454,7 @@ export const api = {
     update: (id: string, body: Partial<HomeScene>) => putJSON<{ scene: HomeScene }>(`/api/home-scenes/${enc(id)}`, body),
     remove: (id: string) => delJSON<{ ok: boolean }>(`/api/home-scenes/${enc(id)}`),
     apply: (id: string) => postJSON<{ ts: string; applied: number; failed: number }>(`/api/home-scenes/${enc(id)}/apply`, {}),
+    favorite: (id: string, favorite: boolean) => postJSON<{ scene: HomeScene }>(`/api/home-scenes/${enc(id)}/favorite`, { favorite }),
   },
 
   /* ---- Kiosk / wall-tablet mode (admin provisions a kiosk session) ---- */

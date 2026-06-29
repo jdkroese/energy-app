@@ -183,6 +183,7 @@ import {
   updateHomeScene,
   deleteHomeScene,
   applyHomeScene,
+  favoriteHomeScene,
 } from './routes/home-scenes';
 import { requireAuth, requireAdmin, requireKioskOrAdmin } from './auth/middleware';
 import { bootstrapAdmin } from './auth/users';
@@ -720,6 +721,8 @@ app.post('/api/home-scenes', requireAdmin, wrap((req) => createHomeScene((req.bo
 app.put('/api/home-scenes/:id', requireAdmin, wrap((req) => updateHomeScene(String(req.params.id), (req.body ?? {}) as never)));
 app.delete('/api/home-scenes/:id', requireAdmin, wrap((req) => deleteHomeScene(String(req.params.id))));
 app.post('/api/home-scenes/:id/apply', requireKioskOrAdmin, wrap((req) => applyHomeScene(String(req.params.id))));
+// Star/un-star — kiosk-or-admin, so the wall tablet can curate its own favorites.
+app.post('/api/home-scenes/:id/favorite', requireKioskOrAdmin, wrap((req) => favoriteHomeScene(String(req.params.id), (req.body as { favorite?: unknown })?.favorite !== false)));
 
 // ---- Kiosk (wall-tablet) provisioning — admin swaps THIS browser's session to the
 // limited kiosk role. provisionKiosk sends its own response (cookie + JSON), so it's
