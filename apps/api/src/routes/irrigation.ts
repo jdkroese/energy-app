@@ -171,6 +171,9 @@ export function setIrrigationSettings(
 export interface ProbeResult {
   ok: boolean;
   detail: string;
+  /** When a direct probe fails but a LAN scan locates the controller elsewhere,
+   *  the IP it was actually found at — the UI offers to switch the host to this. */
+  suggestedHost?: string;
 }
 
 /** GET /api/integrations/rainbird — effective config + live status (never leaks password). */
@@ -236,7 +239,29 @@ export async function testRainbird(
   const password = passwordRaw ? String(passwordRaw) : rainbird.password();
   if (!host) throw badInput("host required");
   if (!password) throw badInput("password required");
-  return probeRainbird(host, password);
+  const probe = await probeRainbird(host, password);
+  if (probe.ok) return probe;
+  // Direct probe failed — the IP may be wrong (DHCP moved the LNK). Sweep the /24
+  // for the real controller and, if found, suggest switching the host to it.
+  try {
+    const found = await rainbird.discoverOnLan(password, host);
+    if (found && found.host !== host) {
+      return {
+        ok: false,
+        detail: `${probe.detail}. But I found a Rain Bird at ${found.host} (model ${found.model.modelId} · v${found.model.version}) — switch the host to ${found.host} and Save.`,
+        suggestedHost: found.host,
+      };
+    }
+    if (!found) {
+      return {
+        ok: false,
+        detail: `${probe.detail}. Scanned the network and found no controller answering on the Rain Bird port — the LNK may be on a different WiFi/subnet, powered off, or its local API disabled.`,
+      };
+    }
+  } catch {
+    // Discovery is best-effort — fall back to the direct probe result.
+  }
+  return probe;
 }
 
 /** PUT /api/integrations/rainbird — persist the host+password, then probe.
