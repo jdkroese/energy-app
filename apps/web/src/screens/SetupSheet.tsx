@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Capability, CapabilityKind, CapabilityOverride, CustomDeviceType, DiscoveredDevice } from '../lib/types';
-import { Button, Icon, Input, Select, Modal } from '../components/ui';
+import { Button, Icon, Input, Select, Modal, Switch } from '../components/ui';
 import { GenericControl } from '../components/GenericControl';
 import { SETUP_BUILTIN_TYPES } from '../lib/deviceTypes';
 import { api } from '../lib/api';
@@ -212,13 +212,9 @@ export function SetupSheet({ device, wide, customTypes, initialName, initialType
                     </select>
                   </div>
                   <Input value={ov.label ?? cap.label} onChange={(e) => setOv(cap.dp, { label: e.target.value })} placeholder="Label" />
-                  <div style={{ display: 'flex', gap: 14, fontSize: 12, color: 'var(--text-2)' }}>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={hidden} onChange={(e) => setOv(cap.dp, { hidden: e.target.checked })} /> Hide
-                    </label>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={readOnly} onChange={(e) => setOv(cap.dp, { readOnly: e.target.checked })} /> Read-only
-                    </label>
+                  <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                    <Switch label="Hide" checked={hidden} onChange={(e) => setOv(cap.dp, { hidden: e.target.checked })} />
+                    <Switch label="Read-only" checked={readOnly} onChange={(e) => setOv(cap.dp, { readOnly: e.target.checked })} />
                   </div>
                 </div>
               );

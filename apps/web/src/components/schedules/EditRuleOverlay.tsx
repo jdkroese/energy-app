@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { Icon, Button, Modal } from '../ui';
+import { Icon, Button, Modal, Input } from '../ui';
 import type { Action, Capability, ClimateMode, FanSetting, RunCondition, Schedule, ScheduleWindow, TimeAnchor, VaneSetting } from '../../lib/types';
 import { checkRuleOverlap, expandSegments, selfOverlaps, wouldOverlapUnit, TYPE_LABEL } from '../../lib/scheduleRules';
 import { AnchorPicker, OffsetStepper } from './TimeAnchorControls';
@@ -126,12 +126,11 @@ export function EditRuleOverlay({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: wide ? '4px 22px 22px' : '4px 16px 18px' }}>
       {/* NAME + subtitle */}
       <div>
-        <input
+        <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
           aria-label="Rule name"
-          className="pwr-input"
-          style={{ fontSize: 18, fontWeight: 700, width: '100%' }}
+          style={{ fontSize: 18, fontWeight: 700 }}
         />
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>{unitName} · {TYPE_LABEL[rule.type]}</div>
       </div>

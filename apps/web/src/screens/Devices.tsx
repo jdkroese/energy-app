@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
@@ -6,7 +6,7 @@ import type {
   DeviceView, DevicesResponse, DeviceWarmth, LiveResponse, DevicesStatus, AutomationsResponse, Automation, ClimateLever, LightsResponse, BlindsResponse, SpeakersResponse,
   ConfiguredResponse, ConfiguredDeviceView, Capability,
 } from '../lib/types';
-import { Card, Icon, Switch, Button, EmptyState, ErrorState, LoadingState } from '../components/ui';
+import { Card, Icon, Switch, Button, EmptyState, ErrorState, LoadingState, SegmentedControl, Input, InlineReveal } from '../components/ui';
 import { Gauge } from '../components/Gauge';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
@@ -140,61 +140,45 @@ interface TabSpec {
   count: number;
 }
 
-/* ---- type tab bar (matches the Autopilot SegmentedControl look + hue dots) --
+/* ---- type tab bar — built on the shared SegmentedControl primitive ---------
  * Renders built-in tabs plus any type (built-in or custom) that has configured
- * generic devices. Appends a warning-toned "Needs setup · N" segment when N>0. */
+ * generic devices, each with its per-type hue dot + count badge. Appends a
+ * warning-toned "Needs setup · N" segment (tone="warning") when N>0. The strip
+ * wraps (rather than squashing) when there are many types, and labels shorten on
+ * mobile — matching the prior bespoke behavior, now on the primitive. */
 function TypeTabs({ active, tabs, needsSetup, wide, onSelect }: {
   active: HubView; tabs: TabSpec[]; needsSetup: number; wide: boolean; onSelect: (t: HubView) => void;
 }) {
+  const options: {
+    value: string; label: string; dot?: string; count?: number; countAlways?: boolean; tone?: 'warning'; icon?: ReactNode; title?: string;
+  }[] = tabs.map((m) => ({
+    value: m.id,
+    // Shorten long labels on mobile (kept count visible on both viewports).
+    label: !wide && m.label.length > 7 ? m.label.slice(0, 5) : m.label,
+    dot: m.hue,
+    // Count badge shows on desktop only (mobile keeps tabs compact — matches prior behavior).
+    count: wide ? m.count : 0,
+  }));
+  if (needsSetup > 0) {
+    options.push({
+      value: 'needs-setup',
+      label: wide ? 'Needs setup' : 'Setup',
+      icon: <Icon name="sparkles" size={12} color="var(--grid)" />,
+      count: needsSetup,
+      countAlways: true,
+      tone: 'warning',
+      title: 'Devices found but not set up yet',
+    });
+  }
   return (
-    <div style={{ display: 'flex', gap: 4, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 5, flexWrap: 'wrap' }}>
-      {tabs.map((m) => {
-        const on = m.id === active;
-        const short = !wide && m.label.length > 7 ? m.label.slice(0, 5) : m.label;
-        return (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => onSelect(m.id)}
-            style={{
-              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-              padding: wide ? '9px 6px' : '8px 4px', borderRadius: 'var(--radius-md)', border: 'none', cursor: 'pointer',
-              background: on ? 'var(--surface-3)' : 'transparent',
-              boxShadow: on ? 'var(--hairline-top)' : 'none',
-              color: on ? 'var(--text-1)' : 'var(--text-2)',
-              fontSize: wide ? 13 : 11.5, fontWeight: 500, minWidth: 0,
-            }}
-          >
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: m.hue, flex: 'none', opacity: on ? 1 : 0.6 }} />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
-            {wide && m.count > 0 && (
-              <span className="pwr-mono" style={{ fontSize: 11, color: on ? 'var(--text-3)' : 'var(--text-disabled)' }}>{m.count}</span>
-            )}
-          </button>
-        );
-      })}
-      {needsSetup > 0 && (() => {
-        const on = active === 'needs-setup';
-        return (
-          <button
-            type="button"
-            onClick={() => onSelect('needs-setup')}
-            title="Devices found but not set up yet"
-            style={{
-              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-              padding: wide ? '9px 6px' : '8px 4px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-grid-strong)', cursor: 'pointer',
-              background: on ? 'var(--grid-wash)' : 'transparent',
-              color: on ? 'var(--grid)' : 'var(--text-2)',
-              fontSize: wide ? 13 : 11.5, fontWeight: 600, minWidth: 0,
-            }}
-          >
-            <Icon name="sparkles" size={12} color="var(--grid)" />
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wide ? 'Needs setup' : 'Setup'}</span>
-            <span className="pwr-mono" style={{ fontSize: 11, color: 'var(--grid)' }}>{needsSetup}</span>
-          </button>
-        );
-      })()}
-    </div>
+    <SegmentedControl
+      block
+      wrap
+      className="pwr-seg--typetabs"
+      value={active}
+      options={options}
+      onChange={(v) => onSelect(v as HubView)}
+    />
   );
 }
 
@@ -252,11 +236,14 @@ function ModeChip({ mode, available, disabled, syncing, onCycle }: {
   );
 }
 
-/** −/＋ setpoint steppers around a mono value. Dimmed/disabled when the room is off. */
+/** −/＋ setpoint steppers around a mono value. Dimmed/disabled when the room is off.
+ *  `compact` is the mobile branch: buttons are sized up to a comfortable ~40px tap
+ *  target (the invisible .pwr-ifx-hit pad still reaches 44px); desktop stays tidy at 28px. */
 function SetpointStepper({ value, lo, hi, step, accent, disabled, syncing, onStep, compact }: {
   value: number | null; lo: number; hi: number; step: number; accent: string; disabled: boolean; syncing: boolean; onStep: (delta: number) => void; compact?: boolean;
 }) {
   const v = value;
+  const btnSize = compact ? 40 : 28;
   const stepBtn = (label: string, delta: number, off: boolean) => (
     <button
       type="button"
@@ -265,16 +252,16 @@ function SetpointStepper({ value, lo, hi, step, accent, disabled, syncing, onSte
       onClick={(e) => { e.stopPropagation(); onStep(delta); }}
       className="pwr-ifx-press pwr-ifx-press--step pwr-ifx-hit pwr-ifx-hit--tight"
       style={{
-        width: compact ? 26 : 28, height: compact ? 26 : 28, display: 'grid', placeItems: 'center', borderRadius: 'var(--radius-md)',
+        width: btnSize, height: btnSize, fontSize: compact ? 18 : 14, display: 'grid', placeItems: 'center', borderRadius: 'var(--radius-md)',
         border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: off ? 'var(--text-disabled)' : 'var(--text-1)',
         cursor: off ? 'default' : 'pointer', flex: 'none',
       }}
     >{label}</button>
   );
   return (
-    <div className={syncing ? 'pwr-ifx-pending-soft' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, opacity: disabled ? 0.5 : 1 }}>
+    <div className={syncing ? 'pwr-ifx-pending-soft' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: compact ? 8 : 6, opacity: disabled ? 0.5 : 1 }}>
       {stepBtn('−', -step, disabled || v == null || v <= lo)}
-      <span className="pwr-mono" style={{ fontSize: 13, fontWeight: 600, color: accent, minWidth: 42, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+      <span className="pwr-mono" style={{ fontSize: compact ? 15 : 13, fontWeight: 600, color: accent, minWidth: compact ? 48 : 42, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
         {v == null ? '—' : `${v.toFixed(1)}°`}{syncing && <SyncDot />}
       </span>
       {stepBtn('+', step, disabled || v == null || v >= hi)}
@@ -520,6 +507,8 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(d.name);
   const [saving, setSaving] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) nameInputRef.current?.focus(); }, [editing]);
   // Local optimistic overlay for the Power switch: snaps immediately on tap, then
   // reconciles (drops) once the live /configured read-back catches up (Tuya cloud
   // read lags a few seconds; the fleet only polls every 20s).
@@ -569,19 +558,15 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
     <Card padded style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Header: name (inline-editable for admins) + chevron to detail */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {editing ? (
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              autoFocus
+        <InlineReveal open={editing} className="pwr-reveal--flex1">
+          <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 2 }}>
+            <Input
+              ref={nameInputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') setEditing(false); }}
               disabled={saving}
-              style={{
-                flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: 'var(--text-1)',
-                background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 8,
-                padding: '5px 8px', outline: 'none',
-              }}
+              style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600 }}
             />
             <button type="button" aria-label="Save name" onClick={() => void save()} disabled={saving}
               style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>
@@ -592,7 +577,8 @@ function CircuitBreakerCard({ d, wide, canWrite, onWrite, onOpen, onSchedule, on
               <Icon name="x" size={16} color="var(--text-3)" />
             </button>
           </div>
-        ) : (
+        </InlineReveal>
+        {!editing && (
           <>
             <button type="button" onClick={onOpen} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>

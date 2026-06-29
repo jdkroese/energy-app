@@ -21,5 +21,6 @@ export { ScreenHeader } from './ScreenHeader';
 export type { ScreenHeaderProps } from './ScreenHeader';
 export { Modal } from './Modal';
 export type { ModalProps, ModalSize, ModalZLayer, ModalTone, ModalPlacement } from './Modal';
+export { InlineReveal } from './InlineReveal';
 export { EmptyState, ErrorState, LoadingState, Skeleton } from './States';
 export type { EmptyStateProps, ErrorStateProps, LoadingStateProps } from './States';

@@ -1,9 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { Capability, ConfiguredResponse, DeviceDiagnosticsResponse, Schedule, SchedulesResponse } from '../lib/types';
-import { Card, Icon, Button } from '../components/ui';
+import { Card, Icon, Button, Input, InlineReveal } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
@@ -40,6 +40,10 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [savingName, setSavingName] = useState(false);
+  // InlineReveal keeps the rename field mounted across the expand/collapse, so we
+  // focus it explicitly when editing opens (autoFocus only fires on first mount).
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editingName) nameInputRef.current?.focus(); }, [editingName]);
 
   const saveName = async (deviceId: string, current: string) => {
     const name = nameDraft.trim();
@@ -100,15 +104,15 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
                 <Icon name={meta.icon} size={21} />
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
-                {editingName ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <input
-                      autoFocus
+                <InlineReveal open={editingName}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 2 }}>
+                    <Input
+                      ref={nameInputRef}
                       value={nameDraft}
                       onChange={(e) => setNameDraft(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') void saveName(device.id, device.name); if (e.key === 'Escape') setEditingName(false); }}
                       disabled={savingName}
-                      style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: 600, color: 'var(--text-1)', background: 'var(--surface-3)', border: '1px solid var(--border-1)', borderRadius: 8, padding: '5px 8px', outline: 'none' }}
+                      style={{ flex: 1, minWidth: 0, fontSize: 16, fontWeight: 600 }}
                     />
                     <button type="button" aria-label="Save name" onClick={() => void saveName(device.id, device.name)} disabled={savingName}
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 3 }}>
@@ -119,7 +123,8 @@ export function GenericDeviceDetail({ ctx }: { ctx: ShellContext }) {
                       <Icon name="x" size={17} color="var(--text-3)" />
                     </button>
                   </div>
-                ) : (
+                </InlineReveal>
+                {!editingName && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{device.name}</div>
                     {isAdmin && (
