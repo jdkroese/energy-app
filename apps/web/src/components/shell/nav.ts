@@ -5,37 +5,98 @@ export interface NavItem {
   soon?: boolean;
 }
 
-/** Primary nav used by both the mobile tab bar and the desktop rail. */
-export const NAV: NavItem[] = [
+/* ============================================================================
+ * Navigation model. The menu is grouped into ordered sections; the desktop Rail
+ * draws a divider between each section and pins Settings + Sign out at the bottom.
+ * The mobile bottom bar shows a compact set of tabs and folds the rest into the
+ * grouped "More" sheet. Add a destination to a section here and it shows up in
+ * both surfaces.
+ * ==========================================================================*/
+
+/** Top section — the at-a-glance screens, above the first divider. */
+export const NAV_TOP: NavItem[] = [
   { to: '/', label: 'Live', icon: 'activity' },
   { to: '/reports', label: 'Reports', icon: 'chart-column' },
-  { to: '/batteries', label: 'Batteries', icon: 'battery-charging' },
-  { to: '/devices', label: 'Devices', icon: 'thermometer' },
-  { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
 
-/** Secondary destinations surfaced in the rail (and the mobile "More" menu). */
-export const NAV_MORE: NavItem[] = [
-  { to: '/irrigation', label: 'Irrigation', icon: 'droplets' },
-  { to: '/scenarios', label: 'Scenarios', icon: 'sliders-horizontal' },
+/** Devices section — Charging + per-category shortcuts, then the all-devices hub.
+ *  The category links carry a ?type= query that the Devices screen reads to open
+ *  straight onto that category's listing. "Other devices" (no query) lands on the
+ *  category-tile overview. Icons/hues mirror the device-type registry. */
+export const NAV_DEVICES: NavItem[] = [
+  { to: '/batteries', label: 'Charging', icon: 'battery-charging' },
+  { to: '/devices?type=lighting', label: 'Lighting', icon: 'lightbulb' },
+  { to: '/devices?type=cooling', label: 'Cooling', icon: 'snowflake' },
+  { to: '/devices?type=heating', label: 'Heating', icon: 'flame' },
+  { to: '/irrigation', label: 'Irrigating', icon: 'droplets' },
+  { to: '/devices', label: 'Other devices', icon: 'layout-grid' },
+];
+
+/** Automation section — below a second divider. */
+export const NAV_AUTOMATION: NavItem[] = [
   // Autopilot folded into Automations (Summary · Schedules · Smart Rules · Events ·
   // Status · Settings); /brain redirects there. Keeps Autopilot's sparkles icon.
   { to: '/automations', label: 'Automations', icon: 'sparkles' },
+  { to: '/scenarios', label: 'Scenarios', icon: 'sliders-horizontal' },
   { to: '/button-test', label: 'Button test', icon: 'radio' },
 ];
 
+/** Settings — pinned to the bottom of the rail next to Sign out / Collapse. */
+export const NAV_SETTINGS: NavItem = { to: '/settings', label: 'Settings', icon: 'settings' };
+
+/** Ordered rail sections — a divider is drawn between each. */
+export const RAIL_SECTIONS: NavItem[][] = [NAV_TOP, NAV_DEVICES, NAV_AUTOMATION];
+
 /**
- * Mobile navigation. The bottom bar shows these four primary tabs plus a "More"
- * button; everything else lives in the More menu. Both lists derive from
- * NAV + NAV_MORE so the mobile nav can never silently drop a page the desktop
- * rail exposes — add a destination once and it shows up in both.
+ * Active-state match for a nav `to` that may carry a ?type= query (the device
+ * shortcuts). NavLink only compares pathname, so the category links would all
+ * light up together on /devices — this disambiguates by the `type` param, and
+ * treats the query-less "Other devices" link as the overview (no type) only.
  */
-const MOBILE_PRIMARY_PATHS = ['/', '/reports', '/batteries', '/devices'];
-export const MOBILE_TABS: NavItem[] = MOBILE_PRIMARY_PATHS.map(
-  (p) => NAV.find((n) => n.to === p)!,
-).filter(Boolean);
-export const MOBILE_MORE: NavItem[] = [...NAV, ...NAV_MORE].filter(
-  (n) => !MOBILE_PRIMARY_PATHS.includes(n.to),
+export function navMatches(to: string, loc: { pathname: string; search: string }): boolean {
+  const qIdx = to.indexOf('?');
+  const path = qIdx === -1 ? to : to.slice(0, qIdx);
+  const wantType = qIdx === -1 ? null : new URLSearchParams(to.slice(qIdx)).get('type');
+  if (path === '/devices') {
+    // Category shortcut (?type=…) lights up only on its own type's listing.
+    if (wantType) return loc.pathname === '/devices' && new URLSearchParams(loc.search).get('type') === wantType;
+    // "Other devices" (no type) = the overview, and the fallback for any device
+    // detail page (/devices/:id), whose category isn't known from the URL alone.
+    if (loc.pathname.startsWith('/devices/')) return true;
+    return loc.pathname === '/devices' && !new URLSearchParams(loc.search).get('type');
+  }
+  if (path === '/') return loc.pathname === '/';
+  return loc.pathname === path || loc.pathname.startsWith(`${path}/`);
+}
+
+/* ---- Mobile ----------------------------------------------------------------
+ * The bottom bar stays compact (Live · Reports · Charging · Devices + More); the
+ * category shortcuts, automation group and Settings live in the grouped More
+ * sheet so the whole app is reachable on a phone. */
+export const MOBILE_TABS: NavItem[] = [
+  NAV_TOP[0], // Live
+  NAV_TOP[1], // Reports
+  NAV_DEVICES[0], // Charging
+  { to: '/devices', label: 'Devices', icon: 'layout-grid' },
+];
+
+/** Paths already covered by a bottom tab — excluded from the More sheet. */
+const MOBILE_BOTTOM_PATHS = MOBILE_TABS.map((t) => t.to);
+
+/** Grouped destinations in the More sheet (each rendered under a section header). */
+export const MOBILE_MORE_SECTIONS: { title: string; items: NavItem[] }[] = [
+  // Category shortcuts (Charging + the all-devices hub are on the bottom bar already).
+  { title: 'Devices', items: NAV_DEVICES.filter((n) => !MOBILE_BOTTOM_PATHS.includes(n.to)) },
+  { title: 'Automation', items: NAV_AUTOMATION },
+  { title: 'Account', items: [NAV_SETTINGS] },
+];
+
+/** Flat list of every More destination — used to highlight the bottom "More" tab. */
+export const MOBILE_MORE: NavItem[] = MOBILE_MORE_SECTIONS.flatMap((s) => s.items);
+
+/** Paths a route can live "behind" the More tab (excludes anything on the bottom bar). */
+export const MOBILE_MORE_PATHS: string[] = MOBILE_MORE.map((n) => n.to.split('?')[0]).filter(
+  (p) => !MOBILE_BOTTOM_PATHS.includes(p),
 );
 
 /**
