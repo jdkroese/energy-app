@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_HISTORY } from '../lib/mock';
@@ -60,8 +60,16 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   if (ctx.desktop) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>{tabs}</div>
-        {tab === 'Energy' ? <EnergyReports ctx={ctx} /> : <Bills ctx={ctx} />}
+        {/* Energy owns the header row so the tab strip and its period nav share one
+            line (tabs left, "Showing …" right). Bills keeps the tabs on their own row. */}
+        {tab === 'Energy' ? (
+          <EnergyReports ctx={ctx} tabs={tabs} />
+        ) : (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>{tabs}</div>
+            <Bills ctx={ctx} />
+          </>
+        )}
       </div>
     );
   }
@@ -76,7 +84,7 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
   );
 }
 
-function EnergyReports({ ctx }: { ctx: ShellContext }) {
+function EnergyReports({ ctx, tabs }: { ctx: ShellContext; tabs?: ReactNode }) {
   // Period navigator: how far back from the current period (0 = now, negative = past).
   // Resets to "now" whenever the Hour/Day/Week/Month/Year range changes.
   const [offset, setOffset] = useState(0);
@@ -254,12 +262,17 @@ function EnergyReports({ ctx }: { ctx: ShellContext }) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {stale && <StaleBanner updatedAt={updatedAt} />}
-        {showNav && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Showing</span>
-            <PeriodNav range={ctx.range} offset={offset} hasPrev={navHasPrev} hasNext={navHasNext} onChange={setOffset} desktop />
-          </div>
-        )}
+        {/* One header row: Energy/Bills tabs on the left, the period navigator on the
+            right — vertically centered so the two line up (was two stacked rows). */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ display: 'flex' }}>{tabs}</div>
+          {showNav && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Showing</span>
+              <PeriodNav range={ctx.range} offset={offset} hasPrev={navHasPrev} hasNext={navHasNext} onChange={setOffset} desktop />
+            </div>
+          )}
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 16 }}>{kpis}</div>
         {gridBand}
         <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 20 }}>
