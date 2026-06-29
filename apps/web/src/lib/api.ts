@@ -87,6 +87,10 @@ import type {
   InvoiceParseResponse,
   InvoiceSaveResponse,
   InvoiceDetail,
+  IrrigationResponse,
+  IrrigationZoneDetailResponse,
+  IrrigationLever,
+  RainbirdIntegrationStatus,
 } from './types';
 
 /**
@@ -344,6 +348,19 @@ export const api = {
     deleteSchedule: (id: string) => delJSON<{ ok: boolean }>(`/api/radio/schedules/${enc(id)}`),
   },
 
+  /* ---- Irrigation (Rain Bird); run/stop/rain-delay are admin + require armed ---- */
+  irrigation: {
+    list: () => getJSON<IrrigationResponse>('/api/irrigation'),
+    detail: (id: string) => getJSON<IrrigationZoneDetailResponse>(`/api/irrigation/${enc(id)}`),
+    command: (id: string, lever: IrrigationLever, value?: number) =>
+      postJSON<{ ts: string; result: { ok: boolean; reason: string; detail: string } }>(
+        `/api/irrigation/${enc(id)}/command`,
+        { lever, value },
+      ),
+    setSettings: (id: string, patch: { roomId?: string | null; name?: string }) =>
+      putJSON<{ ts: string }>(`/api/irrigation/${enc(id)}/settings`, patch),
+  },
+
   /* ---- Blinds / curtains (Tuya); command/bulk are admin ---- */
   blinds: {
     list: () => getJSON<BlindsResponse>('/api/blinds'),
@@ -390,6 +407,14 @@ export const api = {
       postJSON<ProbeResult>('/api/integrations/airzone/test', { host }),
     setAirzone: (host: string) =>
       putJSON<ProbeResult & { config: IntegrationsConfig }>('/api/integrations/airzone', { host }),
+
+    // Rain Bird irrigation (LAN-local SIP; host prefilled, password required).
+    rainbirdStatus: () => getJSON<RainbirdIntegrationStatus>('/api/integrations/rainbird'),
+    testRainbird: (host?: string, password?: string) =>
+      postJSON<ProbeResult>('/api/integrations/rainbird/test', { host, password }),
+    setRainbird: (host: string, password?: string) =>
+      putJSON<ProbeResult & { config: RainbirdIntegrationStatus }>('/api/integrations/rainbird', { host, password }),
+    disconnectRainbird: () => delJSON<{ ok: boolean }>('/api/integrations/rainbird'),
   },
 
   schedules: {

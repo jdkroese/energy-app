@@ -318,6 +318,9 @@ export interface IntegrationsState {
   weather?: { lat?: number; lon?: number };
   /** Airzone Local API override (webserver host/IP; port is fixed at 3000). */
   airzone?: { host?: string } | null;
+  /** Rain Bird LNK / LNK2 irrigation controller (LAN-local SIP). Host defaults to the
+   *  known module IP; the password is REQUIRED and persisted here (never in the repo). */
+  rainbird?: { host?: string; password?: string } | null;
   /** Tuya Cloud project (datacenter region + Access ID/Secret). Unlocks the
    *  whole linked device fleet — lights first, more categories to come. */
   tuya?: { region?: string; accessId?: string; accessSecret?: string };
@@ -408,7 +411,7 @@ export interface DeviceSettings {
 export type ClimateMode = 'auto' | 'heat' | 'dry' | 'fan' | 'cool';
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers';
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers' | 'irrigation';
 
 /** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
 export type FanSetting = 'auto' | 1 | 2 | 3 | 4 | 5;

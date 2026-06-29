@@ -6,6 +6,7 @@ import * as intesis from '../connectors/intesis';
 import type { ClimateUnit } from '../connectors/intesis';
 import * as airzone from '../connectors/airzone';
 import * as panasonic from '../connectors/panasonic';
+import * as rainbird from '../connectors/rainbird';
 import * as store from '../store';
 import { defaultAutomations, defaultTariffArbitrageParams } from '../store';
 import { resolveRoomId } from '../rooms';
@@ -144,9 +145,63 @@ function mergeView(u: ClimateUnit, settings: Record<string, DeviceSettings>): De
   };
 }
 
-/** Whether ANY climate connector is connected. */
+/**
+ * Map a Rain Bird irrigation zone into a DeviceView so it appears in the unified
+ * fleet under the 'irrigation' type. Irrigation has NO setpoint/mode/temp — those
+ * climate fields are null. `power` reflects "currently watering". The zone's
+ * run/stop/rain-delay levers live on the dedicated /api/irrigation surface, not the
+ * climate command path (which only knows power/mode/setpoint/fan/vanes).
+ */
+function irrigationView(z: rainbird.IrrigationZone, settings: Record<string, DeviceSettings>): DeviceView {
+  const ds = settings[z.id];
+  const roomId = resolveRoomId(z.id);
+  const roomName = roomId ? store.get().rooms[roomId]?.name ?? null : null;
+  const name = ds?.name ?? z.name;
+  return {
+    id: z.id,
+    name,
+    zone: name,
+    installation: 'Rain Bird',
+    power: z.active,
+    mode: z.active ? 'watering' : 'idle',
+    setpointC: null,
+    currentTempC: null,
+    minSetpointC: null,
+    maxSetpointC: null,
+    online: z.available,
+    floorDemand: null,
+    humidity: null,
+    wireless: null,
+    lowBattery: null,
+    type: 'irrigation',
+    room: roomName ?? name,
+    roomId,
+    roomName,
+    automationEnabled: false,
+    solarCoolEnabled: false,
+    solarHeatEnabled: false,
+    manualOverrideUntil: null,
+    manualOn: false,
+    comfortCeilingC: null,
+    comfortFloorC: null,
+    warmth: 'unknown',
+    governedBy: { schedules: [], automations: [] },
+  };
+}
+
+/** Irrigation zones as DeviceViews; soft-fails to [] when not connected/unreachable. */
+async function getIrrigationViews(settings: Record<string, DeviceSettings>): Promise<DeviceView[]> {
+  if (!rainbird.isConfigured()) return [];
+  try {
+    return (await rainbird.getZones()).map((z) => irrigationView(z, settings));
+  } catch {
+    return [];
+  }
+}
+
+/** Whether ANY device connector (climate or irrigation) is connected. */
 function anyConnected(): boolean {
-  return intesis.isConfigured() || airzone.isConfigured() || panasonic.isConfigured();
+  return intesis.isConfigured() || airzone.isConfigured() || panasonic.isConfigured() || rainbird.isConfigured();
 }
 
 /** Combined, normalized climate fleet across all connectors. Soft-fails per
@@ -184,7 +239,10 @@ export async function getDevices(): Promise<unknown> {
   const connected = anyConnected();
   const { fleet, error: fleetError } = await getAllUnits();
   const settings = store.get().deviceSettings;
-  const devices = fleet.map((u) => mergeView(u, settings));
+  const climate = fleet.map((u) => mergeView(u, settings));
+  // Irrigation zones merge into the same fleet under type 'irrigation' (soft-fails to []).
+  const irrigation = await getIrrigationViews(settings);
+  const devices = [...climate, ...irrigation];
 
   const temps = devices.map((d) => d.currentTempC).filter((t): t is number => t !== null);
   const indoorAvgC = temps.length ? Math.round((temps.reduce((a, b) => a + b, 0) / temps.length) * 10) / 10 : null;
@@ -212,10 +270,16 @@ export async function getDevice(id: string): Promise<unknown> {
   if (!anyConnected()) {
     return { ts: new Date().toISOString(), connected: false, device: null };
   }
+  const settings = store.get().deviceSettings;
+  // Irrigation zones (`rb-*`) live on a separate connector; resolve them here so the
+  // unified /:id detail endpoint covers the whole fleet.
+  if (id.startsWith('rb-')) {
+    const zone = (await getIrrigationViews(settings)).find((z) => z.id === id) ?? null;
+    return { ts: new Date().toISOString(), connected: true, device: zone, schedules: [], automations: [] };
+  }
   const { fleet } = await getAllUnits();
   const u = fleet.find((x) => x.id === id);
   if (!u) return { ts: new Date().toISOString(), connected: true, device: null };
-  const settings = store.get().deviceSettings;
   const device = mergeView(u, settings);
   const schedules = store.get().schedules.filter((s) => ruleTargetsUnit(s, id));
   const automations = device.automationEnabled ? store.get().automations : [];

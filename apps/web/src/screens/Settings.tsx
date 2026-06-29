@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
@@ -1109,6 +1109,112 @@ function AirzoneConnection({ first, open, onToggle, cfg, reload }: { first?: boo
 }
 
 /* ============================================================================
+ * Rain Bird — irrigation controller (ESP-TM2 + LNK/LNK2 WiFi module) on the LAN.
+ * Host is prefilled with the known module IP; the PASSWORD is required and never
+ * leaves the server (we only learn whether one is set). The backend PROBES the box
+ * (model/version) before persisting, mirroring Airzone/Sonnen.
+ * ==========================================================================*/
+
+function RainbirdConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState<RainbirdIntegrationStatus | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [host, setHost] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState<'test' | 'save' | null>(null);
+  const [res, setRes] = useState<ProbeResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = () => {
+    api.integrations
+      .rainbirdStatus()
+      .then((s) => {
+        setStatus(s);
+        if (s.host && !host) setHost(s.host);
+      })
+      .catch(() => {})
+      .finally(() => setChecked(true));
+  };
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const run = async (kind: 'test' | 'save') => {
+    setBusy(kind); setErr(null); setRes(null);
+    try {
+      if (kind === 'test') {
+        setRes(await api.integrations.testRainbird(host.trim(), password || undefined));
+      } else {
+        const r = await api.integrations.setRainbird(host.trim(), password || undefined);
+        setRes({ ok: r.ok, detail: r.detail });
+        setPassword(''); // never keep the entered secret in component state
+        load();
+      }
+    } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); }
+  };
+
+  const connected = status?.connected ?? false;
+  const probe = status?.status ?? null;
+  const statusText = !checked
+    ? 'loading…'
+    : !connected
+      ? 'not connected'
+      : probe
+        ? (probe.ok ? probe.detail : 'unreachable')
+        : 'sprinkler controller';
+  const statusTone = !checked ? 'text-3' : connected && probe?.ok ? 'solar' : connected ? 'grid' : 'text-2';
+
+  return (
+    <ConnectionRow
+      first={first}
+      icon="droplets"
+      tone={connected && probe?.ok ? 'solar' : undefined}
+      name="Rain Bird"
+      statusText={statusText}
+      statusTone={statusTone}
+      showDot={checked}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={cfgDesc}>
+          Rain Bird ESP-TM2 sprinkler controller with an LNK / LNK2 WiFi module — local
+          watering control over the home network. A password is required.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <DetailLine label="Status" value={probe ? probe.detail : connected ? 'connected' : 'not connected'} tone={probe?.ok ? 'solar' : 'grid'} />
+          {status?.host && <DetailLine label="Host" value={status.host} />}
+          {status?.info && <DetailLine label="Serial" value={status.info.serialNumber} />}
+          <DetailLine label="Password" value={status?.hasPassword ? 'set' : 'not set'} tone={status?.hasPassword ? 'solar' : 'text-3'} />
+        </div>
+        {isAdmin ? (
+          <>
+            <Input label="Module host / IP" value={host} onChange={(e) => setHost(e.target.value)} placeholder="192.168.1.159" />
+            <Input
+              label="Controller password"
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={status?.hasPassword ? '•••••••• (unchanged)' : 'enter password'}
+            />
+            <ResultLine r={res} err={err} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="secondary" loading={busy === 'test'} onClick={() => void run('test')}>Test</Button>
+              <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void run('save')}>Save</Button>
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can connect Rain Bird.</div>
+        )}
+      </div>
+    </ConnectionRow>
+  );
+}
+
+/* ============================================================================
  * Tuya — Cloud project (lights first; covers/switches/breakers/fans to follow).
  * Admin enters the datacenter region + Access ID/Secret from their iot.tuya.com
  * project (with the Smart-Life app account linked). The backend validates by
@@ -1509,6 +1615,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
       })}
       <AcCloudConnection first={false} open={openId === 'accloud'} onToggle={() => toggle('accloud')} />
       <AirzoneConnection first={false} open={openId === 'airzone'} onToggle={() => toggle('airzone')} cfg={cfg} reload={loadCfg} />
+      <RainbirdConnection first={false} open={openId === 'rainbird'} onToggle={() => toggle('rainbird')} />
       <TuyaConnection first={false} open={openId === 'tuya'} onToggle={() => toggle('tuya')} />
       <SonosConnection first={false} open={openId === 'sonos'} onToggle={() => toggle('sonos')} />
     </Card>

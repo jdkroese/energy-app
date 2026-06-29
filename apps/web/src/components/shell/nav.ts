@@ -16,6 +16,7 @@ export const NAV: NavItem[] = [
 
 /** Secondary destinations surfaced in the rail (and the mobile "More" menu). */
 export const NAV_MORE: NavItem[] = [
+  { to: '/irrigation', label: 'Irrigation', icon: 'droplets' },
   { to: '/scenarios', label: 'Scenarios', icon: 'sliders-horizontal' },
   // Autopilot folded into Automations (Summary · Schedules · Smart Rules · Events ·
   // Status · Settings); /brain redirects there. Keeps Autopilot's sparkles icon.

@@ -617,7 +617,7 @@ export type ClimateLever = 'power' | 'mode' | 'setpoint' | 'fan' | 'vaneUpDown' 
 export type DeviceWarmth = 'cold' | 'cool' | 'comfortable' | 'warm' | 'hot' | 'unknown';
 
 /** Device categories a rule can target. Extensible (lighting/circuit land later). */
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers';
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'circuit' | 'blinds' | 'speakers' | 'irrigation';
 
 // ---- Sonos speakers + house alarm ------------------------------------------
 
@@ -1057,6 +1057,54 @@ export interface IntegrationsConfig {
 export interface ProbeResult {
   ok: boolean;
   detail: string;
+}
+
+/* ============================================================================
+ * Irrigation (Rain Bird ESP-TM2 + LNK/LNK2). Reads any-authed; run/stop/rain-delay
+ * writes are admin-gated AND require the Devices layer to be armed. Zones also merge
+ * into /api/devices under type 'irrigation'.
+ * ==========================================================================*/
+
+export interface IrrigationZone {
+  id: string; // `rb-<station>`
+  name: string;
+  station: number;
+  active: boolean;
+  available: boolean;
+  roomId: string | null;
+  roomName: string | null;
+}
+
+export interface IrrigationResponse {
+  ts: string;
+  connected: boolean;
+  armed: boolean;
+  mode: ControlMode;
+  zones: IrrigationZone[];
+  activeStationId: string | null;
+  rainDelayDays: number;
+  running: boolean;
+  lastError: string | null;
+}
+
+export interface IrrigationZoneDetailResponse {
+  ts: string;
+  connected: boolean;
+  zone: IrrigationZone | null;
+  rainDelayDays: number;
+}
+
+export type IrrigationLever = 'run' | 'stop' | 'rainDelay';
+
+/** Rain Bird integration status (host + whether a password is set; never the value). */
+export interface RainbirdIntegrationStatus {
+  ts: string;
+  connected: boolean;
+  host: string;
+  hasPassword: boolean;
+  overridden: boolean;
+  status: ProbeResult | null;
+  info: { model: string; version: string; serialNumber: string } | null;
 }
 
 /* ============================================================================

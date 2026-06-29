@@ -135,6 +135,9 @@ export const TYPE_LABEL: Record<DeviceType, string> = {
   // Speakers aren't schedulable (the house alarm is a one-shot action, not a window rule);
   // listed only to keep this map exhaustive over DeviceType.
   speakers: 'Speakers',
+  // Irrigation uses its own run/stop levers (not climate windows); listed only to keep
+  // this map exhaustive over DeviceType.
+  irrigation: 'Irrigation',
 };
 
 /** Accent colour per device type, matching the Power palette. */
@@ -145,6 +148,7 @@ export const TYPE_COLOR: Record<DeviceType, string> = {
   circuit: 'var(--home)',
   blinds: 'var(--ev)',
   speakers: 'var(--solar)',
+  irrigation: 'var(--battery)',
 };
 
 /** A fresh default rule for "+ Add rule" on a given unit + type. */

@@ -170,6 +170,12 @@ export async function roomAllOff(id: string, body: unknown): Promise<unknown> {
       results.push({ id: dev.id, name: dev.name, kind: dev.kind, ok: false, reason: 'skipped — sensitive' });
       continue;
     }
+    // Irrigation is not swept by room all-off — water is actuated only via explicit
+    // run/stop on the Irrigation screen, never as a side effect of "turn the room off".
+    if (dev.kind === 'irrigation') {
+      results.push({ id: dev.id, name: dev.name, kind: dev.kind, ok: false, reason: 'skipped — irrigation' });
+      continue;
+    }
     // Blinds are not "off"-able in scope.
     if (dev.kind === 'blind') {
       results.push({ id: dev.id, name: dev.name, kind: dev.kind, ok: false, reason: 'skipped — not a power device' });
