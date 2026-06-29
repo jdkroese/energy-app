@@ -189,6 +189,22 @@ export async function discoverOnLan(
   return null;
 }
 
+/** TCP-probe a SINGLE host across several ports — used to tell "the box is online
+ *  but its local API isn't on 80" (some open port) from "the LNK server is down"
+ *  (nothing open). Returns the open ports, sorted. */
+export async function probeHostPorts(
+  hostArg: string,
+  ports: number[] = [80, 443, 8080, 8443],
+): Promise<number[]> {
+  const open: number[] = [];
+  await Promise.all(
+    ports.map(async (p) => {
+      if (await tcpOpen(hostArg, p, 1500)) open.push(p);
+    }),
+  );
+  return open.sort((a, b) => a - b);
+}
+
 /** Rain-delay days currently set on the controller (0 = none). */
 export async function getRainDelay(): Promise<number> {
   if (!isConfigured()) return 0;

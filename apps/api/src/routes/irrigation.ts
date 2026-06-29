@@ -241,9 +241,27 @@ export async function testRainbird(
   if (!password) throw badInput("password required");
   const probe = await probeRainbird(host, password);
   if (probe.ok) return probe;
-  // Direct probe failed — the IP may be wrong (DHCP moved the LNK). Sweep the /24
-  // for the real controller and, if found, suggest switching the host to it.
+
+  // Retry a couple times — the LNK serves ONE connection at a time and can be
+  // briefly busy/intermittent (refused now ≠ gone). ECONNREFUSED returns fast, so
+  // these retries cost little.
+  for (let i = 0; i < 2; i++) {
+    const retry = await probeRainbird(host, password);
+    if (retry.ok) return retry;
+  }
+
   try {
+    // Is the host up on some OTHER port? Distinguishes "local API not on 80" from
+    // "the LNK web server is down".
+    const openPorts = await rainbird.probeHostPorts(host);
+    if (openPorts.length && !openPorts.includes(80)) {
+      return {
+        ok: false,
+        detail: `${probe.detail}. ${host} is up with open port(s) ${openPorts.join(", ")} but not 80 — the LNK's local API may be on a non-standard port.`,
+      };
+    }
+
+    // IP may be wrong — sweep the /24 for the real controller.
     const found = await rainbird.discoverOnLan(password, host);
     if (found && found.host !== host) {
       return {
@@ -252,14 +270,14 @@ export async function testRainbird(
         suggestedHost: found.host,
       };
     }
-    if (!found) {
-      return {
-        ok: false,
-        detail: `${probe.detail}. Scanned the network and found no controller answering on the Rain Bird port — the LNK may be on a different WiFi/subnet, powered off, or its local API disabled.`,
-      };
-    }
+
+    // Online but no usable port / handshake → the LNK's local API isn't answering.
+    return {
+      ok: false,
+      detail: `${probe.detail}. ${host} is online but its Rain Bird local API isn't answering on port 80${openPorts.length ? ` (open ports: ${openPorts.join(", ")})` : " (no common web port open)"} — power-cycle the controller/LNK and fully close the Rain Bird app, then Test again.`,
+    };
   } catch {
-    // Discovery is best-effort — fall back to the direct probe result.
+    // Best-effort diagnostics — fall back to the direct probe result.
   }
   return probe;
 }
