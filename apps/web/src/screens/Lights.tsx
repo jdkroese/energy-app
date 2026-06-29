@@ -38,6 +38,7 @@ function LightCard({
   d,
   wide,
   canControl,
+  pending,
   onCmd,
   onRename,
   onOpenDetail,
@@ -45,6 +46,8 @@ function LightCard({
   d: LightUnit;
   wide: boolean;
   canControl: boolean;
+  /** Levers with an in-flight optimistic command — drives the sync/pending ring. */
+  pending: Set<LightLever>;
   onCmd: (lever: LightLever, value: boolean | number | LightHsv) => void;
   onRename: (name: string) => void;
   /** Configured (set-up) lights only — opens the device edit/detail screen where the
@@ -64,6 +67,7 @@ function LightCard({
       : 'var(--solar)'
     : 'var(--text-3)';
 
+  const syncing = pending.size > 0;
   const showWhite = d.workMode !== 'colour';
   const modeOptions = [
     ...(d.dimmable || d.tunable ? [{ value: 'white', label: 'White' }] : []),
@@ -110,7 +114,18 @@ function LightCard({
                   <button type="button" aria-label="Rename" onClick={() => { setDraft(d.name); setEditing(true); }} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 2, flex: 'none' }}><Icon name="pencil" size={12} /></button>
                 )}
               </div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{d.online ? (on ? 'on' : 'off') : 'offline'}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                {d.online ? (on ? 'on' : 'off') : 'offline'}
+                {syncing && (
+                  <span
+                    aria-label="Syncing"
+                    title="Syncing — confirming with the bulb"
+                    style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--grid)', display: 'inline-block', animation: 'pwrSyncPulse 1s ease-in-out infinite' }}
+                  >
+                    <style>{`@keyframes pwrSyncPulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }`}</style>
+                  </span>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -125,11 +140,13 @@ function LightCard({
             <Icon name="settings-2" size={15} />
           </button>
         )}
-        <Switch
-          checked={on}
-          disabled={!canControl || !d.online}
-          onChange={(e) => onCmd('power', e.target.checked)}
-        />
+        <span className={pending.has('power') ? 'pwr-ifx-pending' : undefined} style={{ display: 'inline-flex', flex: 'none' }}>
+          <Switch
+            checked={on}
+            disabled={!canControl || !d.online}
+            onChange={(e) => onCmd('power', e.target.checked)}
+          />
+        </span>
       </div>
 
       {/* Brightness — shown whenever dimmable, even when off (presets the level) */}
@@ -271,6 +288,18 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
     });
   }, [data]);
 
+  /** Levers with an in-flight (unconfirmed) optimistic override for this light —
+   *  mirrors how Devices tracks per-(id,lever) pending. Drives the sync/pending
+   *  affordance; purely visual (command behavior is unchanged). */
+  const pendingLevers = (id: string): Set<LightLever> => {
+    const out = new Set<LightLever>();
+    for (const k of Object.keys(override)) {
+      const [kid, lever] = k.split(':');
+      if (kid === id) out.add(lever as LightLever);
+    }
+    return out;
+  };
+
   /** Merge any in-flight optimistic overrides onto the server view of a light. */
   const withOverrides = (d: LightUnit): LightUnit => {
     const o = override;
@@ -329,6 +358,7 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
                     d={m}
                     wide={wide}
                     canControl={canControl}
+                    pending={pendingLevers(dev.id)}
                     onCmd={(lever, value) => send(dev.id, lever, value)}
                     onRename={(name) => { void api.lights.rename(dev.id, name).then(refetch); }}
                     onOpenDetail={dev.configured ? () => nav(`/devices/generic/${dev.id}`) : undefined}
