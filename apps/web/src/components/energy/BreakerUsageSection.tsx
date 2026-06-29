@@ -27,9 +27,6 @@ const WINDOWS: { key: Window; label: string; hours: number; granularity: Breaker
 function isoHoursAgo(hours: number): string {
   return new Date(Date.now() - hours * 3600 * 1000).toISOString();
 }
-function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
-}
 
 /** Start-of-this-week (Mon) ISO, local. */
 function isoWeekStart(): string {

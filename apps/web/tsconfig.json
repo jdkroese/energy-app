@@ -3,7 +3,8 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": []
+    "types": [],
+    "noUnusedLocals": true
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]

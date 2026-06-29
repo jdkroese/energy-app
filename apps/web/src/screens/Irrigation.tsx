@@ -12,7 +12,7 @@
 //
 // Responsive (CLAUDE.md web+mobile rule): branches on ctx.desktop. "Power" design system.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
 import { useAuth } from "../auth/AuthProvider";

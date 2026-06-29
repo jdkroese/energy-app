@@ -72,11 +72,6 @@ function isIosSafari(): boolean {
   return !/CriOS|FxiOS|EdgiOS|OPiOS|GSA/i.test(navigator.userAgent);
 }
 
-/** Whether a native Chromium install prompt is currently available. */
-export function canPromptInstall(): boolean {
-  return deferred !== null;
-}
-
 /** Replay the captured Chromium install prompt. */
 export async function promptInstall(): Promise<'accepted' | 'dismissed' | 'unavailable'> {
   if (!deferred) return 'unavailable';

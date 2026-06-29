@@ -7,7 +7,7 @@ import { Card, StatTile, RadialGauge, ProgressBar, Badge, Eyebrow, Icon } from '
 import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
 import { VoltageHistoryOverlay } from '../components/energy/VoltageHistoryOverlay';
-import { TariffBand, DEFAULT_TARIFF_24 } from '../components/energy/TariffBand';
+import { TariffBand } from '../components/energy/TariffBand';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { NotificationsWidget } from '../components/Notifications';
 import { usePlan, ControlGrid, PlanHero, PlanKpis, TodaysMoves } from '../components/energy/PlanSummary';

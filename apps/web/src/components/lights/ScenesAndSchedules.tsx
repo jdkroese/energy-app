@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
 import type {

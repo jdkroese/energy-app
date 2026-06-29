@@ -2,10 +2,6 @@ import type { ReactNode } from 'react';
 import { ScreenHeader } from '../components/ui';
 import { ThemeToggle } from '../components/shell/ThemeToggle';
 
-// Skeleton now lives in components/ui/States (single shimmer source); re-export
-// it here so existing `import { Skeleton } from './_shared'` callers keep working.
-export { Skeleton } from '../components/ui';
-
 /**
  * Mobile screen header (eyebrow + h1), matching the *-mobile mockups.
  * Thin wrapper over the shared <ScreenHeader> so titles are standardized
