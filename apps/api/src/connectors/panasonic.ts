@@ -10,7 +10,7 @@
 // Reference: https://github.com/lostfields/python-panasonic-comfort-cloud
 
 import * as crypto from 'crypto';
-import { cached } from '../cache';
+import { cached, invalidate } from '../cache';
 import * as store from '../store';
 import type { ClimateUnit } from './intesis';
 import { serialize } from './write-queue';
@@ -490,6 +490,11 @@ async function fetchDeviceNow(token: PanasonicToken, guid: string): Promise<Pana
 export async function getFleet(): Promise<ClimateUnit[]> {
   if (!isConfigured()) return [];
   return cached('panasonic.fleet', 30_000, () => fetchFleet());
+}
+
+/** Drop the cached fleet so the next read reflects a write immediately (not after TTL). */
+export function invalidateFleet(): void {
+  invalidate('panasonic.fleet');
 }
 
 // ---- Control -----------------------------------------------------------------

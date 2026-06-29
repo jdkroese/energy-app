@@ -16,7 +16,7 @@
 //            are whole °C with 0.5° steps (NOT tenths).
 //  - INFO  : POST /webserver, POST /version.
 
-import { cached } from '../cache';
+import { cached, invalidate } from '../cache';
 import * as store from '../store';
 import { serialize } from './write-queue';
 
@@ -190,6 +190,11 @@ export async function getZones(): Promise<AirzoneZone[]> {
   return cached('airzone.zones', 10_000, async () =>
     flattenZones(await api('POST', '/hvac', { systemID: 0, zoneID: 0 })).map(normalizeZone),
   );
+}
+
+/** Drop the cached zones so the next read reflects a write immediately (not after TTL). */
+export function invalidateFleet(): void {
+  invalidate('airzone.zones');
 }
 
 /** Fleet as generic ClimateUnits, for merging into /api/devices. */
