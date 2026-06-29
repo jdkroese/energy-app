@@ -323,6 +323,15 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
   // builder's light picker, and the light-schedule target picker — derived once here.
   const sortedLights = [...(d?.devices ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
+  // All/On/Off filter for the grid. Counts and filtering both read the
+  // optimistic (override-merged) power so a just-toggled light moves buckets
+  // immediately rather than waiting for the next poll.
+  const [filter, setFilter] = useState<'all' | 'on' | 'off'>('all');
+  const merged = sortedLights.map(withOverrides);
+  const onCount = merged.filter((m) => m.power).length;
+  const counts = { all: merged.length, on: onCount, off: merged.length - onCount };
+  const visibleLights = merged.filter((m) => filter === 'all' || (filter === 'on' ? m.power : !m.power));
+
   const body = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
@@ -339,32 +348,34 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
       )}
       {d && d.connected && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, maxWidth: wide ? 360 : '100%' }}>
-            <Chip label="Lights" value={String(d.context.deviceCount)} />
-            <Chip label="On now" value={String(d.context.onCount)} color="var(--solar)" accent />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, maxWidth: wide ? 480 : '100%' }} role="group" aria-label="Filter lights">
+            <FilterChip label="All" value={counts.all} selected={filter === 'all'} onClick={() => setFilter('all')} />
+            <FilterChip label="On" value={counts.on} selected={filter === 'on'} onClick={() => setFilter('on')} accent />
+            <FilterChip label="Off" value={counts.off} selected={filter === 'off'} onClick={() => setFilter('off')} />
           </div>
           {d.fleetError && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>Could not read the fleet: {d.fleetError}</div>}
           {d.devices.length === 0 ? (
             <Card padded style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 13, padding: 24 }}>
               No lights found on this Tuya account.
             </Card>
+          ) : visibleLights.length === 0 ? (
+            <Card padded style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 13, padding: 24 }}>
+              No lights are {filter === 'on' ? 'on' : 'off'} right now.
+            </Card>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(auto-fill, minmax(260px, 1fr))' : '1fr', gap: 12 }}>
-              {sortedLights.map((dev) => {
-                const m = withOverrides(dev);
-                return (
-                  <LightCard
-                    key={dev.id}
-                    d={m}
-                    wide={wide}
-                    canControl={canControl}
-                    pending={pendingLevers(dev.id)}
-                    onCmd={(lever, value) => send(dev.id, lever, value)}
-                    onRename={(name) => { void api.lights.rename(dev.id, name).then(refetch); }}
-                    onOpenDetail={dev.configured ? () => nav(`/devices/generic/${dev.id}`) : undefined}
-                  />
-                );
-              })}
+              {visibleLights.map((m) => (
+                <LightCard
+                  key={m.id}
+                  d={m}
+                  wide={wide}
+                  canControl={canControl}
+                  pending={pendingLevers(m.id)}
+                  onCmd={(lever, value) => send(m.id, lever, value)}
+                  onRename={(name) => { void api.lights.rename(m.id, name).then(refetch); }}
+                  onOpenDetail={m.configured ? () => nav(`/devices/generic/${m.id}`) : undefined}
+                />
+              ))}
             </div>
           )}
 
@@ -379,20 +390,29 @@ export function LightsPanel({ ctx }: { ctx: ShellContext }) {
   return body;
 }
 
-function Chip({ label, value, color, accent }: { label: string; value: string; color?: string; accent?: boolean }) {
+/** A clickable stat chip that doubles as an All/On/Off filter segment. The
+ *  selected segment lights up (solar wash); the "On" segment carries the solar
+ *  accent for its count so the live on-count stays visually distinct. */
+function FilterChip({ label, value, selected, onClick, accent }: { label: string; value: number; selected: boolean; onClick: () => void; accent?: boolean }) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className="touch-area"
       style={{
-        background: accent ? 'var(--solar-wash)' : 'var(--surface-1)',
-        border: `1px solid ${accent ? 'var(--border-solar)' : 'var(--border-1)'}`,
+        background: selected ? 'var(--solar-wash)' : 'var(--surface-1)',
+        border: `1px solid ${selected ? 'var(--border-solar)' : 'var(--border-1)'}`,
         borderRadius: 'var(--radius-md)',
         padding: '8px 12px',
-        textAlign: 'right',
+        textAlign: 'left',
         minWidth: 0,
+        cursor: 'pointer',
+        transition: 'background .15s ease, border-color .15s ease',
       }}
     >
-      <div className="pwr-eyebrow" style={{ color: accent ? 'var(--solar-dim)' : 'var(--text-3)' }}>{label}</div>
-      <div className="pwr-mono" style={{ fontSize: 16, marginTop: 2, color: color ?? 'var(--text-1)' }}>{value}</div>
-    </div>
+      <div className="pwr-eyebrow" style={{ color: selected ? 'var(--solar-dim)' : 'var(--text-3)' }}>{label}</div>
+      <div className="pwr-mono" style={{ fontSize: 16, marginTop: 2, color: accent ? 'var(--solar)' : 'var(--text-1)' }}>{value}</div>
+    </button>
   );
 }
