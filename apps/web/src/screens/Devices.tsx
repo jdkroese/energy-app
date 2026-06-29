@@ -236,11 +236,14 @@ function ModeChip({ mode, available, disabled, syncing, onCycle }: {
   );
 }
 
-/** −/＋ setpoint steppers around a mono value. Dimmed/disabled when the room is off. */
+/** −/＋ setpoint steppers around a mono value. Dimmed/disabled when the room is off.
+ *  `compact` is the mobile branch: buttons are sized up to a comfortable ~40px tap
+ *  target (the invisible .pwr-ifx-hit pad still reaches 44px); desktop stays tidy at 28px. */
 function SetpointStepper({ value, lo, hi, step, accent, disabled, syncing, onStep, compact }: {
   value: number | null; lo: number; hi: number; step: number; accent: string; disabled: boolean; syncing: boolean; onStep: (delta: number) => void; compact?: boolean;
 }) {
   const v = value;
+  const btnSize = compact ? 40 : 28;
   const stepBtn = (label: string, delta: number, off: boolean) => (
     <button
       type="button"
@@ -249,16 +252,16 @@ function SetpointStepper({ value, lo, hi, step, accent, disabled, syncing, onSte
       onClick={(e) => { e.stopPropagation(); onStep(delta); }}
       className="pwr-ifx-press pwr-ifx-press--step pwr-ifx-hit pwr-ifx-hit--tight"
       style={{
-        width: compact ? 26 : 28, height: compact ? 26 : 28, display: 'grid', placeItems: 'center', borderRadius: 'var(--radius-md)',
+        width: btnSize, height: btnSize, fontSize: compact ? 18 : 14, display: 'grid', placeItems: 'center', borderRadius: 'var(--radius-md)',
         border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: off ? 'var(--text-disabled)' : 'var(--text-1)',
         cursor: off ? 'default' : 'pointer', flex: 'none',
       }}
     >{label}</button>
   );
   return (
-    <div className={syncing ? 'pwr-ifx-pending-soft' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, opacity: disabled ? 0.5 : 1 }}>
+    <div className={syncing ? 'pwr-ifx-pending-soft' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: compact ? 8 : 6, opacity: disabled ? 0.5 : 1 }}>
       {stepBtn('−', -step, disabled || v == null || v <= lo)}
-      <span className="pwr-mono" style={{ fontSize: 13, fontWeight: 600, color: accent, minWidth: 42, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+      <span className="pwr-mono" style={{ fontSize: compact ? 15 : 13, fontWeight: 600, color: accent, minWidth: compact ? 48 : 42, textAlign: 'center', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
         {v == null ? '—' : `${v.toFixed(1)}°`}{syncing && <SyncDot />}
       </span>
       {stepBtn('+', step, disabled || v == null || v >= hi)}
