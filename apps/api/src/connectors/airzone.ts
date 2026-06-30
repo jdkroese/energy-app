@@ -187,8 +187,13 @@ export function toClimateUnit(z: AirzoneZone): ClimateUnit {
 /** All zones as Airzone-native records (cached 10s to keep polling cheap). */
 export async function getZones(): Promise<AirzoneZone[]> {
   if (!isConfigured()) return [];
-  return cached('airzone.zones', 10_000, async () =>
-    flattenZones(await api('POST', '/hvac', { systemID: 0, zoneID: 0 })).map(normalizeZone),
+  // Stale-while-revalidate: a slow/unreachable webserver shouldn't block the
+  // Devices page — serve the last snapshot and refresh in the background.
+  return cached(
+    'airzone.zones',
+    10_000,
+    async () => flattenZones(await api('POST', '/hvac', { systemID: 0, zoneID: 0 })).map(normalizeZone),
+    { staleMs: 300_000 },
   );
 }
 

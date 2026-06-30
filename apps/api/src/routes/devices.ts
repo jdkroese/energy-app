@@ -208,29 +208,32 @@ function anyConnected(): boolean {
 /** Combined, normalized climate fleet across all connectors. Soft-fails per
  *  connector so one being unreachable doesn't blank the whole list. */
 async function getAllUnits(): Promise<{ fleet: ClimateUnit[]; error: string | null }> {
-  const fleet: ClimateUnit[] = [];
-  let error: string | null = null;
-  if (intesis.isConfigured()) {
+  // Fetch each configured connector concurrently — total latency is the slowest
+  // connector, not the sum of all three. Each soft-fails to [] with its own
+  // error string; fleet order + error priority match the previous sequential
+  // version (Intesis, then Airzone, then Panasonic).
+  const fetchOne = async (
+    enabled: boolean,
+    get: () => Promise<ClimateUnit[]>,
+    label: string,
+  ): Promise<{ units: ClimateUnit[]; error: string | null }> => {
+    if (!enabled) return { units: [], error: null };
     try {
-      fleet.push(...(await intesis.getFleet()));
+      return { units: await get(), error: null };
     } catch (e) {
-      error = (e as Error).message;
+      const msg = (e as Error).message;
+      return { units: [], error: label ? `${label}: ${msg}` : msg };
     }
-  }
-  if (airzone.isConfigured()) {
-    try {
-      fleet.push(...(await airzone.getFleet()));
-    } catch (e) {
-      error = error ?? `Airzone: ${(e as Error).message}`;
-    }
-  }
-  if (panasonic.isConfigured()) {
-    try {
-      fleet.push(...(await panasonic.getFleet()));
-    } catch (e) {
-      error = error ?? `Panasonic CC: ${(e as Error).message}`;
-    }
-  }
+  };
+
+  const [int, air, pan] = await Promise.all([
+    fetchOne(intesis.isConfigured(), () => intesis.getFleet(), ''),
+    fetchOne(airzone.isConfigured(), () => airzone.getFleet(), 'Airzone'),
+    fetchOne(panasonic.isConfigured(), () => panasonic.getFleet(), 'Panasonic CC'),
+  ]);
+
+  const fleet = [...int.units, ...air.units, ...pan.units];
+  const error = int.error ?? air.error ?? pan.error;
   return { fleet, error };
 }
 
