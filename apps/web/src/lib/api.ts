@@ -814,7 +814,11 @@ export const api = {
       deviceId: string,
       body: {
         enabled: boolean;
-        buttons: Array<{ index: number; label?: string; single?: { sceneId: string } }>;
+        buttons: Array<{
+          index: number;
+          label?: string;
+          single?: { kind: "light" | "home"; sceneId: string };
+        }>;
       },
     ) =>
       putJSON<{ ts: string; deviceId: string }>(
