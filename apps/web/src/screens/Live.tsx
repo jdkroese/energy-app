@@ -382,7 +382,7 @@ function LiveDesktop({ live, flow, plan, stale }: { live: LiveResponse; flow: Fl
           actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live</Badge>}
           style={{ display: 'flex', flexDirection: 'column' }}
         >
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
             <EnergyFlow flow={flow} size="lg" />
           </div>
         </Card>

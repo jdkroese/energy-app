@@ -25,19 +25,23 @@ export interface FlowData {
 
 type NodeKey = keyof FlowData;
 
+// Balanced layout: solar feeds the hub from the top, the two batteries form a
+// left "storage" column, grid sits top-right and home anchors the bottom. This
+// fills the top-right corner the old layout left empty, while keeping the card's
+// bottom-right clear for the floating alarm button.
 const POS_MOBILE: Record<NodeKey, { x: number; y: number }> = {
-  solar: { x: 50, y: 16 },
-  sonnen: { x: 15, y: 37 },
-  tesla: { x: 15, y: 70 },
-  grid: { x: 85, y: 50 },
-  home: { x: 50, y: 88 },
+  solar: { x: 50, y: 18 },
+  sonnen: { x: 15, y: 42 },
+  tesla: { x: 15, y: 80 },
+  grid: { x: 85, y: 42 },
+  home: { x: 50, y: 80 },
 };
 const POS_DESKTOP: Record<NodeKey, { x: number; y: number }> = {
-  solar: { x: 50, y: 14 },
-  sonnen: { x: 10, y: 34 },
-  tesla: { x: 10, y: 70 },
-  grid: { x: 90, y: 50 },
-  home: { x: 50, y: 90 },
+  solar: { x: 50, y: 17 },
+  sonnen: { x: 13, y: 40 },
+  tesla: { x: 13, y: 80 },
+  grid: { x: 87, y: 40 },
+  home: { x: 50, y: 80 },
 };
 const HUB = { x: 50, y: 50 };
 const COLOR: Record<NodeKey, string> = {
