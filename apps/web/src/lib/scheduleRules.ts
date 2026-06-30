@@ -137,6 +137,9 @@ export const TYPE_LABEL: Record<DeviceType, string> = {
   // Irrigation uses its own run/stop levers (not climate windows); listed only to keep
   // this map exhaustive over DeviceType.
   irrigation: 'Irrigation',
+  // Controllers (scene switches) are INPUT devices — not schedulable; listed only to keep
+  // this map exhaustive over DeviceType.
+  controller: 'Controllers',
 };
 
 /** Accent colour per device type, matching the Power palette. */
@@ -148,6 +151,7 @@ export const TYPE_COLOR: Record<DeviceType, string> = {
   blinds: 'var(--ev)',
   speakers: 'var(--solar)',
   irrigation: 'var(--battery)',
+  controller: 'var(--ev)',
 };
 
 /** A fresh default rule for "+ Add rule" on a given unit + type. */

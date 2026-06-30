@@ -652,7 +652,8 @@ export type DeviceWarmth =
   | "hot"
   | "unknown";
 
-/** Device categories a rule can target. Extensible (lighting/circuit land later). */
+/** Device categories a rule can target. Extensible (lighting/circuit land later).
+ *  'controller' = a wireless scene switch (INPUT device, no actuatable load). */
 export type DeviceType =
   | "cooling"
   | "heating"
@@ -660,7 +661,8 @@ export type DeviceType =
   | "circuit"
   | "blinds"
   | "speakers"
-  | "irrigation";
+  | "irrigation"
+  | "controller";
 
 // ---- Sonos speakers + house alarm ------------------------------------------
 
@@ -1653,6 +1655,34 @@ export interface HomeScene {
 export interface HomeScenesResponse {
   ts: string;
   scenes: HomeScene[];
+}
+
+/* ---- Scene controllers (wireless scene switches) ---- */
+export interface SceneButtonBinding {
+  /** 1-based physical button index (1..4). */
+  index: number;
+  label?: string;
+  /** Single-click binding: scene to toggle + persisted current toggle state. */
+  single?: { sceneId: string; on: boolean };
+  /** RESERVED (Phase 2). */
+  double?: { sceneId: string; on: boolean };
+  long?: { sceneId: string; on: boolean };
+}
+
+export interface SceneControllerView {
+  deviceId: string;
+  name: string;
+  online: boolean;
+  /** True when present in the live fleet as a 'wxkg' scene switch. */
+  resolved: boolean;
+  enabled: boolean;
+  buttons: SceneButtonBinding[];
+}
+
+export interface SceneControllersResponse {
+  ts: string;
+  connected: boolean;
+  controllers: SceneControllerView[];
 }
 
 export interface LightSchedulesResponse {

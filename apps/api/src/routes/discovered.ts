@@ -26,6 +26,7 @@ import { resolveConfiguredLightCaps } from '../connectors/tuya-configured-lights
 import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import * as store from '../store';
 import { resolveRoomId } from '../rooms';
+import { ensureSceneController, removeSceneController } from './scene-controllers';
 
 /** Resolve the first-class Rooms fields (assigned id + name) for a device id. */
 function roomFor(id: string): { roomId: string | null; roomName: string | null } {
@@ -160,6 +161,11 @@ export async function setupDevice(id: string, body: unknown): Promise<unknown> {
     // A set-up device is no longer "ignored" (the two states are mutually exclusive).
     s.deviceOnboarding.ignored = s.deviceOnboarding.ignored.filter((x) => x !== deviceId);
   });
+  // A scene switch (typeId 'controller') gets a default binding entry (4 empty buttons,
+  // enabled) so the coordinator + binding UI have something to work with. Re-classifying
+  // AWAY from controller drops the stale bindings.
+  if (typeId === 'controller') ensureSceneController(deviceId);
+  else removeSceneController(deviceId);
   return { ts: new Date().toISOString(), id: deviceId, configured };
 }
 
@@ -185,6 +191,8 @@ export function unsetupDevice(id: string): unknown {
   store.update((s) => {
     delete s.deviceOnboarding.configured[deviceId];
   });
+  // Returning a controller to the inbox drops its scene bindings (idempotent for others).
+  removeSceneController(deviceId);
   return { ts: new Date().toISOString(), id: deviceId, configured: false };
 }
 

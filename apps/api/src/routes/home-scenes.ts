@@ -256,3 +256,48 @@ export async function applyHomeScene(id: string): Promise<unknown> {
 
   return { ts: new Date().toISOString(), id, applied, failed };
 }
+
+/**
+ * Turn a scene's members OFF — the inverse of {@link applyHomeScene}, used by the
+ * scene-switch single-click TOGGLE (press once = apply, press again = off). Mirrors the
+ * apply fan-out shape (best-effort per device): every light member → off, every climate
+ * member → power off, every blind member → close (a '*' member expands to all blinds).
+ * An 'all-off' special scene is already an "off" scene, so off == apply for it.
+ */
+export async function applyHomeSceneOff(id: string): Promise<unknown> {
+  const scene = store.get().homeScenes.find((x) => x.id === id);
+  if (!scene) throw badInput(`home scene ${id} not found`);
+
+  // An all-off scene's "on" IS off — reuse the apply path so the semantics match.
+  if (scene.special === "all-off") return applyHomeScene(id);
+
+  let applied = 0;
+  let failed = 0;
+
+  // Lights → off (ignore brightness; just cut them).
+  const lightRes = await applyMembers(scene.lights.map((m) => ({ lightId: m.lightId, on: false })));
+  applied += lightRes.applied;
+  failed += lightRes.failed;
+
+  // Climate → power off.
+  for (const m of scene.climate) {
+    if (await applyClimateMember({ deviceId: m.deviceId, power: false })) applied++;
+    else failed++;
+  }
+
+  // Blinds → close (a '*' member means "all blinds").
+  for (const m of scene.blinds) {
+    if (m.blindId === "*") {
+      const blindIds = await listBlindIds().catch(() => []);
+      for (const blindId of blindIds) {
+        if (await applyBlindMember({ blindId, action: "close", positionPct: null })) applied++;
+        else failed++;
+      }
+      continue;
+    }
+    if (await applyBlindMember({ blindId: m.blindId, action: "close", positionPct: null })) applied++;
+    else failed++;
+  }
+
+  return { ts: new Date().toISOString(), id, applied, failed };
+}

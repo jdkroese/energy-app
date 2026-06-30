@@ -43,6 +43,7 @@ import type {
   LightSchedule,
   HomeScene,
   HomeScenesResponse,
+  SceneControllersResponse,
   ScenesResponse,
   LightSchedulesResponse,
   TuyaIntegrationStatus,
@@ -803,6 +804,23 @@ export const api = {
       postJSON<{ scene: HomeScene }>(`/api/home-scenes/${enc(id)}/favorite`, {
         favorite,
       }),
+  },
+
+  /* ---- Scene controllers (wireless scene switches); save is admin ---- */
+  sceneControllers: {
+    list: () =>
+      getJSON<SceneControllersResponse>("/api/scene-controllers"),
+    save: (
+      deviceId: string,
+      body: {
+        enabled: boolean;
+        buttons: Array<{ index: number; label?: string; single?: { sceneId: string } }>;
+      },
+    ) =>
+      putJSON<{ ts: string; deviceId: string }>(
+        `/api/scene-controllers/${enc(deviceId)}`,
+        body,
+      ),
   },
 
   /* ---- Kiosk / wall-tablet mode (admin provisions a kiosk session) ---- */
