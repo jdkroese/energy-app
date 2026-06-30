@@ -468,6 +468,8 @@ export const CATEGORY_LABELS: Record<string, string> = {
   cl: 'Curtains/blinds', clkg: 'Curtain switches',
   // Fans
   fs: 'Fans', fskg: 'Fan switches',
+  // Scene / wireless switches
+  wxkg: 'Scene switches',
 };
 
 /**
@@ -509,6 +511,8 @@ const CATEGORY_TYPES: Record<string, ProposedType> = {
   // Fans
   fs: { label: 'Fan', icon: 'fan' },
   fskg: { label: 'Fan switch', icon: 'fan' },
+  // Scene / wireless switches (INPUT devices — buttons bind to whole-home scenes)
+  wxkg: { label: 'Scene switch', icon: 'radio' },
   // Sensors
   wsdcg: { label: 'Sensor', icon: 'thermometer' },
   ms: { label: 'Sensor', icon: 'radar' },

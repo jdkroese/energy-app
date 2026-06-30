@@ -101,6 +101,7 @@ import {
 import { startLightCoordinator } from "./control/light-coordinator";
 import { startRadioCoordinator } from "./control/radio-coordinator";
 import { startDeviceScheduleCoordinator } from "./control/device-schedule-coordinator";
+import { startControllerCoordinator } from "./control/controller-coordinator";
 import { startBreakerMetering } from "./control/breaker-metering";
 import { startEnergyHistory } from "./control/energy-history";
 import { runEnergyBackfill } from "./control/energy-backfill";
@@ -204,6 +205,10 @@ import {
   applyHomeScene,
   favoriteHomeScene,
 } from "./routes/home-scenes";
+import {
+  listSceneControllers,
+  saveSceneController,
+} from "./routes/scene-controllers";
 import {
   requireAuth,
   requireAdmin,
@@ -1288,6 +1293,18 @@ app.post(
   ),
 );
 
+// ---- Scene controllers (wireless scene switches) — list any-authed; save admin-gated.
+// Each button binds to a whole-home scene; the controller-coordinator toggles on press.
+app.get(
+  "/api/scene-controllers",
+  wrap(() => listSceneControllers()),
+);
+app.put(
+  "/api/scene-controllers/:deviceId",
+  requireAdmin,
+  wrap((req) => saveSceneController(String(req.params.deviceId), req.body)),
+);
+
 // ---- Kiosk (wall-tablet) provisioning — admin swaps THIS browser's session to the
 // limited kiosk role. provisionKiosk sends its own response (cookie + JSON), so it's
 // NOT wrapped in `wrap`. ----
@@ -1330,6 +1347,12 @@ startLightCoordinator();
 // switchable Tuya devices on/off at their scheduled window edges, optionally at a
 // chosen fan speed/direction). No arm gate — matches the lights coordinator.
 startDeviceScheduleCoordinator();
+
+// Start the scene-controller coordinator (wireless scene switches). Every ~3s it reads
+// each enabled controller's Tuya device logs and TOGGLES the whole-home scene bound to a
+// button on single-click. Fires LIVE on press; gated only on the per-controller enabled
+// flag (NOT battery-arm) — it touches no battery-control logic.
+startControllerCoordinator();
 
 // Start the Sonos radio-schedule coordinator (edge-triggered; plays a station on chosen
 // speakers at its on-time and stops at its off-time). No arm gate — it only acts on enabled

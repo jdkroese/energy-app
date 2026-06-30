@@ -29,9 +29,14 @@ const eyebrow = { fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', text
  *  'switching' bucket by default; the user can re-point to any built-in/custom. */
 function inferTypeId(d: DiscoveredDevice, customTypes: CustomDeviceType[]): string {
   const label = d.proposedType.label.toLowerCase();
+  const cat = (d.category ?? '').toLowerCase();
+  const hay = `${label} ${(d.productName ?? '').toLowerCase()} ${(d.name ?? '').toLowerCase()}`;
   // A few proposed labels map onto built-in tabs; everything else → switching.
   if (label.includes('light') || label.includes('dimmer')) return 'lighting';
   if (label.includes('blind')) return 'blinds';
+  // Wireless scene switch (INPUT device): Tuya category 'wxkg', or a name/product that
+  // reads as a scene/gang switch (incl. the Chinese 场景/开关). Lands in the Controllers tab.
+  if (cat === 'wxkg' || /scene|场景|开关|\bgang\b/.test(hay)) return 'controller';
   // Plug / switch / fan / lock / siren / sensor / unknown → generic Switching bucket,
   // unless a custom type with a matching label already exists.
   const custom = customTypes.find((c) => c.label.toLowerCase() === label);

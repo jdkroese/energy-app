@@ -14,7 +14,9 @@
 // 'irrigation' is a recognized fleet type but has NO Devices-hub tab — Rain Bird
 // zones live on the dedicated /irrigation screen (run/stop levers, not climate). It's
 // in the union so classifyDevice can tag + EXCLUDE them from the climate hub.
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'blinds' | 'switching' | 'speakers' | 'irrigation';
+// 'controller' is a wireless scene switch — an INPUT device with NO actuatable load. It
+// gets its own Devices-hub group; its buttons bind to whole-home scenes (no on/off UI).
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'blinds' | 'switching' | 'speakers' | 'irrigation' | 'controller';
 
 export interface DeviceTypeMeta {
   type: DeviceType;
@@ -34,6 +36,7 @@ export const DEVICE_TYPES: DeviceTypeMeta[] = [
   { type: 'blinds', label: 'Blinds', hue: 'var(--ev)', icon: 'blinds', built: true },
   { type: 'speakers', label: 'Speakers', hue: 'var(--solar)', icon: 'volume-2', built: true },
   { type: 'switching', label: 'Switching', hue: 'var(--battery)', icon: 'toggle-right', built: false },
+  { type: 'controller', label: 'Controllers', hue: 'var(--ev)', icon: 'radio', built: true },
 ];
 
 export const typeMeta = (t: DeviceType): DeviceTypeMeta =>

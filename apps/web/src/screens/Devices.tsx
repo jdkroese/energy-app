@@ -758,6 +758,52 @@ function GenericGroup({ devices, wide, canWrite, onWrite, onOpen, emptyMeta, bre
   );
 }
 
+/** A controller (wireless scene switch) card — an INPUT device, so NO load controls.
+ *  Header + a "Bind buttons" affordance that opens the per-switch binding detail. */
+function ControllerCard({ d, onOpen }: { d: ConfiguredDeviceView; onOpen: () => void }) {
+  const boundSummary = 'Bind its 4 buttons to whole-home scenes';
+  return (
+    <Card padded style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ width: 36, height: 36, borderRadius: 10, display: 'grid', placeItems: 'center', background: 'var(--surface-3)', color: 'var(--ev)', flex: 'none' }}>
+          <Icon name="radio" size={18} />
+        </span>
+        <button type="button" onClick={onOpen} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
+          <div className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 1 }}>
+            Tuya · {d.category || '?'}{!d.online ? ' · offline' : ''}
+          </div>
+        </button>
+        <button type="button" onClick={onOpen} aria-label="Open bindings" style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2 }}>
+          <Icon name="chevron-right" size={16} color="var(--text-3)" />
+        </button>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{boundSummary}</div>
+      <div>
+        <Button size="sm" variant="secondary" onClick={onOpen} iconLeft={<Icon name="sliders-horizontal" size={14} />}>
+          Bind buttons
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/** The Controllers tab content — configured scene switches as input-only cards. */
+function ControllerGroup({ devices, wide, onOpen, emptyMeta }: {
+  devices: ConfiguredDeviceView[]; wide: boolean; onOpen: (id: string) => void;
+  emptyMeta: { label: string; icon: string; hue: string };
+}) {
+  if (devices.length === 0) return <ComingSoon meta={emptyMeta} />;
+  const sorted = [...devices].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(2, 1fr)' : '1fr', gap: 10 }}>
+      {sorted.map((d) => (
+        <ControllerCard key={d.id} d={d} onOpen={() => onOpen(d.id)} />
+      ))}
+    </div>
+  );
+}
+
 function ComingSoon({ meta }: { meta: { label: string; icon: string; hue: string } }) {
   return (
     <Card padded style={{ padding: 0 }}>
@@ -1074,6 +1120,19 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
     );
     // Speakers: the Sonos fleet + the house-alarm control (local UPnP, not Tuya).
     if (t === 'speakers') return <><SpeakersPanel ctx={ctx} />{bespokeExtras(t)}</>;
+    // Controllers: wireless scene switches (INPUT devices) — input-only cards that open
+    // the per-switch binding screen. No load controls + no schedules section.
+    if (t === 'controller') {
+      const cmeta = resolveTypeMeta('controller', customTypes);
+      return (
+        <ControllerGroup
+          devices={configuredByType('controller')}
+          wide={wide}
+          onOpen={(id) => nav(`/devices/controller/${id}`)}
+          emptyMeta={{ label: cmeta.label, icon: cmeta.icon, hue: cmeta.hue }}
+        />
+      );
+    }
     // Switching (built-in generic bucket) + any custom type → the generic group.
     const meta = resolveTypeMeta(t, customTypes);
     return (

@@ -461,7 +461,9 @@ export interface DeviceSettings {
 
 export type ClimateMode = "auto" | "heat" | "dry" | "fan" | "cool";
 
-/** Device categories a rule can target. Extensible (lighting/circuit land later). */
+/** Device categories a rule can target. Extensible (lighting/circuit land later).
+ *  'controller' is an INPUT device (a wireless scene switch) — it has no actuatable
+ *  load; its buttons are bound to whole-home scenes (see sceneControllers). */
 export type DeviceType =
   | "cooling"
   | "heating"
@@ -469,7 +471,8 @@ export type DeviceType =
   | "circuit"
   | "blinds"
   | "speakers"
-  | "irrigation";
+  | "irrigation"
+  | "controller";
 
 /** Fan / vane settings: 'auto' (A) or a discrete 1..5 position. */
 export type FanSetting = "auto" | 1 | 2 | 3 | 4 | 5;
@@ -949,6 +952,37 @@ export interface HomeScene {
   blinds: HomeSceneBlindMember[];
 }
 
+// ---- Scene controllers (wireless scene switches) ---------------------------
+// A Tuya wireless scene switch (category 'wxkg') is an INPUT device: each of its
+// N buttons emits a `switch_mode{N}` DP event on press (single_click / double_click /
+// long_press). We can't see repeated presses via status polling, so the coordinator
+// reads the device LOGS and, for each new single-click on a bound button, TOGGLES the
+// bound whole-home scene on/off. Double/long are reserved for Phase 2 (fields present,
+// no engine yet). Phase 1 acts on single-click only. Persisted so the toggle state +
+// log watermark survive restarts.
+
+export interface SceneButtonBinding {
+  /** 1-based physical button index (1..4). */
+  index: number;
+  /** Optional friendly label for this button. */
+  label?: string;
+  /** Single-click binding: the scene to toggle, plus the persisted current toggle state. */
+  single?: { sceneId: string; on: boolean };
+  /** RESERVED (Phase 2) — double-click binding. No engine yet. */
+  double?: { sceneId: string; on: boolean };
+  /** RESERVED (Phase 2) — long-press binding. No engine yet. */
+  long?: { sceneId: string; on: boolean };
+}
+
+export interface SceneController {
+  /** Master per-controller gate — only an enabled controller's presses are acted on. */
+  enabled: boolean;
+  /** The 4 button bindings (index 1..4). Always length 4 after hydration. */
+  buttons: SceneButtonBinding[];
+  /** Highest log event_time (epoch ms) already processed — events at/below this never replay. */
+  watermarkMs?: number;
+}
+
 export type LightScheduleTarget =
   | { kind: "scene"; sceneId: string }
   | { kind: "lights"; members: LightSceneMember[] };
@@ -1239,6 +1273,9 @@ export interface StoreSchema {
   lightSchedules: LightSchedule[];
   /** Whole-home (cross-domain) scenes — lights + climate + blinds in one moment. */
   homeScenes: HomeScene[];
+  /** Wireless scene-switch bindings, keyed by Tuya device id — each button → a scene
+   *  (single-click toggle). Created when a device is set up as a 'controller'. */
+  sceneControllers: Record<string, SceneController>;
   /** Device-onboarding triage state (the "Discovered devices" inbox). Phase 1
    *  persists only the list of ignored device ids; later phases extend this. */
   deviceOnboarding: DeviceOnboardingState;
@@ -1583,6 +1620,7 @@ function defaults(): StoreSchema {
     lightScenes: [],
     lightSchedules: [],
     homeScenes: defaultHomeScenes(),
+    sceneControllers: {},
     deviceOnboarding: { ignored: [], configured: {}, customDeviceTypes: [] },
     alarmActive: null,
     alarmConfig: defaultAlarmConfig(),
@@ -2072,6 +2110,7 @@ function hydrate(raw: unknown): StoreSchema {
     // Back-compat: an on-disk state.json predating whole-home scenes lacks the key —
     // fall back to the seeded starter set (an existing array, even empty, is preserved).
     homeScenes: Array.isArray(p.homeScenes) ? p.homeScenes : base.homeScenes,
+    sceneControllers: hydrateSceneControllers(p.sceneControllers),
     deviceOnboarding: hydrateDeviceOnboarding(
       p.deviceOnboarding,
       base.deviceOnboarding,
@@ -2203,6 +2242,62 @@ function hydrateIrrigation(p: unknown): IrrigationState {
     lastTickAt: typeof r.lastTickAt === "string" ? r.lastTickAt : null,
     updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : Date.now(),
   };
+}
+
+/** A freshly-onboarded scene controller: 4 empty buttons (index 1..4), enabled. */
+export function defaultSceneController(): SceneController {
+  return {
+    enabled: true,
+    buttons: [1, 2, 3, 4].map((index) => ({ index })),
+  };
+}
+
+/** Coerce a single button binding's optional press target ({ sceneId, on }) from disk. */
+function hydratePress(raw: unknown): { sceneId: string; on: boolean } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as { sceneId?: unknown; on?: unknown };
+  if (typeof o.sceneId !== "string" || !o.sceneId) return undefined;
+  return { sceneId: o.sceneId, on: o.on === true };
+}
+
+/** Coerce persisted scene-controller bindings onto clean defaults. Always normalizes to
+ *  exactly 4 buttons (index 1..4); a missing/old blob → empty map. Defensive so a
+ *  malformed entry can never break the coordinator. */
+function hydrateSceneControllers(p: unknown): Record<string, SceneController> {
+  const out: Record<string, SceneController> = {};
+  if (!p || typeof p !== "object") return out;
+  for (const [id, raw] of Object.entries(p as Record<string, unknown>)) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Partial<SceneController>;
+    const byIndex = new Map<number, SceneButtonBinding>();
+    if (Array.isArray(r.buttons)) {
+      for (const b of r.buttons) {
+        const o = (b ?? {}) as Partial<SceneButtonBinding>;
+        const idx = Number(o.index);
+        if (!Number.isInteger(idx) || idx < 1 || idx > 4) continue;
+        byIndex.set(idx, {
+          index: idx,
+          ...(typeof o.label === "string" && o.label.trim()
+            ? { label: o.label.trim() }
+            : {}),
+          ...(hydratePress(o.single) ? { single: hydratePress(o.single) } : {}),
+          ...(hydratePress(o.double) ? { double: hydratePress(o.double) } : {}),
+          ...(hydratePress(o.long) ? { long: hydratePress(o.long) } : {}),
+        });
+      }
+    }
+    const buttons: SceneButtonBinding[] = [1, 2, 3, 4].map(
+      (index) => byIndex.get(index) ?? { index },
+    );
+    out[id] = {
+      enabled: r.enabled !== false,
+      buttons,
+      ...(typeof r.watermarkMs === "number" && Number.isFinite(r.watermarkMs)
+        ? { watermarkMs: r.watermarkMs }
+        : {}),
+    };
+  }
+  return out;
 }
 
 function clampNum(

@@ -23,6 +23,9 @@ const Irrigation = lazy(() => import('./screens/Irrigation').then((m) => ({ defa
 const GenericDeviceDetail = lazy(() =>
   import('./screens/GenericDeviceDetail').then((m) => ({ default: m.GenericDeviceDetail })),
 );
+const SceneControllerDetail = lazy(() =>
+  import('./screens/SceneControllerDetail').then((m) => ({ default: m.SceneControllerDetail })),
+);
 const RoomsManage = lazy(() => import('./screens/RoomsManage').then((m) => ({ default: m.RoomsManage })));
 const Automations = lazy(() => import('./screens/Automations').then((m) => ({ default: m.Automations })));
 const AlarmScreen = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.AlarmScreen })));
@@ -70,6 +73,7 @@ function AppRoutes() {
           <Route path="/irrigation" element={<Irrigation ctx={ctx} />} />
           <Route path="/rooms" element={<RoomsManage ctx={ctx} />} />
           <Route path="/devices/generic/:id" element={<GenericDeviceDetail ctx={ctx} />} />
+          <Route path="/devices/controller/:id" element={<SceneControllerDetail ctx={ctx} />} />
           <Route path="/devices/:id" element={<DeviceDetail ctx={ctx} />} />
           {/* /schedules folded into Automations behind a tab — keep the path as a
               back-compat redirect to the Schedules tab for bookmarks/links. */}
