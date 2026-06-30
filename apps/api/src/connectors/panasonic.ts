@@ -489,7 +489,9 @@ async function fetchDeviceNow(token: PanasonicToken, guid: string): Promise<Pana
 /** Cached 30 s fleet snapshot; returns [] when not configured. */
 export async function getFleet(): Promise<ClimateUnit[]> {
   if (!isConfigured()) return [];
-  return cached('panasonic.fleet', 30_000, () => fetchFleet());
+  // Serve last snapshot instantly + refresh in the background so a slow cloud
+  // fetch doesn't block the Devices page.
+  return cached('panasonic.fleet', 30_000, () => fetchFleet(), { staleMs: 300_000 });
 }
 
 /** Drop the cached fleet so the next read reflects a write immediately (not after TTL). */

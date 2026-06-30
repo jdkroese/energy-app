@@ -242,7 +242,9 @@ export function normalizeDevices(login: IntesisLoginResult): ClimateUnit[] {
  */
 export async function getFleet(): Promise<ClimateUnit[]> {
   if (!isConfigured()) return [];
-  return cached('intesis.fleet', 30_000, async () => normalizeDevices(await login()));
+  // Serve the last snapshot instantly and refresh in the background — the AC
+  // Cloud login can take up to 12s, and this read gates the Devices page.
+  return cached('intesis.fleet', 30_000, async () => normalizeDevices(await login()), { staleMs: 300_000 });
 }
 
 /** Invalidate the cached fleet snapshot (after a write or a creds change). */
