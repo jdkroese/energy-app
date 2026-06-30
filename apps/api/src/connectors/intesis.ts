@@ -19,7 +19,7 @@
 
 import net from 'node:net';
 import { config } from '../config';
-import { cached } from '../cache';
+import { cached, invalidate } from '../cache';
 import * as store from '../store';
 import { serialize } from './write-queue';
 
@@ -247,12 +247,9 @@ export async function getFleet(): Promise<ClimateUnit[]> {
   return cached('intesis.fleet', 30_000, async () => normalizeDevices(await login()), { staleMs: 300_000 });
 }
 
-/** Invalidate the cached fleet snapshot (after a write or a creds change). */
+/** Drop the cached fleet so the next read reflects a write immediately (not after TTL). */
 export function invalidateFleet(): void {
-  // The cache module memoizes by key with a TTL; force the next read to refetch
-  // by writing a stale entry. Simplest portable approach: re-key via a fresh call
-  // is unavailable, so we rely on the short 30s TTL. Expose a no-op marker here so
-  // callers can signal intent; the control read-back uses a direct login() anyway.
+  invalidate('intesis.fleet');
 }
 
 // ---- CONTROL: push-socket datapoint writes ---------------------------------
