@@ -36,6 +36,17 @@ function decodePick(v: string): { kind: Kind; sceneId: string } | null {
   return { kind, sceneId };
 }
 
+type Gesture = 'single' | 'double' | 'long';
+const EXTRA_GESTURES: Gesture[] = ['double', 'long'];
+const GESTURE_LABEL: Record<Gesture, string> = {
+  single: 'Single-click',
+  double: 'Double-click',
+  long: 'Long-press',
+};
+/** A binding → its encoded pick (`<kind>:<sceneId>`), or NONE. Legacy (no kind) = home. */
+const pressPick = (p?: { kind?: Kind; sceneId?: string } | null): string =>
+  p?.sceneId ? encodePick(p.kind ?? 'home', p.sceneId) : NONE;
+
 export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
   const { id = '' } = useParams<{ id: string }>();
   const nav = useNavigate();
@@ -58,9 +69,10 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
   const lightScenes = lightScenesData?.scenes ?? [];
   const noScenes = homeScenes.length === 0 && lightScenes.length === 0;
 
-  // Local edit buffer: enabled + per-index sceneId (loaded from the server view).
+  // Local edit buffer: enabled + per-index, per-gesture pick (loaded from the server view).
   const [enabled, setEnabled] = useState(true);
-  const [picks, setPicks] = useState<Record<number, string>>({});
+  const [picks, setPicks] = useState<Record<number, Record<Gesture, string>>>({});
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -70,12 +82,15 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
   useEffect(() => {
     if (!controller || dirty) return;
     setEnabled(controller.enabled);
-    const next: Record<number, string> = {};
+    const next: Record<number, Record<Gesture, string>> = {};
+    const openByDefault: Record<number, boolean> = {};
     for (const b of controller.buttons) {
-      // A binding without an explicit kind (legacy) is a whole-home scene.
-      next[b.index] = b.single?.sceneId ? encodePick(b.single.kind ?? 'home', b.single.sceneId) : NONE;
+      next[b.index] = { single: pressPick(b.single), double: pressPick(b.double), long: pressPick(b.long) };
+      // Reveal the extra gestures up-front for a button that already uses them.
+      if (pressPick(b.double) !== NONE || pressPick(b.long) !== NONE) openByDefault[b.index] = true;
     }
     setPicks(next);
+    setExpanded((e) => ({ ...openByDefault, ...e }));
   }, [controller, dirty]);
 
   // Flat "None" option + a Light scenes group (first — what the owner wants) + a Home
@@ -93,18 +108,30 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
   );
 
   const setEnabledDirty = (v: boolean) => { setEnabled(v); setDirty(true); };
-  const setPick = (index: number, sceneId: string) => { setPicks((p) => ({ ...p, [index]: sceneId })); setDirty(true); };
+  const pickOf = (index: number, g: Gesture): string => picks[index]?.[g] ?? NONE;
+  const setPick = (index: number, g: Gesture, value: string) => {
+    setPicks((p) => {
+      const cur = p[index] ?? { single: NONE, double: NONE, long: NONE };
+      return { ...p, [index]: { ...cur, [g]: value } };
+    });
+    setDirty(true);
+  };
+  const toggleExpanded = (index: number) => setExpanded((e) => ({ ...e, [index]: !e[index] }));
 
   const save = async () => {
     setSaving(true);
     try {
       const buttons = [1, 2, 3, 4].map((index) => {
-        const target = decodePick(picks[index] ?? NONE);
         const label = controller?.buttons.find((b) => b.index === index)?.label;
+        const s = decodePick(pickOf(index, 'single'));
+        const d = decodePick(pickOf(index, 'double'));
+        const l = decodePick(pickOf(index, 'long'));
         return {
           index,
           ...(label ? { label } : {}),
-          ...(target ? { single: { kind: target.kind, sceneId: target.sceneId } } : {}),
+          ...(s ? { single: { kind: s.kind, sceneId: s.sceneId } } : {}),
+          ...(d ? { double: { kind: d.kind, sceneId: d.sceneId } } : {}),
+          ...(l ? { long: { kind: l.kind, sceneId: l.sceneId } } : {}),
         };
       });
       await api.sceneControllers.save(id, { enabled, buttons });
@@ -116,38 +143,63 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
     }
   };
 
+  const scenePicker = (index: number, g: Gesture) => (
+    <Select
+      value={pickOf(index, g)}
+      options={[{ value: NONE, label: 'None' }]}
+      groups={sceneGroups}
+      disabled={!isAdmin}
+      onChange={(e) => setPick(index, g, e.target.value)}
+    />
+  );
+
   const buttonRow = (index: number) => {
-    const live = controller?.buttons.find((b) => b.index === index);
-    const livePick = live?.single?.sceneId ? encodePick(live.single.kind ?? 'home', live.single.sceneId) : NONE;
-    const on = live?.single?.on === true && (picks[index] ?? NONE) === livePick;
-    const pick = picks[index] ?? NONE;
+    const isOpen = expanded[index] ?? false;
+    const extra = EXTRA_GESTURES.filter((g) => pickOf(index, g) !== NONE).length;
     return (
-      <div
-        key={index}
-        style={{
-          display: 'flex', flexDirection: wide ? 'row' : 'column', alignItems: wide ? 'center' : 'stretch',
-          gap: wide ? 14 : 8, padding: wide ? '12px 4px' : '12px 0',
-        }}
-      >
-        {/* Button N badge */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: wide ? 150 : undefined }}>
-          <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--surface-3)', color: meta.hue, flex: 'none', fontWeight: 700, fontSize: 13 }} className="pwr-mono">{index}</span>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-1)' }}>Button {index}</div>
-            <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
-              single-click{pick && on ? ' · on' : ''}
+      <div key={index} style={{ padding: wide ? '12px 4px' : '12px 0' }}>
+        {/* Primary row: Button N badge + single-click picker */}
+        <div
+          style={{
+            display: 'flex', flexDirection: wide ? 'row' : 'column', alignItems: wide ? 'center' : 'stretch',
+            gap: wide ? 14 : 8,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: wide ? 150 : undefined }}>
+            <span style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--surface-3)', color: meta.hue, flex: 'none', fontWeight: 700, fontSize: 13 }} className="pwr-mono">{index}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-1)' }}>Button {index}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                single-click{extra > 0 ? ` · +${extra} gesture${extra > 1 ? 's' : ''}` : ''}
+              </div>
             </div>
           </div>
+          <div style={{ flex: 1, minWidth: 0 }}>{scenePicker(index, 'single')}</div>
         </div>
-        {/* Scene picker */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <Select
-            value={pick}
-            options={[{ value: NONE, label: 'None' }]}
-            groups={sceneGroups}
-            disabled={!isAdmin}
-            onChange={(e) => setPick(index, e.target.value)}
-          />
+
+        {/* More gestures: double-click + long-press, collapsed by default */}
+        <div style={{ marginTop: 8, paddingLeft: wide ? 160 : 0 }}>
+          <button
+            type="button"
+            onClick={() => toggleExpanded(index)}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 11.5, display: 'inline-flex', alignItems: 'center', gap: 4, padding: 0 }}
+          >
+            <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={13} />
+            {isOpen ? 'Fewer gestures' : 'More gestures'}{!isOpen && extra > 0 ? ` (${extra} set)` : ''}
+          </button>
+          {isOpen && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {EXTRA_GESTURES.map((g) => (
+                <div
+                  key={g}
+                  style={{ display: 'flex', flexDirection: wide ? 'row' : 'column', alignItems: wide ? 'center' : 'stretch', gap: wide ? 14 : 6 }}
+                >
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', minWidth: wide ? 136 : undefined }}>{GESTURE_LABEL[g]}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>{scenePicker(index, g)}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -199,7 +251,8 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
           <Card padded style={{ padding: 16 }}>
             <div className="pwr-eyebrow" style={{ marginBottom: 4 }}>Buttons → scenes</div>
             <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginBottom: 8 }}>
-              Each button toggles its scene on a single click — press once to apply, press again to turn it off.
+              Each gesture toggles its scene — press once to apply, press again to turn it off. Add
+              double-click and long-press under “More gestures”.
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {[1, 2, 3, 4].map((index, i) => (

@@ -818,6 +818,8 @@ export const api = {
           index: number;
           label?: string;
           single?: { kind: "light" | "home"; sceneId: string };
+          double?: { kind: "light" | "home"; sceneId: string };
+          long?: { kind: "light" | "home"; sceneId: string };
         }>;
       },
     ) =>
