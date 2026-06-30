@@ -253,7 +253,10 @@ const FLEET_KEY = 'tuya.devices';
 /** Cached fleet snapshot (20s). Returns [] when no project is connected. */
 export function getDevices(): Promise<TuyaDevice[]> {
   if (!isConfigured()) return Promise.resolve([]);
-  return cached(FLEET_KEY, 20_000, listDevices);
+  // Serve an expired-but-recent snapshot instantly and refresh in the background, so a
+  // slow Tuya Cloud response never blocks the Devices page. Writes call invalidateFleet,
+  // so control-action freshness is preserved. (Mirrors the climate connectors.)
+  return cached(FLEET_KEY, 20_000, listDevices, { staleMs: 300_000 });
 }
 
 /** Force the next getDevices() to refetch — call right after a successful write. */
@@ -271,14 +274,19 @@ export function invalidateFleet(): void {
  */
 export function getDeviceDirect(id: string): Promise<TuyaDevice | null> {
   if (!isConfigured()) return Promise.resolve(null);
-  return cached(`tuya.device.${id}`, 20_000, async () => {
-    try {
-      const d = await request<TuyaRawDevice>('GET', `/v1.0/devices/${id}`);
-      return d && d.id ? normalizeRaw(d) : null;
-    } catch {
-      return null;
-    }
-  });
+  return cached(
+    `tuya.device.${id}`,
+    20_000,
+    async () => {
+      try {
+        const d = await request<TuyaRawDevice>('GET', `/v1.0/devices/${id}`);
+        return d && d.id ? normalizeRaw(d) : null;
+      } catch {
+        return null;
+      }
+    },
+    { staleMs: 300_000 },
+  );
 }
 
 /** Fresh per-device status (bypasses the fleet cache). */

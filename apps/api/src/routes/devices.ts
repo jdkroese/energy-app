@@ -249,13 +249,17 @@ function invalidateFleetFor(id: string): void {
 export async function getDevices(): Promise<unknown> {
   const dev = store.get().devices;
   const connected = anyConnected();
-  const { fleet, error: fleetError } = await getAllUnits();
   const settings = store.get().deviceSettings;
+  // Fetch the climate fleet and the irrigation zones CONCURRENTLY — irrigation no longer
+  // runs as a serial tail after the climate connectors. getIrrigationViews soft-fails to [].
+  const [{ fleet, error: fleetError }, irrigation] = await Promise.all([
+    getAllUnits(),
+    getIrrigationViews(settings),
+  ]);
   // Overlay just-written values so a navigate-away/back (or any client) reads the
   // command result immediately, not the connector's stale pre-write cache.
   const climate = applyOptimistic(fleet).map((u) => mergeView(u, settings));
-  // Irrigation zones merge into the same fleet under type 'irrigation' (soft-fails to []).
-  const irrigation = await getIrrigationViews(settings);
+  // Irrigation zones merge into the same fleet under type 'irrigation'.
   const devices = [...climate, ...irrigation];
 
   const temps = devices.map((d) => d.currentTempC).filter((t): t is number => t !== null);
