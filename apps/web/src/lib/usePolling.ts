@@ -22,11 +22,17 @@ export interface PollingState<T> {
  * @param fetcher async function returning the data
  * @param intervalMs poll cadence; pass 0/undefined to fetch once
  * @param deps re-create the loop when these change (e.g. a range selector)
+ * @param enabled when false, skips fetching entirely (no initial fetch, no
+ *   interval) — used to defer data for tabs/views the user isn't looking at.
+ *   The last-good `data` is kept, and `loading` clears so callers don't show a
+ *   permanent spinner for a paused poll. Flip back to true to fetch immediately
+ *   and resume polling. Defaults to true (existing call sites are unaffected).
  */
 export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalMs = 0,
   deps: ReadonlyArray<unknown> = [],
+  enabled = true,
 ): PollingState<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,6 +47,12 @@ export function usePolling<T>(
   const runRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
+    // Paused (deferred) — don't fetch or poll. Keep the last-good `data`, and
+    // clear `loading` so a gated view never shows a perpetual spinner.
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     let alive = true;
     const run = async () => {
       try {
@@ -83,7 +95,7 @@ export function usePolling<T>(
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intervalMs, ...deps]);
+  }, [intervalMs, enabled, ...deps]);
 
   const refetch = useCallback(() => runRef.current(), []);
 
