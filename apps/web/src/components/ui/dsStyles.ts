@@ -210,7 +210,7 @@ const CSS = `
 .pwr-select option{ background:var(--surface-2); color:var(--text-1); }
 
 /* ---- EnergyFlow (pwr2 two-battery) ---- */
-.pwr2{ position:relative; width:100%; aspect-ratio:1.02/1; min-height:300px; font-family:var(--font-sans); }
+.pwr2{ position:relative; width:100%; aspect-ratio:1.34/1; min-height:268px; font-family:var(--font-sans); }
 .pwr2__svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
 .pwr2__base{ stroke:var(--border-2); stroke-width:1.2; fill:none; }
 .pwr2__line{ fill:none; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:5 6; animation:pwr2move .9s linear infinite; }
@@ -230,7 +230,7 @@ const CSS = `
 .pwr2__hub svg{ width:22px; height:22px; }
 .pwr2__hub::after{ content:""; position:absolute; inset:-6px; border-radius:50%; border:1px solid var(--border-solar); animation:pwr2ring 2.6s ease-out infinite; }
 @keyframes pwr2ring{ 0%{transform:scale(.85);opacity:.7;} 70%{transform:scale(1.5);opacity:0;} 100%{opacity:0;} }
-.pwr2--lg{ aspect-ratio:1.08/1; min-height:360px; }
+.pwr2--lg{ aspect-ratio:auto; height:100%; min-height:300px; }
 .pwr2--lg .pwr2__node{ width:104px; gap:4px; }
 .pwr2--lg .pwr2__chip{ width:52px; height:52px; border-radius:16px; }
 .pwr2--lg .pwr2__chip svg{ width:22px; height:22px; }
