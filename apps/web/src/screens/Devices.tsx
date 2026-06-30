@@ -828,10 +828,10 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   const { data: lightsData } = usePolling<LightsResponse>(api.lights.list, 20_000);
   const { data: blindsData } = usePolling<BlindsResponse>(api.blinds.list, 20_000);
   const { data: speakersData } = usePolling<SpeakersResponse>(api.speakers.list, 20_000);
-  // Configured (set-up) generic devices — populate the Switching + custom tabs.
-  const { data: configuredData, refetch: refetchConfigured } = usePolling<ConfiguredResponse>(api.devices.configured, 20_000);
   // Active tab persists in the URL (?type=) so returning from a unit detail
   // restores the tab the device lives on (e.g. back from a heating zone → Heating).
+  // The URL drives both viewports (the rail's shortcuts on desktop, the tab strip on
+  // mobile both write ?type=), so the gating below keys off one viewport-agnostic signal.
   const [params, setParams] = useSearchParams();
   const paramType = params.get('type');
   // The URL is the source of truth: no ?type= → the category-tile overview ("Other
@@ -839,6 +839,19 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
   // "Other devices" link drive this directly.
   const overview = !paramType;
   const activeType: HubView = paramType || 'cooling';
+
+  // Defer the heavy Tuya-Cloud /configured fetch: it's only NEEDED for the overview
+  // tile counts + the configured-device tabs (Switching / Controllers / custom / any
+  // tab's bespoke extras). The pure native-fleet tabs (Cooling / Heating / Lighting)
+  // render their own /api/devices, /api/lights data and don't depend on it, so we pause
+  // its 20s poll while one of those is open. usePolling keeps the last-good data while
+  // paused, so returning to the overview shows cached counts instantly then refreshes —
+  // no empty flash, no need to latch it permanently on.
+  const NATIVE_FLEET_TABS = ['cooling', 'heating', 'lighting'];
+  const needsConfigured = overview || !NATIVE_FLEET_TABS.includes(activeType);
+  // Configured (set-up) generic devices — populate the Switching + custom tabs.
+  const { data: configuredData, refetch: refetchConfigured } =
+    usePolling<ConfiguredResponse>(api.devices.configured, 20_000, [], needsConfigured);
   const selectType = (t: HubView) => {
     setParams((prev) => { const n = new URLSearchParams(prev); n.set('type', t); return n; }, { replace: true });
   };
