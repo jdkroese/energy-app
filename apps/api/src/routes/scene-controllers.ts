@@ -63,7 +63,7 @@ function sanitizeButton(raw: unknown, prev: store.SceneButtonBinding | undefined
   const o = (raw ?? {}) as {
     index?: unknown;
     label?: unknown;
-    single?: { sceneId?: unknown } | null;
+    single?: { kind?: unknown; sceneId?: unknown } | null;
   };
   const idx = Number(o.index);
   const index = Number.isInteger(idx) && idx >= 1 && idx <= 4 ? idx : prev?.index ?? 1;
@@ -71,11 +71,15 @@ function sanitizeButton(raw: unknown, prev: store.SceneButtonBinding | undefined
   if (typeof o.label === 'string' && o.label.trim()) out.label = o.label.trim();
 
   const sceneId = typeof o.single?.sceneId === 'string' ? o.single.sceneId.trim() : '';
+  // Target store: 'light' (a Lights scene) or 'home' (whole-home). Default 'home' so old
+  // clients that omit `kind` keep their existing behaviour.
+  const kind: store.SceneButtonPress['kind'] = o.single?.kind === 'light' ? 'light' : 'home';
   if (sceneId) {
-    // Preserve the toggle state only when the bound scene is unchanged; a new binding
-    // starts "off" so the first press turns it ON.
-    const keepOn = prev?.single?.sceneId === sceneId ? prev.single.on : false;
-    out.single = { sceneId, on: keepOn };
+    // Preserve the toggle state only when the bound target (kind + scene) is unchanged; a
+    // new or re-pointed binding starts "off" so the first press turns it ON.
+    const keepOn =
+      prev?.single?.sceneId === sceneId && (prev.single.kind ?? 'home') === kind ? prev.single.on : false;
+    out.single = { kind, sceneId, on: keepOn };
   }
   // Phase 2 double/long bindings are carried through if present (no UI yet).
   if (prev?.double) out.double = prev.double;

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
-  ConfiguredResponse, HomeScenesResponse, SceneControllersResponse,
+  ConfiguredResponse, HomeScenesResponse, SceneControllersResponse, ScenesResponse,
 } from '../lib/types';
 import { Card, Icon, Button, Switch, Select } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
@@ -13,14 +13,28 @@ import { resolveTypeMeta } from '../lib/deviceTypes';
 
 /* ============================================================================
  * SceneControllerDetail (/devices/controller/:id) — bind a wireless scene
- * switch's 4 buttons to whole-home scenes (Phase 1: single-click toggle). Mirrors
+ * switch's 4 buttons to a scene (Phase 1: single-click toggle). A button can target
+ * a Light scene (from the Lights feature) OR a whole-home scene. Mirrors
  * GenericDeviceDetail's routing/layout: header (name/online) + an Enabled toggle +
- * 4 button rows, each a Scene picker (dropdown of HomeScenes + "None"). Saving
- * PUTs /api/scene-controllers/:deviceId. Responsive desktop (≥768) / mobile (<768).
+ * 4 button rows, each a Scene picker (grouped: Light scenes / Home scenes + "None").
+ * Saving PUTs /api/scene-controllers/:deviceId. Responsive desktop (≥768) / mobile (<768).
  * The coordinator does the live press-handling; this screen only edits bindings.
  * ==========================================================================*/
 
+// Picks are encoded as `<kind>:<sceneId>` so the target store survives round-trips.
+// "None" is the empty string.
 const NONE = '';
+type Kind = 'light' | 'home';
+const encodePick = (kind: Kind, sceneId: string): string => `${kind}:${sceneId}`;
+function decodePick(v: string): { kind: Kind; sceneId: string } | null {
+  if (!v) return null;
+  const i = v.indexOf(':');
+  if (i < 0) return null;
+  const kind = v.slice(0, i);
+  const sceneId = v.slice(i + 1);
+  if ((kind !== 'light' && kind !== 'home') || !sceneId) return null;
+  return { kind, sceneId };
+}
 
 export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
   const { id = '' } = useParams<{ id: string }>();
@@ -30,7 +44,8 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
 
   const { data: ctrlData, stale, updatedAt, refetch } = usePolling<SceneControllersResponse>(api.sceneControllers.list, 15_000);
-  const { data: scenesData } = usePolling<HomeScenesResponse>(api.homeScenes.list, 0);
+  const { data: homeScenesData } = usePolling<HomeScenesResponse>(api.homeScenes.list, 0);
+  const { data: lightScenesData } = usePolling<ScenesResponse>(api.lights.scenes, 0);
   // The configured-device record gives us the display name/category even before the
   // (fleet-joined) controller view resolves — so the header is never blank.
   const { data: configuredData } = usePolling<ConfiguredResponse>(api.devices.configured, 0);
@@ -39,7 +54,9 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
   const configured = configuredData?.devices.find((d) => d.id === id) ?? null;
   const customTypes = configuredData?.customDeviceTypes ?? [];
   const meta = resolveTypeMeta(configured?.typeId ?? 'controller', customTypes);
-  const scenes = scenesData?.scenes ?? [];
+  const homeScenes = homeScenesData?.scenes ?? [];
+  const lightScenes = lightScenesData?.scenes ?? [];
+  const noScenes = homeScenes.length === 0 && lightScenes.length === 0;
 
   // Local edit buffer: enabled + per-index sceneId (loaded from the server view).
   const [enabled, setEnabled] = useState(true);
@@ -54,13 +71,25 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
     if (!controller || dirty) return;
     setEnabled(controller.enabled);
     const next: Record<number, string> = {};
-    for (const b of controller.buttons) next[b.index] = b.single?.sceneId ?? NONE;
+    for (const b of controller.buttons) {
+      // A binding without an explicit kind (legacy) is a whole-home scene.
+      next[b.index] = b.single?.sceneId ? encodePick(b.single.kind ?? 'home', b.single.sceneId) : NONE;
+    }
     setPicks(next);
   }, [controller, dirty]);
 
-  const sceneOptions = useMemo(
-    () => [{ value: NONE, label: 'None' }, ...scenes.map((s) => ({ value: s.id, label: s.name }))],
-    [scenes],
+  // Flat "None" option + a Light scenes group (first — what the owner wants) + a Home
+  // scenes group. Each option value encodes its kind so the target store survives a save.
+  const sceneGroups = useMemo(
+    () => [
+      ...(lightScenes.length
+        ? [{ group: 'Light scenes', options: lightScenes.map((s) => ({ value: encodePick('light', s.id), label: s.name })) }]
+        : []),
+      ...(homeScenes.length
+        ? [{ group: 'Home scenes', options: homeScenes.map((s) => ({ value: encodePick('home', s.id), label: s.name })) }]
+        : []),
+    ],
+    [lightScenes, homeScenes],
   );
 
   const setEnabledDirty = (v: boolean) => { setEnabled(v); setDirty(true); };
@@ -70,12 +99,12 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
     setSaving(true);
     try {
       const buttons = [1, 2, 3, 4].map((index) => {
-        const sceneId = picks[index] || NONE;
+        const target = decodePick(picks[index] ?? NONE);
         const label = controller?.buttons.find((b) => b.index === index)?.label;
         return {
           index,
           ...(label ? { label } : {}),
-          ...(sceneId ? { single: { sceneId } } : {}),
+          ...(target ? { single: { kind: target.kind, sceneId: target.sceneId } } : {}),
         };
       });
       await api.sceneControllers.save(id, { enabled, buttons });
@@ -89,7 +118,8 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
 
   const buttonRow = (index: number) => {
     const live = controller?.buttons.find((b) => b.index === index);
-    const on = live?.single?.on === true && (picks[index] ?? '') === (live?.single?.sceneId ?? '');
+    const livePick = live?.single?.sceneId ? encodePick(live.single.kind ?? 'home', live.single.sceneId) : NONE;
+    const on = live?.single?.on === true && (picks[index] ?? NONE) === livePick;
     const pick = picks[index] ?? NONE;
     return (
       <div
@@ -113,7 +143,8 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <Select
             value={pick}
-            options={sceneOptions}
+            options={[{ value: NONE, label: 'None' }]}
+            groups={sceneGroups}
             disabled={!isAdmin}
             onChange={(e) => setPick(index, e.target.value)}
           />
@@ -177,10 +208,10 @@ export function SceneControllerDetail({ ctx }: { ctx: ShellContext }) {
                 </div>
               ))}
             </div>
-            {scenes.length === 0 && (
+            {noScenes && (
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Icon name="info" size={13} color="var(--text-3)" />
-                No whole-home scenes yet — create one on the Live screen, then bind it here.
+                No scenes yet — create one in Settings → Scenes, or a Lights scene in Lights, then bind it here.
               </div>
             )}
           </Card>

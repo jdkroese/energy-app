@@ -961,17 +961,27 @@ export interface HomeScene {
 // no engine yet). Phase 1 acts on single-click only. Persisted so the toggle state +
 // log watermark survive restarts.
 
+/** A press binding's target: either a Light scene (from the Lights feature) or a
+ *  whole-home scene. `kind` defaults to 'home' for records written before this field
+ *  existed. `on` is the persisted current toggle state. */
+export interface SceneButtonPress {
+  /** Which scene store the sceneId refers to. */
+  kind: "light" | "home";
+  sceneId: string;
+  on: boolean;
+}
+
 export interface SceneButtonBinding {
   /** 1-based physical button index (1..4). */
   index: number;
   /** Optional friendly label for this button. */
   label?: string;
   /** Single-click binding: the scene to toggle, plus the persisted current toggle state. */
-  single?: { sceneId: string; on: boolean };
+  single?: SceneButtonPress;
   /** RESERVED (Phase 2) — double-click binding. No engine yet. */
-  double?: { sceneId: string; on: boolean };
+  double?: SceneButtonPress;
   /** RESERVED (Phase 2) — long-press binding. No engine yet. */
-  long?: { sceneId: string; on: boolean };
+  long?: SceneButtonPress;
 }
 
 export interface SceneController {
@@ -2252,12 +2262,14 @@ export function defaultSceneController(): SceneController {
   };
 }
 
-/** Coerce a single button binding's optional press target ({ sceneId, on }) from disk. */
-function hydratePress(raw: unknown): { sceneId: string; on: boolean } | undefined {
+/** Coerce a single button binding's optional press target from disk. An existing record
+ *  without `kind` is treated as a whole-home scene (the only Phase-1 target). */
+function hydratePress(raw: unknown): SceneButtonPress | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const o = raw as { sceneId?: unknown; on?: unknown };
+  const o = raw as { kind?: unknown; sceneId?: unknown; on?: unknown };
   if (typeof o.sceneId !== "string" || !o.sceneId) return undefined;
-  return { sceneId: o.sceneId, on: o.on === true };
+  const kind = o.kind === "light" ? "light" : "home";
+  return { kind, sceneId: o.sceneId, on: o.on === true };
 }
 
 /** Coerce persisted scene-controller bindings onto clean defaults. Always normalizes to

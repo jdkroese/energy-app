@@ -1658,15 +1658,23 @@ export interface HomeScenesResponse {
 }
 
 /* ---- Scene controllers (wireless scene switches) ---- */
+/** A press binding's target: a Light scene ('light') or a whole-home scene ('home').
+ *  `kind` defaults to 'home' for records written before this field existed. */
+export interface SceneButtonPress {
+  kind: "light" | "home";
+  sceneId: string;
+  on: boolean;
+}
+
 export interface SceneButtonBinding {
   /** 1-based physical button index (1..4). */
   index: number;
   label?: string;
   /** Single-click binding: scene to toggle + persisted current toggle state. */
-  single?: { sceneId: string; on: boolean };
+  single?: SceneButtonPress;
   /** RESERVED (Phase 2). */
-  double?: { sceneId: string; on: boolean };
-  long?: { sceneId: string; on: boolean };
+  double?: SceneButtonPress;
+  long?: SceneButtonPress;
 }
 
 export interface SceneControllerView {
