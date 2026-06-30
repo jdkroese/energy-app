@@ -398,6 +398,19 @@ body,
   height: 100%;
 }
 
+/* Pin the app root to the *dynamic* viewport so the fixed TabBar always sits at
+   the visible bottom on mobile. Plain `height:100%`/`100vh` keys off the large
+   viewport, so when the browser's bottom toolbar retracts (iOS Safari, in-app
+   webviews) the app stays short and leaves a dead black band below the tab bar.
+   `100dvh` tracks the currently-visible area; the `100%` above is the fallback
+   for browsers without `dvh`. */
+@supports (height: 100dvh) {
+  html,
+  #root {
+    height: 100dvh;
+  }
+}
+
 body {
   margin: 0;
   background: var(--bg-0);
