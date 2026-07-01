@@ -1012,6 +1012,10 @@ export interface SolarSurplusPrecoolParams {
   bandRestrictionEnabled?: boolean;
   exitBand: Band;
   startThresholdW?: number;
+  /** Minimum on-time (s) after a start before the rule may soft-stop the unit (anti-chatter). */
+  minRunSec?: number;
+  /** Fan speed the rule sets when it switches a unit on (0=auto, 1..5). */
+  fanLevel?: number;
 }
 
 /**

@@ -668,6 +668,15 @@ function sanitizeSurplusParams(
       typeof p?.bandRestrictionEnabled === 'boolean' ? p.bandRestrictionEnabled : base.bandRestrictionEnabled,
     exitBand: p?.exitBand ?? base.exitBand,
     startThresholdW: typeof p?.startThresholdW === 'number' ? p.startThresholdW : base.startThresholdW,
+    // Anti-chatter min-run (s) and switch-on fan speed (0=auto, 1..5), clamped to sane ranges.
+    minRunSec:
+      typeof p?.minRunSec === 'number'
+        ? Math.min(3600, Math.max(0, Math.round(p.minRunSec)))
+        : base.minRunSec,
+    fanLevel:
+      typeof p?.fanLevel === 'number'
+        ? Math.min(5, Math.max(0, Math.round(p.fanLevel)))
+        : base.fanLevel,
   };
 }
 
@@ -739,13 +748,15 @@ export function createAutomation(body: Partial<Automation>): unknown {
   // drops the other direction's target); the tariff-arbitrage rule carries the battery shape.
   const surplusBase: SolarSurplusPrecoolParams = {
     roomTempLimitC: 25,
-    targetSetpointC: 23,
+    targetSetpointC: 24,
     heatRoomFloorC: 19,
     heatTargetSetpointC: 21,
     surplusClearSec: 120,
     bandRestrictionEnabled: true,
     exitBand: 'P1',
-    startThresholdW: 800,
+    startThresholdW: 3000,
+    minRunSec: 900,
+    fanLevel: 2,
   };
   const base: AutomationParams =
     type === 'tariff_arbitrage' ? defaultTariffArbitrageParams() : surplusBase;
