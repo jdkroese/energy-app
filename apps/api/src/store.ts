@@ -1566,7 +1566,7 @@ export function defaultAutomations(): Automation[] {
         surplusClearSec: 120,
         bandRestrictionEnabled: true,
         exitBand: "P1",
-        startThresholdW: 800,
+        startThresholdW: 3000,
         minRunSec: 900,
         fanLevel: 2,
       },
@@ -2012,21 +2012,21 @@ function mergeAutomations(
  * ONE-TIME tune of the persisted surplus rules to the new anti-chatter baseline. Keyed off
  * the ABSENCE of `minRunSec` (the field shipped with this change) so it runs exactly once per
  * rule and then never touches the owner's later edits:
- *   • COOLING (solar_surplus_precool): set to cool@24°C, start only above >3 kW export, and
- *     add the 15-min min-run + fan-speed-2 the owner requested.
- *   • HEATING (solar_surplus_preheat): only BACKFILL the two new fields (min-run + fan) — its
- *     targets/threshold are left as-is.
+ *   • BOTH rules: start only above >3 kW export, and add the 15-min min-run + fan-speed-2.
+ *   • COOLING (solar_surplus_precool): additionally set to cool@24°C. Heating keeps its own
+ *     heat target (it drives up to heatTargetSetpointC, not the cooling setpoint).
  * A freshly-seeded rule already carries `minRunSec`, so this is a no-op for new installs.
  */
 function tuneSurplusDefaults(a: Automation): Automation {
   if (a.type !== "solar_surplus_precool" && a.type !== "solar_surplus_preheat") return a;
   const p = a.params as SolarSurplusPrecoolParams;
   if (p.minRunSec != null) return a; // already tuned — respect any later owner edits
-  const base: Partial<SolarSurplusPrecoolParams> = { minRunSec: 900, fanLevel: 2 };
-  if (a.type === "solar_surplus_precool") {
-    base.targetSetpointC = 24;
-    base.startThresholdW = 3000;
-  }
+  const base: Partial<SolarSurplusPrecoolParams> = {
+    minRunSec: 900,
+    fanLevel: 2,
+    startThresholdW: 3000,
+  };
+  if (a.type === "solar_surplus_precool") base.targetSetpointC = 24;
   return { ...a, params: { ...p, ...base } };
 }
 
