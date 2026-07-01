@@ -350,6 +350,73 @@ export function effectivePR(monthKey?: string): { prEff: number; confidence: num
   return { prEff: clamp(prEff, 0.5, 0.95), confidence, days, month: key };
 }
 
+/** Retained days looked back over for the LIVE trailing-window roof shape (~4 weeks). */
+const TRAILING_LOOKBACK_DAYS = 28;
+
+/** Memo for the trailing-window roof shape, invalidated when the day-key set changes. */
+let trailingCache: { key: string; shape: number[]; days: number[] } | null = null;
+
+/**
+ * LIVE trailing-window per-hour roof shape (24) computed straight from the last
+ * ~28 RETAINED days in history5m — NOT the persisted per-month buckets. This is
+ * the fix for the month cold-start: the per-month model empties on the 1st of each
+ * month (fresh month key → 0 days → prEff falls back to DEFAULT 0.82 and the flat
+ * scalar shape), which would collapse the Live forecast to the old naive formula
+ * for ~10 days every month. Mirrors load-model.ts, which already learns from a
+ * trailing window and is therefore accurate immediately.
+ *
+ * For each retained day we take that day's per-hour measured/clear-sky ratios
+ * (dayHourlyPRFromHistory, null where no usable daytime production), then for each
+ * hour take the MEDIAN of the non-null ratios across days (robust to cloudy-day
+ * outliers — same intent as the scalar model's per-day median). Returns the 24
+ * medians (clamped 0..HOURLY_PR_MAX) + per-hour sample-day counts. Memoized on the
+ * set of available day keys so the per-request forecast (Live poll + Autopilot)
+ * doesn't re-scan 28×288 buckets each call.
+ */
+export function trailingRoofShape(): { shape: (number | null)[]; days: number[] } {
+  let dayKeys: string[];
+  try {
+    dayKeys = history.availableDayKeys();
+  } catch {
+    return { shape: new Array<number | null>(24).fill(null), days: zeros24() };
+  }
+  // Exclude today: it's incomplete (mutates as /api/live fills its buckets) and is
+  // the day we're forecasting. Dropping it keeps the memo stable within a day and
+  // learns only from finished days.
+  const todayKey = history.madridDateKey(new Date());
+  const recent = dayKeys.filter((k) => k !== todayKey).slice(-TRAILING_LOOKBACK_DAYS);
+  const cacheKey = recent.join(',');
+  if (trailingCache && trailingCache.key === cacheKey) {
+    return { shape: trailingCache.shape.map((v) => (v > 0 ? v : null)), days: trailingCache.days };
+  }
+
+  const perHour: number[][] = Array.from({ length: 24 }, () => []);
+  for (const dateKey of recent) {
+    const dayShape = dayHourlyPRFromHistory(dateKey);
+    if (!dayShape) continue;
+    for (let h = 0; h < 24; h++) {
+      const v = dayShape[h];
+      if (v != null && Number.isFinite(v) && v > 0) perHour[h].push(v);
+    }
+  }
+
+  const shape: (number | null)[] = new Array<number | null>(24).fill(null);
+  const days = zeros24();
+  // Store 0 (not null) in the cache array so it's a plain number[]; callers map
+  // 0 → null (0 is never a legitimate learned shape for a producing hour).
+  const cacheShape = zeros24();
+  for (let h = 0; h < 24; h++) {
+    if (perHour[h].length > 0) {
+      const m = clamp(median(perHour[h]), 0, HOURLY_PR_MAX);
+      shape[h] = m;
+      cacheShape[h] = m;
+      days[h] = perHour[h].length;
+    }
+  }
+  trailingCache = { key: cacheKey, shape: cacheShape, days };
+  return { shape, days };
+}
+
 /**
  * Per-hour learned roof shape (24) for a month key, blending the learned per-hour
  * ratio with the scalar prEff by per-hour confidence (min(1, hourlyDays[h]/10)).
@@ -393,10 +460,27 @@ export function forecastSolarKw(weather: WeatherForecast | null, date: Date): nu
   const { lat } = weatherCoords();
   const kwp = config.site.solarKwp;
   const monthKey = madridMonthKey(date);
-  const roofShape = roofShapeForMonth(monthKey);
+  const monthShape = roofShapeForMonth(monthKey);
   const { prEff } = effectivePR(monthKey);
+  // LIVE trailing-window shape (last ~28 retained days) — accurate immediately,
+  // even when the per-month bucket is empty (e.g. the 1st of a new month).
+  const trailing = trailingRoofShape();
   const rad = weather?.shortwaveRadiation ?? null;
   const haveWeather = Array.isArray(rad) && rad.length >= 24;
+
+  // Per-hour roof shape: prefer the live trailing window where it has samples for
+  // that hour (blended with the scalar prEff by per-hour confidence), falling back
+  // to the persisted per-month shape (which itself falls back to prEff) where the
+  // trailing window is thin. Only a truly empty house collapses to prEff.
+  const roofShape = zeros24().map((_, h) => {
+    const tDays = trailing.days[h] ?? 0;
+    const tShape = trailing.shape[h];
+    if (tDays > 0 && tShape != null && Number.isFinite(tShape)) {
+      const conf = Math.min(1, tDays / HOURLY_FULL_DAYS);
+      return clamp(prEff * (1 - conf) + tShape * conf, 0, HOURLY_PR_MAX);
+    }
+    return monthShape[h] ?? prEff;
+  });
 
   let anyDaylight = false;
   const out = zeros24().map((_, h) => {

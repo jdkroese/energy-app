@@ -63,8 +63,16 @@ function blankDay(dateKey: string) {
   return { date: dateKey, series, seen: new Array<number>(BUCKETS).fill(1) };
 }
 
-/** Write a synthetic history file: `days` July days, measured solar = clearSky×ratio. */
-function writeHistory(days: string[], ratio: number, homeKw = 0): void {
+/**
+ * Write a synthetic history file: for each day, measured solar = clearSky × ratio.
+ * `ratio` may be a scalar (same for every hour) or a per-hour function ratio(h).
+ */
+function writeHistory(
+  days: string[],
+  ratio: number | ((h: number) => number),
+  homeKw = 0,
+): void {
+  const ratioAt = typeof ratio === 'function' ? ratio : () => ratio;
   const file = { v: 1, days: {} as Record<string, ReturnType<typeof blankDay>> };
   for (const key of days) {
     const day = blankDay(key);
@@ -74,7 +82,7 @@ function writeHistory(days: string[], ratio: number, homeKw = 0): void {
       const elev = solarElevationDeg(h, doy, LAT);
       const ghiC = haurwitzGHI(elev);
       const clearKw = (ghiC / 1000) * KWP;
-      day.series.solarKw[b] = clearKw > 0 ? clearKw * ratio : 0;
+      day.series.solarKw[b] = clearKw > 0 ? clearKw * ratioAt(h) : 0;
       day.series.homeKw[b] = homeKw;
     }
     file.days[key] = day;
@@ -84,6 +92,10 @@ function writeHistory(days: string[], ratio: number, homeKw = 0): void {
 
 function julyDays(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `2026-07-${String(i + 1).padStart(2, '0')}`);
+}
+
+function juneDays(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => `2026-06-${String(i + 1).padStart(2, '0')}`);
 }
 
 // ---- Fresh-module loader -----------------------------------------------------
@@ -194,5 +206,55 @@ test('back-compat: hydrates an old scalar-only (v1) model file', async () => {
   // roofShape falls back to the scalar prEff for every hour (hourlyDays seeded to 0).
   const shape = solar.roofShapeForMonth('2026-07');
   assert.ok(Math.abs(shape[13] - eff.prEff) < 1e-6, `hydrated shape falls back to prEff, got ${shape[13]}`);
+  cleanup();
+});
+
+test('trailing window learns a per-hour under-performing shape immediately', async () => {
+  cleanup();
+  // A roof where hour 9 (morning) consistently under-performs clear-sky (shaded),
+  // while midday runs near a healthy ratio. Learned from a trailing window of days.
+  const ratioAt = (h: number) => (h === 9 ? 0.35 : 0.85);
+  writeHistory(juneDays(20), ratioAt);
+  const solar = await freshModel();
+  const { shape, days } = solar.trailingRoofShape();
+  assert.ok(days[9] >= 10, `morning hour has samples, got ${days[9]}`);
+  assert.ok(shape[9] != null && shape[9]! > 0.28 && shape[9]! < 0.45, `hour-9 shape ~0.35, got ${shape[9]}`);
+  assert.ok(shape[12] != null && shape[12]! > 0.75 && shape[12]! < 0.95, `midday shape ~0.85, got ${shape[12]}`);
+  cleanup();
+});
+
+test('empty-month case: forecast uses trailing history, not the 0.82 fallback', async () => {
+  cleanup();
+  // History lives in JUNE; we forecast for JULY 15 whose per-MONTH bucket is empty.
+  // Without the trailing layer the July bucket cold-starts (prEff→0.82, flat shape)
+  // and the morning under-performance would be invisible. With it, the shape carries
+  // across immediately. Morning hour under-performs at 0.4, midday at 0.85.
+  const ratioAt = (h: number) => (h === 9 ? 0.4 : 0.85);
+  writeHistory(juneDays(20), ratioAt);
+  const solar = await freshModel();
+
+  // July bucket is genuinely empty → the persisted-month path alone would give 0.82.
+  const julyEff = solar.effectivePR('2026-07');
+  assert.ok(Math.abs(julyEff.prEff - 0.82) < 1e-6, `July month bucket empty (prEff=DEFAULT), got ${julyEff.prEff}`);
+  const julyMonthShape = solar.roofShapeForMonth('2026-07');
+  assert.ok(Math.abs(julyMonthShape[9] - 0.82) < 1e-6, `month-only morning shape is the flat 0.82`);
+
+  // No live weather → weatherFactor=1 → solarKw = clearSkyKw × trailing-shape.
+  const date = new Date('2026-07-15T12:00:00Z');
+  const doy = doyOf('2026-07-15');
+  const kw = solar.forecastSolarKw(null, date);
+
+  // Effective morning ratio the forecast implies = solarKw[9] / clearSkyKw[9].
+  const ghiC9 = haurwitzGHI(solarElevationDeg(9, doy, LAT));
+  const clearKw9 = (ghiC9 / 1000) * KWP;
+  const impliedMorning = kw[9] / clearKw9;
+  // It must reflect the learned ~0.4 morning shape, NOT the 0.82 flat fallback.
+  assert.ok(impliedMorning < 0.6, `morning forecast reflects trailing shape (~0.4), got ${impliedMorning}`);
+
+  // Midday should reflect the ~0.85 learned shape (and clearly beat the morning).
+  const ghiC12 = haurwitzGHI(solarElevationDeg(12, doy, LAT));
+  const clearKw12 = (ghiC12 / 1000) * KWP;
+  const impliedMidday = kw[12] / clearKw12;
+  assert.ok(impliedMidday > 0.75, `midday forecast reflects trailing shape (~0.85), got ${impliedMidday}`);
   cleanup();
 });
