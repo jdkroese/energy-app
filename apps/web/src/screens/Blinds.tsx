@@ -18,7 +18,7 @@ import type { ShellContext } from '../components/shell/AppShell';
 function stateText(d: BlindUnit): string {
   if (!d.online) return 'offline';
   if (d.moving) return 'moving…';
-  if (d.positionPct == null) return d.room && d.room !== d.name ? d.room : '—';
+  if (d.positionPct == null) return '—';
   if (d.positionPct <= 2) return 'closed';
   if (d.positionPct >= 98) return 'open';
   return `${d.positionPct}% open`;
@@ -67,7 +67,7 @@ function BlindCard({
           <Icon name="blinds" size={19} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</div>
+          <div title={d.room || d.name} style={{ fontSize: 14, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.room || d.name}</div>
           <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{stateText(d)}</div>
         </div>
         {canControl && (
