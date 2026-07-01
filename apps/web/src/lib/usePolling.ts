@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+/**
+ * Last-good response cache, keyed by the FETCHER FUNCTION identity. When a screen
+ * remounts (e.g. navigating back to Devices), its polls previously started cold —
+ * `data: null, loading: true` — flashing a spinner and blocking on a network
+ * round-trip every single time. This cache lets a remount seed its first render
+ * synchronously from the previous value, then revalidate in the background:
+ * client-side stale-while-revalidate.
+ *
+ * Keyed by the fetcher reference, so only STABLE fetchers (e.g. `api.blinds.list`,
+ * defined once on the `api` object) share a slot across mounts and benefit. Inline
+ * arrow fetchers get a fresh identity each render, miss the cache, and behave
+ * exactly as before. A WeakMap means entries for GC'd fetchers vanish on their own.
+ */
+const lastGood = new WeakMap<object, { data: unknown; ts: number }>();
+
 export interface PollingState<T> {
   /** Last successfully-fetched value (kept on error → keep-last-good). */
   data: T | null;
@@ -34,11 +49,16 @@ export function usePolling<T>(
   deps: ReadonlyArray<unknown> = [],
   enabled = true,
 ): PollingState<T> {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Seed the first render from the last-good cache (if this exact fetcher has run
+  // before), so a remount shows prior data instantly instead of a spinner. A cache
+  // hit means loading is already false — the effect below still revalidates in the
+  // background. A miss keeps the original cold-start behaviour (null + loading).
+  const seed = lastGood.get(fetcher) as { data: T; ts: number } | undefined;
+  const [data, setData] = useState<T | null>(seed ? seed.data : null);
+  const [loading, setLoading] = useState(!seed);
   const [error, setError] = useState<Error | null>(null);
   const [stale, setStale] = useState(false);
-  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(seed ? seed.ts : null);
 
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -57,6 +77,10 @@ export function usePolling<T>(
     const run = async () => {
       try {
         const d = await fetcherRef.current();
+        // Cache the fresh value against the fetcher identity so the next remount
+        // of this poll renders it immediately (client-side SWR). Written even if
+        // this instance was unmounted mid-flight, so the value isn't lost.
+        lastGood.set(fetcherRef.current, { data: d, ts: Date.now() });
         if (!alive) return;
         setData(d);
         setError(null);
