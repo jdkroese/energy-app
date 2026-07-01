@@ -9,11 +9,14 @@ import { planArbitrage } from '../control/arbitrage';
 import { weatherCoords } from '../runtime-config';
 import {
   effectivePR,
+  forecastSolarKw,
   haurwitzGHI,
   madridDayOfYear,
   monthLabel,
   solarElevationDeg,
 } from '../solar-model';
+import { forecastLoadKw } from '../load-model';
+import type { WeatherForecast } from '../connectors/weather';
 
 function round(n: number, dp = 1): number {
   const f = 10 ** dp;
@@ -41,38 +44,27 @@ function madridHour(d: Date): number {
   );
 }
 
-/** Solar forecast (kW per hour) from Open-Meteo shortwave radiation, or a synthetic bell. */
-export function solarForecast(rad: number[] | null, pr: number): number[] {
-  const kwp = config.site.solarKwp;
-  if (rad && rad.length === 24) {
-    // PV model: kW ≈ radiation(W/m²) / 1000 × kWp × learned performance ratio.
-    return rad.map((w) => round(Math.max(0, (w / 1000) * kwp * pr), 2));
-  }
-  // Synthetic clear-day bell centred ~13:30 Madrid.
-  return Array.from({ length: 24 }, (_, h) => {
-    const x = (h - 13.5) / 3.6;
-    const v = Math.exp(-0.5 * x * x) * kwp * (pr * 0.88);
-    return round(Math.max(0, v), 2);
-  });
+/**
+ * Solar forecast (24 hourly kW) — thin back-compat wrapper over the shared
+ * `forecastSolarKw` model (clear-sky × learned per-hour roof shape × live weather).
+ * Callers pass raw shortwave radiation + a scalar PR; we wrap the radiation in a
+ * minimal WeatherForecast so the shared model applies its per-hour weatherFactor.
+ * The `pr` argument is retained for signature compatibility but the shared model
+ * derives its own learned PR from the month record. `date` defaults to now.
+ */
+export function solarForecast(rad: number[] | null, _pr: number, date: Date = new Date()): number[] {
+  const wf: WeatherForecast | null =
+    rad && rad.length >= 24 ? ({ shortwaveRadiation: rad } as WeatherForecast) : null;
+  return forecastSolarKw(wf, date).map((kw) => round(kw, 2));
 }
 
-/** Load forecast (kW per hour) for the all-electric house, thermally nudged by temp. */
-export function loadForecast(temp: number[] | null): number[] {
-  // Base daily profile (kW) — morning + evening peaks, all-electric.
-  const base = [
-    0.6, 0.5, 0.5, 0.5, 0.5, 0.6, 0.9, 1.4, 1.6, 1.3, 1.1, 1.2, 1.3, 1.2, 1.1, 1.2, 1.4, 1.8,
-    2.4, 2.6, 2.3, 1.8, 1.2, 0.8,
-  ];
-  return base.map((kw, h) => {
-    let v = kw;
-    if (temp && temp[h] !== undefined) {
-      const t = temp[h];
-      // Heating below 16°C, cooling above 26°C add HVAC load.
-      if (t < 16) v += (16 - t) * 0.08;
-      if (t > 26) v += (t - 26) * 0.1;
-    }
-    return round(v, 2);
-  });
+/**
+ * Load forecast (24 hourly kW) — thin back-compat wrapper over the shared learned
+ * `forecastLoadKw` model (learned household profile blended with the base curve by
+ * confidence, thermally nudged). `date` defaults to now.
+ */
+export function loadForecast(temp: number[] | null, date: Date = new Date()): number[] {
+  return forecastLoadKw(date, temp).map((kw) => round(kw, 2));
 }
 
 /**
@@ -92,6 +84,8 @@ function plan(
   const capKwh = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh; // combined tank
   const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
   const socPct: number[] = [];
+  const chargeKw: number[] = [];
+  const dischargeKw: number[] = [];
   const actions: Array<{ h: number; startH: number; endH: number; icon: string; tone: string; title: string; why: string }> = [];
 
   // Scenario bias: a self/independence-leaning scenario discharges the battery
@@ -156,6 +150,10 @@ function plan(
 
     soc = Math.max(0, Math.min(100, soc + (deltaKwh / capKwh) * 100));
     socPct.push(Math.round(soc));
+    // Split the per-hour battery delta into charge/discharge series (parity with
+    // the Live chart's forecast; deltaKwh over a 1h step ≈ kW).
+    chargeKw.push(round(Math.max(0, deltaKwh), 2));
+    dischargeKw.push(round(Math.max(0, -deltaKwh), 2));
   }
 
   // Timed action markers — each is a duration window (startH..endH) the timeline
@@ -216,6 +214,8 @@ function plan(
 
   return {
     socPct,
+    chargeKw,
+    dischargeKw,
     actions,
     projected: {
       savedEur: round(savedEur, 2),
@@ -245,11 +245,14 @@ export async function getPlan(): Promise<unknown> {
   const temp = wf?.temperature ?? null;
 
   // Learned roof performance ratio for this month (seeded at 0.82, sharpens with
-  // measured days). Drives both the solar-kW forecast and the genKwh prediction.
+  // measured days). Kept for the genKwh/confidence badge; the solar forecast now
+  // comes from the SHARED model so Autopilot and the Live "Today" chart agree.
   const { prEff, confidence, days, month } = effectivePR();
 
-  const solarKw = solarForecast(rad, prEff);
-  const loadKw = loadForecast(temp);
+  // Shared self-improving forecast: clear-sky × learned per-hour roof shape × live
+  // weather (solar); learned household profile blended by confidence (load).
+  const solarKw = forecastSolarKw(wf, now).map((kw) => round(kw, 2));
+  const loadKw = forecastLoadKw(now, temp);
   const bandCodes = bandCodesForDay(now);
 
   // Active scenario drives the reserve floor + discharge bias.
@@ -363,6 +366,8 @@ export async function getPlan(): Promise<unknown> {
   const usageKwh = ext(usageKwh24);
   const solarKw25 = ext(solarKw);
   const loadKw25 = ext(loadKw);
+  const chargeKw25 = ext(result.chargeKw);
+  const dischargeKw25 = ext(result.dischargeKw);
   // When the arbitrage rule is enabled+active, show its bent trajectory instead of the
   // baseline so the chart reflects the planned valley-charge + peak-discharge.
   const socSeries = arbSocPct ?? result.socPct;
@@ -377,7 +382,7 @@ export async function getPlan(): Promise<unknown> {
     ts: now.toISOString(),
     scenario: { id: state.activeScenario, name: scenario.name, reservePct },
     projected: result.projected,
-    forecast: { solarKw: solarKw25, loadKw: loadKw25, cloudPct, sunIntensityPct, genKwh, usageKwh },
+    forecast: { solarKw: solarKw25, loadKw: loadKw25, chargeKw: chargeKw25, dischargeKw: dischargeKw25, cloudPct, sunIntensityPct, genKwh, usageKwh },
     model: { month: monthLabel(month), confidencePct: Math.round(confidence * 100), days },
     socPct: socPct25,
     tariff,

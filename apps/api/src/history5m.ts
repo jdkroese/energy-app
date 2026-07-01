@@ -221,6 +221,16 @@ export function availableDayKeys(): string[] {
   return Object.keys(load().days).sort();
 }
 
+/**
+ * Test-only: drop the in-memory cache + resolved path so the next call re-reads
+ * HISTORY_5M_FILE from disk. Lets hermetic tests swap the backing file between
+ * cases. No-op effect on production paths (never called there).
+ */
+export function _resetForTest(): void {
+  cache = null;
+  path = null;
+}
+
 /** One persisted 5-min bucket: unix-second ts + per-series value (null if unseen). */
 export interface RawBucketSample {
   ts: number; // unix seconds — bucket START in Madrid local time
