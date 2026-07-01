@@ -14,6 +14,8 @@ import * as store from '../store';
 import { bandForHour, type Band } from '../tariff';
 import * as history5m from '../history5m';
 import { BUCKETS_PER_DAY, type HistorySeriesKey } from '../history5m';
+import { forecastSolarKw } from '../solar-model';
+import { forecastLoadKw } from '../load-model';
 
 function round(n: number, dp = 2): number {
   const f = 10 ** dp;
@@ -33,40 +35,11 @@ function madridWeekday(d: Date): number {
   return map[wdName] ?? 1;
 }
 
-/** Solar forecast (kW per hour), Open-Meteo radiation → PV model, or a bell. */
-function solarForecast(rad: number[] | null): number[] {
-  const kwp = config.site.solarKwp;
-  if (rad && rad.length === 24) {
-    const pr = 0.82;
-    return rad.map((w) => round(Math.max(0, (w / 1000) * kwp * pr), 2));
-  }
-  return Array.from({ length: 24 }, (_, h) => {
-    const x = (h - 13.5) / 3.6;
-    const v = Math.exp(-0.5 * x * x) * kwp * 0.72;
-    return round(Math.max(0, v), 2);
-  });
-}
-
-/** Load forecast (kW per hour) for the all-electric house, thermally nudged. */
-function loadForecast(temp: number[] | null): number[] {
-  const base = [
-    0.6, 0.5, 0.5, 0.5, 0.5, 0.6, 0.9, 1.4, 1.6, 1.3, 1.1, 1.2, 1.3, 1.2, 1.1, 1.2, 1.4, 1.8, 2.4,
-    2.6, 2.3, 1.8, 1.2, 0.8,
-  ];
-  return base.map((kw, h) => {
-    let v = kw;
-    if (temp && temp[h] !== undefined) {
-      const t = temp[h];
-      if (t < 16) v += (16 - t) * 0.08;
-      if (t > 26) v += (t - 26) * 0.1;
-    }
-    return round(v, 2);
-  });
-}
-
 /**
- * Combined-SoC trajectory (% per hour) — a light version of the brain plan:
- * charge from solar surplus, discharge harder in P1, hold a reserve floor.
+ * Combined-SoC trajectory (% per hour) plus per-hour battery flow — a light
+ * version of the brain plan: charge from solar surplus, discharge harder in P1,
+ * hold a reserve floor. Returns the SoC track and, split from the per-hour battery
+ * delta, chargeKw[h] = max(0, delta) and dischargeKw[h] = max(0, -delta).
  */
 function socTrajectory(
   solarKw: number[],
@@ -74,10 +47,12 @@ function socTrajectory(
   bandCodes: number[],
   startSoc: number,
   reservePct: number,
-): number[] {
+): { socPct: number[]; chargeKw: number[]; dischargeKw: number[] } {
   const capKwh = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
   const maxKw = config.assets.sonnenMaxKw + config.assets.teslaMaxKw;
-  const out: number[] = [];
+  const socPct: number[] = [];
+  const chargeKw: number[] = [];
+  const dischargeKw: number[] = [];
   let soc = startSoc;
   for (let h = 0; h < 24; h++) {
     const surplus = solarKw[h] - loadKw[h];
@@ -96,9 +71,12 @@ function socTrajectory(
       deltaKwh = -discharge;
     }
     soc = Math.max(0, Math.min(100, soc + (deltaKwh / capKwh) * 100));
-    out.push(Math.round(soc));
+    socPct.push(Math.round(soc));
+    // deltaKwh over a 1-hour step ≈ kW; split into charge / discharge series.
+    chargeKw.push(round(Math.max(0, deltaKwh), 2));
+    dischargeKw.push(round(Math.max(0, -deltaKwh), 2));
   }
-  return out;
+  return { socPct, chargeKw, dischargeKw };
 }
 
 /** Expand a 24-hour array to a 288-bucket (5-min) array by linear interpolation. */
@@ -214,7 +192,7 @@ export async function getHistoryDay(rawOffset: number): Promise<HistoryDayRespon
 
   if (isToday) {
     nowIndex = madridBucketIndex(new Date());
-    forecast = await buildForecast(weekday);
+    forecast = await buildForecast(weekday, new Date());
     // Forecast values only exist from nowIndex..287; null everything before.
     if (forecast) {
       for (const k of FORECAST_KEYS) {
@@ -235,8 +213,8 @@ export async function getHistoryDay(rawOffset: number): Promise<HistoryDayRespon
   };
 }
 
-/** Compute the 288-pt forecast series for today from weather + brain heuristics. */
-async function buildForecast(weekday: number): Promise<ForecastSeries> {
+/** Compute the 288-pt forecast series for today from the shared forecast model. */
+async function buildForecast(weekday: number, date: Date): Promise<ForecastSeries> {
   const fc = blankForecast();
   const [wRes, tRes, sRes] = await Promise.allSettled([
     weather.getForecast(),
@@ -247,10 +225,12 @@ async function buildForecast(weekday: number): Promise<ForecastSeries> {
   const t = tRes.status === 'fulfilled' ? tRes.value : null;
   const s = sRes.status === 'fulfilled' ? sRes.value : null;
 
-  const rad = wf?.shortwaveRadiation ?? null;
   const temp = wf?.temperature ?? null;
-  const solarKw = solarForecast(rad);
-  const loadKw = loadForecast(temp);
+  // Shared self-improving model: clear-sky × learned per-hour roof shape × live
+  // weather (solar), learned household profile (load). Same functions the
+  // Autopilot plan uses, so the two surfaces agree.
+  const solarKw = forecastSolarKw(wf, date);
+  const loadKw = forecastLoadKw(date, temp);
 
   const bandCodes = Array.from({ length: 24 }, (_, h) => {
     const b = bandForHour(h, weekday);
@@ -271,12 +251,21 @@ async function buildForecast(weekday: number): Promise<ForecastSeries> {
     ? Math.max(scenario.reserve, deviceReserve)
     : scenario.reserve;
 
-  const socPct = socTrajectory(solarKw, loadKw, bandCodes, startSoc, reservePct);
+  const { socPct, chargeKw, dischargeKw } = socTrajectory(
+    solarKw,
+    loadKw,
+    bandCodes,
+    startSoc,
+    reservePct,
+  );
 
-  // Production (solar) → area/line; consumption (home load); combined SoC plan.
+  // Production (solar) → area/line; consumption (home load); combined SoC plan;
+  // battery charge/discharge derived from the SoC-trajectory per-hour deltas.
   fc.solarKw = hourlyTo288(solarKw);
   fc.homeKw = hourlyTo288(loadKw);
   fc.combinedSoc = hourlyTo288(socPct).map((v) => Math.round(v));
+  fc.chargeKw = hourlyTo288(chargeKw);
+  fc.dischargeKw = hourlyTo288(dischargeKw);
   // Remaining series have no meaningful forecast; leave null.
   return fc;
 }
