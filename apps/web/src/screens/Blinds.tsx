@@ -145,6 +145,9 @@ function BlindCard({
 }) {
   const [open, setOpen] = useState(false);
   const [roomDraft, setRoomDraft] = useState(d.room);
+  // Travel-time is edited as a free numeric seconds field: draft held locally, committed
+  // on blur / Enter / ± (1s steps). Seed 30s the first time a timed blind is configured.
+  const [travelDraft, setTravelDraft] = useState(String(d.travelSec ?? 30));
   // The slider works in the CLOSED display convention. `slider` holds the dragged
   // closed% while a gesture is in flight; committed (converted back to open%) on release.
   const known = knownPct(d); // open%
@@ -172,8 +175,17 @@ function BlindCard({
     setGlide(useGlide);
     if (canControl) onCmd('position', toClosed(closedTarget)); // openTarget = 100 − closed
   };
-  // Travel-time stepper (timed positioning). Default seed 30s when configuring for the first time.
+  // Travel-time (timed positioning). Default seed 30s when configuring for the first time.
   const travelSec = d.travelSec ?? 30;
+  // Numeric value currently in the draft field (falls back to committed when mid-edit/blank).
+  const travelBase = Number.isFinite(Number(travelDraft)) ? Math.round(Number(travelDraft)) : travelSec;
+  // Clamp to the server-enforced 5–90s range and persist. Blank/NaN reverts to committed.
+  const commitTravel = (raw: string) => {
+    if (!raw.trim() || !Number.isFinite(Number(raw))) { setTravelDraft(String(d.travelSec ?? 30)); return; }
+    const clamped = Math.max(5, Math.min(90, Math.round(Number(raw))));
+    setTravelDraft(String(clamped));
+    onSaveSettings({ travelSec: clamped });
+  };
 
   const moveBtn = (label: string, icon: string, lever: BlindLever) => (
     <button
@@ -329,19 +341,35 @@ function BlindCard({
                   <Button
                     size="sm"
                     variant="secondary"
-                    disabled={travelSec <= 5}
-                    onClick={() => onSaveSettings({ travelSec: Math.max(5, travelSec - 5) })}
+                    disabled={travelBase <= 5}
+                    onClick={() => commitTravel(String(travelBase - 1))}
+                    aria-label="Decrease travel time by one second"
                   >
                     –
                   </Button>
-                  <span className="pwr-mono" style={{ minWidth: 42, textAlign: 'center', fontSize: 14, color: d.travelSec != null ? 'var(--text-1)' : 'var(--text-3)' }}>
-                    {travelSec}s
-                  </span>
+                  <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min={5}
+                      max={90}
+                      step={1}
+                      className="pwr-mono"
+                      value={travelDraft}
+                      onChange={(e) => setTravelDraft(e.target.value)}
+                      onBlur={(e) => commitTravel(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                      aria-label="Travel time in seconds"
+                      style={{ width: 68, textAlign: 'center', paddingRight: 18 }}
+                    />
+                    <span style={{ position: 'absolute', right: 8, fontSize: 12, color: 'var(--text-3)', pointerEvents: 'none' }}>s</span>
+                  </div>
                   <Button
                     size="sm"
                     variant="secondary"
-                    disabled={travelSec >= 90}
-                    onClick={() => onSaveSettings({ travelSec: Math.min(90, travelSec + 5) })}
+                    disabled={travelBase >= 90}
+                    onClick={() => commitTravel(String(travelBase + 1))}
+                    aria-label="Increase travel time by one second"
                   >
                     +
                   </Button>
