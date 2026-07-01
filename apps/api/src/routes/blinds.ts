@@ -150,6 +150,13 @@ export async function commandBlind(id: string, lever: BlindLever, value: unknown
   // Timed positioning applies only to a blind WITHOUT native position, WITH a travelSec set.
   const timed = !supportsPosition && travelSec != null;
 
+  // Belt-and-suspenders: a partial-position command on a blind that has NO native position
+  // AND no configured travelSec has no way to run (would be a zero/NaN-duration move). Reject
+  // it rather than trusting the client to disable the control. Open/close/stop are unaffected.
+  if (lever === 'position' && !supportsPosition && travelSec == null) {
+    throw badInput(`blind ${id} needs a travel time set before it can go to a position`);
+  }
+
   // A brand-new command on this blind supersedes any in-flight timed move: bump the token so
   // the old detached sequence sees the change after its next wait and abandons its pending Stop.
   const t = getTimed(id);
