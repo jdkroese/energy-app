@@ -432,7 +432,11 @@ export async function setDevicesArm(armed: boolean, mode?: ControlMode): Promise
 
 // ---- Per-device settings ----------------------------------------------------
 
-export function setDeviceSettings(id: string, patch: Partial<DeviceSettings>): unknown {
+export function setDeviceSettings(
+  id: string,
+  // travelSec accepts null to explicitly CLEAR the timed-positioning config (vs. undefined = leave).
+  patch: Partial<DeviceSettings> & { travelSec?: number | null },
+): unknown {
   const saved = store.update((s) => {
     const existing = s.deviceSettings[id] ?? {};
     // Per-direction solar flags are the source of truth. A legacy `automationEnabled`
@@ -455,6 +459,14 @@ export function setDeviceSettings(id: string, patch: Partial<DeviceSettings>): u
       comfortCeilingC: patch.comfortCeilingC ?? existing.comfortCeilingC,
       comfortFloorC: patch.comfortFloorC ?? existing.comfortFloorC,
       invertPosition: patch.invertPosition ?? existing.invertPosition,
+      // Blinds timed positioning (docs/34): full-travel seconds. Clamp 5–90s when set.
+      // `null` in the patch clears it (back to open/stop/close only); undefined preserves.
+      travelSec:
+        patch.travelSec === null
+          ? undefined
+          : patch.travelSec !== undefined
+            ? Math.max(5, Math.min(90, Math.round(patch.travelSec)))
+            : existing.travelSec,
       // EV (car) breaker: "Solar / P3 charging only" opt-in. Only override when the patch
       // explicitly carries it (so other setting writes don't clear it). When the owner turns
       // it OFF, clear any rule-owned runtime so the rule fully releases the breaker.

@@ -445,6 +445,13 @@ export interface DeviceSettings {
   /** Blinds only: flip 0/100 so the app's "% open" matches the motor's direction. */
   invertPosition?: boolean;
   /**
+   * Blinds only: full-travel time in seconds (a full open OR close take the same time).
+   * When set, enables TIMED partial positioning for a blind that has no native position DP
+   * (open/stop/close only): a move to target% runs the motor for travelSec×|Δ|/100 then Stop.
+   * Clamped 5–90s at the write. Unset/undefined = no timed positioning. See docs/34.
+   */
+  travelSec?: number;
+  /**
    * Circuit breaker (EV charger) only: when true, the EV-surplus rule owns this breaker —
    * it turns the breaker ON only on solar surplus OR the cheap P3 band (armed+auto), and OFF
    * otherwise. Default/undefined = false = MAX charging (rule never touches the breaker, today's
