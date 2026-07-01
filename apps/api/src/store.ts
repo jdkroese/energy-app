@@ -589,6 +589,15 @@ export interface SolarSurplusPrecoolParams {
   exitBand: Band;
   /** Surplus (W) above which a compressor start is permitted. */
   startThresholdW?: number;
+  /**
+   * Minimum on-time (s) once the rule STARTS a unit: for this window the rule will not
+   * soft-stop it (room-reached-target or surplus-cleared) so a fluctuating surplus can't
+   * chatter it on/off. The tariff-band (P1 peak) stand-down still overrides immediately.
+   * Absent ⇒ coordinator default (900s = 15 min).
+   */
+  minRunSec?: number;
+  /** Fan speed the rule sets when it switches a unit on (0=auto, 1..5). Absent ⇒ 2. */
+  fanLevel?: number;
 }
 
 /**
@@ -1532,13 +1541,15 @@ export function defaultAutomations(): Automation[] {
       type: "solar_surplus_precool",
       params: {
         roomTempLimitC: 25,
-        targetSetpointC: 23,
+        targetSetpointC: 24,
         heatRoomFloorC: 19,
         heatTargetSetpointC: 21,
         surplusClearSec: 120,
         bandRestrictionEnabled: true,
         exitBand: "P1",
-        startThresholdW: 800,
+        startThresholdW: 3000,
+        minRunSec: 900,
+        fanLevel: 2,
       },
       lastEval: null,
     },
@@ -1556,6 +1567,8 @@ export function defaultAutomations(): Automation[] {
         bandRestrictionEnabled: true,
         exitBand: "P1",
         startThresholdW: 800,
+        minRunSec: 900,
+        fanLevel: 2,
       },
       lastEval: null,
     },
@@ -1992,7 +2005,29 @@ function mergeAutomations(
     (b) =>
       !dismissedSet.has(b.id) && !deduped.some((a) => sameRuleAsDefault(a, b)),
   );
-  return [...deduped, ...toSeed];
+  return [...deduped, ...toSeed].map(tuneSurplusDefaults);
+}
+
+/**
+ * ONE-TIME tune of the persisted surplus rules to the new anti-chatter baseline. Keyed off
+ * the ABSENCE of `minRunSec` (the field shipped with this change) so it runs exactly once per
+ * rule and then never touches the owner's later edits:
+ *   • COOLING (solar_surplus_precool): set to cool@24°C, start only above >3 kW export, and
+ *     add the 15-min min-run + fan-speed-2 the owner requested.
+ *   • HEATING (solar_surplus_preheat): only BACKFILL the two new fields (min-run + fan) — its
+ *     targets/threshold are left as-is.
+ * A freshly-seeded rule already carries `minRunSec`, so this is a no-op for new installs.
+ */
+function tuneSurplusDefaults(a: Automation): Automation {
+  if (a.type !== "solar_surplus_precool" && a.type !== "solar_surplus_preheat") return a;
+  const p = a.params as SolarSurplusPrecoolParams;
+  if (p.minRunSec != null) return a; // already tuned — respect any later owner edits
+  const base: Partial<SolarSurplusPrecoolParams> = { minRunSec: 900, fanLevel: 2 };
+  if (a.type === "solar_surplus_precool") {
+    base.targetSetpointC = 24;
+    base.startThresholdW = 3000;
+  }
+  return { ...a, params: { ...p, ...base } };
 }
 
 /** Keep persisted rule enable-states but append any newly-shipped default rules

@@ -47,6 +47,17 @@ const offSeenCount = new Map<string, number>();
 // Consecutive OFF reads required before the rule releases ownership of a unit.
 const OFF_RELEASE_TICKS = 2;
 
+// Per-device epoch ms the rule STARTED the unit, for the minimum-run floor (anti-chatter):
+// for minRunSec after a start the rule won't soft-stop the unit (room-at-target / surplus
+// cleared), so a fluctuating surplus can't switch it on/off repeatedly. In-memory only — a
+// restart forgets it (a just-rebooted unit may then stop at once, which is safe). Set on a
+// true start, cleared whenever ownership is dropped (see dropSurplusStarted).
+const surplusStartedAt = new Map<string, number>();
+// Default minimum on-time (s) when a rule omits minRunSec — 15 min, the owner's anti-chatter floor.
+const MIN_RUN_DEFAULT_SEC = 900;
+// Default fan speed the rule sets on switch-on when a rule omits fanLevel.
+const FAN_LEVEL_DEFAULT = 2;
+
 // Above this much GRID IMPORT (kW) we treat the moment as a DEFICIT regardless of
 // the computed surplusW — a safety net so surplus cooling can never silently turn
 // into a grid-import load (e.g. when the battery-headroom term keeps surplusW > 0
@@ -88,6 +99,7 @@ function addSurplusStarted(deviceId: string): void {
  *  the user took manual control of it. Exported so the manual command path can release a
  *  rule-started unit when the user powers it off. */
 export function dropSurplusStarted(deviceId: string): void {
+  surplusStartedAt.delete(deviceId); // ownership gone ⇒ forget its min-run start time
   store.update((s) => {
     const i = s.devices.surplusStartedIds.indexOf(deviceId);
     if (i >= 0) s.devices.surplusStartedIds.splice(i, 1);
@@ -181,6 +193,8 @@ async function evaluateSurplusDirection(
   const startThreshold = p.startThresholdW ?? 800;
   const heatFloor = p.heatRoomFloorC ?? 19;
   const heatTarget = p.heatTargetSetpointC ?? 21;
+  const minRunMs = (p.minRunSec ?? MIN_RUN_DEFAULT_SEC) * 1000;
+  const fanLevel = p.fanLevel ?? FAN_LEVEL_DEFAULT;
   const settings = store.get().deviceSettings;
 
   // This direction's trigger + target. Cooling triggers when warm (room > limit) and
@@ -251,6 +265,9 @@ async function evaluateSurplusDirection(
     ) {
       addSurplusStarted(u.id);
       offSeenCount.delete(u.id);
+      // Unknown true start time for a reclaimed unit — begin the min-run floor now so a
+      // just-adopted unit still gets its anti-chatter window rather than stopping instantly.
+      if (!surplusStartedAt.has(u.id)) surplusStartedAt.set(u.id, Date.now());
       logDecision(
         u.id,
         `${automation.name}: reclaim`,
@@ -293,7 +310,17 @@ async function evaluateSurplusDirection(
       : 0;
     const surplusSustainedClear = clearedFor >= p.surplusClearSec * 1000;
 
-    const shouldStop = u.power && (surplusSustainedClear || roomAtTarget || inExitBand);
+    // Minimum-run floor (anti-chatter): while a rule-owned unit is inside its min-run window,
+    // suppress the SOFT stops (room reached target / surplus cleared) so a fluctuating surplus
+    // can't switch it on/off repeatedly. The tariff-band (P1 peak) stand-down is NOT held —
+    // entering the expensive band always stops immediately. Tradeoff: if solar collapses right
+    // after a start the unit may draw from the grid for up to minRun; bounded by that window.
+    const startedAt = surplusStartedAt.get(u.id);
+    const withinMinRun =
+      u.power && surplusOwns(u.id) && startedAt != null && Date.now() - startedAt < minRunMs;
+    const softStop = surplusSustainedClear || roomAtTarget;
+
+    const shouldStop = u.power && (inExitBand || (softStop && !withinMinRun));
 
     if (shouldStop) {
       const why = inExitBand
@@ -327,12 +354,20 @@ async function evaluateSurplusDirection(
     }
 
     const reason = `${automation.name}: ${dir}@${targetC}°C (room ${room}°C, surplus ${(snap.surplusW / 1000).toFixed(1)}kW)`;
-    // Drive: mode + target setpoint + power on. Order: mode → setpoint → power.
+    // Drive: mode + target setpoint + fan speed + power on. Order: mode → setpoint → fan → power.
+    // Fan is re-issued each maintain tick like mode/setpoint (issueClimate no-ops when unchanged),
+    // so the unit stays pinned at the configured speed.
     await issueClimate(u, 'mode', dir, reason, { ...snap, pendingImportKw });
     await issueClimate(u, 'setpoint', targetC, reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'fan', fanLevel, reason, { ...snap, pendingImportKw });
     const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
     if (res.ok) addSurplusStarted(u.id); // rule owns this unit now (persisted)
-    if (res.ok && startingCompressor) pendingImportKw += COMPRESSOR_START_KW;
+    // Stamp the min-run start ONLY on a true compressor start (not maintain ticks, which would
+    // otherwise keep resetting the floor and stop it ever elapsing).
+    if (res.ok && startingCompressor) {
+      surplusStartedAt.set(u.id, Date.now());
+      pendingImportKw += COMPRESSOR_START_KW;
+    }
   }
 
   store.update((s) => {
@@ -590,6 +625,7 @@ export function revertClimateToSafe(): void {
   _resetClimateRateLimits();
   surplusClearedSince.clear();
   offSeenCount.clear();
+  surplusStartedAt.clear();
   store.update((st) => {
     st.devices.armed = false;
     st.devices.mode = 'off';

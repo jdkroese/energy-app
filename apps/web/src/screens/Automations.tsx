@@ -90,8 +90,10 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
 
   const surplus = live?.climateSurplusKw ?? 0;                 // real rule surplus (kW), may be negative
   const batteryDataOk = live?.batteryDataComplete ?? true;
-  const startThresholdKw = (p.startThresholdW ?? 800) / 1000;
+  const startThresholdKw = (p.startThresholdW ?? 3000) / 1000;
   const hasSurplus = batteryDataOk && surplus > startThresholdKw; // the rule would actually act
+  const fanLevel = p.fanLevel ?? 2;
+  const minRunMin = Math.round((p.minRunSec ?? 900) / 60);
   const soc = batterySoc(live);
   // Rooms that QUALIFY for this direction right now: cooling wants rooms ABOVE the warm
   // limit, heating wants rooms BELOW the cold floor. Enrolment is per-direction
@@ -126,14 +128,14 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
 
       {/* WHEN / DO / UNTIL / LIMITS */}
       <Block label="When" color="var(--battery)" wash="var(--battery-wash)">
-        <Tok>solar surplus</Tok><span style={{ color: 'var(--text-3)' }}>&gt;</span><Tok>battery intake headroom</Tok>
+        <Tok>surplus to grid</Tok><span style={{ color: 'var(--text-3)' }}>&gt;</span><Tok color="var(--solar)">{startThresholdKw.toFixed(1)} kW</Tok>
         <span style={{ color: 'var(--text-3)' }}>and</span><Tok>a room is {heating ? 'cold' : 'warm'}</Tok><span style={{ color: 'var(--text-3)' }}>{heating ? '<' : '>'}</span><Tok color="var(--grid)">{triggerC.toFixed(1)}°</Tok>
       </Block>
       <Block label="Do" color={tone} wash={wash}>
-        run the <Tok>HVAC units</Tok> — <Tok color={tone}>{verb}</Tok> — to <Tok color={tone}>{targetC.toFixed(1)}°</Tok>, <Tok>staggered ≤ 14 kW</Tok>
+        run the <Tok>HVAC units</Tok> — <Tok color={tone}>{verb}</Tok> — to <Tok color={tone}>{targetC.toFixed(1)}°</Tok>, <Tok>fan {fanLevel}</Tok>, <Tok>staggered ≤ 14 kW</Tok>
       </Block>
       <Block label="Until" color="var(--home)" wash="var(--home-wash)">
-        surplus clears <span style={{ color: 'var(--text-3)' }}>for</span> <Tok>{p.surplusClearSec}s</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> room reaches target
+        <Tok>runs ≥ {minRunMin} min</Tok> <span style={{ color: 'var(--text-3)' }}>then·until</span> surplus clears <span style={{ color: 'var(--text-3)' }}>for</span> <Tok>{p.surplusClearSec}s</Tok> <span style={{ color: 'var(--text-3)' }}>·or·</span> room reaches target
         {bandOn && (<><span style={{ color: 'var(--text-3)' }}>·or·</span> band <Tok color="var(--grid)">{p.exitBand}</Tok></>)}
       </Block>
       <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: '10px 14px' }}>
@@ -199,7 +201,18 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
               <Slider label="Cool to target" unit="°C" min={16} max={26} step={0.5} value={p.targetSetpointC} onChange={(v) => set({ targetSetpointC: v })} />
             </>
           )}
+          <Slider label="Start when surplus above" unit=" kW" min={0} max={6} step={0.5} value={startThresholdKw} onChange={(v) => set({ startThresholdW: Math.round(v * 1000) })} />
+          <Slider label="Minimum run time" unit=" min" min={0} max={30} step={1} value={minRunMin} onChange={(v) => set({ minRunSec: v * 60 })} />
           <Slider label="Surplus must clear for" unit=" s" min={30} max={600} step={30} value={p.surplusClearSec} onChange={(v) => set({ surplusClearSec: v })} />
+          <div>
+            <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Fan speed on start</div>
+            <SegmentedControl
+              size="sm"
+              options={['Auto', '1', '2', '3', '4', '5']}
+              value={fanLevel === 0 ? 'Auto' : String(fanLevel)}
+              onChange={(f) => set({ fanLevel: f === 'Auto' ? 0 : Number(f) })}
+            />
+          </div>
           <div>
             <div className="pwr-eyebrow" style={{ marginBottom: 6 }}>Price-band stand-down</div>
             <SegmentedControl
