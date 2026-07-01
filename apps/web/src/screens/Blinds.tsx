@@ -15,13 +15,26 @@ import type { ShellContext } from '../components/shell/AppShell';
  * /api/blinds; writes are admin-gated server-side. Responsive desktop/mobile.
  * ==========================================================================*/
 
+/** Best-known position for the card: native feedback, else the timed assumed %. */
+function knownPct(d: BlindUnit): number | null {
+  if (d.positionMode === 'timed') return d.assumedPct ?? null;
+  return d.positionPct;
+}
+
 function stateText(d: BlindUnit): string {
   if (!d.online) return 'offline';
   if (d.moving) return 'moving…';
-  if (d.positionPct == null) return '—';
-  if (d.positionPct <= 2) return 'closed';
-  if (d.positionPct >= 98) return 'open';
-  return `${d.positionPct}% open`;
+  const p = knownPct(d);
+  if (p == null) {
+    // Timed blind that hasn't been anchored yet — position is unknown until the first move.
+    if (d.positionMode === 'timed') return 'position unknown';
+    return '—';
+  }
+  if (p <= 2) return 'closed';
+  if (p >= 98) return 'open';
+  const label = `${p}% open`;
+  // A timed blind that has never re-anchored shows its value as approximate.
+  return d.positionMode === 'timed' && d.anchored === false ? `~${label}` : label;
 }
 
 function BlindCard({
@@ -35,13 +48,20 @@ function BlindCard({
   wide: boolean;
   canControl: boolean;
   onCmd: (lever: BlindLever, value?: number) => void;
-  onSaveSettings: (patch: { room?: string; invertPosition?: boolean }) => void;
+  onSaveSettings: (patch: { room?: string; invertPosition?: boolean; travelSec?: number | null }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [roomDraft, setRoomDraft] = useState(d.room);
-  const isOpen = (d.positionPct ?? 0) > 2;
+  // Slider drag value — lets the thumb track the finger smoothly; committed on release.
+  const known = knownPct(d);
+  const [slider, setSlider] = useState<number | null>(null);
+  const sliderVal = slider ?? (known ?? 0);
+  const posMode = d.positionMode ?? (d.supportsPosition ? 'native' : null);
+  const isOpen = (known ?? 0) > 2;
   const tint = d.online && isOpen ? 'var(--ev)' : 'var(--text-3)';
   const disabled = !canControl || !d.online;
+  // Travel-time stepper (timed positioning). Default seed 30s when configuring for the first time.
+  const travelSec = d.travelSec ?? 30;
 
   const moveBtn = (label: string, icon: string, lever: BlindLever) => (
     <button
@@ -80,15 +100,53 @@ function BlindCard({
       {/* Controls */}
       {d.online && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {d.supportsPosition && d.positionPct != null && (
-            <Slider
-              label="Position (open)"
-              min={0}
-              max={100}
-              value={d.positionPct}
-              unit="%"
-              onChange={(v) => canControl && onCmd('position', v)}
-            />
+          {posMode && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Commit the dragged value on release (pointer up / key up) so a timed blind
+                  fires exactly one position command per gesture, not one per pixel. */}
+              <div
+                onPointerUp={() => {
+                  if (slider != null && canControl) onCmd('position', slider);
+                  setSlider(null); // hand back to the live/assumed value (optimistic override covers the gap)
+                }}
+                onKeyUp={() => {
+                  if (slider != null && canControl) onCmd('position', slider);
+                  setSlider(null);
+                }}
+              >
+                <Slider
+                  label="Position (open)"
+                  min={0}
+                  max={100}
+                  value={sliderVal}
+                  unit="%"
+                  onChange={(v) => setSlider(v)}
+                />
+              </div>
+              {/* Preset chips — one-tap common positions. */}
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[0, 25, 50, 75, 100].map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => {
+                      if (canControl) onCmd('position', p);
+                      setSlider(null);
+                    }}
+                    style={{
+                      flex: 1, padding: '5px 0', borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-2)', background: 'var(--surface-2)',
+                      color: disabled ? 'var(--text-disabled)' : 'var(--text-2)',
+                      fontSize: 11, fontWeight: 600, cursor: disabled ? 'default' : 'pointer',
+                      fontFamily: 'var(--font-mono, monospace)',
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           <div style={{ display: 'flex', gap: 8 }}>
             {moveBtn('Open', 'arrow-up', 'open')}
@@ -114,6 +172,53 @@ function BlindCard({
             </div>
             <Switch checked={d.inverted} onChange={(e) => onSaveSettings({ invertPosition: e.target.checked })} />
           </div>
+
+          {/* Travel time — only relevant when there's no native position DP. Enables timed
+              positioning: a move to N% runs the motor for travelSec×|Δ|/100 then Stops. */}
+          {!d.supportsPosition && (
+            <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '9px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13 }}>Travel time</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                    {d.travelSec != null
+                      ? `Full travel ${travelSec}s · each 10% ≈ ${(travelSec / 10).toFixed(1)}s`
+                      : 'Set the full open/close time to enable the % slider'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={travelSec <= 5}
+                    onClick={() => onSaveSettings({ travelSec: Math.max(5, travelSec - 5) })}
+                  >
+                    –
+                  </Button>
+                  <span className="pwr-mono" style={{ minWidth: 42, textAlign: 'center', fontSize: 14, color: d.travelSec != null ? 'var(--text-1)' : 'var(--text-3)' }}>
+                    {travelSec}s
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={travelSec >= 90}
+                    onClick={() => onSaveSettings({ travelSec: Math.min(90, travelSec + 5) })}
+                  >
+                    +
+                  </Button>
+                </div>
+              </div>
+              {d.travelSec != null && (
+                <button
+                  type="button"
+                  onClick={() => onSaveSettings({ travelSec: null })}
+                  style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--text-3)', fontSize: 11, cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                >
+                  Clear (open/stop/close only)
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
       {!canControl && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Read-only — admin required to control.</div>}
@@ -154,13 +259,15 @@ export function BlindsPanel({ ctx }: { ctx: ShellContext }) {
     }, delay);
   };
 
-  const saveSettings = (id: string, patch: { room?: string; invertPosition?: boolean }) => {
+  const saveSettings = (id: string, patch: { room?: string; invertPosition?: boolean; travelSec?: number | null }) => {
     void api.devices.setSettings(id, patch).then(() => refetch());
   };
 
   const withOverride = (d: BlindUnit): BlindUnit => {
     const p = override[d.id];
-    return typeof p === 'number' ? { ...d, positionPct: p } : d;
+    // Reflect the optimistic value on BOTH the native (positionPct) and timed (assumedPct)
+    // read paths so the slider/state line feel live regardless of positionMode.
+    return typeof p === 'number' ? { ...d, positionPct: p, assumedPct: p } : d;
   };
 
   const d = data;

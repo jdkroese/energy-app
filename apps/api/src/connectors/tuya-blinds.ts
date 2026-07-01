@@ -44,6 +44,24 @@ export interface BlindUnit {
   moving: boolean;
   /** Device exposes a settable target position (percent_control). */
   supportsPosition: boolean;
+  /**
+   * How this blind can be positioned:
+   *  - 'native' — hardware percent_control DP (supportsPosition true).
+   *  - 'timed'  — no native DP, but a travelSec is configured (simulate via a timed motor run).
+   *  - null     — open/stop/close only (no positioning). The slider is hidden.
+   * Native wins when both are available.
+   */
+  positionMode: 'native' | 'timed' | null;
+  /** Configured full-travel seconds for a timed blind (undefined for native/none). */
+  travelSec?: number;
+  /**
+   * Best-known position for a TIMED blind, 0–100 (100 = open). This is the server's
+   * assumed position (no feedback), echoed so the card can render the slider. For a
+   * native blind it mirrors positionPct.
+   */
+  assumedPct?: number | null;
+  /** Timed blind: false when the assumed position is unknown (post-restart / never moved). */
+  anchored?: boolean;
   /** Echo of the per-device invert setting that was applied. */
   inverted: boolean;
 }
@@ -74,10 +92,17 @@ function fromOpenPct(openPct: number, invert: boolean): number {
   return invert ? 100 - v : v;
 }
 
-/** Normalize a Tuya curtain device into the app's BlindUnit shape. */
+/** Normalize a Tuya curtain device into the app's BlindUnit shape.
+ *  `runtime` carries the server's timed-position tracking (assumed % + anchored) so the
+ *  card can render a slider for a timed blind that has no hardware feedback. */
 export function normalizeBlind(
   d: TuyaDevice,
-  opts?: { room?: string; invert?: boolean },
+  opts?: {
+    room?: string;
+    invert?: boolean;
+    travelSec?: number;
+    runtime?: { assumedPct: number; anchored: boolean } | null;
+  },
 ): BlindUnit {
   const invert = opts?.invert ?? false;
   const dp = statusMap(d.status);
@@ -93,6 +118,23 @@ export function normalizeBlind(
   const work = workCode ? String(dp[workCode]).toLowerCase() : '';
   const moving = work.includes('opening') || work.includes('closing') || work.includes('moving');
 
+  const supportsPosition = percentCtrl !== null;
+  const travelSec = opts?.travelSec;
+  // Native positioning wins; otherwise a configured travelSec enables timed positioning.
+  const positionMode: 'native' | 'timed' | null = supportsPosition
+    ? 'native'
+    : travelSec != null
+      ? 'timed'
+      : null;
+
+  // assumedPct for the card: native → the real feedback; timed → the server's tracked value.
+  const assumedPct =
+    positionMode === 'native'
+      ? positionPct
+      : positionMode === 'timed'
+        ? opts?.runtime?.assumedPct ?? null
+        : null;
+
   return {
     id: d.id,
     name: d.name,
@@ -101,7 +143,11 @@ export function normalizeBlind(
     online: d.online,
     positionPct,
     moving,
-    supportsPosition: percentCtrl !== null,
+    supportsPosition,
+    positionMode,
+    travelSec: positionMode === 'timed' ? travelSec : undefined,
+    assumedPct,
+    anchored: positionMode === 'timed' ? opts?.runtime?.anchored ?? false : undefined,
     inverted: invert,
   };
 }

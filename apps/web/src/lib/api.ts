@@ -352,6 +352,8 @@ export const api = {
         comfortCeilingC?: number;
         comfortFloorC?: number;
         invertPosition?: boolean;
+        /** Blinds: full-travel seconds for timed positioning (server clamps 5–90; null clears). */
+        travelSec?: number | null;
         solarP3Only?: boolean;
       },
     ) => putJSON<{ ts: string }>(`/api/devices/${enc(id)}/settings`, patch),

@@ -1357,6 +1357,15 @@ export interface BlindUnit {
   moving: boolean;
   /** Device exposes a settable target position (vs. open/close/stop only). */
   supportsPosition: boolean;
+  /** How this blind can be positioned: 'native' (hardware DP), 'timed' (travelSec configured),
+   *  or null (open/stop/close only — no slider). */
+  positionMode?: "native" | "timed" | null;
+  /** Configured full-travel seconds for a timed blind (undefined for native/none). */
+  travelSec?: number;
+  /** Best-known position for a timed blind (server's assumed %); mirrors positionPct for native. */
+  assumedPct?: number | null;
+  /** Timed blind: false when the assumed position is unknown (post-restart / never moved). */
+  anchored?: boolean;
   /** Echo of the per-device invert setting that was applied. */
   inverted: boolean;
 }
