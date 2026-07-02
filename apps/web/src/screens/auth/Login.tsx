@@ -165,7 +165,7 @@ export function Login() {
 
   // ---- Login view ----
   return (
-    <AuthShell title="Sign in to Power" subtitle="Your home energy control room.">
+    <AuthShell title="Sign in to Home" subtitle="Your home energy control room.">
       <form onSubmit={onLogin} style={col}>
         {error && <AuthError>{error}</AuthError>}
         <Input

@@ -1,17 +1,21 @@
 import type { ReactNode } from 'react';
 
-/** The green-bolt Power logo, sized for the auth header. */
+/** The green house "Home" logo, sized for the auth header. */
 export function PowerMark({ size = 44 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 44 44" fill="none" aria-label="Power">
+    <svg width={size} height={size} viewBox="0 0 44 44" fill="none" aria-label="Home">
       <rect x="1" y="1" width="42" height="42" rx="12" fill="#0F1619" stroke="#2EE6A0" strokeOpacity="0.5" strokeWidth="1.5" />
-      <path d="M24.5 9 L14 24.2 h6.4 l-2.9 10.8 L31 19.4 h-6.4 z" fill="#2EE6A0" />
+      {/* House glyph: pitched roof + body, matching the green control-room accent. */}
+      <path
+        d="M22 10 L33 19.4 V21 h-2.4 v12.2 a1.4 1.4 0 0 1 -1.4 1.4 h-4.6 v-7.4 h-5.2 v7.4 h-4.6 a1.4 1.4 0 0 1 -1.4 -1.4 V21 H11 v-1.6 z"
+        fill="#2EE6A0"
+      />
     </svg>
   );
 }
 
 /**
- * AuthShell — full-screen dark canvas with a centered ~380px Power card.
+ * AuthShell — full-screen dark canvas with a centered ~380px Home card.
  * Used by Login, Setup and Reset. A subtle solar glow sits behind the card.
  */
 export function AuthShell({

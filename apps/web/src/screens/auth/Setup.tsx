@@ -56,7 +56,7 @@ export function Setup() {
   };
 
   return (
-    <AuthShell title="Set your password" subtitle="Choose a password to finish setting up your Power account.">
+    <AuthShell title="Set your password" subtitle="Choose a password to finish setting up your Home account.">
       <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {error && <AuthError>{error}</AuthError>}
         <Input

@@ -1,6 +1,6 @@
 {
-  "name": "Power — Energy",
-  "short_name": "Power",
+  "name": "Home — Energy",
+  "short_name": "Home",
   "description": "Home energy management — solar, batteries, grid, live.",
   "id": "/",
   "start_url": "/?source=pwa",

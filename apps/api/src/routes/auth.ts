@@ -67,7 +67,7 @@ import type { AuthUser, TwoFactorChannel } from '../store';
 
 export const authRouter = Router();
 
-const RESET_BASE = 'https://energy.hirobo.nl/reset';
+const RESET_BASE = 'https://home.hirobo.nl/reset';
 
 function ctx(req: Request) {
   return { ua: userAgent(req), ip: clientIp(req) };
@@ -376,7 +376,7 @@ authRouter.post('/users', requireAdmin, (req: Request, res: Response) => {
     res.json({
       user: publicUser(user),
       setupToken: token,
-      setupUrl: `https://energy.hirobo.nl/setup?token=${token}`,
+      setupUrl: `https://home.hirobo.nl/setup?token=${token}`,
     });
   } catch (e) {
     const err = e as Error & { code?: string };
