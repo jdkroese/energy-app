@@ -37,6 +37,26 @@ export function lastAppRunTs(zoneId: string): number | undefined {
   return lastAppRunByZone.get(zoneId);
 }
 
+/** Expected end (epoch ms) of the run the app most recently started for each zone, so the UI
+ *  can reflect "watering now" the instant we fire — WITHOUT depending on the controller's
+ *  CurrentStationsActive register (which, on this LNK, is unverified to report manual runs).
+ *  Set on a successful run, dropped when the window elapses, and cleared on a stop. */
+const appRunUntilByZone = new Map<string, number>();
+
+/** Remaining ms of the app-initiated run window for this zone (0 when none/elapsed). */
+export function appRunRemainingMs(
+  zoneId: string,
+  now: number = Date.now(),
+): number {
+  const until = appRunUntilByZone.get(zoneId);
+  if (until === undefined) return 0;
+  if (until <= now) {
+    appRunUntilByZone.delete(zoneId); // window elapsed — self-clean
+    return 0;
+  }
+  return until - now;
+}
+
 function logEntry(
   deviceId: string,
   lever: IrrigationLever,
@@ -105,7 +125,9 @@ export async function issueIrrigation(
       if (!Number.isFinite(minutes) || minutes <= 0)
         return reject(deviceId, lever, "minutes must be > 0");
       await rainbird.startZone(deviceId, minutes);
-      lastAppRunByZone.set(deviceId, Date.now());
+      const startedAt = Date.now();
+      lastAppRunByZone.set(deviceId, startedAt);
+      appRunUntilByZone.set(deviceId, startedAt + minutes * 60_000);
       logEntry(
         deviceId,
         lever,
@@ -120,6 +142,7 @@ export async function issueIrrigation(
 
     if (lever === "stop") {
       await rainbird.stopAll();
+      appRunUntilByZone.clear(); // stop-all ends every app-initiated run window
       logEntry(
         deviceId,
         lever,
