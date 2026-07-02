@@ -3,12 +3,16 @@ import type { VoltageSample } from '../../lib/types';
 
 /* ============================================================================
  * VoltageHistoryChart — hand-rolled SVG line chart of the last 48h of grid
- * voltage (5-min buckets). Draws the voltage line in --grid, dashed band lines
- * at minV/maxV, tints out-of-band segments --danger, and labels a few x-axis
- * time ticks. Hover/drag (pointer events → mouse + touch) reveals a crosshair,
- * a dot on the nearest sample, and a tooltip with the value + date/time.
- * Empty/too-few-points → a tidy "Collecting data…" state. Used in both
- * viewports (desktop modal + mobile sheet). Model: AreaChart/DayChart.
+ * voltage (5-min buckets). Draws the breaker voltage line in --grid, dashed band
+ * lines at minV/maxV, tints out-of-band segments --danger, and labels a few x-axis
+ * time ticks. Overlays a SECOND line (--warning) for the Sonnen inverter's own AC
+ * terminal voltage (Uac) — it runs higher than the breaker meter and is the value
+ * that actually governs the over-voltage trip; samples missing Uac leave a GAP in
+ * that line (never plotted as 0). A small legend distinguishes the two. Hover/drag
+ * (pointer events → mouse + touch) reveals a crosshair, a dot on the nearest sample,
+ * and a tooltip with both values + date/time. Empty/too-few-points → a tidy
+ * "Collecting data…" state. Used in both viewports (desktop modal + mobile sheet).
+ * Model: AreaChart/DayChart.
  * ==========================================================================*/
 
 type Props = {
@@ -65,8 +69,12 @@ export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
   const plotH = h - padY * 2;
 
   const vals = samples.map((s) => s.voltageV);
+  // Sonnen inverter Uac values (only the real ones — >0); used to widen the Y-range so
+  // the (higher) inverter line stays in view, and to draw the overlay line below.
+  const uacVals = samples.map((s) => s.sonnenUacV).filter((v): v is number => typeof v === 'number' && v > 0);
+  const hasUac = uacVals.length >= 2;
   const dataMin = Math.min(...vals);
-  const dataMax = Math.max(...vals);
+  const dataMax = Math.max(...vals, ...uacVals);
   // Y-range always includes the band, with a little padding above/below.
   const lo = Math.floor(Math.min(dataMin, band.minV) - 4);
   const hi = Math.ceil(Math.max(dataMax, band.maxV) + 4);
@@ -90,6 +98,23 @@ export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
       d: `M${a.x.toFixed(1)} ${a.y.toFixed(1)} L${b.x.toFixed(1)} ${b.y.toFixed(1)}`,
       bad: outOfBand(a.v) || outOfBand(b.v),
     });
+  }
+
+  // Sonnen inverter Uac overlay — build as contiguous polyline runs so samples that
+  // lack a real Uac (missing/0) leave a GAP in the line rather than dropping to 0.
+  const uacRuns: string[] = [];
+  if (hasUac) {
+    let run: string[] = [];
+    for (const s of samples) {
+      const u = s.sonnenUacV;
+      if (typeof u === 'number' && u > 0) {
+        run.push(`${run.length ? 'L' : 'M'}${x(s.ts).toFixed(1)} ${y(u).toFixed(1)}`);
+      } else if (run.length) {
+        if (run.length >= 2) uacRuns.push(run.join(' '));
+        run = [];
+      }
+    }
+    if (run.length >= 2) uacRuns.push(run.join(' '));
   }
 
   // Band lines (clamped into the plot when within range).
@@ -141,6 +166,26 @@ export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
       onPointerLeave={() => setHover(null)}
       style={{ position: 'relative', touchAction: 'none', cursor: 'crosshair' }}
     >
+      {/* legend — distinguishes the breaker meter from the Sonnen inverter Uac line */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          display: 'flex',
+          gap: 12,
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: '0.02em',
+          color: 'var(--text-3)',
+          pointerEvents: 'none',
+          zIndex: 1,
+        }}
+      >
+        <LegendKey color="var(--grid)" label="Breaker" />
+        {hasUac && <LegendKey color="var(--warning)" label="Inverter (Sonnen)" />}
+      </div>
     <svg
       viewBox={`0 0 ${w} ${h + 24}`}
       width="100%"
@@ -222,6 +267,21 @@ export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
         />
       ))}
 
+      {/* Sonnen inverter Uac overlay — amber, drawn over the breaker line; gaps where absent */}
+      {uacRuns.map((d, i) => (
+        <path
+          key={`uac${i}`}
+          d={d}
+          fill="none"
+          stroke="var(--warning)"
+          strokeWidth="2"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          strokeOpacity="0.9"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+
       {/* x-axis time ticks */}
       {ticks.map((tk, i) => (
         <text
@@ -293,11 +353,26 @@ export function VoltageHistoryChart({ samples, band, height = 200 }: Props) {
           <span style={{ font: '600 15px var(--font-mono)', color: hBad ? 'var(--danger)' : 'var(--grid)' }}>
             {hs.voltageV} V
           </span>
+          {typeof hs.sonnenUacV === 'number' && hs.sonnenUacV > 0 && (
+            <span style={{ font: '600 15px var(--font-mono)', color: 'var(--warning)', marginLeft: 8 }}>
+              {hs.sonnenUacV} V
+            </span>
+          )}
           <span style={{ font: '500 11px var(--font-sans, inherit)', color: 'var(--text-3)', marginLeft: 8 }}>
             {whenLabel(hs.ts)}
           </span>
         </div>
       )}
     </div>
+  );
+}
+
+/** Legend swatch + label — a short colored dash matching the line stroke. */
+function LegendKey({ color, label }: { color: string; label: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+      <span style={{ width: 14, height: 3, borderRadius: 2, background: color, display: 'inline-block' }} />
+      {label}
+    </span>
   );
 }

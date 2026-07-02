@@ -29,6 +29,7 @@ const RULE_META: Record<string, { icon: string; label: string }> = {
   'rule-offline': { icon: 'wifi-off', label: 'Device unreachable' },
   'rule-outage': { icon: 'zap-off', label: 'Grid outage detected' },
   'rule-export': { icon: 'arrow-up-from-line', label: 'Exporting during P1 (wasted value)' },
+  'rule-charge-stall': { icon: 'battery-warning', label: 'Sonnen not absorbing surplus' },
   'rule-voltage': { icon: 'zap', label: 'Grid voltage out of band' },
 };
 
@@ -133,6 +134,44 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
         ts: now,
         status: 'new',
         rule: 'rule-export',
+      });
+    }
+
+    // Sonnen not absorbing the solar surplus — only meaningful when the coordinator is
+    // actively managing the battery (armed + auto). NET export means neither battery is
+    // soaking the surplus, so this cleanly excludes the legit "Tesla-first idles Sonnen"
+    // case. The usual cause is a grid OVER-VOLTAGE trip: the inverter stops charging AND
+    // exporting while the house still spills to grid, and the control log shows healthy
+    // "setpoint issued / ok" because the Sonnen 200s the command but ignores it.
+    const ctrl = store.get().control;
+    if (
+      ruleEnabled('rule-charge-stall') &&
+      ctrl.armed &&
+      ctrl.mode === 'auto' &&
+      s.gridFeedInW > ctrl.soakExport.startW &&
+      s.soc < ctrl.soakExport.socCeilingPct &&
+      s.dir !== 'charging'
+    ) {
+      // Diagnostic: read the monitored breaker voltage and the Sonnen's own Uac. If EITHER
+      // is above the configured band, this is almost certainly an over-voltage trip.
+      const vm = store.get().voltageMonitor;
+      const breaker = await getMonitoredBreaker().catch(() => null);
+      const breakerHigh = !!breaker && breaker.voltageV > 0 && breaker.voltageV > vm.maxV;
+      const uacHigh = s.uacV > 0 && s.uacV > vm.maxV;
+      const sub =
+        breakerHigh || uacHigh
+          ? `Exporting ${Math.round(s.gridFeedInW)} W with SoC ${s.soc}% — likely grid over-voltage trip (Uac ${s.uacV} V)`
+          : `Exporting ${Math.round(s.gridFeedInW)} W with SoC ${s.soc}% but battery idle — not absorbing surplus`;
+      live.push({
+        id: 'sonnen-charge-stall',
+        severity: 'danger',
+        icon: 'battery-warning',
+        title: 'Sonnen not absorbing surplus',
+        sub,
+        device: 'Sonnen',
+        ts: now,
+        status: 'new',
+        rule: 'rule-charge-stall',
       });
     }
   }

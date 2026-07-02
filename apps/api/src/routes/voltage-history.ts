@@ -10,7 +10,7 @@ import * as store from '../store';
 import { getMonitoredBreaker } from '../connectors/tuya-voltage';
 
 export interface VoltageHistoryResponse {
-  samples: Array<{ ts: number; voltageV: number; currentA: number; powerW: number }>;
+  samples: Array<{ ts: number; voltageV: number; currentA: number; powerW: number; sonnenUacV?: number }>;
   band: { minV: number; maxV: number };
   breaker: { id: string; name: string } | null;
 }

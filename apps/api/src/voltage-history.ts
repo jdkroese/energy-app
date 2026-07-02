@@ -22,6 +22,9 @@ export interface Sample {
   voltageV: number;
   currentA: number;
   powerW: number;
+  /** Sonnen inverter AC terminal voltage (V), when available. Runs higher than the
+   *  breaker meter and governs the over-voltage trip; absent on old files / when 0. */
+  sonnenUacV?: number;
 }
 
 const BUCKET_MS = 5 * 60 * 1000; // 5-minute slots
@@ -31,6 +34,9 @@ const MAX_ENTRIES = 600; // hard ceiling (48h / 5min = 576; small headroom)
 interface StoredSample extends Sample {
   /** Per-bucket sample count, for running averages. */
   n: number;
+  /** Per-bucket count of folded-in Sonnen Uac readings (>0 only), tracked
+   *  separately from `n` since some polls lack a real Uac. */
+  un?: number;
 }
 
 interface HistoryFile {
@@ -101,12 +107,21 @@ function hydrate(raw: Partial<HistoryFile>): HistoryFile {
       !Number.isFinite(r.voltageV)
     )
       continue;
+    const hasUac =
+      typeof r.sonnenUacV === 'number' && Number.isFinite(r.sonnenUacV) && r.sonnenUacV > 0;
     out.samples.push({
       ts: r.ts,
       voltageV: r.voltageV,
       currentA: typeof r.currentA === 'number' && Number.isFinite(r.currentA) ? r.currentA : 0,
       powerW: typeof r.powerW === 'number' && Number.isFinite(r.powerW) ? r.powerW : 0,
       n: typeof r.n === 'number' && Number.isFinite(r.n) && r.n > 0 ? r.n : 1,
+      // Back-compat: old files lack Uac entirely — leave it off so the chart gaps it.
+      ...(hasUac
+        ? {
+            sonnenUacV: r.sonnenUacV as number,
+            un: typeof r.un === 'number' && Number.isFinite(r.un) && r.un > 0 ? r.un : 1,
+          }
+        : {}),
     });
   }
   out.samples.sort((a, b) => a.ts - b.ts);
@@ -142,9 +157,19 @@ function prune(state: HistoryFile, now: number): void {
  * sampler). Within a bucket each field is a running average. Skips readings with
  * no real voltage (voltageV <= 0). Persists atomically. Never throws.
  */
-export function record(reading: { voltageV: number; currentA: number; powerW: number }): void {
+export function record(reading: {
+  voltageV: number;
+  currentA: number;
+  powerW: number;
+  sonnenUacV?: number;
+}): void {
   try {
     if (!Number.isFinite(reading.voltageV) || reading.voltageV <= 0) return; // no real reading
+    // Only fold Uac in when it's a real reading (>0); otherwise leave the bucket's Uac untouched.
+    const uac =
+      typeof reading.sonnenUacV === 'number' && Number.isFinite(reading.sonnenUacV) && reading.sonnenUacV > 0
+        ? reading.sonnenUacV
+        : null;
     const state = load();
     const now = Date.now();
     const bucket = Math.floor(now / BUCKET_MS) * BUCKET_MS;
@@ -156,6 +181,12 @@ export function record(reading: { voltageV: number; currentA: number; powerW: nu
       last.currentA = round((last.currentA * n + reading.currentA) / (n + 1), 1);
       last.powerW = Math.round((last.powerW * n + reading.powerW) / (n + 1));
       last.n = n + 1;
+      if (uac !== null) {
+        // Averaged over its own count so buckets with only some Uac polls stay correct.
+        const un = last.un ?? 0;
+        last.sonnenUacV = round((((last.sonnenUacV ?? 0) * un) + uac) / (un + 1));
+        last.un = un + 1;
+      }
     } else {
       state.samples.push({
         ts: bucket,
@@ -163,6 +194,7 @@ export function record(reading: { voltageV: number; currentA: number; powerW: nu
         currentA: round(reading.currentA, 1),
         powerW: Math.round(reading.powerW),
         n: 1,
+        ...(uac !== null ? { sonnenUacV: round(uac), un: 1 } : {}),
       });
       prune(state, now);
     }
@@ -181,5 +213,12 @@ export function getRecent(hoursBack = 48): Sample[] {
   const cutoff = Date.now() - hoursBack * 60 * 60 * 1000;
   return state.samples
     .filter((s) => s.ts >= cutoff)
-    .map((s) => ({ ts: s.ts, voltageV: s.voltageV, currentA: s.currentA, powerW: s.powerW }));
+    .map((s) => ({
+      ts: s.ts,
+      voltageV: s.voltageV,
+      currentA: s.currentA,
+      powerW: s.powerW,
+      // Only surface a real Uac so the chart gaps (not plots 0) where it's missing.
+      ...(typeof s.sonnenUacV === 'number' && s.sonnenUacV > 0 ? { sonnenUacV: s.sonnenUacV } : {}),
+    }));
 }
