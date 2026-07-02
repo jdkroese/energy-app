@@ -4,6 +4,7 @@ import { Icon } from '../ui/Icon';
 import { Eyebrow } from '../ui/Eyebrow';
 import { RAIL_SECTIONS, NAV_SETTINGS, navMatches, type NavItem } from './nav';
 import { RailAlarmButton } from './NavAlarm';
+import { RailMiniPlayer } from './NavMiniPlayer';
 import { useAuth } from '../../auth/AuthProvider';
 
 type Props = {
@@ -95,6 +96,9 @@ export function Rail({ expanded, onToggle }: Props) {
       </nav>
 
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Global now-playing mini player — sits above the footer controls, shows
+            whatever's playing (Spotify/radio); renders nothing when idle. */}
+        <RailMiniPlayer expanded={expanded} />
         {/* Panic button — always reachable, visually set apart from the nav links. */}
         <RailAlarmButton expanded={expanded} />
         {expanded && (
@@ -118,57 +122,68 @@ export function Rail({ expanded, onToggle }: Props) {
             </div>
           </div>
         )}
-        {/* Settings pinned here — next to Sign out / Collapse, away from the nav groups. */}
-        <RailLink item={NAV_SETTINGS} expanded={expanded} active={navMatches(NAV_SETTINGS.to, loc)} />
-        <button
-          onClick={() => void signOut()}
-          title={user ? `Sign out — ${user.email}` : 'Sign out'}
+        {/* Footer controls — one icon-only line: Settings · Sign out · Pin. The pin
+            keeps the old collapse/expand behaviour (pinned-open ↔ collapsed); only
+            its icon + inline placement changed. Expanded → a horizontal row; the
+            narrow collapsed rail stacks them into a single icon column. */}
+        <div
           style={{
             display: 'flex',
+            flexDirection: expanded ? 'row' : 'column',
             alignItems: 'center',
-            height: 42,
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            color: 'var(--text-2)',
-            borderRadius: 'var(--radius-md)',
-            fontSize: 14,
-            fontWeight: 500,
-            justifyContent: expanded ? 'flex-start' : 'center',
-            gap: expanded ? 11 : 0,
-            padding: expanded ? '0 12px' : '0',
+            justifyContent: expanded ? 'space-between' : 'center',
+            gap: expanded ? 4 : 6,
+            padding: expanded ? '0 4px' : 0,
           }}
         >
-          <Icon name="log-out" size={18} />
-          {expanded && <span>Sign out</span>}
-        </button>
-
-        <button
-          onClick={onToggle}
-          title={expanded ? 'Collapse' : 'Expand'}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            height: 42,
-            border: 'none',
-            background: 'transparent',
-            cursor: 'pointer',
-            color: 'var(--text-2)',
-            borderRadius: 'var(--radius-md)',
-            fontSize: 14,
-            fontWeight: 500,
-            justifyContent: expanded ? 'flex-start' : 'center',
-            gap: expanded ? 11 : 0,
-            padding: expanded ? '0 12px' : '0',
-          }}
-        >
-          <Icon name={expanded ? 'chevrons-left' : 'chevrons-right'} size={18} />
-          {expanded && <span>Collapse</span>}
-        </button>
+          <NavLink
+            to={NAV_SETTINGS.to}
+            aria-label="Settings"
+            title="Settings"
+            style={{ ...footerIconBtn, ...(navMatches(NAV_SETTINGS.to, loc) ? footerIconActive : null) }}
+          >
+            <Icon name="settings" size={18} />
+          </NavLink>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            aria-label="Log out"
+            title={user ? `Log out — ${user.email}` : 'Log out'}
+            style={footerIconBtn}
+          >
+            <Icon name="log-out" size={18} />
+          </button>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label={expanded ? 'Unpin the sidebar' : 'Pin the sidebar open'}
+            title={expanded ? 'Unpin the sidebar' : 'Pin the sidebar open'}
+            aria-pressed={expanded}
+            style={{ ...footerIconBtn, ...(expanded ? footerIconActive : null) }}
+          >
+            <Icon name={expanded ? 'pin' : 'pin-off'} size={18} />
+          </button>
+        </div>
       </div>
     </aside>
   );
 }
+
+/** Shared icon-only footer button (settings / logout / pin). */
+const footerIconBtn: CSSProperties = {
+  display: 'grid',
+  placeItems: 'center',
+  width: 38,
+  height: 38,
+  flex: 'none',
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  color: 'var(--text-2)',
+  borderRadius: 'var(--radius-md)',
+  textDecoration: 'none',
+};
+const footerIconActive: CSSProperties = { color: 'var(--solar)', background: 'var(--solar-wash)' };
 
 function Logo() {
   return (
