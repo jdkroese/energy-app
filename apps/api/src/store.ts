@@ -389,7 +389,7 @@ export interface IntegrationsState {
   tuya?: { region?: string; accessId?: string; accessSecret?: string };
   /** Sungrow solar inverters — the two WiNet-S dongles (one per SG5.0RS), keyed on
    *  dongle IP. Read-only LAN integration (docs/36); env is the fallback. */
-  sungrow?: { dongles?: { ip: string; name?: string }[] } | null;
+  sungrow?: { dongles?: { ip: string; name?: string; ratedKw?: number }[] } | null;
   /** Panasonic Comfort Cloud — native WiFi AC modules (CS-Z / CS-XZ series). */
   panasonic?: { username: string; password: string } | null;
   /** Sonos house-alarm. Local UPnP discovery (zero-config on the LAN); `seedIp` is a

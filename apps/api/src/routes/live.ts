@@ -9,8 +9,29 @@ import { recordEnergySample } from '../control/energy-history';
 import { recordInverterSamples } from '../control/inverter-history';
 import { climateSurplusW } from '../control/climate-snapshot';
 import { getMonitoredBreaker } from '../connectors/tuya-voltage';
+import { logEvent } from '../events';
 
 const COMBINED_USABLE_KWH = config.assets.sonnenUsableKwh + config.assets.teslaUsableKwh;
+
+// Site-wide solar AC plausibility ceiling (kW). Physical ceiling ≈ 2×5.0 kW Sungrow
+// (Array A) + ~7 kW Tesla-metered array (Array B) ≈ 17 kW; 18 leaves a small headroom.
+// A summed solarKw above this is physically impossible → clamped (defense-in-depth for
+// a Tesla-side/summing anomaly the per-inverter Sungrow guard can't catch). Tunable here.
+export const SITE_SOLAR_CEILING_KW = 18;
+
+/**
+ * Clamp a summed solar kW to the physical site AC ceiling (and floor at 0). Pure +
+ * side-effect-free so it's unit-testable; the caller handles the (fail-soft) logging.
+ * `clamped` is true only when the raw value exceeded the ceiling (not the negative→0
+ * floor), so logging fires once per real over-ceiling anomaly and never spams.
+ */
+export function clampSiteSolarKw(
+  rawKw: number,
+  ceilingKw = SITE_SOLAR_CEILING_KW,
+): { kw: number; clamped: boolean } {
+  if (!Number.isFinite(rawKw)) return { kw: 0, clamped: false };
+  return { kw: Math.max(0, Math.min(ceilingKw, rawKw)), clamped: rawKw > ceilingKw };
+}
 
 // In-process rolling 24h day buffers for the day chart (best-effort; resets on
 // restart, resets at Madrid midnight). Power series in kW, SoC series in %.
@@ -194,6 +215,43 @@ export async function getLive(): Promise<unknown> {
     solarKw = round(teslaSolar + sonnenSolar);
   }
 
+  // Site-wide solar plausibility clamp (defense-in-depth). The per-inverter guard in
+  // sungrow.ts catches a bad Sungrow sample, but a Tesla-side anomaly or a summing
+  // glitch could still produce an impossible total. Physical AC ceiling ≈ 2×5.0 kW
+  // (Sungrows) + ~7 kW (Tesla-metered 16×450 Wp array) ≈ 17 kW; we clamp at 18 kW to
+  // leave a small headroom. A single garbage sample above this can no longer be drawn.
+  const rawSolarKw = solarKw;
+  const clamp = clampSiteSolarKw(rawSolarKw);
+  solarKw = clamp.kw;
+  if (clamp.clamped) {
+    // Only log a real over-ceiling clamp (not the harmless negative→0 floor), and be
+    // fail-soft so a logging hiccup can never break /api/live or the control loop.
+    try {
+      logEvent({
+        class: 'observation',
+        category: 'solar',
+        severity: 'medium',
+        summary: `Implausible total solar clamped — ${rawSolarKw.toFixed(1)} kW`,
+        trigger: { source: 'threshold', detail: `> ${SITE_SOLAR_CEILING_KW} kW site ceiling` },
+        device: 'Solar',
+        entity: 'solar.kw',
+        detail:
+          `Summed solar production ${rawSolarKw.toFixed(1)} kW exceeded the ${SITE_SOLAR_CEILING_KW} kW ` +
+          `site AC ceiling and was clamped to ${solarKw.toFixed(1)} kW (likely a Tesla-side or summing anomaly).`,
+        data: {
+          rawSolarKw: round(rawSolarKw),
+          clampedKw: solarKw,
+          ceilingKw: SITE_SOLAR_CEILING_KW,
+          teslaKw: round(teslaSolar),
+          arrays,
+        },
+        noNotify: true,
+      });
+    } catch {
+      /* logging is best-effort — never block the live read */
+    }
+  }
+
   // Home load: prefer Tesla load_power; else Sonnen consumption.
   const homeKw = t ? t.loadKw : s ? round(s.consumptionW / 1000) : 0;
 
@@ -252,7 +310,10 @@ export async function getLive(): Promise<unknown> {
   // REACHABLE inverters are recorded so an unreachable dongle doesn't average a
   // spurious 0 into its production. Additive + fail-soft — never throws here.
   if (inv) {
-    const reachable = inv.inverters.filter((i) => i.reachable);
+    // Skip inverters whose power reading was rejected this poll by the plausibility
+    // guard (powerRejected) — a WiNet-S catch-up spike would otherwise land verbatim
+    // in per-inverter history. A single ~20s gap is invisible in the 5m buckets.
+    const reachable = inv.inverters.filter((i) => i.reachable && !i.powerRejected);
     if (reachable.length > 0) {
       recordInverterSamples(
         reachable.map((i) => ({
