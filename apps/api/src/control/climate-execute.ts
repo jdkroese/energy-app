@@ -57,12 +57,23 @@ function logEntry(
   reason: string,
   ok: boolean,
   detail: string,
+  opts: { commsError?: boolean } = {},
 ): void {
   store.update((s) => {
     s.devices.log.push({ ts: Date.now(), deviceId, lever, from, to, reason, ok, detail });
     s.devices.log = store.pruneLog(s.devices.log);
     s.devices.updatedAt = Date.now();
-    if (!ok) s.devices.lastError = `${deviceId}.${lever}: ${detail}`;
+    if (ok) {
+      // A successful write proves the control path is healthy — clear any stale write
+      // error so a one-off transient (e.g. "socket closed before set_ack") self-heals
+      // instead of reddening the connector until the next arm toggle.
+      s.devices.lastError = null;
+    } else if (opts.commsError) {
+      // Only genuine device/cloud comms failures are connector errors. Benign policy
+      // rejects (rate-limited, not armed, stale snapshot, unknown lever) must NOT set
+      // lastError — otherwise a routine "rate-limited (<30s)" reds the connector tile.
+      s.devices.lastError = `${deviceId}.${lever}: ${detail}`;
+    }
   });
   // Shim: mirror into the unified event bus (docs/37 §3) alongside the domain log.
   logClimateAction(deviceId, lever, from, to, reason, ok, detail);
@@ -217,7 +228,9 @@ export async function issueClimate(
     return reject(unit.id, lever, null, `unknown lever '${lever}'`);
   } catch (e) {
     const detail = (e as Error).message;
-    logEntry(unit.id, lever, null, null, reason, false, detail);
+    // A thrown setDatapoint (socket dropped, timed out, cloud rejected) is a genuine
+    // comms failure — the only kind that should mark the connector's lastError.
+    logEntry(unit.id, lever, null, null, reason, false, detail, { commsError: true });
     return { ok: false, skipped: false, reason: detail, from: null, to: null };
   }
 }

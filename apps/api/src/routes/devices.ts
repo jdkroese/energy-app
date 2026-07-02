@@ -265,13 +265,26 @@ export async function getDevices(): Promise<unknown> {
   const temps = devices.map((d) => d.currentTempC).filter((t): t is number => t !== null);
   const indoorAvgC = temps.length ? Math.round((temps.reduce((a, b) => a + b, 0) / temps.length) * 10) / 10 : null;
 
+  // Self-heal a stale write/coordinator error. `lastError` is sticky (set on a failed
+  // write, only cleared on arm), so one transient blip (e.g. "socket closed before
+  // set_ack") reds the connector forever even though reads are fine. A healthy fleet
+  // read — connector reachable, no fleetError — proves the control path is alive, so
+  // clear it. A genuinely-failing write immediately re-sets it on its next attempt.
+  let lastError = dev.lastError;
+  // Only self-heal a device WRITE error ("<id>.<lever>: …") — leave distinct
+  // coordinator-tick errors ("climate coordinator …") to their own lifecycle.
+  if (lastError && connected && !fleetError && /^[\w-]+\.\w+: /.test(lastError)) {
+    store.update((st) => { st.devices.lastError = null; });
+    lastError = null;
+  }
+
   return {
     ts: new Date().toISOString(),
     connected,
     fleetError,
     armed: dev.armed,
     mode: dev.mode,
-    lastError: dev.lastError,
+    lastError,
     guardrails: dev.guardrails,
     context: {
       indoorAvgC,
