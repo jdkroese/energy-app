@@ -638,6 +638,13 @@ export const api = {
     }) => postJSON<RadioPlayResponse>("/api/radio/play", body),
     stop: (speakerIds: string[] = []) =>
       postJSON<{ ts: string; ok: boolean }>("/api/radio/stop", { speakerIds }),
+    // Live-edit which zones the active radio session plays on (reconciles the group;
+    // empty set stops the session).
+    setSpeakers: (speakerIds: string[]) =>
+      postJSON<{ ts: string; ok: boolean; joined?: string[]; coordinator?: string; stopped?: boolean }>(
+        "/api/radio/speakers",
+        { speakerIds },
+      ),
     nowPlaying: () =>
       getJSON<RadioNowPlayingResponse>("/api/radio/now-playing"),
     schedules: () => getJSON<RadioSchedulesResponse>("/api/radio/schedules"),
@@ -677,6 +684,13 @@ export const api = {
       speakerIds: string[];
       volumePct?: number;
     }) => postJSON<SpotifyPlayResponse>("/api/spotify/play", body),
+    // Live-edit which zones the active Spotify playback runs on (reconciles the group;
+    // empty set pauses playback).
+    setSpeakers: (speakerIds: string[]) =>
+      postJSON<{ ts: string; ok: boolean; joined?: string[]; coordinator?: string; paused?: boolean }>(
+        "/api/spotify/speakers",
+        { speakerIds },
+      ),
     pause: () => postJSON<{ ok: boolean }>("/api/spotify/pause", {}),
     resume: () => postJSON<{ ok: boolean }>("/api/spotify/resume", {}),
     next: () => postJSON<{ ok: boolean }>("/api/spotify/next", {}),

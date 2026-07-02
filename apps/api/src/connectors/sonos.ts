@@ -355,6 +355,76 @@ export async function groupSpeakers(
   return { coordinator: coordinator.Uuid, joined };
 }
 
+/**
+ * Reconcile the speaker set of an ALREADY-PLAYING group to `targetIds`, without interrupting the
+ * stream on the coordinator. Used by the "Playing on" control to add/remove zones live:
+ *   • ADD    — a target zone not currently in the group JoinGroup()s the coordinator (starts in sync).
+ *   • REMOVE — a currently-grouped zone that's no longer wanted is unjoined (Sonos "Leave") + stopped
+ *              so it goes silent. The coordinator itself is never removed (its stream keeps running).
+ * `currentIds` is the set the group is believed to be playing on (the persisted now-playing set). The
+ * coordinator is kept as the group's anchor; if the coordinator would be removed, the FIRST remaining
+ * target becomes the new coordinator is NOT attempted here — callers guarantee ≥1 target and keep the
+ * coordinator in-scope (remove-last is handled one level up as a Stop). Best-effort per speaker.
+ *
+ * Returns the resolved set of ids now in the group (coordinator + successfully-joined members).
+ */
+export async function reconcileGroup(
+  coordinatorId: string,
+  currentIds: string[],
+  targetIds: string[],
+): Promise<{ coordinator: string; joined: string[] }> {
+  const m = await getManager();
+  if (!m) throw new Error(lastError || 'Sonos not available');
+  const coordinator = deviceByUuid(m, coordinatorId);
+  if (!coordinator) throw new Error(`coordinator ${coordinatorId} not found`);
+
+  const want = new Set(targetIds);
+  want.add(coordinatorId); // the coordinator is always in-scope while playing
+  const have = new Set(currentIds);
+  have.add(coordinatorId);
+
+  const toAdd = [...want].filter((id) => !have.has(id) && id !== coordinatorId);
+  const toRemove = [...have].filter((id) => !want.has(id) && id !== coordinatorId);
+
+  // Add: join each new zone to the coordinator's group (plays the same stream in sync).
+  const joined: string[] = [coordinatorId];
+  for (const id of [...want].filter((x) => x !== coordinatorId)) {
+    // Only actively JoinGroup the newly-added ones; ones already grouped are assumed in sync.
+    if (toAdd.includes(id)) {
+      const d = deviceByUuid(m, id);
+      if (!d) continue;
+      try {
+        await d.JoinGroup(coordinator.Name);
+        joined.push(id);
+      } catch {
+        /* couldn't join this zone — the rest still play */
+      }
+    } else {
+      joined.push(id); // already in the group
+    }
+  }
+
+  // Remove: leave the group (become a standalone) + stop, so the zone goes silent.
+  for (const id of toRemove) {
+    const d = deviceByUuid(m, id);
+    if (!d) continue;
+    try {
+      // Leaving the group makes the player its own standalone coordinator; then stop it.
+      await d.AVTransportService.BecomeCoordinatorOfStandaloneGroup({ InstanceID: 0 });
+    } catch {
+      /* some firmware/lib versions lack the standalone call — fall through to Stop */
+    }
+    try {
+      await d.Stop();
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  lastFleetAt = 0; // force the next fleet read to reflect the new grouping
+  return { coordinator: coordinatorId, joined: [...new Set(joined)] };
+}
+
 /** The distinct group coordinators (one device per group). Firing a notification at each
  *  coordinator covers EVERY speaker — including stereo pairs (one logical coordinator per
  *  pair). Owner-validated: 8 coordinators cover the 8-zone / 13-player system.

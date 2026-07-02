@@ -240,6 +240,57 @@ export function nowPlaying(): unknown {
   return { ts: new Date().toISOString(), nowPlaying: store.get().radioNowPlaying };
 }
 
+/**
+ * POST /api/radio/speakers { speakerIds } (admin) — LIVE-edit which zones the active radio session
+ * plays on, without re-pressing Play. Reconciles the current now-playing group to the target set:
+ * newly-checked zones JoinGroup the coordinator (start in sync); un-checked zones leave + stop.
+ *
+ * Removing the LAST speaker stops the session entirely (an empty set = stop everything + clear the
+ * banner). Otherwise the coordinator's stream keeps running and the persisted set is updated so
+ * /now-playing reflects the change. Fail-soft — grouping errors surface as BAD_INPUT.
+ */
+export async function setRadioSpeakers(body: unknown): Promise<unknown> {
+  const b = (body ?? {}) as { speakerIds?: unknown };
+  const targetIds = Array.isArray(b.speakerIds)
+    ? [...new Set(b.speakerIds.filter((x): x is string => typeof x === 'string'))]
+    : [];
+
+  const np = store.get().radioNowPlaying;
+  if (!np) badInput('nothing is playing on the radio');
+
+  // Empty target = stop the whole session.
+  if (targetIds.length === 0) {
+    await sonos.stopSpeakers(np.wholeHouse ? undefined : np.speakerIds).catch(() => {});
+    store.update((s) => {
+      s.radioNowPlaying = null;
+    });
+    return { ts: new Date().toISOString(), ok: true, stopped: true };
+  }
+
+  // The coordinator anchors the stream. Fall back to the first current/target id if unset.
+  const coordinator = np.coordinator || np.speakerIds[0] || targetIds[0];
+  // If the coordinator is being removed, we can't keep its stream on it — keep it in-scope and
+  // let the owner remove it explicitly by unchecking others down to a set that includes it. To
+  // keep behaviour simple + predictable we always retain the coordinator while ≥1 zone is chosen.
+  const withCoord = targetIds.includes(coordinator) ? targetIds : [coordinator, ...targetIds];
+
+  const res = await sonos
+    .reconcileGroup(coordinator, np.speakerIds, withCoord)
+    .catch((e) => badInput(`could not update speakers: ${(e as Error).message}`));
+
+  // A specific set was chosen — this is no longer a whole-house play.
+  store.update((s) => {
+    if (!s.radioNowPlaying) return;
+    s.radioNowPlaying = {
+      ...s.radioNowPlaying,
+      speakerIds: res.joined,
+      wholeHouse: false,
+      coordinator: res.coordinator,
+    };
+  });
+  return { ts: new Date().toISOString(), ok: true, ...res };
+}
+
 /** POST /api/radio/stop { speakerIds? } (admin) — stop the chosen speakers (or all). */
 export async function stopRadio(body: unknown): Promise<unknown> {
   const b = (body ?? {}) as { speakerIds?: unknown };
