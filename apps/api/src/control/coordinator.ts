@@ -24,6 +24,31 @@ import { solarForecast, loadForecast } from '../routes/brain';
 const TICK_MS = 90_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 
+// Discharge-priority deadband (W). The Sonnen only force-discharges when the house
+// residual (load − PV) clears this, and stands down when PV covers the load. Prevents
+// meter-noise flapping around the zero-crossing and never lets it dump to grid.
+export const DISCHARGE_DEADBAND_W = 300;
+
+/**
+ * Decide the discharge-priority target from the Sonnen's OWN meter (self-consistent
+ * and, unlike the grid-meter + battery-flow reconstruction it replaced, NOT corrupted
+ * by the Sonnen's own discharge). `residualW` = house load the PV isn't covering; the
+ * Sonnen force-discharges at most that, so it can never push power to the grid, and it
+ * STANDS DOWN entirely on a PV surplus (PV ≥ load). This kills the discharge↔soak-charge
+ * runaway that dumped the battery to grid (the old `drawW` self-latched to 4.6 kW because
+ * it counted the Sonnen's own discharge as "load").
+ */
+export function decideDischargeTarget(
+  pvW: number,
+  loadW: number,
+  deadbandW = DISCHARGE_DEADBAND_W,
+): { residualW: number; standDown: boolean } {
+  const residualW = Math.max(0, loadW - pvW);
+  // Stand down on a PV surplus (PV ≥ load − deadband) or a negligible residual.
+  const standDown = pvW >= loadW - deadbandW || residualW <= deadbandW;
+  return { residualW, standDown };
+}
+
 // ---- Tariff-arbitrage forecast cache ----------------------------------------
 // The arbitrage decision needs a forecast-derived pre-peak SoC target. The forecast is a
 // network fetch, so cache the computed ArbitragePlan and refresh it at most every 15 min.
@@ -644,29 +669,34 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
   // The Sonnen then supplies everything, so the Tesla (in backup/self_consumption) sees
   // ~no residual demand and idles → it holds its charge. Needs ZERO Tesla cooperation.
   const dp = plan.discharge;
-  // Deficit regime only (no meaningful export). Compute the whole non-PV draw the
-  // batteries+grid are currently covering; making the Sonnen supply all of it leaves the
-  // Tesla with ~nothing to do, so it idles and holds its charge.
+  // Deficit regime only. The target is the house residual (load − PV) from the Sonnen's
+  // OWN meter — bounded, so the Sonnen covers real demand and NEVER pushes to grid — and
+  // it stands down on a PV surplus (PV ≥ load) per decideDischargeTarget(). This replaced
+  // the old self-referential `drawW = sonnenDischarge + teslaDischarge + gridImport`, which
+  // counted the Sonnen's own discharge as load, latched to 4.6 kW, dumped to grid, and
+  // flip-flopped with soak-export every tick.
   const notExporting = snap.gridExportKw <= 0.2;
-  if (dp.active && dp.holdTesla && notExporting) {
-    const sonnenDisW = s.dir === 'discharging' ? s.kw * 1000 : 0;
-    const teslaDisW = snap.tesla && snap.tesla.dir === 'discharging' ? snap.tesla.kw * 1000 : 0;
-    const drawW = sonnenDisW + teslaDisW + snap.gridImportKw * 1000; // total non-PV draw
+  const pvW = s.productionW ?? 0;
+  const loadW = s.consumptionW ?? 0;
+  const { residualW, standDown } = decideDischargeTarget(pvW, loadW);
+  if (dp.active && dp.holdTesla && notExporting && !standDown) {
     const targetW = checkSonnenWatts(
-      Math.min(drawW, store.get().control.guardrails.sonnenMaxW),
+      Math.min(residualW, store.get().control.guardrails.sonnenMaxW),
       'discharge',
       snap,
     ).value;
+    const meta = `load ${Math.round(loadW)}W − PV ${Math.round(pvW)}W`;
     if (dp.authority === 'auto') {
       if (targetW > 150) {
-        // Sonnen covers the whole house; Tesla idles and holds.
+        // Sonnen covers the house residual; Tesla idles and holds. Clamped to the residual,
+        // so it can't over-discharge into the grid.
         await issue('sonnen', 'mode', '1', `${reason}: discharge-priority — Sonnen covers house so Tesla holds`, snap);
-        await issue('sonnen', 'discharge', targetW, `${reason}: discharge-priority ${targetW}W (draw ${Math.round(drawW)}W) — Sonnen first`, snap);
+        await issue('sonnen', 'discharge', targetW, `${reason}: discharge-priority ${targetW}W (${meta}) — Sonnen first`, snap);
         return;
       }
-      // Negligible draw: don't force; fall through to self-consumption.
+      // Negligible residual: don't force; fall through to self-consumption.
     } else {
-      logShadow('sonnen', 'discharge', `discharge-priority (shadow): ${dp.reason}`, `would force-discharge Sonnen ~${targetW}W (draw ${Math.round(drawW)}W) so Tesla idles`);
+      logShadow('sonnen', 'discharge', `discharge-priority (shadow): ${dp.reason}`, `would force-discharge Sonnen ~${targetW}W (${meta}) so Tesla idles`);
       // shadow → fall through to normal self-consumption (current behaviour) for comparison.
     }
   }
