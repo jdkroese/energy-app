@@ -340,14 +340,28 @@ test("dueWateringTimes returns the times whose start fell in the tick window", (
   );
 });
 
-test("windowFavorable reflects the chosen preference", () => {
-  const mk = (window: string) => ({ irrigation: { window } }) as never;
-  assert.equal(__test.windowFavorable(mk("solar-surplus"), 500).ok, true);
-  assert.equal(__test.windowFavorable(mk("solar-surplus"), 0).ok, false);
-  assert.equal(__test.windowFavorable(mk("none"), 0).ok, true);
+// ---- Rain-bypass decision (docs/39 §6) --------------------------------------
+
+test("evaluateSkip skips on rain mm OR probability ≥ threshold, else runs", () => {
+  const z = zone(); // no per-zone rainSkipMm override
+  const irr = { globalRainSkipMm: 5, rainSkipProbabilityPct: 60 } as never;
+  const day = (precipMm: number, prob: number) =>
+    ({ date: "2026-07-03", precipMm, precipProbabilityPct: prob, et0Mm: 4, tMaxC: 30 }) as never;
+
+  assert.equal(__test.evaluateSkip(day(8, 20), z, irr).decision, "skip"); // by mm
+  assert.equal(__test.evaluateSkip(day(1, 75), z, irr).decision, "skip"); // by probability
+  assert.equal(__test.evaluateSkip(day(2, 40), z, irr).decision, "run"); // clear
 });
 
-// ---- Coordinator shadow/live gate -------------------------------------------
+test("evaluateSkip honours a per-zone rainSkipMm override", () => {
+  const z = zone({ rainSkipMm: 3 });
+  const irr = { globalRainSkipMm: 5, rainSkipProbabilityPct: 60 } as never;
+  const day = { date: "x", precipMm: 4, precipProbabilityPct: 10, et0Mm: 4, tMaxC: 30 } as never;
+  // 4mm would NOT trip the global 5mm, but DOES trip the zone's own 3mm.
+  assert.equal(__test.evaluateSkip(day, z, irr).decision, "skip");
+});
+
+// ---- Coordinator live gate --------------------------------------------------
 
 test("liveAllowed actuates ONLY in mode live AND armed AND devices not off", () => {
   const mk = (mode: string, armed: boolean, devicesMode: string): StoreSchema =>
@@ -359,8 +373,7 @@ test("liveAllowed actuates ONLY in mode live AND armed AND devices not off", () 
   // The one true path: live + armed + a real devices mode.
   assert.equal(liveAllowed(mk("live", true, "auto")), true);
 
-  // SHADOW-FIRST defence: any of the three conditions failing → no actuation.
-  assert.equal(liveAllowed(mk("shadow", true, "auto")), false); // not live
+  // Any of the three conditions failing → no actuation.
   assert.equal(liveAllowed(mk("off", true, "auto")), false); // not live
   assert.equal(liveAllowed(mk("live", false, "auto")), false); // disarmed
   assert.equal(liveAllowed(mk("live", true, "off")), false); // devices layer off

@@ -10,11 +10,15 @@
 //   • If the app/mini/LAN/deploy FAILS, the rain-delay lapses within ≤1 day and the
 //     controller's onboard program RESUMES on its own. Fail-safe — the garden never dries out.
 //
-// SHADOW-FIRST (non-negotiable): the coordinator ships in mode 'off' and the live actuation
-// path runs ONLY when irrigation.mode === 'live' AND the Devices layer is armed (the same
-// arm/admin gate as the other coordinators — enforced again inside issueIrrigation). In
-// 'shadow' it computes the full plan and LOGS what it WOULD do, but refreshes nothing and
-// fires nothing. It never opens a valve autonomously on first ship.
+// PRODUCTION: the live actuation path runs ONLY when irrigation.mode === 'live' AND the Devices
+// layer is armed (the same arm/admin gate as the other coordinators — enforced again inside
+// issueIrrigation). When mode is 'live' but not actuating (disarmed / box unreachable) it still
+// LOGS the intended run. Mode 'off' = dormant (the controller's own program runs). The retired
+// 'shadow' mode (compute-and-log-only, never actuate) was removed in docs/39 §7.
+//
+// RAIN BYPASS (docs/39 §6): each tick we look 2h ahead of every scheduled run and, on the
+// freshest daily forecast vs the bypass thresholds, record a skip/run DECISION honoured at fire
+// time — so a wet-forecast run is skipped with a visible, logged reason.
 //
 // SYNC (single-writer-per-thing): the app owns the OPTIMIZED plan (zones, schedules, durations,
 // photos, weather rules, suppression delay) and is the only writer of those. The baseline
@@ -36,15 +40,12 @@ import {
   type DayWeather,
   type ZoneTrim,
 } from "./irrigation-engine";
-import { bandFor } from "../tariff";
 import { logIrrigationDecision, logIrrigationSession } from "./log-adapters";
-import { climateSurplusW } from "./climate-snapshot";
-import * as sonnen from "../connectors/sonnen";
-import * as tesla from "../connectors/tesla";
 import type {
   IrrigationState,
   IrrigationZoneConfig,
   IrrigationWateringTime,
+  IrrigationSkipDecision,
 } from "../store";
 
 const TICK_MS = 60_000;
@@ -81,6 +82,20 @@ async function forecastCached(): Promise<weather.WeatherForecast | null> {
   // Only cache a successful fetch; a transient null should retry next tick.
   if (data) wxCache = { ts: now, data };
   return data ?? wxCache?.data ?? null;
+}
+
+/** Cache the multi-day daily outlook (rain sum + probability + ET₀) for the forecast strip and
+ *  the 2h rain-bypass decision, on the same 30-min TTL as the hourly forecast. */
+let outlookCache: { ts: number; data: weather.DailyOutlook[] } | null = null;
+
+export async function getDailyOutlookCached(): Promise<
+  weather.DailyOutlook[] | null
+> {
+  const now = Date.now();
+  if (outlookCache && now - outlookCache.ts < WX_TTL_MS) return outlookCache.data;
+  const data = await weather.getDailyOutlook(6);
+  if (data) outlookCache = { ts: now, data };
+  return data ?? outlookCache?.data ?? null;
 }
 
 function nowDM(d = new Date()): { day: number; min: number } {
@@ -162,7 +177,7 @@ export function computeTrims(
   return trims;
 }
 
-/** Append one coordinator decision to the irrigation log (shadow-safe — also used for shadow). */
+/** Append one coordinator decision to the irrigation log (also mirrored to the event bus). */
 function log(
   zoneId: string,
   action: store.IrrigationLogEntry["action"],
@@ -225,7 +240,7 @@ async function confirmActive(zoneId: string): Promise<boolean> {
  * This closes the gap where a run started at the keypad or by the controller's onboard weekly
  * program left no trace: the coordinator read the active zone each tick but threw it away.
  *
- * Runs in shadow AND live (both already read the active zone every tick — zero extra LNK traffic).
+ * Runs on every tick where mode != off (we already read the active zone — zero extra LNK traffic).
  * Called only when the controller answered this tick: an unreachable read is NOT "valves idle", so
  * we never fabricate an end — an in-flight session's end is logged once the box answers again.
  *
@@ -277,46 +292,147 @@ function appClaimed(zoneId: string, observedAt: number): boolean {
   return ts !== undefined && observedAt - ts < APP_RUN_CLAIM_MS && ts <= observedAt + TICK_MS;
 }
 
-/** Prefer the owner's watering window — but only as a tie-breaker, NEVER at the expense of plant
- *  health. We return whether NOW is a "good" time; the coordinator still fires a due run regardless
- *  (deferring water risks the plant). This only annotates the log / future nudging. */
-function windowFavorable(
-  s: store.StoreSchema,
-  surplusW: number,
-): { ok: boolean; why: string } {
-  switch (s.irrigation.window) {
-    case "solar-surplus":
-      return surplusW > 300
-        ? { ok: true, why: "solar surplus" }
-        : { ok: false, why: "no surplus" };
-    case "off-peak-P3":
-      return bandFor() === "P3"
-        ? { ok: true, why: "P3 off-peak" }
-        : { ok: false, why: `band ${bandFor()}` };
-    case "early-morning": {
-      const h = new Date().getHours();
-      return h >= 4 && h < 9
-        ? { ok: true, why: "early morning" }
-        : { ok: false, why: "outside morning" };
+// ---- Rain-bypass decisions (docs/39 §6) ------------------------------------
+// 2h before every scheduled run we evaluate the run-day's freshest forecast against the bypass
+// thresholds (global mm / probability, per-zone rainSkipMm override) and record a skip/run call.
+// The call is keyed by the exact occurrence and honoured at fire time — so a wet run is skipped
+// with a visible, logged reason, decided on data far fresher than the once-a-day trim.
+
+const DECISION_LEAD_MS = 2 * 3600_000;
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** `${zoneId}@${YYYY-MM-DD}T${HH:MM}` for a run at `runTs` (local time). */
+function occurrenceKey(zoneId: string, runTs: number): string {
+  const d = new Date(runTs);
+  return `${zoneId}@${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(
+    d.getDate(),
+  )}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** Local "YYYY-MM-DD" for a timestamp (to match Open-Meteo daily dates). */
+function isoDate(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** The next future datetime (epoch ms) a watering time runs, scanning today..+2 days. */
+function nextOccurrenceMs(w: IrrigationWateringTime, now: Date): number | null {
+  const [h, m] = w.startTime.split(":").map(Number);
+  for (let d = 0; d <= 2; d++) {
+    const cand = new Date(now);
+    cand.setDate(now.getDate() + d);
+    if (!w.days[cand.getDay()]) continue;
+    cand.setHours(h || 0, m || 0, 0, 0);
+    if (cand.getTime() > now.getTime()) return cand.getTime();
+  }
+  return null;
+}
+
+/** The epoch ms of the occurrence that JUST fired for `w` (today at start, or yesterday on the
+ *  midnight straddle) — so the fire path can look up the decision keyed 2h earlier. */
+function firedOccurrenceMs(w: IrrigationWateringTime, now: Date): number {
+  const [h, m] = w.startTime.split(":").map(Number);
+  const d = new Date(now);
+  d.setHours(h || 0, m || 0, 0, 0);
+  if (d.getTime() > now.getTime()) d.setDate(d.getDate() - 1); // straddle: belonged to yesterday
+  return d.getTime();
+}
+
+/** Evaluate a run-day forecast vs the bypass thresholds. Skip if EITHER the day's rain sum meets
+ *  the mm threshold OR its max probability meets the % threshold (mirrors the trim's rain-skip). */
+function evaluateSkip(
+  dayOut: weather.DailyOutlook,
+  zone: IrrigationZoneConfig,
+  irr: IrrigationState,
+): { decision: "skip" | "run"; reason: string; rainMm: number; prob: number } {
+  const mmT = zone.rainSkipMm ?? irr.globalRainSkipMm;
+  const probT = irr.rainSkipProbabilityPct;
+  const rainMm = dayOut.precipMm;
+  const prob = dayOut.precipProbabilityPct;
+  const byMm = rainMm >= mmT;
+  const byProb = prob >= probT;
+  if (byMm || byProb) {
+    const bits: string[] = [];
+    if (byMm) bits.push(`${rainMm.toFixed(1)}mm ≥ ${mmT}mm`);
+    if (byProb) bits.push(`${Math.round(prob)}% ≥ ${probT}%`);
+    return { decision: "skip", reason: `rain bypass (${bits.join(", ")})`, rainMm, prob };
+  }
+  return {
+    decision: "run",
+    reason: `clear (${rainMm.toFixed(1)}mm / ${Math.round(prob)}%)`,
+    rainMm,
+    prob,
+  };
+}
+
+/** For each app-managed zone's next occurrence within the 2h lead window, record (once) a
+ *  skip/run decision on the freshest daily forecast, and prune decisions older than 2 days. */
+async function evaluateUpcomingSkips(
+  outlook: weather.DailyOutlook[] | null,
+): Promise<void> {
+  if (!outlook || outlook.length === 0) return;
+  const now = new Date();
+  const irr = store.get().irrigation;
+  const live = liveAllowed();
+  for (const zone of Object.values(irr.zones)) {
+    if (zone.managedBy !== "app") continue;
+    for (const w of zone.wateringTimes) {
+      const runTs = nextOccurrenceMs(w, now);
+      if (runTs === null) continue;
+      if (runTs - now.getTime() > DECISION_LEAD_MS) continue; // not within the 2h lead yet
+      const key = occurrenceKey(zone.zoneId, runTs);
+      if (irr.skipDecisions[key]) continue; // already decided this occurrence
+      const dayOut = outlook.find((o) => o.date === isoDate(runTs));
+      if (!dayOut) continue;
+      const ev = evaluateSkip(dayOut, zone, irr);
+      store.update((s) => {
+        s.irrigation.skipDecisions[key] = {
+          key,
+          zoneId: zone.zoneId,
+          runTs,
+          decision: ev.decision,
+          reason: ev.reason,
+          rainMm: ev.rainMm,
+          probabilityPct: ev.prob,
+          decidedAt: new Date().toISOString(),
+        };
+        for (const [k, d] of Object.entries(s.irrigation.skipDecisions)) {
+          if (Math.abs(Date.now() - d.runTs) > 2 * 24 * 3600_000)
+            delete s.irrigation.skipDecisions[k];
+        }
+      });
+      log(
+        zone.zoneId,
+        "decide",
+        live,
+        true,
+        `${w.startTime} → ${ev.decision.toUpperCase()} — ${ev.reason}`,
+      );
     }
-    default:
-      return { ok: true, why: "no window pref" };
   }
 }
 
-async function liveSurplusW(): Promise<number> {
-  try {
-    const [s, t] = await Promise.allSettled([
-      sonnen.getNormalized(),
-      tesla.getNormalized(),
-    ]);
-    return climateSurplusW(
-      s.status === "fulfilled" ? s.value : null,
-      t.status === "fulfilled" ? t.value : null,
-    );
-  } catch {
-    return 0;
+/** The stored skip/run decision for a zone's SOONEST upcoming run, or null. Used by the plan
+ *  route to show "next run will skip — 8mm/70%". */
+export function nextRunSkipDecision(
+  zone: IrrigationZoneConfig,
+): IrrigationSkipDecision | null {
+  if (zone.managedBy !== "app") return null;
+  const now = new Date();
+  let soonest: number | null = null;
+  for (const w of zone.wateringTimes) {
+    const ts = nextOccurrenceMs(w, now);
+    if (ts !== null && (soonest === null || ts < soonest)) soonest = ts;
   }
+  if (soonest === null) return null;
+  return (
+    store.get().irrigation.skipDecisions[
+      occurrenceKey(zone.zoneId, soonest)
+    ] ?? null
+  );
 }
 
 /** Re-mirror the controller's baseline (~daily) for non-destructive drift surfacing. NEVER writes
@@ -368,7 +484,7 @@ async function tick(): Promise<void> {
       return;
     }
 
-    // ---- READ live controller state and REFLECT it (both shadow + live). One request at a
+    // ---- READ live controller state and REFLECT it (whenever mode != off). One request at a
     //      time — these run sequentially through the connector's transport mutex. ----
     let activeId: string | null = null;
     let rainDelayDays = 0;
@@ -402,7 +518,10 @@ async function tick(): Promise<void> {
       : { et0Mm: 0, precipMm: 0, precipProbabilityPct: 0, peakHourEt0Mm: 0 };
 
     const trims = computeTrims(store.get().irrigation, now.day, day);
-    const surplusW = irr.mode === "live" ? await liveSurplusW() : 0;
+
+    // ---- RAIN BYPASS: decide skip/run for runs coming up within 2h, on the freshest outlook. ----
+    const outlook = await getDailyOutlookCached();
+    await evaluateUpcomingSkips(outlook);
 
     const live = liveAllowed(store.get()) && reachable && wf !== null;
 
@@ -434,12 +553,28 @@ async function tick(): Promise<void> {
       const dayTrimmed = trim ? trim.trimmedMin : dayScheduled;
       const factor = dayScheduled > 0 ? dayTrimmed / dayScheduled : 0;
 
+      const nowDate = new Date();
       for (const w of due) {
         const minutes = Math.round(w.durationMin * factor);
-        const fav = windowFavorable(store.get(), surplusW);
         const reasonBits = trim?.reasons.length
           ? ` [${trim.reasons.join(", ")}]`
           : "";
+
+        // RAIN BYPASS: honour a 'skip' decision recorded ~2h ago for this exact occurrence.
+        const decision =
+          store.get().irrigation.skipDecisions[
+            occurrenceKey(zone.zoneId, firedOccurrenceMs(w, nowDate))
+          ];
+        if (decision?.decision === "skip") {
+          log(
+            zone.zoneId,
+            "skip",
+            live,
+            true,
+            `${w.startTime}: skipped — ${decision.reason}`,
+          );
+          continue;
+        }
 
         if (minutes <= 0) {
           log(
@@ -453,13 +588,13 @@ async function tick(): Promise<void> {
         }
 
         if (!live) {
-          // SHADOW (or live-but-not-allowed/unreachable): log the intended run, fire nothing.
+          // Live-but-not-allowed/unreachable: log the intended run, fire nothing.
           log(
             zone.zoneId,
             "plan",
             false,
             true,
-            `would run ${minutes}m (of ${w.durationMin}m ceiling) at ${w.startTime}${reasonBits} · window ${fav.why}`,
+            `would run ${minutes}m (of ${w.durationMin}m ceiling) at ${w.startTime}${reasonBits}`,
           );
           continue;
         }
@@ -486,7 +621,7 @@ async function tick(): Promise<void> {
           "fire",
           true,
           true,
-          `run ${minutes}m issued (${fav.why})${reasonBits}`,
+          `run ${minutes}m issued${reasonBits}`,
         );
         const confirmed = await confirmActive(zone.zoneId);
         log(
@@ -537,7 +672,7 @@ export function startIrrigationCoordinator(): void {
   if (timer) return;
   timer = setInterval(() => void tick(), TICK_MS);
   console.log(
-    `[irrigation] coordinator started (every ${TICK_MS / 1000}s, SHADOW-first — actuates only when mode=live + armed)`,
+    `[irrigation] coordinator started (every ${TICK_MS / 1000}s — actuates only when mode=live + armed)`,
   );
 }
 
@@ -554,7 +689,9 @@ export const __test = {
   crossed,
   dueWateringTimes,
   scheduledMinForDay,
-  windowFavorable,
+  evaluateSkip,
+  nextOccurrenceMs,
+  occurrenceKey,
   observeSessions,
   resetObserver: (): void => {
     observedRun = null;

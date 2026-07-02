@@ -1214,12 +1214,12 @@ export interface RadioNowPlaying {
 
 /** Mode of the irrigation coordinator:
  *  - 'off'    : coordinator does nothing (no suppression, no firing). Controller's onboard
- *               program runs (whatever the keypad set). Default.
- *  - 'shadow' : computes + LOGS the full plan every tick but actuates NOTHING (no delay
- *               refresh, no zone firing). SHADOW-FIRST safety — ships here.
+ *               program runs (whatever the keypad set). Default; also where a wet-forecast
+ *               fail-safe lands.
  *  - 'live'   : refreshes the suppression rain-delay and fires zones per the trimmed plan.
- *               Gated behind the SAME arm model as the other coordinators (armed+mode!=off). */
-export type IrrigationMode = "off" | "shadow" | "live";
+ *               Gated behind the SAME arm model as the other coordinators (armed+mode!=off).
+ *  (The retired 'shadow' compute-and-log-only mode was removed in docs/39 §7.) */
+export type IrrigationMode = "off" | "live";
 
 /** Plant / crop type → drives the crop coefficient (Kc) used in the ETc calc. */
 export type IrrigationPlantType =
@@ -1311,23 +1311,42 @@ export interface IrrigationBaselineMirror {
   availableStationIds: string[];
 }
 
-/** Preferred window to bias watering into (never at the expense of plant health). */
-export type IrrigationWindow =
-  | "early-morning"
-  | "solar-surplus"
-  | "off-peak-P3"
-  | "none";
-
-/** One logged coordinator decision (shadow or live) for the irrigation activity feed. */
+/** One logged coordinator decision for the irrigation activity feed. */
 export interface IrrigationLogEntry {
   ts: number;
   zoneId: string;
-  /** What the coordinator did / would do. */
-  action: "plan" | "fire" | "trim" | "skip" | "suppress" | "confirm" | "alert";
-  /** True = actually actuated (live); false = shadow / would-do / informational. */
+  /** What the coordinator did / would do. `decide` = a 2h-ahead rain-bypass skip/run call. */
+  action:
+    | "plan"
+    | "fire"
+    | "trim"
+    | "skip"
+    | "suppress"
+    | "confirm"
+    | "alert"
+    | "decide";
+  /** True = actually actuated (live); false = would-do / informational. */
   live: boolean;
   ok: boolean;
   detail: string;
+}
+
+/** A 2h-ahead rain-bypass decision for ONE scheduled watering occurrence. Recorded when the
+ *  run is < 2h away, using the freshest daily forecast vs the bypass thresholds, and honoured
+ *  at fire time. Keyed in state by `${zoneId}@${YYYY-MM-DD}T${HH:MM}`. */
+export interface IrrigationSkipDecision {
+  /** `${zoneId}@${YYYY-MM-DD}T${HH:MM}` — the occurrence this decision is for. */
+  key: string;
+  zoneId: string;
+  /** Epoch ms of the scheduled run this decision governs. */
+  runTs: number;
+  decision: "skip" | "run";
+  /** Human reason (e.g. "8mm ≥ 5mm forecast" / "clear — 0.3mm/20%"). */
+  reason: string;
+  /** Forecast figures the decision was made on. */
+  rainMm: number;
+  probabilityPct: number;
+  decidedAt: string; // ISO
 }
 
 /** The whole irrigation Phase-2 state block. Additive + defensively migrated. */
@@ -1337,14 +1356,14 @@ export interface IrrigationState {
   globalRainSkipMm: number;
   /** Global precip-probability skip threshold (%). */
   rainSkipProbabilityPct: number;
-  /** Preferred watering window the coordinator biases into. */
-  window: IrrigationWindow;
   /** Per-zone configs keyed by zoneId (`rb-<n>`). */
   zones: Record<string, IrrigationZoneConfig>;
   /** Per-zone rolling soil-water-balance deficit (mm). */
   deficits: Record<string, IrrigationDeficit>;
   /** Latest soil-moisture sensor readings by zoneId (future hardware; usually empty). */
   soilMoisture: Record<string, SoilMoistureReading>;
+  /** 2h-ahead rain-bypass decisions per upcoming watering occurrence (keyed by occurrence). */
+  skipDecisions: Record<string, IrrigationSkipDecision>;
   /** Mirror of the controller's baseline program + a drift flag. */
   baselineMirror: IrrigationBaselineMirror | null;
   /** True when the last baseline re-read differed from the mirror (surfaced, non-destructive). */
@@ -1780,10 +1799,10 @@ export function defaultIrrigation(): IrrigationState {
     mode: "off",
     globalRainSkipMm: 5,
     rainSkipProbabilityPct: 60,
-    window: "early-morning",
     zones: {},
     deficits: {},
     soilMoisture: {},
+    skipDecisions: {},
     baselineMirror: null,
     baselineDrift: false,
     log: [],
@@ -2336,18 +2355,10 @@ function hydrate(raw: unknown): StoreSchema {
 function hydrateIrrigation(p: unknown): IrrigationState {
   const base = defaultIrrigation();
   if (!p || typeof p !== "object") return base;
-  const r = p as Partial<IrrigationState>;
-  const mode: IrrigationMode =
-    r.mode === "shadow" || r.mode === "live" || r.mode === "off"
-      ? r.mode
-      : base.mode;
-  const window: IrrigationWindow =
-    r.window === "solar-surplus" ||
-    r.window === "off-peak-P3" ||
-    r.window === "none" ||
-    r.window === "early-morning"
-      ? r.window
-      : base.window;
+  const r = p as Partial<IrrigationState> & { window?: unknown };
+  // Migrate the retired 'shadow' mode → 'off' (never auto-actuate on upgrade). 'window' is
+  // dropped entirely (it only annotated logs, never changed behaviour — docs/39 §5).
+  const mode: IrrigationMode = r.mode === "live" ? "live" : "off";
 
   const zones: Record<string, IrrigationZoneConfig> = {};
   if (r.zones && typeof r.zones === "object") {
@@ -2388,6 +2399,38 @@ function hydrateIrrigation(p: unknown): IrrigationState {
           zoneId: id,
           pct: Math.max(0, Math.min(100, s.pct)),
           ts: typeof s.ts === "string" ? s.ts : new Date().toISOString(),
+        };
+      }
+    }
+  }
+
+  // 2h-ahead skip decisions — keep only still-relevant ones (run within the last/next 2 days).
+  const skipDecisions: Record<string, IrrigationSkipDecision> = {};
+  const nowMs = Date.now();
+  if (r.skipDecisions && typeof r.skipDecisions === "object") {
+    for (const [key, raw] of Object.entries(
+      r.skipDecisions as Record<string, unknown>,
+    )) {
+      const d = (raw ?? {}) as Partial<IrrigationSkipDecision>;
+      if (
+        (d.decision === "skip" || d.decision === "run") &&
+        typeof d.zoneId === "string" &&
+        typeof d.runTs === "number" &&
+        Math.abs(nowMs - d.runTs) < 2 * 24 * 3600_000
+      ) {
+        skipDecisions[key] = {
+          key,
+          zoneId: d.zoneId,
+          runTs: d.runTs,
+          decision: d.decision,
+          reason: typeof d.reason === "string" ? d.reason : "",
+          rainMm: typeof d.rainMm === "number" ? d.rainMm : 0,
+          probabilityPct:
+            typeof d.probabilityPct === "number" ? d.probabilityPct : 0,
+          decidedAt:
+            typeof d.decidedAt === "string"
+              ? d.decidedAt
+              : new Date().toISOString(),
         };
       }
     }
@@ -2434,10 +2477,10 @@ function hydrateIrrigation(p: unknown): IrrigationState {
       0,
       100,
     ),
-    window,
     zones,
     deficits,
     soilMoisture,
+    skipDecisions,
     baselineMirror,
     baselineDrift:
       typeof r.baselineDrift === "boolean" ? r.baselineDrift : false,

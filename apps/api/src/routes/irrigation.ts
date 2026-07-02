@@ -19,6 +19,8 @@ import {
   computeTrims,
   scheduledMinForDay,
   liveAllowed,
+  getDailyOutlookCached,
+  nextRunSkipDecision,
 } from "../control/irrigation-coordinator";
 import {
   rollupDayWeather,
@@ -31,12 +33,12 @@ import { savePhoto, readPhoto, deletePhoto } from "../irrigation/photos";
 import { randomBytes } from "node:crypto";
 import type {
   IrrigationMode,
-  IrrigationWindow,
   IrrigationZoneConfig,
   IrrigationWateringTime,
   IrrigationPlantType,
   IrrigationEmitterType,
   IrrigationManagedBy,
+  IrrigationSkipDecision,
 } from "../store";
 
 function badInput(msg: string): Error & { code: string } {
@@ -370,13 +372,7 @@ const EMITTER_TYPES: IrrigationEmitterType[] = [
   "bubbler",
   "soaker",
 ];
-const MODES: IrrigationMode[] = ["off", "shadow", "live"];
-const WINDOWS: IrrigationWindow[] = [
-  "early-morning",
-  "solar-surplus",
-  "off-peak-P3",
-  "none",
-];
+const MODES: IrrigationMode[] = ["off", "live"];
 
 /** A zone config enriched with the LIVE station view + derived plan figures for the UI. */
 export interface IrrigationPlanZone {
@@ -407,11 +403,32 @@ export interface IrrigationPlanZone {
   litersToday: number;
   trimReasons: string[];
   nextRun: { startTime: string; weekday: number } | null;
+  /** The 2h-ahead rain-bypass decision for this zone's soonest upcoming run, if one exists. */
+  nextRunSkip: {
+    decision: "skip" | "run";
+    reason: string;
+    rainMm: number;
+    probabilityPct: number;
+  } | null;
 }
 
 function photoUrl(photoId: string | undefined): string | null {
   return photoId
     ? `/api/irrigation/photos/${encodeURIComponent(photoId)}`
+    : null;
+}
+
+/** Project a stored skip decision to the plan-response shape (drops the internal key/ts). */
+function skipView(
+  d: IrrigationSkipDecision | null,
+): IrrigationPlanZone["nextRunSkip"] {
+  return d
+    ? {
+        decision: d.decision,
+        reason: d.reason,
+        rainMm: d.rainMm,
+        probabilityPct: d.probabilityPct,
+      }
     : null;
 }
 
@@ -469,6 +486,7 @@ export async function getIrrigationPlan(): Promise<unknown> {
   const stationById = new Map(stations.map((z) => [z.id, z]));
 
   const { day, ok: weatherOk } = await dayWeather();
+  const outlook = await getDailyOutlookCached();
   const weekday = new Date().getDay();
   const trims = computeTrims(irr, weekday, day);
   const trimById = new Map(trims.map((t) => [t.zoneId, t]));
@@ -512,6 +530,7 @@ export async function getIrrigationPlan(): Promise<unknown> {
         litersToday: trim?.volumeL ?? 0,
         trimReasons: trim?.reasons ?? [],
         nextRun: nextRunFor(z),
+        nextRunSkip: skipView(nextRunSkipDecision(z)),
       };
     })
     .sort((a, b) => a.station - b.station);
@@ -533,7 +552,6 @@ export async function getIrrigationPlan(): Promise<unknown> {
     devicesMode: s.devices.mode,
     globalRainSkipMm: irr.globalRainSkipMm,
     rainSkipProbabilityPct: irr.rainSkipProbabilityPct,
-    window: irr.window,
     zones,
     baselineMirror: irr.baselineMirror,
     baselineDrift: irr.baselineDrift,
@@ -544,6 +562,13 @@ export async function getIrrigationPlan(): Promise<unknown> {
           precipProbabilityPct: Math.round(day.precipProbabilityPct),
         }
       : null,
+    outlook: (outlook ?? []).map((o) => ({
+      date: o.date,
+      precipMm: Math.round(o.precipMm * 10) / 10,
+      precipProbabilityPct: Math.round(o.precipProbabilityPct),
+      et0Mm: Math.round(o.et0Mm * 100) / 100,
+      tMaxC: Math.round(o.tMaxC),
+    })),
     stats: {
       zoneCount: zones.length,
       plannedTodayMin,
@@ -568,11 +593,10 @@ export function setIrrigationMode(rawMode: unknown): unknown {
   return { ts: new Date().toISOString(), mode };
 }
 
-/** PUT /api/irrigation/settings — global rules { globalRainSkipMm?, rainSkipProbabilityPct?, window? }. */
+/** PUT /api/irrigation/settings — bypass rules { globalRainSkipMm?, rainSkipProbabilityPct? }. */
 export function setIrrigationGlobal(patch: {
   globalRainSkipMm?: unknown;
   rainSkipProbabilityPct?: unknown;
-  window?: unknown;
 }): unknown {
   store.update((s) => {
     if (patch.globalRainSkipMm !== undefined) {
@@ -584,10 +608,6 @@ export function setIrrigationGlobal(patch: {
       const v = Number(patch.rainSkipProbabilityPct);
       if (Number.isFinite(v))
         s.irrigation.rainSkipProbabilityPct = Math.max(0, Math.min(100, v));
-    }
-    if (patch.window !== undefined) {
-      const w = String(patch.window) as IrrigationWindow;
-      if (WINDOWS.includes(w)) s.irrigation.window = w;
     }
     s.irrigation.updatedAt = Date.now();
   });

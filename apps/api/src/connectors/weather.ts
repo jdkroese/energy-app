@@ -30,6 +30,64 @@ export interface WeatherForecast {
   windSpeed: number[];
 }
 
+/** One day of the multi-day outlook (Open-Meteo `daily=`). Drives the irrigation forecast
+ *  strip + the 2h rain-bypass decision (docs/39 §6). */
+export interface DailyOutlook {
+  /** Local date "YYYY-MM-DD" (Europe/Madrid). */
+  date: string;
+  /** Total precipitation for the day (mm). */
+  precipMm: number;
+  /** Max precipitation probability across the day (%). */
+  precipProbabilityPct: number;
+  /** FAO-56 reference ET₀ total for the day (mm). */
+  et0Mm: number;
+  /** Daily max temperature (°C). */
+  tMaxC: number;
+}
+
+/**
+ * Fetch the daily outlook (precip sum + max probability + ET₀ + tMax) for the next `days`
+ * days at the site. Returns null on any failure so callers can degrade. Used by the
+ * irrigation forecast strip and the 2h-ahead rain-bypass decision.
+ */
+export async function getDailyOutlook(
+  days = 6,
+): Promise<DailyOutlook[] | null> {
+  try {
+    const { lat, lon } = weatherCoords();
+    const clamped = Math.max(1, Math.min(14, Math.round(days)));
+    const url =
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&daily=precipitation_sum,precipitation_probability_max,et0_fao_evapotranspiration,temperature_2m_max` +
+      `&timezone=Europe%2FMadrid&forecast_days=${clamped}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      daily?: {
+        time?: string[];
+        precipitation_sum?: number[];
+        precipitation_probability_max?: number[];
+        et0_fao_evapotranspiration?: number[];
+        temperature_2m_max?: number[];
+      };
+    };
+    const d = json.daily;
+    if (!d?.time || !Array.isArray(d.time)) return null;
+    return d.time.map((date, i) => ({
+      date,
+      precipMm: Math.max(0, d.precipitation_sum?.[i] ?? 0),
+      precipProbabilityPct: Math.max(
+        0,
+        Math.min(100, d.precipitation_probability_max?.[i] ?? 0),
+      ),
+      et0Mm: Math.max(0, d.et0_fao_evapotranspiration?.[i] ?? 0),
+      tMaxC: d.temperature_2m_max?.[i] ?? 0,
+    }));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch today's hourly shortwave_radiation + temperature_2m (plus direct/diffuse
  * radiation + sunshine_duration) for the site. We request forecast_days=2 so the

@@ -1305,12 +1305,7 @@ export interface RainbirdIntegrationStatus {
 
 /* ---- Irrigation Phase 2 (smart-watering plan) ----------------------------- */
 
-export type IrrigationMode = "off" | "shadow" | "live";
-export type IrrigationWindow =
-  | "early-morning"
-  | "solar-surplus"
-  | "off-peak-P3"
-  | "none";
+export type IrrigationMode = "off" | "live";
 export type IrrigationPlantType =
   | "lawn"
   | "shrubs"
@@ -1362,12 +1357,35 @@ export interface IrrigationPlanZone {
   litersToday: number;
   trimReasons: string[];
   nextRun: { startTime: string; weekday: number } | null;
+  nextRunSkip: {
+    decision: "skip" | "run";
+    reason: string;
+    rainMm: number;
+    probabilityPct: number;
+  } | null;
+}
+
+/** One day of the multi-day forecast outlook (from /api/irrigation/plan). */
+export interface IrrigationDailyOutlook {
+  date: string; // "YYYY-MM-DD"
+  precipMm: number;
+  precipProbabilityPct: number;
+  et0Mm: number;
+  tMaxC: number;
 }
 
 export interface IrrigationLogEntry {
   ts: number;
   zoneId: string;
-  action: "plan" | "fire" | "trim" | "skip" | "suppress" | "confirm" | "alert";
+  action:
+    | "plan"
+    | "fire"
+    | "trim"
+    | "skip"
+    | "suppress"
+    | "confirm"
+    | "alert"
+    | "decide";
   live: boolean;
   ok: boolean;
   detail: string;
@@ -1382,7 +1400,6 @@ export interface IrrigationPlanResponse {
   devicesMode: ControlMode;
   globalRainSkipMm: number;
   rainSkipProbabilityPct: number;
-  window: IrrigationWindow;
   zones: IrrigationPlanZone[];
   baselineMirror: {
     ts: string;
@@ -1395,6 +1412,7 @@ export interface IrrigationPlanResponse {
     precipMm: number;
     precipProbabilityPct: number;
   } | null;
+  outlook: IrrigationDailyOutlook[];
   stats: {
     zoneCount: number;
     plannedTodayMin: number;
