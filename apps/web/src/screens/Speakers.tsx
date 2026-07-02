@@ -290,6 +290,42 @@ export function AlarmActiveBanner() {
   );
 }
 
+/* ---- standalone /music route — the Music experience (Spotify + radio) ------
+ *  A dedicated destination for the "Music" nav item and the mini-player body
+ *  click. Reuses the exact panels from the Speakers tab (now-playing, browse,
+ *  radio favourites + schedules) so there's one music surface, just reachable
+ *  from its own route. Responsive desktop + mobile. ------------------------- */
+
+export function MusicScreen({ ctx }: { ctx: ShellContext }) {
+  const { user } = useAuth();
+  const canControl = user?.role === 'admin';
+  const wide = ctx.desktop;
+  const { data, loading, stale, updatedAt } = usePolling<SpeakersResponse>(api.speakers.list, 20_000);
+  const speakers = [...(data?.speakers ?? [])].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: wide ? 760 : '100%', margin: wide ? '0 auto' : undefined, width: '100%' }}>
+      {!wide && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 2px 4px' }}>
+          <Icon name="music" size={18} color="var(--solar)" />
+          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-1)' }}>Music</div>
+        </div>
+      )}
+      {stale && <StaleBanner updatedAt={updatedAt} />}
+      {!data && loading && <Card padded style={{ color: 'var(--text-3)', fontSize: 13 }}>Discovering speakers…</Card>}
+
+      {/* Music (Spotify) — now-playing + browse/search; stands alone without speakers. */}
+      <MusicPanel speakers={speakers} canControl={canControl} wide={wide} />
+
+      {/* Internet radio — favourites grid + play + schedules. */}
+      <RadioPanel speakers={speakers} canControl={canControl} wide={wide} />
+      <RadioSchedulesSection speakers={speakers} canControl={canControl} wide={wide} />
+    </div>
+  );
+}
+
 /* ---- standalone /alarm route — a big button for a phone home-screen shortcut */
 
 export function AlarmScreen({ ctx }: { ctx: ShellContext }) {

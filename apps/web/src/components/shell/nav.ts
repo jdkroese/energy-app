@@ -33,6 +33,11 @@ export const NAV_DEVICES: NavItem[] = [
   { to: '/devices', label: 'Other devices', icon: 'layout-grid' },
 ];
 
+/** Media section — the Music (Spotify + radio) experience, its own dedicated route. */
+export const NAV_MEDIA: NavItem[] = [
+  { to: '/music', label: 'Music', icon: 'music' },
+];
+
 /** Automation section — below a second divider. */
 export const NAV_AUTOMATION: NavItem[] = [
   // Autopilot folded into Automations (Summary · Schedules · Smart Rules · Events ·
@@ -45,7 +50,7 @@ export const NAV_AUTOMATION: NavItem[] = [
 export const NAV_SETTINGS: NavItem = { to: '/settings', label: 'Settings', icon: 'settings' };
 
 /** Ordered rail sections — a divider is drawn between each. */
-export const RAIL_SECTIONS: NavItem[][] = [NAV_TOP, NAV_DEVICES, NAV_AUTOMATION];
+export const RAIL_SECTIONS: NavItem[][] = [NAV_TOP, NAV_DEVICES, NAV_MEDIA, NAV_AUTOMATION];
 
 /**
  * Active-state match for a nav `to` that may carry a ?type= query (the device
@@ -87,6 +92,7 @@ const MOBILE_BOTTOM_PATHS = MOBILE_TABS.map((t) => t.to);
 export const MOBILE_MORE_SECTIONS: { title: string; items: NavItem[] }[] = [
   // Category shortcuts (Charging + the all-devices hub are on the bottom bar already).
   { title: 'Devices', items: NAV_DEVICES.filter((n) => !MOBILE_BOTTOM_PATHS.includes(n.to)) },
+  { title: 'Media', items: NAV_MEDIA },
   { title: 'Automation', items: NAV_AUTOMATION },
   { title: 'Account', items: [NAV_SETTINGS] },
 ];

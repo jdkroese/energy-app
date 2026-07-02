@@ -8,6 +8,7 @@ import { PageTransition } from './PageTransition';
 // is on — lazy so normal web/mobile users never download them.
 const TabletShell = lazy(() => import('./TabletShell').then((m) => ({ default: m.TabletShell })));
 import { MobileAlarmFab } from './NavAlarm';
+import { MobileMiniPlayer } from './NavMiniPlayer';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
 import { settingsTabsFor } from './nav';
@@ -26,6 +27,7 @@ const META: Record<string, { eyebrow: string; title: string }> = {
   '/settings': { eyebrow: 'Settings', title: 'System' },
   '/scenarios': { eyebrow: 'Scenarios', title: 'Strategy profiles' },
   '/automations': { eyebrow: 'Home', title: 'Automations' },
+  '/music': { eyebrow: 'Media', title: 'Music' },
 };
 
 const RAIL_KEY = 'power.rail.expanded';
@@ -121,6 +123,9 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
         <PageTransition key={location.pathname}>{children(ctx)}</PageTransition>
       </div>
       <MobileAlarmFab />
+      {/* Slim now-playing bar sits above the TabBar; its content is padded clear of
+          the alarm FAB (bottom-right). Hidden when nothing is playing. */}
+      <MobileMiniPlayer />
       <TabBar />
     </div>
   );

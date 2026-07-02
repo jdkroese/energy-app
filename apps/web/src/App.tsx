@@ -30,6 +30,7 @@ const SceneControllerDetail = lazy(() =>
 const RoomsManage = lazy(() => import('./screens/RoomsManage').then((m) => ({ default: m.RoomsManage })));
 const Automations = lazy(() => import('./screens/Automations').then((m) => ({ default: m.Automations })));
 const AlarmScreen = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.AlarmScreen })));
+const MusicScreen = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.MusicScreen })));
 // AlarmActiveBanner renders on every authed page but shares a module with the
 // Radio/Speakers panels (~1k lines). Lazy-load it with a null fallback so it
 // doesn't drag that code into the main bundle and doesn't gate the page paint.
@@ -81,6 +82,8 @@ function AppRoutes() {
               back-compat redirect to the Schedules tab for bookmarks/links. */}
           <Route path="/schedules" element={<Navigate to="/automations?tab=schedules" replace />} />
           <Route path="/automations" element={<Automations ctx={ctx} />} />
+          {/* Music — dedicated Spotify + radio experience (also the mini-player target). */}
+          <Route path="/music" element={<MusicScreen ctx={ctx} />} />
           {/* House-alarm panic page — a big trigger/STOP button for a phone shortcut. */}
           <Route path="/alarm" element={<AlarmScreen ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}
