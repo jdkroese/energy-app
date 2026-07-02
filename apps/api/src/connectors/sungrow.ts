@@ -117,13 +117,18 @@ function num(v: unknown): number | null {
  * the parsed live values or throws (caller treats a throw as "unreachable"). The
  * socket is always closed before returning. Bounded by WS_TIMEOUT_MS end-to-end.
  */
-async function wsReadLive(ip: string): Promise<{
+interface LiveVals {
   acPowerW: number;
   dailyKwh: number;
   totalKwh: number;
   tempC: number | null;
   workState: string;
-}> {
+}
+
+/** Grace after `real` arrives to also collect the `fault` list before resolving. */
+const FAULT_GRACE_MS = 2500;
+
+async function wsReadLive(ip: string): Promise<LiveVals & { faults: InverterFault[] }> {
   const url = `ws://${ip}:${WS_PORT}/ws/home/overview`;
 
   return await new Promise((resolve, reject) => {
@@ -131,11 +136,14 @@ async function wsReadLive(ip: string): Promise<{
     let settled = false;
     let token = '';
     let devId: number | null = null;
+    let liveVals: LiveVals | null = null;
+    let faultGrace: ReturnType<typeof setTimeout> | null = null;
 
-    const done = (err: Error | null, val?: Awaited<ReturnType<typeof wsReadLive>>) => {
+    const done = (err: Error | null, val?: LiveVals & { faults: InverterFault[] }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (faultGrace) clearTimeout(faultGrace);
       try {
         ws.close();
       } catch {
@@ -188,7 +196,26 @@ async function wsReadLive(ip: string): Promise<{
       }
 
       if ((service === 'real' || service === 'real_battery') && Array.isArray(data.list)) {
-        resolveFromRealList(data.list, done, devId);
+        // Parse live values, then ask for the fault log on the SAME session (the dongle
+        // rate-limits guest sessions, so we don't open a second socket). Resolve when
+        // faults arrive, or after a short grace if they don't.
+        liveVals = parseRealList(data.list);
+        send({ lang: 'en_us', token, service: 'fault', dev_id: String(devId ?? 1), type: '0', count: '20' });
+        faultGrace = setTimeout(() => {
+          if (liveVals) done(null, { ...liveVals, faults: [] });
+        }, FAULT_GRACE_MS);
+        return;
+      }
+
+      if (service === 'fault') {
+        const faults = Array.isArray(data.list) ? parseFaultList(data.list) : [];
+        if (liveVals) done(null, { ...liveVals, faults });
+        return;
+      }
+
+      // Dongle rate-limit / other notice — resolve with the live values we already have.
+      if ((service === 'notice' || msg.result_code === 100) && liveVals) {
+        done(null, { ...liveVals, faults: [] });
         return;
       }
     };
@@ -205,11 +232,7 @@ function pick(list: Array<Record<string, unknown>>, keys: string[]): Record<stri
 }
 
 /** Parse the WiNet `real` value list into normalized live values. */
-function resolveFromRealList(
-  list: Array<Record<string, unknown>>,
-  done: (err: Error | null, val?: { acPowerW: number; dailyKwh: number; totalKwh: number; tempC: number | null; workState: string }) => void,
-  _devId: number | null,
-): void {
+function parseRealList(list: Array<Record<string, unknown>>): LiveVals {
   const valOf = (item: Record<string, unknown> | null) => (item ? num(item.data_value ?? item.value) : null);
   const unitOf = (item: Record<string, unknown> | null) => String(item?.data_unit ?? item?.unit ?? '').toLowerCase();
 
@@ -237,7 +260,7 @@ function resolveFromRealList(
   const stateItem = pick(list, ['i18n_common_running_state', 'running state', 'work state', 'device state', 'system state', 'state']);
   const workState = normalizeWorkState(stateItem ? String(stateItem.data_value ?? stateItem.value ?? '') : '');
 
-  done(null, { acPowerW: Math.max(0, Math.round(acPowerW)), dailyKwh, totalKwh, tempC, workState });
+  return { acPowerW: Math.max(0, Math.round(acPowerW)), dailyKwh, totalKwh, tempC, workState };
 }
 
 /** Map a raw work-state string (or hex code) to a canonical label. */
@@ -262,29 +285,26 @@ function normalizeWorkState(raw: string): string {
   return hex[t] ?? (raw.trim() || 'Unknown');
 }
 
-// ---- REST fault/alarm log --------------------------------------------------
-// The WiNet-S SPA exposes the fault history under a local REST path returning the
-// standard `{ result_code, result_msg, result_data }` envelope. The exact query path
-// varies by firmware, so we try a small set of known candidates and parse tolerantly.
-// Confirmed fields (docs/36): Device Name · Alarm Name · Alarm Type · Status · Time ·
-// Fault Code · Fault ID. We keep only currently-Active entries + a bounded recent set.
+// ---- Fault/alarm log (WiNet-S WebSocket `service:'fault'`) ------------------
+// Live-confirmed (2026-07-02): faults come over the SAME WebSocket, not REST —
+// `{service:'connect'}` → `{service:'devicelist'}` → `{service:'fault', dev_id}` →
+// `result_data.list` of fault rows (empty when healthy). wsReadLive() issues the
+// fault query in-session and hands the rows here. Fields (docs/36): Alarm Name ·
+// Type · Status (Active/Closed) · Fault Code · Fault ID · Time — parsed tolerantly
+// since the exact row keys weren't observable while the list was empty.
 
 const REST_TIMEOUT_MS = 8000;
-const FAULT_PATHS = [
-  '/device/faultList?lang=en_us',
-  '/history/faultList?lang=en_us',
-  '/device/getFaultList?lang=en_us',
-  '/fault/list?lang=en_us',
-];
 
-async function getJson(url: string): Promise<WsEnvelope | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(REST_TIMEOUT_MS) });
-    if (!res.ok) return null;
-    return (await res.json()) as WsEnvelope;
-  } catch {
-    return null;
+/** Parse the WS `fault` list into InverterFaults (fail-soft, tolerant). */
+function parseFaultList(rows: unknown[]): InverterFault[] {
+  const faults: InverterFault[] = [];
+  for (const r of rows) {
+    if (r && typeof r === 'object') {
+      const f = parseFaultRow(r as Record<string, unknown>);
+      if (f) faults.push(f);
+    }
   }
+  return faults;
 }
 
 /** Product probe — the confirmed-reachable open endpoint. Throws on failure. */
@@ -307,8 +327,8 @@ function parseFaultRow(row: Record<string, unknown>): InverterFault | null {
     }
     return undefined;
   };
-  const name = g('faultName', 'alarmName', 'name', 'faulttype', 'dataname');
-  if (name == null) return null;
+  const rawName = g('faultName', 'alarmName', 'name', 'faulttype', 'dataname');
+  if (rawName == null) return null;
   const type = String(g('faultType', 'alarmType', 'type') ?? 'Fault');
   const status = String(g('status', 'faultStatus', 'dealStatus') ?? 'Active');
   const code = num(g('faultCode', 'code'));
@@ -317,30 +337,20 @@ function parseFaultRow(row: Record<string, unknown>): InverterFault | null {
   let time: string;
   if (typeof timeRaw === 'number') time = new Date(timeRaw < 1e12 ? timeRaw * 1000 : timeRaw).toISOString();
   else time = String(timeRaw ?? new Date().toISOString());
-  return { name: String(name), type, status, code, id, time };
+  return { name: prettyFaultName(String(rawName)), type, status, code, id, time };
 }
 
-/** Read the dongle fault log; returns [] on any failure (fail-soft). */
-async function restReadFaults(ip: string): Promise<InverterFault[]> {
-  for (const path of FAULT_PATHS) {
-    const j = await getJson(`http://${ip}${path}`);
-    if (!j || j.result_code !== 1) continue;
-    const data = j.result_data ?? {};
-    const rows =
-      (Array.isArray(data.list) && data.list) ||
-      (Array.isArray((data as { faultList?: unknown[] }).faultList) && (data as { faultList: unknown[] }).faultList) ||
-      null;
-    if (!rows) continue;
-    const faults: InverterFault[] = [];
-    for (const r of rows) {
-      if (r && typeof r === 'object') {
-        const f = parseFaultRow(r as Record<string, unknown>);
-        if (f) faults.push(f);
-      }
-    }
-    return faults;
-  }
-  return [];
+/** WiNet often returns names as raw I18N keys (e.g. "I18N_COMMON_GRID_UNDERVOLTAGE").
+ *  Prettify to "Grid Undervoltage"; pass through already-human strings unchanged. */
+function prettyFaultName(raw: string): string {
+  if (!/^i18n[_a-z0-9]*$/i.test(raw)) return raw;
+  const words = raw
+    .replace(/^I18N[_]?/i, '')
+    .replace(/^COMMON[_]?/i, '')
+    .split(/[_\s]+/)
+    .filter(Boolean);
+  if (words.length === 0) return raw;
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 }
 
 /** Currently-Active faults only (case-insensitive on the status field). */
@@ -370,25 +380,23 @@ async function readOne(dongle: SungrowDongle, index: number): Promise<InverterNo
     faults: [],
   };
 
-  // Live values (WS) + fault log (REST) in parallel; each is independently fail-soft.
-  const [liveRes, faultRes] = await Promise.allSettled([wsReadLive(ip), restReadFaults(ip)]);
-
-  if (liveRes.status === 'fulfilled') {
-    const v = liveRes.value;
+  // Live values + fault log come from ONE WebSocket session (fail-soft; a throw =
+  // unreachable). The dongle rate-limits guest sockets, so we never open a second one.
+  try {
+    const v = await wsReadLive(ip);
     base.acPowerW = v.acPowerW;
     base.dailyKwh = v.dailyKwh;
     base.totalKwh = v.totalKwh;
     base.tempC = v.tempC;
     base.workState = v.workState;
+    base.faults = v.faults;
     base.reachable = true;
     const now = new Date().toISOString();
     base.lastSeen = now;
     lastSeenByIp.set(ip, now);
-  } else {
-    base.detail = (liveRes.reason as Error)?.message ?? 'unreachable';
+  } catch (e) {
+    base.detail = (e as Error)?.message ?? 'unreachable';
   }
-
-  if (faultRes.status === 'fulfilled') base.faults = faultRes.value;
 
   return base;
 }

@@ -12,6 +12,7 @@ import type {
   ConfiguredResponse,
   AlertsResponse,
   ControlStatus,
+  InvertersResponse,
 } from '../lib/types';
 import {
   subsystemRollup,
@@ -22,6 +23,7 @@ import {
   irrigationHealth,
   batteryHealth,
   circuitHealth,
+  inverterHealth,
   worstState,
   type RollupInput,
   type HealthState,
@@ -92,6 +94,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
   const { data: configured } = usePolling<ConfiguredResponse>(api.devices.configured, POLL_MS);
   const { data: alertsData } = usePolling<AlertsResponse>(api.alerts, POLL_MS);
   const { data: ctrl } = usePolling<ControlStatus>(api.control.status, POLL_MS);
+  const { data: inverters } = usePolling<InvertersResponse>(api.inverters, POLL_MS);
 
   /* ---- Build the per-subsystem rollups + chips ---- */
   const subsystems: SubsystemBlock[] = [];
@@ -126,6 +129,24 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
       return { id: b.id, name: b.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     subsystems.push({ key: 'batteries', icon: 'battery-charging', name: 'Batteries', rollup, chips });
+  }
+
+  // Solar inverters (Sungrow SG5.0RS ×2)
+  if (inverters && inverters.count > 0) {
+    const invs = inverters.inverters;
+    const items: RollupInput[] = invs.map((d) => ({ id: d.id, name: d.name, health: inverterHealth(d) }));
+    const rollup = subsystemRollup(items);
+    const chips: DeviceChip[] = invs.map((d) => {
+      const h = inverterHealth(d);
+      const tele =
+        d.status === 'online'
+          ? `${d.kw.toFixed(2)} kW${d.dailyKwh != null ? ` · ${d.dailyKwh.toFixed(1)} kWh today` : ''}`
+          : d.status === 'asleep'
+            ? 'asleep (night)'
+            : 'offline';
+      return { id: d.id, name: d.name, state: h.state, telemetry: tele, reason: h.reason };
+    });
+    subsystems.push({ key: 'inverters', icon: 'sun', name: 'Solar Inverters', rollup, chips });
   }
 
   // Lighting
@@ -224,6 +245,21 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
   if (blinds) tiles.push(subTile('blinds', 'Blinds', 'blinds', blinds.connected, blinds.fleetError, blinds.devices.filter((d) => d.online).length, blinds.devices.length));
   if (speakers) tiles.push(subTile('speakers', 'Speakers', 'speaker', speakers.enabled, speakers.lastError, speakers.speakers.filter((d) => d.online).length, speakers.speakers.length));
   if (irrigation) tiles.push(subTile('irrigation', 'Irrigation', 'droplet', irrigation.connected, irrigation.lastError, irrigation.zones.filter((z) => z.available).length, irrigation.zones.length));
+  // Solar inverters — night sleep is expected (green), only a daylight miss is a fault.
+  if (inverters && inverters.count > 0) {
+    const invs = inverters.inverters;
+    const offline = invs.filter((i) => i.status === 'offline').length;
+    const online = invs.filter((i) => i.status === 'online').length;
+    const asleep = invs.filter((i) => i.status === 'asleep').length;
+    const tone: ConnTone = offline > 0 ? 'danger' : 'ok';
+    const detail =
+      offline > 0
+        ? `${offline}/${invs.length} offline`
+        : asleep === invs.length
+          ? 'asleep (night)'
+          : `${online}/${invs.length} online`;
+    tiles.push({ key: 'inverters', name: 'Solar Inverters', icon: 'sun', tone, detail });
+  }
 
   /* ---- Rejected control commands ---- */
   const rejected = (ctrl?.log ?? []).filter((l) => !l.ok).slice(0, 5);

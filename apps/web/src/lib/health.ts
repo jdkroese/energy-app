@@ -20,6 +20,7 @@ import type {
   IrrigationZone,
   BatteryDetail,
   ConfiguredDeviceView,
+  InverterView,
 } from './types';
 
 export type HealthState = 'ok' | 'warning' | 'error' | 'offline' | 'nosetup';
@@ -137,6 +138,21 @@ export function batteryHealth(d: BatteryDetail): Health {
 export function circuitHealth(d: ConfiguredDeviceView): Health {
   if (!d.online) return { state: 'offline', reason: 'Offline' };
   return { state: 'ok', reason: 'Online' };
+}
+
+/** Solar inverter (Sungrow SG5.0RS) — InverterView. String inverters + their WiNet-S
+ *  dongle power down at night, so `asleep` (unreachable when the sun is down) is an
+ *  EXPECTED healthy state, not an issue — only a daylight miss (`offline`) is. An
+ *  active protection fault is an error; a soft alarm is a warning. */
+export function inverterHealth(d: InverterView): Health {
+  if (d.activeFaultCount > 0) {
+    const f = d.faults.find((x) => x.status.toLowerCase().includes('active'));
+    const isFault = (f?.type ?? 'fault').toLowerCase().includes('fault');
+    return { state: isFault ? 'error' : 'warning', reason: f?.name ?? 'Active fault' };
+  }
+  if (d.status === 'offline') return { state: 'offline', reason: 'Unreachable in daylight' };
+  if (d.status === 'asleep') return { state: 'ok', reason: 'Asleep (night)' };
+  return { state: 'ok', reason: d.workState || 'Run' };
 }
 
 /* ---- rollup ---------------------------------------------------------------- */
