@@ -96,6 +96,12 @@ export interface MealPlan {
   days: MealPlanDay[];
 }
 
+/** What Confirm applies to the draft — shape depends on the suggestion kind (P2). */
+export type SuggestionApply =
+  | { action: 'switch-product'; lineId: string; productId: string; productName: string; packsNeeded: number }
+  | { action: 'merge-lines'; keepLineId: string; dropLineId: string }
+  | { action: 'check-line'; lineId: string };
+
 export interface OrderSuggestion {
   id: string;
   kind: 'pack' | 'merge' | 'cadence';
@@ -103,6 +109,10 @@ export interface OrderSuggestion {
   state: 'open' | 'confirmed' | 'ignored';
   /** Applied automatically by the pack consolidator (P1 renders only these). */
   auto?: boolean;
+  /** Stable subject for the (kind, subject) suppression memory — ignored twice → never again (P2). */
+  subject?: string;
+  /** What Confirm applies (P2 interactive suggestions). */
+  apply?: SuggestionApply;
 }
 
 export interface OrderLine {
@@ -125,6 +135,8 @@ export interface OrderLine {
   priceEur?: number | null;
   /** Pantry staple heuristics pre-uncheck these. */
   pantry?: boolean;
+  /** Mixed units were aggregated across recipes — the qty needs a human look (P2). */
+  incomparable?: boolean;
 }
 
 export interface OrderDraft {
@@ -145,6 +157,12 @@ export interface OrderHistoryEntry {
   lines: OrderLine[];
   totalEur: number;
   deliveredAt?: string | null;
+  /** How the order left the app: checklist (M0), cart fill (M2) or detected on the account (P2). */
+  source?: 'checklist' | 'cart' | 'mercadona';
+  /** Mercadona order id once the placed order is detected on the account (P2). */
+  orderId?: string | null;
+  /** Delivery window of the placed order, when the API exposes it (P2). */
+  slot?: { start: string; end: string } | null;
 }
 
 export interface HouseholdGoals {
@@ -191,6 +209,8 @@ export interface KitchenData {
   orderHistory: OrderHistoryEntry[];
   household: Household;
   reminders: Reminders;
+  /** (kind:subject) → times ignored. At 2 the suggestion is permanently suppressed (P2). */
+  suggestionMutes: Record<string, number>;
   /** Seed-library version applied (never re-seeds over user edits). */
   seededAt: string | null;
 }

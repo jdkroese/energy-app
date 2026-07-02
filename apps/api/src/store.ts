@@ -1443,13 +1443,36 @@ export interface StoreSchema {
 
 // ---- Kitchen Hub (docs/38 + docs/39) — connector settings -------------------
 
-/** Mercadona READ-ONLY connector config. Warehouse is resolved once via the
- *  postal-code endpoint (never hardcoded); Algolia keys are scraped from the
- *  tienda JS bundle and refreshed on 4xx. */
+/** The linked Mercadona account (P2 cart fill, docs/41). Bootstrapped ONCE by hand
+ *  (login is reCAPTCHA-gated), then renewed headlessly. The refresh token ROTATES on
+ *  every use — mercadona-auth.ts persists the rotated token here atomically the
+ *  moment it arrives. NEVER logged; masked in every API response. */
+export interface KitchenMercadonaAccount {
+  refreshToken: string;
+  customerId: string;
+  /** Default delivery-address id, learned from /addresses/ (drives the slots read). */
+  addressId: string | null;
+  /** Human label (name/email) when the API exposes it. */
+  label: string | null;
+  linkedAt: string;
+  lastRefreshAt: string | null;
+  lastRefreshOk: boolean;
+}
+
+/** Mercadona connector config. Reads stay anonymous (P1); cart writes (P2) need the
+ *  linked account and honor the spend-cap + dry-run guardrails. Warehouse is resolved
+ *  once via the postal-code endpoint (never hardcoded); Algolia keys are scraped from
+ *  the tienda JS bundle and refreshed on 4xx. */
 export interface KitchenMercadonaConfig {
   postalCode: string;
   warehouse: string | null;
   algolia: { appId: string; apiKey: string; scrapedAt: string } | null;
+  account: KitchenMercadonaAccount | null;
+  /** Server-side cart-fill spend cap in EUR — fills above this are refused. */
+  spendCapEur: number;
+  /** Dry-run: build/validate/log the exact cart payload without sending. Defaults ON;
+   *  flipped off automatically on a successful account link (re-enabled on unlink). */
+  dryRun: boolean;
 }
 
 /** Settings ▸ Intelligence (D2): the Claude API helper config. Every feature
@@ -1479,6 +1502,9 @@ export function defaultKitchen(): KitchenSettings {
       postalCode: process.env.MERCADONA_POSTAL_CODE || "03730",
       warehouse: null,
       algolia: null,
+      account: null,
+      spendCapEur: 150,
+      dryRun: true,
     },
     intelligence: {
       enabled: false,
@@ -1523,6 +1549,12 @@ function hydrateKitchen(p: unknown): KitchenSettings {
                   : new Date().toISOString(),
             }
           : null,
+      account: hydrateMercadonaAccount(m.account),
+      spendCapEur:
+        typeof m.spendCapEur === "number" && Number.isFinite(m.spendCapEur) && m.spendCapEur > 0
+          ? Math.min(2000, Math.round(m.spendCapEur))
+          : base.mercadona.spendCapEur,
+      dryRun: typeof m.dryRun === "boolean" ? m.dryRun : base.mercadona.dryRun,
     },
     intelligence: {
       enabled: typeof i.enabled === "boolean" ? i.enabled : base.intelligence.enabled,
@@ -1552,6 +1584,22 @@ function hydrateKitchen(p: unknown): KitchenSettings {
         eur: typeof u.eur === "number" ? Math.max(0, u.eur) : 0,
       },
     },
+  };
+}
+
+function hydrateMercadonaAccount(p: unknown): KitchenMercadonaAccount | null {
+  if (!p || typeof p !== "object") return null;
+  const a = p as Partial<KitchenMercadonaAccount>;
+  if (typeof a.refreshToken !== "string" || !a.refreshToken) return null;
+  if (typeof a.customerId !== "string" || !a.customerId) return null;
+  return {
+    refreshToken: a.refreshToken,
+    customerId: a.customerId,
+    addressId: typeof a.addressId === "string" && a.addressId ? a.addressId : null,
+    label: typeof a.label === "string" && a.label ? a.label : null,
+    linkedAt: typeof a.linkedAt === "string" ? a.linkedAt : new Date().toISOString(),
+    lastRefreshAt: typeof a.lastRefreshAt === "string" ? a.lastRefreshAt : null,
+    lastRefreshOk: typeof a.lastRefreshOk === "boolean" ? a.lastRefreshOk : true,
   };
 }
 

@@ -2203,6 +2203,7 @@ export interface OrderSuggestion {
   text: string;
   state: 'open' | 'confirmed' | 'ignored';
   auto?: boolean;
+  subject?: string;
 }
 
 export interface OrderLine {
@@ -2220,6 +2221,8 @@ export interface OrderLine {
   checked: boolean;
   priceEur?: number | null;
   pantry?: boolean;
+  /** Mixed units were aggregated across recipes — the qty needs a human check (P2). */
+  incomparable?: boolean;
 }
 
 export interface OrderDraft {
@@ -2240,6 +2243,9 @@ export interface OrderHistoryEntry {
   lines: OrderLine[];
   totalEur: number;
   deliveredAt?: string | null;
+  source?: 'checklist' | 'cart' | 'mercadona';
+  orderId?: string | null;
+  slot?: { start: string; end: string } | null;
 }
 
 export interface KitchenHouseholdGoals {
@@ -2301,6 +2307,62 @@ export interface MercadonaStatus {
   detail?: string;
 }
 
+/* ---- Kitchen Hub P2 (docs/41): account link · cart fill · slots · regulars ---- */
+
+export interface MercadonaAccountStatus {
+  linked: boolean;
+  label: string | null;
+  customerIdMasked: string | null;
+  tokenMasked: string | null;
+  linkedAt: string | null;
+  lastRefreshAt: string | null;
+  lastRefreshOk: boolean | null;
+  dryRun: boolean;
+  spendCapEur: number;
+  warehouse: string | null;
+}
+
+export interface MercadonaSlot {
+  id: string;
+  start: string | null;
+  end: string | null;
+  day: string | null;
+  available: boolean;
+  priceEur: number | null;
+}
+
+export interface CartPlanItem {
+  product_id: string;
+  quantity: number;
+  label: string;
+  priceEur: number | null;
+}
+
+export interface FillCartResponse {
+  ts: string;
+  ok: boolean;
+  dryRun: boolean;
+  linked: boolean;
+  payload?: { lines: Array<{ product_id: string; quantity: number }> };
+  added?: number;
+  cartLines?: number;
+  items: CartPlanItem[];
+  skipped: Array<{ label: string; reason: string }>;
+  totalEur: number;
+  unpricedCount: number;
+  capEur: number;
+  cartUrl?: string;
+}
+
+export interface KitchenRegularHit {
+  id: string;
+  name: string;
+  photo: string | null;
+  unitPrice: number | null;
+  packSizeDisplay: string | null;
+  alreadyStaple: boolean;
+}
+
 export interface RecipesResponse { ts: string; recipes: Recipe[] }
 export interface RecipeResponse { ts: string; recipe: Recipe }
 export interface RecipeImportResponse {
@@ -2321,3 +2383,16 @@ export interface KitchenPickResponse { ts: string; entry: unknown; draft: OrderD
 export interface KitchenHouseholdResponse { ts: string; household: KitchenHousehold }
 export interface KitchenRemindersResponse { ts: string; reminders: KitchenReminders }
 export interface KitchenIntelligenceResponse { ts: string; intelligence: KitchenIntelligence }
+export interface MercadonaAccountResponse { ts: string; account: MercadonaAccountStatus }
+export interface MercadonaLinkResponse { ts: string; ok: boolean; account: MercadonaAccountStatus }
+export interface KitchenSlotsResponse { ts: string; linked: boolean; available: boolean; slots: MercadonaSlot[] }
+export interface KitchenSuggestionActionResponse { ts: string; draft: OrderDraft; suppressed: boolean }
+export interface KitchenOrderSyncResponse {
+  ts: string;
+  checked: boolean;
+  matched: boolean;
+  order?: { id: string; slotStart: string | null; slotEnd: string | null; totalEur: number | null };
+  draft: OrderDraft;
+}
+export interface KitchenRegularsResponse { ts: string; linked: boolean; available: boolean; products: KitchenRegularHit[] }
+export interface KitchenImportRegularsResponse { ts: string; ok: boolean; added: number; staples: StaplesItem[] }

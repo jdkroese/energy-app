@@ -11,6 +11,7 @@ import { logEvent } from '../events';
 import { sendPush } from '../notify';
 import * as kitchen from '../kitchen/store';
 import { addDays, weekStartOf } from '../kitchen/engine';
+import { syncOrderStatus } from '../kitchen/order-status';
 
 const TICK_MS = 60 * 60_000; // hourly
 
@@ -82,6 +83,21 @@ export function evaluateNudges(data: kitchen.KitchenData, now: Date): KitchenNud
  */
 export async function kitchenTick(now: Date = new Date()): Promise<KitchenNudge[]> {
   let nudges: KitchenNudge[] = [];
+  // P2 (docs/41 §4): after a cart fill, watch the account for the placed order
+  // (filled → submitted + delivery window). No-op unless the draft is 'filled' and an
+  // account is linked; read-only against Mercadona; never throws.
+  try {
+    const status = await syncOrderStatus(now);
+    if (status.matched && status.order) {
+      await sendPush(
+        'Groceries: order placed ✓',
+        status.order.slotStart ? `Delivery ${status.order.slotStart}` : 'Delivery window pending',
+        { url: '/groceries' },
+      ).catch(() => {});
+    }
+  } catch (e) {
+    console.error('[kitchen-coordinator] order-status sync failed:', (e as Error).message);
+  }
   try {
     const data = kitchen.get();
     nudges = evaluateNudges(data, now);

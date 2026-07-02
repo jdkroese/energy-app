@@ -65,6 +65,7 @@ function defaults(): KitchenData {
     orderHistory: [],
     household: defaultHousehold(),
     reminders: defaultReminders(),
+    suggestionMutes: {},
     seededAt: null,
   };
 }
@@ -142,8 +143,18 @@ function hydrate(p: unknown): KitchenData {
       ...(typeof rem.lastPlanNudgeWeek === 'string' ? { lastPlanNudgeWeek: rem.lastPlanNudgeWeek } : {}),
       ...(typeof rem.lastSubmitNudgeWeek === 'string' ? { lastSubmitNudgeWeek: rem.lastSubmitNudgeWeek } : {}),
     },
+    suggestionMutes: hydrateMutes(k.suggestionMutes),
     seededAt: typeof k.seededAt === 'string' ? k.seededAt : null,
   };
+}
+
+function hydrateMutes(p: unknown): Record<string, number> {
+  if (!p || typeof p !== 'object') return {};
+  const out: Record<string, number> = {};
+  for (const [key, v] of Object.entries(p as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[key] = Math.round(v);
+  }
+  return out;
 }
 
 // ---- Seed (first boot only — never overwrites user edits) --------------------

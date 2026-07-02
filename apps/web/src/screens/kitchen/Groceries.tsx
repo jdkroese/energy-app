@@ -1,17 +1,30 @@
-// Groceries — the Kitchen Hub order builder (docs/38 D4, docs/39 P1; screens per the
-// approved docs/mockups/kitchen-hub-v4.html). Desktop ≥768px: smart-suggestions card
-// (P1 renders only the auto-applied pack merges) + three columns (recipes · staples ·
-// basket). Mobile <768px: segmented Recipes/Staples/Basket tabs + a sticky total footer.
-// "Fill Mercadona cart" renders DISABLED ("coming in the next update") until P2; the M0
-// "Send as checklist" flow works today. Unmapped ingredients get the cyan pick-once
-// product search that writes the mapping memory.
+// Groceries — the Kitchen Hub order builder (docs/38 D4, docs/39 P1, docs/41 P2;
+// screens per the approved docs/mockups/kitchen-hub-v4.html). Desktop ≥768px:
+// smart-suggestions strip (auto pack merges + interactive Confirm/Ignore nudges) +
+// three columns (recipes · staples · basket). Mobile <768px: segmented tabs + a
+// sticky total footer. P2 wires "Fill Mercadona cart" for real: explicit confirm
+// modal → server-side spend cap → ONE batched cart write (dry-run returns the exact
+// payload without sending) → "in your cart — open Mercadona to pick a slot and pay";
+// checkout stays 100% human. Real delivery slots + order status ride the linked
+// account; "Send as checklist" remains the always-works fallback.
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { ShellContext } from '../../components/shell/AppShell';
 import { Badge, Button, Card, Icon, LoadingState, Modal, SegmentedControl } from '../../components/ui';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
-import type { KitchenProductHit, OrderDraft, OrderHistoryEntry, OrderLine, StaplesItem } from '../../lib/types';
+import type {
+  FillCartResponse,
+  KitchenProductHit,
+  KitchenRegularHit,
+  MercadonaAccountStatus,
+  MercadonaSlot,
+  OrderDraft,
+  OrderHistoryEntry,
+  OrderLine,
+  OrderSuggestion,
+  StaplesItem,
+} from '../../lib/types';
 import { MobileHeader } from '../_shared';
 import { fmtEur, fmtQty } from './shared';
 
@@ -53,13 +66,77 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
   const [picker, setPicker] = useState<OrderLine | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [checklist, setChecklist] = useState<string | null>(null);
+  const [confirmFill, setConfirmFill] = useState(false);
+  const [fillResult, setFillResult] = useState<FillCartResponse | null>(null);
+  const [regularsOpen, setRegularsOpen] = useState(false);
+  const [slots, setSlots] = useState<MercadonaSlot[] | null>(null);
 
   const { data: draftResp, refetch: refetchDraft } = usePolling(api.kitchen.orderDraft, 0);
   const { data: staplesResp, refetch: refetchStaples } = usePolling(api.kitchen.staples, 0);
+  const { data: accountResp } = usePolling(api.kitchen.mercadonaAccount, 0);
+  const { data: historyResp, refetch: refetchHistory } = usePolling(api.kitchen.orderHistory, 0);
   const draft = draftResp?.draft ?? null;
   const staples = staplesResp?.staples ?? [];
+  const account: MercadonaAccountStatus | null = accountResp?.account ?? null;
+  /** Delivery window of the latest order detected on the account (status card). */
+  const deliveryWindow = historyResp?.history.find((h) => h.source === 'mercadona')?.slot ?? null;
 
   const linked = useMemo(() => Boolean(draft?.lines.some((l) => l.priceEur != null)), [draft]);
+  const accountLinked = Boolean(account?.linked);
+
+  // P2: real delivery slots once the account is linked (READ only — booking stays human).
+  useEffect(() => {
+    if (!accountLinked) return;
+    api.kitchen
+      .orderSlots()
+      .then((r) => setSlots(r.available ? r.slots : null))
+      .catch(() => setSlots(null));
+  }, [accountLinked]);
+
+  // P2: a 'filled' draft means the human still has to check out — poll the account's
+  // orders ONCE per screen open so filled → submitted follows reality.
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (!draft || draft.status !== 'filled' || !accountLinked || syncedRef.current) return;
+    syncedRef.current = true;
+    api.kitchen
+      .syncOrderStatus()
+      .then((r) => {
+        if (r.matched) {
+          void refetchDraft();
+          void refetchHistory();
+        }
+      })
+      .catch(() => {});
+  }, [draft, accountLinked, refetchDraft, refetchHistory]);
+
+  const suggestionAction = async (s: OrderSuggestion, action: 'confirm' | 'ignore') => {
+    setBusy(`sugg-${s.id}-${action}`);
+    try {
+      const r = await api.kitchen.suggestionAction(s.id, action);
+      if (action === 'ignore' && r.suppressed) setNote('Got it — that suggestion won’t come back.');
+      await refetchDraft();
+    } catch (e) {
+      setNote((e as Error).message || 'Suggestion update failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runFillCart = async () => {
+    setBusy('fill');
+    try {
+      const r = await api.kitchen.fillCart();
+      setConfirmFill(false);
+      setFillResult(r);
+      await refetchDraft();
+    } catch (e) {
+      setConfirmFill(false);
+      setNote((e as Error).message || 'Cart fill failed');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const saveLines = async (lines: OrderLine[]) => {
     setBusy('lines');
@@ -124,7 +201,20 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
   const manualLines = draft.lines.filter((l) => l.source === 'manual' || l.source === 'tablet');
   const checkedCount = draft.lines.filter((l) => l.checked).length;
   const autoSuggestions = draft.suggestions.filter((s) => s.auto);
+  const openSuggestions = draft.suggestions.filter((s) => !s.auto && s.state === 'open');
   const minMet = draft.totalEur >= DELIVERY_MIN_EUR;
+  const fillableCount = draft.lines.filter((l) => l.checked && l.productId).length;
+  const unmappedChecked = draft.lines.filter((l) => l.checked && !l.productId).length;
+  const filled = draft.status === 'filled';
+  const submitted = draft.status === 'submitted';
+
+  // The next bookable delivery slot (real cutoff surface — docs/41 §4).
+  const nextSlot = slots?.find((s) => s.available) ?? null;
+  const slotLabel = (s: MercadonaSlot): string => {
+    const day = s.day ? new Date(`${s.day}T12:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '';
+    const window = s.start && s.end ? `${s.start.includes('T') ? s.start.slice(11, 16) : s.start}–${s.end.includes('T') ? s.end.slice(11, 16) : s.end}` : '';
+    return [day, window].filter(Boolean).join(' ') || 'slot available';
+  };
 
   // ---- Line rows -----------------------------------------------------------------------
 
@@ -187,6 +277,11 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
             )}
           </span>
           {line.coverageNote && <small style={{ display: 'block', fontSize: 10.5, color: 'var(--battery)' }}>→ {line.coverageNote}</small>}
+          {line.incomparable && (
+            <small style={{ display: 'block', fontSize: 10.5, color: 'var(--solar)' }}>
+              <Icon name="triangle-alert" size={10} /> check quantity — recipes used mixed units for this one
+            </small>
+          )}
           {line.pantry && <small style={{ display: 'block', fontSize: 10.5, color: 'var(--text-3)' }}>Pantry staple — pre-unchecked</small>}
         </span>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', flex: 'none' }}>{fmtEur(line.priceEur)}</span>
@@ -243,14 +338,49 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
 
   // ---- Cards ----------------------------------------------------------------------------
 
-  const suggestionsCard = autoSuggestions.length > 0 && (
+  // P2 (docs/41 §3): the interactive strip — Confirm applies the change to the draft,
+  // Ignore counts against the (kind, subject); twice → permanently suppressed.
+  const SUGG_ICON: Record<OrderSuggestion['kind'], string> = { pack: 'package', merge: 'carrot', cadence: 'clock' };
+  const SUGG_ACTION: Record<OrderSuggestion['kind'], string> = { pack: 'Switch', merge: 'Merge', cadence: 'Add' };
+
+  const suggestionsCard = (autoSuggestions.length > 0 || openSuggestions.length > 0) && (
     <Card
       title="Smart suggestions"
       icon={<Icon name="sparkles" size={15} color="var(--battery)" />}
-      actions={<span style={{ fontSize: 11, color: 'var(--text-3)' }}>{autoSuggestions.length} auto-applied · interactive nudges arrive with cart fill (P2)</span>}
+      actions={
+        <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+          {openSuggestions.length} open · {autoSuggestions.length} auto-applied
+        </span>
+      }
       accent="battery"
     >
       <div style={{ padding: '2px 16px 12px' }}>
+        {openSuggestions.map((s, i) => (
+          <div
+            key={s.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+              padding: '8px 0',
+              borderBottom: i < openSuggestions.length - 1 || autoSuggestions.length > 0 ? '1px solid var(--border-1)' : 'none',
+              fontSize: 12.5,
+              color: 'var(--text-2)',
+              flexWrap: wide ? 'nowrap' : 'wrap',
+            }}
+          >
+            <Icon name={SUGG_ICON[s.kind]} size={14} color="var(--battery)" />
+            <span style={{ flex: 1, minWidth: wide ? 0 : '70%' }}>{s.text}</span>
+            <span style={{ display: 'flex', gap: 6, flex: 'none', marginLeft: 'auto' }}>
+              <Button size="sm" variant="secondary" loading={busy === `sugg-${s.id}-confirm`} onClick={() => void suggestionAction(s, 'confirm')}>
+                {SUGG_ACTION[s.kind]}
+              </Button>
+              <Button size="sm" variant="ghost" loading={busy === `sugg-${s.id}-ignore`} onClick={() => void suggestionAction(s, 'ignore')}>
+                Ignore
+              </Button>
+            </span>
+          </div>
+        ))}
         {autoSuggestions.map((s, i) => (
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', borderBottom: i < autoSuggestions.length - 1 ? '1px solid var(--border-1)' : 'none', fontSize: 12.5, color: 'var(--text-2)' }}>
             <Icon name="package" size={14} color="var(--battery)" />
@@ -309,6 +439,18 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           </div>
         )}
         <AddStaple onAdd={(name) => void addStaple(name)} />
+        {accountLinked && (
+          <Button
+            size="sm"
+            variant="secondary"
+            block
+            style={{ marginTop: 8 }}
+            iconLeft={<Icon name="sparkles" size={13} />}
+            onClick={() => setRegularsOpen(true)}
+          >
+            Seed staples from your Mercadona regulars
+          </Button>
+        )}
       </div>
     </Card>
   );
@@ -347,11 +489,55 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
             <span>{minMet ? 'Delivery minimum met ✓' : `Delivery minimum ${DELIVERY_MIN_EUR} € — ${fmtEur(DELIVERY_MIN_EUR - draft.totalEur)} to go`}</span>
             <span style={{ fontFamily: 'var(--font-mono)' }}>{linked ? 'alc1 · Jávea' : 'prices unavailable'}</span>
           </div>
+          {/* Order status strip (P2): draft → in cart → order placed. */}
+          {(filled || submitted) && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 11.5,
+                borderRadius: 'var(--radius-md)',
+                padding: '9px 12px',
+                background: submitted ? 'var(--solar-wash)' : 'var(--battery-wash)',
+                color: submitted ? 'var(--solar)' : 'var(--battery)',
+                flexWrap: 'wrap',
+              }}
+            >
+              <Icon name={submitted ? 'circle-check-big' : 'shopping-basket'} size={15} />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {submitted ? (
+                  <>
+                    Order placed ✓
+                    {deliveryWindow?.start && (
+                      <> · delivery <b>{deliveryWindow.start.includes('T') ? deliveryWindow.start.slice(0, 16).replace('T', ' ') : deliveryWindow.start}</b></>
+                    )}
+                  </>
+                ) : (
+                  <>In your Mercadona cart — open Mercadona to pick a slot and pay. This app never checks out.</>
+                )}
+              </span>
+              {filled && (
+                <a href="https://tienda.mercadona.es" target="_blank" rel="noreferrer" style={{ color: 'inherit', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  Open Mercadona <Icon name="external-link" size={11} />
+                </a>
+              )}
+            </div>
+          )}
           {draft.targetSlot && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--text-2)', flexWrap: 'wrap' }}>
               <Icon name="truck" size={15} color="var(--solar)" />
               <span>
-                Target slot <b style={{ color: 'var(--text-1)' }}>{draft.targetSlot.window}</b>
+                {nextSlot ? (
+                  <>
+                    Next slot <b style={{ color: 'var(--text-1)' }}>{slotLabel(nextSlot)}</b>
+                    {slots && <> · {slots.filter((s) => s.available).length} open</>}
+                  </>
+                ) : (
+                  <>
+                    Target slot <b style={{ color: 'var(--text-1)' }}>{draft.targetSlot.window}</b>
+                  </>
+                )}
                 {draft.submitBy && (
                   <>
                     {' '}
@@ -360,22 +546,36 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
                 )}
               </span>
               <Badge tone="solar" icon={<Icon name="bell" size={11} />}>
-                reminder set
+                {nextSlot ? 'live slots' : 'reminder set'}
               </Badge>
             </div>
           )}
-          {/* P2 seam: cart fill renders DISABLED until the token bootstrap ships. */}
-          <span title="Cart link coming in the next update">
-            <Button variant="primary" size="lg" block disabled iconLeft={<Icon name="shopping-basket" size={16} />}>
-              Fill Mercadona cart
-            </Button>
-          </span>
+          <Button
+            variant="primary"
+            size="lg"
+            block
+            disabled={fillableCount === 0}
+            loading={busy === 'fill'}
+            iconLeft={<Icon name="shopping-basket" size={16} />}
+            onClick={() => setConfirmFill(true)}
+          >
+            {filled ? 'Refill Mercadona cart' : 'Fill Mercadona cart'}
+          </Button>
           <Button variant="ghost" block loading={busy === 'checklist'} onClick={() => void sendChecklist()}>
             Send as checklist instead
           </Button>
           <span style={{ fontSize: 10, color: 'var(--text-3)', lineHeight: 1.5 }}>
-            Cart fill arrives in the next update (one-time Mercadona link, spend cap, human checkout — this app never checks out).
-            The checklist works today: your priced list, ready to shop from.
+            {accountLinked ? (
+              <>
+                Fills your real cart ({fillableCount} items). You pick the slot &amp; pay in Mercadona — this app never
+                checks out. Spend cap {account?.spendCapEur ?? 150} €{account?.dryRun ? ' · dry-run mode is ON (nothing is sent)' : ''}.
+              </>
+            ) : (
+              <>
+                No Mercadona account linked yet — the button previews the exact cart payload (dry run, nothing is sent).
+                Link your account in Settings ▸ Connections ▸ Mercadona to fill the real cart. Human checkout, always.
+              </>
+            )}
           </span>
         </div>
       </div>
@@ -414,6 +614,30 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
       )}
       {historyOpen && <HistoryModal desktop={wide} onClose={() => setHistoryOpen(false)} />}
       {checklist != null && <ChecklistModal desktop={wide} text={checklist} onClose={() => setChecklist(null)} />}
+      {confirmFill && (
+        <ConfirmFillModal
+          desktop={wide}
+          draft={draft}
+          account={account}
+          fillableCount={fillableCount}
+          unmappedChecked={unmappedChecked}
+          busy={busy === 'fill'}
+          onConfirm={() => void runFillCart()}
+          onClose={() => setConfirmFill(false)}
+        />
+      )}
+      {fillResult && <FillResultModal desktop={wide} result={fillResult} onClose={() => setFillResult(null)} />}
+      {regularsOpen && (
+        <RegularsModal
+          desktop={wide}
+          onClose={() => setRegularsOpen(false)}
+          onImported={() => {
+            setRegularsOpen(false);
+            void refetchStaples();
+            setNote('Staples added from your regulars ✓');
+          }}
+        />
+      )}
     </>
   );
 
@@ -474,9 +698,17 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           <b style={{ fontFamily: 'var(--font-mono)', fontSize: 18, color: 'var(--text-1)' }}>{fmtEur(draft.totalEur)}</b>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <span title="Cart link coming in the next update" style={{ flex: 1.4, display: 'flex' }}>
-            <Button variant="primary" size="lg" block disabled iconLeft={<Icon name="shopping-basket" size={16} />}>
-              Fill Mercadona cart
+          <span style={{ flex: 1.4, display: 'flex' }}>
+            <Button
+              variant="primary"
+              size="lg"
+              block
+              disabled={fillableCount === 0}
+              loading={busy === 'fill'}
+              iconLeft={<Icon name="shopping-basket" size={16} />}
+              onClick={() => setConfirmFill(true)}
+            >
+              {filled ? 'Refill cart' : 'Fill Mercadona cart'}
             </Button>
           </span>
           <Button variant="secondary" size="lg" loading={busy === 'checklist'} onClick={() => void sendChecklist()}>
@@ -692,6 +924,287 @@ function ChecklistModal({ desktop, text, onClose }: { desktop: boolean; text: st
       }
     >
       <pre style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap', margin: 0, color: 'var(--text-2)' }}>{text}</pre>
+    </Modal>
+  );
+}
+
+// ---- P2: explicit cart-fill confirm (docs/41 §2 — "32 items · 87,40 € → your cart") ----------
+
+function ConfirmFillModal({
+  desktop,
+  draft,
+  account,
+  fillableCount,
+  unmappedChecked,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  desktop: boolean;
+  draft: OrderDraft;
+  account: MercadonaAccountStatus | null;
+  fillableCount: number;
+  unmappedChecked: number;
+  busy: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const dryRun = !account?.linked || Boolean(account?.dryRun);
+  const cap = account?.spendCapEur ?? 150;
+  const overCap = draft.totalEur > cap;
+  // Mirror of the server rule: a REAL fill refuses when any item has no live price
+  // (the spend cap can't judge what it can't see); dry-run stays available.
+  const unpricedFillable = draft.lines.filter((l) => l.checked && l.productId && l.priceEur == null).length;
+  const blockedUnpriced = !dryRun && unpricedFillable > 0;
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={dryRun ? 'Preview the cart payload (dry run)' : 'Fill your Mercadona cart?'}
+      subtitle={`${fillableCount} items · ${fmtEur(draft.totalEur)} → ${dryRun ? 'nothing is sent' : 'your Mercadona cart'}`}
+      icon="shopping-basket"
+      tone="solar"
+      placement={desktop ? 'center' : 'sheet'}
+      wideViewport={desktop}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={(overCap || blockedUnpriced) && !dryRun}
+            onClick={onConfirm}
+            iconLeft={<Icon name={dryRun ? 'flask-conical' : 'shopping-basket'} size={14} />}
+          >
+            {dryRun ? 'Build the payload' : `Fill cart · ${fmtEur(draft.totalEur)}`}
+          </Button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.55 }}>
+        <div>
+          {dryRun ? (
+            <>
+              Dry-run mode: the app builds and validates the <b>exact batched payload</b> it would send to Mercadona and
+              shows it to you — <b>nothing leaves the house</b>.
+              {!account?.linked && ' Link your account in Settings ▸ Connections ▸ Mercadona to fill the real cart.'}
+            </>
+          ) : (
+            <>
+              One batched write adds these items to the cart of <b>{account?.label ?? 'your linked account'}</b>. You still
+              pick the delivery slot and pay in Mercadona yourself — <b>this app never checks out</b>. Unlinking the
+              account in Settings kills this instantly.
+            </>
+          )}
+        </div>
+        {unmappedChecked > 0 && (
+          <div style={{ background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--grid)', fontSize: 12 }}>
+            {unmappedChecked} checked line{unmappedChecked > 1 ? 's have' : ' has'} no product picked yet — they will be
+            skipped. Use the cyan “pick the product” rows first to include them.
+          </div>
+        )}
+        {overCap && (
+          <div style={{ background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--grid)', fontSize: 12 }}>
+            {fmtEur(draft.totalEur)} is over the {cap} € spend cap — the server will refuse. Raise the cap in Settings ▸
+            Connections ▸ Mercadona or uncheck some lines.
+          </div>
+        )}
+        {blockedUnpriced && (
+          <div style={{ background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--grid)', fontSize: 12 }}>
+            {unpricedFillable} item{unpricedFillable > 1 ? 's have' : ' has'} no live price (Mercadona unreachable), so the
+            spend cap can’t judge this fill — the server refuses real fills until prices are back. Try again later, or send
+            as checklist.
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+          Spend cap {cap} € (server-enforced) · batched write · no checkout, payment or slot booking — ever.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- P2: fill result — dry-run payload preview or the real-fill hand-off ----------------------
+
+function FillResultModal({ desktop, result, onClose }: { desktop: boolean; result: FillCartResponse; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const payloadJson = result.payload ? JSON.stringify(result.payload, null, 2) : null;
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={result.dryRun ? 'Dry run — this is the exact payload' : 'In your Mercadona cart ✓'}
+      subtitle={
+        result.dryRun
+          ? `${result.items.length} products · ${fmtEur(result.totalEur)} · nothing was sent`
+          : `${result.items.length} products · ${fmtEur(result.totalEur)} — open Mercadona to pick a slot and pay`
+      }
+      icon={result.dryRun ? 'flask-conical' : 'circle-check-big'}
+      tone="solar"
+      placement={desktop ? 'center' : 'sheet'}
+      wideViewport={desktop}
+      footer={
+        <>
+          {result.dryRun && payloadJson && (
+            <Button
+              variant="secondary"
+              iconLeft={<Icon name={copied ? 'check' : 'copy'} size={14} />}
+              onClick={() => {
+                void navigator.clipboard
+                  ?.writeText(payloadJson)
+                  .then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1600);
+                  })
+                  .catch(() => {});
+              }}
+            >
+              {copied ? 'Copied' : 'Copy payload'}
+            </Button>
+          )}
+          {!result.dryRun && (
+            <Button
+              variant="primary"
+              iconLeft={<Icon name="external-link" size={14} />}
+              onClick={() => window.open(result.cartUrl ?? 'https://tienda.mercadona.es', '_blank', 'noreferrer')}
+            >
+              Open Mercadona
+            </Button>
+          )}
+          <Button variant={result.dryRun ? 'primary' : 'ghost'} onClick={onClose}>
+            Done
+          </Button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {result.skipped.length > 0 && (
+          <div style={{ fontSize: 12, color: 'var(--grid)', background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px' }}>
+            Skipped (no product picked): {result.skipped.map((s) => s.label).join(', ')}
+          </div>
+        )}
+        {result.unpricedCount > 0 && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+            {result.unpricedCount} item{result.unpricedCount > 1 ? 's' : ''} had no live price (Mercadona unreachable) — the
+            spend cap judged the known total only.
+          </div>
+        )}
+        <div style={{ border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '4px 12px 8px' }}>
+          {result.items.map((it, i) => (
+            <div key={it.product_id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: i < result.items.length - 1 ? '1px solid var(--border-1)' : 'none', fontSize: 12.5 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', flex: 'none', width: 26, textAlign: 'right' }}>{it.quantity}×</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)', flex: 'none' }}>{fmtEur(it.priceEur)}</span>
+            </div>
+          ))}
+        </div>
+        {result.dryRun && payloadJson && (
+          <pre style={{ fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: 0, color: 'var(--text-2)', background: 'var(--surface-2)', borderRadius: 'var(--radius-md)', padding: '10px 12px', maxHeight: 220, overflow: 'auto' }}>
+            {payloadJson}
+          </pre>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ---- P2: "seed staples from your regulars" (myregulars import) --------------------------------
+
+function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onClose: () => void; onImported: () => void }) {
+  const [products, setProducts] = useState<KitchenRegularHit[] | null>(null);
+  const [available, setAvailable] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.kitchen
+      .regulars()
+      .then((r) => {
+        setAvailable(r.available);
+        setProducts(r.products);
+        setSelected(new Set(r.products.filter((p) => !p.alreadyStaple).map((p) => p.id)));
+      })
+      .catch(() => {
+        setAvailable(false);
+        setProducts([]);
+      });
+  }, []);
+
+  const toggle = (id: string) =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const importSelected = async () => {
+    if (!products) return;
+    setBusy(true);
+    try {
+      const chosen = products.filter((p) => selected.has(p.id) && !p.alreadyStaple);
+      await api.kitchen.importRegulars(chosen.map((p) => ({ productId: p.id, name: p.name, priceEur: p.unitPrice })));
+      onImported();
+    } catch {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Your Mercadona regulars"
+      subtitle="One tap seeds them as staples — cadence hints take over from there"
+      icon="sparkles"
+      tone="battery"
+      size="lg"
+      placement={desktop ? 'center' : 'sheet'}
+      wideViewport={desktop}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" loading={busy} disabled={selected.size === 0} onClick={() => void importSelected()}>
+            Add {selected.size} as staples
+          </Button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {products === null && <LoadingState label="Reading your regulars…" />}
+        {products !== null && !available && (
+          <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+            Mercadona didn’t answer (or exposes no regulars yet) — try again later.
+          </div>
+        )}
+        {products !== null && available && products.length === 0 && (
+          <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No regulars on this account yet.</div>
+        )}
+        {products?.map((p) => (
+          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px', opacity: p.alreadyStaple ? 0.5 : 1 }}>
+            <LineCheckbox on={p.alreadyStaple || selected.has(p.id)} onToggle={() => !p.alreadyStaple && toggle(p.id)} />
+            {p.photo ? (
+              <img src={p.photo} alt="" style={{ width: 38, height: 38, borderRadius: 8, objectFit: 'cover', flex: 'none' }} />
+            ) : (
+              <span style={{ width: 38, height: 38, borderRadius: 8, background: 'var(--surface-3)', display: 'grid', placeItems: 'center', flex: 'none' }}>
+                <Icon name="package" size={15} color="var(--text-3)" />
+              </span>
+            )}
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 12.5, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              <small style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                {p.packSizeDisplay ?? ''}
+                {p.alreadyStaple ? ' · already a staple' : ''}
+              </small>
+            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, flex: 'none' }}>{fmtEur(p.unitPrice)}</span>
+          </div>
+        ))}
+      </div>
     </Modal>
   );
 }

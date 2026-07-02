@@ -18,9 +18,12 @@ import * as store from '../store';
 const BASE = 'https://tienda.mercadona.es';
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
-const TIMEOUT_MS = 8_000;
+// Timeout is env-overridable ONLY so the degraded-latency unit test can shrink it —
+// production always runs the 8 s default.
+const TIMEOUT_MS = Number(process.env.MERCADONA_TIMEOUT_MS) > 0 ? Number(process.env.MERCADONA_TIMEOUT_MS) : 8_000;
 const CACHE_TTL_MS = 30 * 60_000; // ≥30 min per the brief
 const MAX_IN_FLIGHT = 2;
+const NEG_CACHE_MS = 5 * 60_000; // docs/41 hardening #2: unreachability negative cache
 
 // ---- Public product shapes ------------------------------------------------------
 
@@ -76,10 +79,37 @@ function cacheSet(key: string, value: unknown): void {
   }
 }
 
+// ---- Unreachability negative cache (docs/41 hardening #2) -----------------------
+// A hard network failure (timeout / DNS / refused) marks the whole connector
+// unreachable for 5 min: every queued/subsequent call short-circuits to null instead
+// of burning its own 8 s timeout, so a 30-line draft enrich can't stall for minutes
+// while Mercadona is down. Any successful response clears the mark early.
+
+let unreachableUntil = 0;
+
+export function isUnreachable(): boolean {
+  return Date.now() < unreachableUntil;
+}
+
+function markUnreachable(reason: string): void {
+  if (Date.now() < unreachableUntil) return; // already marked — don't spam the log
+  unreachableUntil = Date.now() + NEG_CACHE_MS;
+  console.error(`[mercadona] unreachable — negative-cached for 5 min (${reason})`);
+}
+
+function markReachable(): void {
+  unreachableUntil = 0;
+}
+
+/** Test-only reset. */
+export function clearUnreachableForTests(): void {
+  unreachableUntil = 0;
+}
+
 let inFlight = 0;
 const waiters: Array<() => void> = [];
 
-async function gate<T>(fn: () => Promise<T>): Promise<T> {
+async function gate<T>(fn: () => Promise<T> | T): Promise<T> {
   if (inFlight >= MAX_IN_FLIGHT) await new Promise<void>((res) => waiters.push(res));
   inFlight++;
   try {
@@ -114,6 +144,7 @@ async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Re
 export async function resolveWarehouse(force = false): Promise<string | null> {
   const cfg = store.get().kitchen.mercadona;
   if (cfg.warehouse && !force) return cfg.warehouse;
+  if (isUnreachable()) return cfg.warehouse ?? null;
   try {
     const res = await gate(() =>
       fetchWithTimeout(`${BASE}/api/postal-codes/actions/change-pc/`, {
@@ -122,6 +153,7 @@ export async function resolveWarehouse(force = false): Promise<string | null> {
         body: JSON.stringify({ new_postal_code: cfg.postalCode }),
       }),
     );
+    markReachable();
     const wh = res.headers.get('x-customer-wh');
     if (wh) {
       store.update((s) => {
@@ -130,6 +162,7 @@ export async function resolveWarehouse(force = false): Promise<string | null> {
       return wh;
     }
   } catch (e) {
+    markUnreachable(`warehouse resolve: ${(e as Error).message}`);
     console.error('[mercadona] warehouse resolve failed:', (e as Error).message);
   }
   return cfg.warehouse ?? null;
@@ -142,13 +175,19 @@ async function apiGet<T>(path: string): Promise<T | null> {
   const url = `${BASE}/api/${path}${sep}lang=es&wh=${encodeURIComponent(wh)}`;
   const hit = cacheGet<T>(url);
   if (hit !== null) return hit;
+  if (isUnreachable()) return null; // negative cache — fail fast, callers degrade
   try {
-    const res = await gate(() => fetchWithTimeout(url));
+    // Re-check INSIDE the gate: with a parallel enrich, dozens of calls queue up
+    // before the first one times out — they must short-circuit when their turn comes.
+    const res = await gate(() => (isUnreachable() ? null : fetchWithTimeout(url)));
+    if (res === null) return null;
+    markReachable();
     if (!res.ok) return null;
     const json = (await res.json()) as T;
     cacheSet(url, json);
     return json;
   } catch (e) {
+    markUnreachable(`GET ${path}: ${(e as Error).message}`);
     console.error(`[mercadona] GET ${path} failed:`, (e as Error).message);
     return null;
   }
@@ -181,7 +220,7 @@ interface RawPriceInstructions {
   total_units?: number | null;
 }
 
-interface RawProduct {
+export interface RawProduct {
   id: string | number;
   display_name?: string;
   packaging?: string | null;
@@ -205,7 +244,8 @@ function thumb(url: string | undefined | null): string | null {
   return `${base}?fit=crop&h=300&w=300`;
 }
 
-function normalizeProduct(p: RawProduct): MercadonaProduct {
+/** Exported for the P2 myregulars mapping (mercadona-auth returns raw product rows). */
+export function normalizeProduct(p: RawProduct): MercadonaProduct {
   const pi = p.price_instructions ?? {};
   const sizeQty = num(pi.unit_size);
   const sizeUnit = (pi.size_format ?? '').toLowerCase() || null;
@@ -302,12 +342,20 @@ async function scrapeAlgoliaKeys(): Promise<{ appId: string; apiKey: string } | 
   return null;
 }
 
-function extractAlgolia(text: string): { appId: string; apiKey: string } | null {
-  // App id: 10 chars upper/num next to an "algolia" mention; key: 32-hex nearby.
+/** Exported for unit tests (docs/41 hardening #4). */
+export function extractAlgolia(text: string): { appId: string; apiKey: string } | null {
+  // App id: 10 chars upper/num next to an "algolia" mention.
   const idMatch =
     text.match(/algolia[^"']{0,40}["']([A-Z0-9]{10})["']/i) ?? text.match(/["']([A-Z0-9]{10})["'][^"']{0,40}algolia/i);
-  const keyMatch = text.match(/["']([a-f0-9]{32})["']/i);
-  if (idMatch && keyMatch) return { appId: idMatch[1], apiKey: keyMatch[1] };
+  if (!idMatch) return null;
+  // Key: 32-hex, but ONLY when an algolia/apiKey/searchKey token sits within ~200
+  // chars — a bare 32-hex match anywhere in a bundle happily grabs a webpack chunk
+  // hash (docs/41 hardening #4).
+  for (const m of text.matchAll(/["']([a-f0-9]{32})["']/gi)) {
+    const at = m.index ?? 0;
+    const around = text.slice(Math.max(0, at - 200), Math.min(text.length, at + m[0].length + 200));
+    if (/algolia|api[-_]?key|search[-_]?key/i.test(around)) return { appId: idMatch[1], apiKey: m[1] };
+  }
   return null;
 }
 
