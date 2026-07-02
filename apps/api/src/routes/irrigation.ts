@@ -568,6 +568,9 @@ export async function getIrrigationPlan(): Promise<unknown> {
       precipProbabilityPct: Math.round(o.precipProbabilityPct),
       et0Mm: Math.round(o.et0Mm * 100) / 100,
       tMaxC: Math.round(o.tMaxC),
+      sunshineHours: Math.round(o.sunshineHours * 10) / 10,
+      humidityPct: Math.round(o.humidityPct),
+      cloudCoverPct: Math.round(o.cloudCoverPct),
     })),
     stats: {
       zoneCount: zones.length,

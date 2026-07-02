@@ -43,12 +43,29 @@ export interface DailyOutlook {
   et0Mm: number;
   /** Daily max temperature (°C). */
   tMaxC: number;
+  /** Bright-sunshine hours for the day. */
+  sunshineHours: number;
+  /** Daily-mean relative humidity (%). */
+  humidityPct: number;
+  /** Daily-mean total cloud cover (%). */
+  cloudCoverPct: number;
+}
+
+/** Mean of the 24 hourly values covering local day `i` (index i*24 … i*24+23), or 0. */
+function dayMean(arr: number[] | undefined, i: number): number {
+  if (!arr) return 0;
+  const slice = arr
+    .slice(i * 24, i * 24 + 24)
+    .filter((v) => typeof v === "number" && Number.isFinite(v));
+  if (slice.length === 0) return 0;
+  return slice.reduce((s, v) => s + v, 0) / slice.length;
 }
 
 /**
- * Fetch the daily outlook (precip sum + max probability + ET₀ + tMax) for the next `days`
- * days at the site. Returns null on any failure so callers can degrade. Used by the
- * irrigation forecast strip and the 2h-ahead rain-bypass decision.
+ * Fetch the daily outlook for the next `days` days at the site: precip sum + max probability,
+ * ET₀, tMax, sunshine hours (daily), plus daily-mean humidity and cloud cover (derived from the
+ * hourly series). Returns null on any failure so callers can degrade. Used by the irrigation
+ * forecast strip and the 2h-ahead rain-bypass decision.
  */
 export async function getDailyOutlook(
   days = 6,
@@ -58,7 +75,8 @@ export async function getDailyOutlook(
     const clamped = Math.max(1, Math.min(14, Math.round(days)));
     const url =
       `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-      `&daily=precipitation_sum,precipitation_probability_max,et0_fao_evapotranspiration,temperature_2m_max` +
+      `&daily=precipitation_sum,precipitation_probability_max,et0_fao_evapotranspiration,temperature_2m_max,sunshine_duration` +
+      `&hourly=relative_humidity_2m,cloudcover` +
       `&timezone=Europe%2FMadrid&forecast_days=${clamped}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
@@ -69,10 +87,17 @@ export async function getDailyOutlook(
         precipitation_probability_max?: number[];
         et0_fao_evapotranspiration?: number[];
         temperature_2m_max?: number[];
+        sunshine_duration?: number[];
+      };
+      hourly?: {
+        relative_humidity_2m?: number[];
+        cloudcover?: number[];
       };
     };
     const d = json.daily;
     if (!d?.time || !Array.isArray(d.time)) return null;
+    const hum = json.hourly?.relative_humidity_2m;
+    const cld = json.hourly?.cloudcover;
     return d.time.map((date, i) => ({
       date,
       precipMm: Math.max(0, d.precipitation_sum?.[i] ?? 0),
@@ -82,6 +107,10 @@ export async function getDailyOutlook(
       ),
       et0Mm: Math.max(0, d.et0_fao_evapotranspiration?.[i] ?? 0),
       tMaxC: d.temperature_2m_max?.[i] ?? 0,
+      // sunshine_duration is seconds/day → hours.
+      sunshineHours: Math.max(0, (d.sunshine_duration?.[i] ?? 0) / 3600),
+      humidityPct: Math.max(0, Math.min(100, dayMean(hum, i))),
+      cloudCoverPct: Math.max(0, Math.min(100, dayMean(cld, i))),
     }));
   } catch {
     return null;
