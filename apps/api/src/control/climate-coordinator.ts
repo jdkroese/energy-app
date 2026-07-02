@@ -123,7 +123,7 @@ export function isManual(deviceId: string, poweredOn: boolean): boolean {
 
 /** Record that the user just manually commanded a device — start/refresh its hold. */
 export function markManualOverride(deviceId: string): void {
-  const mins = store.get().devices.guardrails.manualOverrideMin ?? 120;
+  const mins = store.get().devices.guardrails.manualOverrideMin ?? 480;
   store.update((s) => {
     s.devices.manualOverrides[deviceId] = Date.now() + mins * 60_000;
   });
@@ -244,35 +244,6 @@ async function evaluateSurplusDirection(
       } else {
         offSeenCount.delete(u.id);
       }
-    }
-
-    // Reclaim orphaned rule-started units: a unit that is ON but NOT in provenance, not under
-    // a manual hold, and sitting at THIS rule's exact target (same mode + setpoint) is almost
-    // certainly one the rule started and then lost ownership of (a failed off in an older build,
-    // or before the debounce above). Re-adopt it so the rule can manage — and crucially STOP —
-    // it again. (candidates are already filtered to units ENROLLED in this direction.) The
-    // mode+setpoint match protects a genuinely manual unit: an AC a person set to a DIFFERENT
-    // setpoint won't match and stays manual. RESIDUAL (documented): a unit a person set via a
-    // PHYSICAL REMOTE to exactly this rule's mode+target in an enrolled room would also be
-    // reclaimed; app/dashboard manual commands are excluded via the manual-override hold.
-    if (
-      u.power &&
-      !surplusOwns(u.id) &&
-      !isManualOverrideActive(u.id) &&
-      u.mode === dir &&
-      u.setpointC != null &&
-      Math.abs(u.setpointC - targetC) <= 0.5
-    ) {
-      addSurplusStarted(u.id);
-      offSeenCount.delete(u.id);
-      // Unknown true start time for a reclaimed unit — begin the min-run floor now so a
-      // just-adopted unit still gets its anti-chatter window rather than stopping instantly.
-      if (!surplusStartedAt.has(u.id)) surplusStartedAt.set(u.id, Date.now());
-      logDecision(
-        u.id,
-        `${automation.name}: reclaim`,
-        `re-adopted orphaned ${dir}@${targetC}°C unit (was falsely shown manual)`,
-      );
     }
 
     // Manual protection (provenance): a unit that is powered ON but the rule did NOT
