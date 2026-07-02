@@ -19,7 +19,7 @@ import { useAuth } from '../../auth/AuthProvider';
 const META: Record<string, { eyebrow: string; title: string }> = {
   '/': { eyebrow: 'Live overview', title: 'Your home, right now' },
   '/reports': { eyebrow: 'Reports', title: 'Reports' },
-  '/batteries': { eyebrow: 'Charging', title: 'Sonnen + Tesla' },
+  '/batteries': { eyebrow: 'Energy', title: 'Solar & batteries' },
   '/devices': { eyebrow: 'Home', title: 'Devices' },
   '/irrigation': { eyebrow: 'Home', title: 'Irrigation' },
   '/rooms': { eyebrow: 'Home', title: 'Rooms' },
@@ -71,7 +71,7 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
 
   const meta =
     META[location.pathname] ||
-    (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Charging', title: 'Battery detail' } : { eyebrow: 'Home', title: '' });
+    (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Energy', title: 'Battery detail' } : { eyebrow: 'Home', title: '' });
   const ctx: ShellContext = { desktop, range, setRange, settingsTab: activeSettingsTab, setSettingsTab };
 
   // Wall-tablet (kiosk) mode swaps the whole frame — its own nav + routes, so it

@@ -2,15 +2,16 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type { InvertersResponse, InverterView } from '../lib/types';
 import { Card, StatTile, Badge, StatusDot, Icon } from '../components/ui';
-import { MobileHeader, Avatar, StaleBanner } from './_shared';
+import { StaleBanner } from './_shared';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * Solar Inverters (Sungrow SG5.0RS ×2; docs/36). READ-ONLY monitoring surface:
- * a combined summary + a rich card per inverter (live kW, today kWh, work-state,
- * reachable/last-seen, temp, recent fault). The two Sungrow string inverters drive
- * Array A; they de-energize at night, so an "asleep" state (night) is shown calmly
- * and distinctly from a real daylight "offline".
+ * Solar generation section (Sungrow SG5.0RS ×2; docs/36). READ-ONLY: a combined
+ * summary + a rich card per inverter (live kW, today kWh, work-state, reachable/
+ * last-seen, temp, recent fault). Embedded as the "Solar generation" section of the
+ * Energy hub (/batteries) alongside battery storage. The two Sungrow string inverters
+ * drive Array A; they de-energize at night, so an "asleep" state (night) is shown
+ * calmly and distinctly from a real daylight "offline".
  * ==========================================================================*/
 
 type Status = InverterView['status'];
@@ -163,56 +164,44 @@ function Summary({ d, wide }: { d: InvertersResponse; wide: boolean }) {
   );
 }
 
-export function SolarInverters({ ctx }: { ctx: ShellContext }) {
+/**
+ * Solar generation section — self-contained (own polling + stale handling), so it
+ * drops into the Energy hub without extra wiring. Renders nothing but the section
+ * body; the hosting page provides the "Solar generation" heading + page chrome.
+ */
+export function SolarGenerationSection({ ctx }: { ctx: ShellContext }) {
   const { data, loading, stale, updatedAt } = usePolling<InvertersResponse>(api.inverters, 15_000);
   const wide = ctx.desktop;
   const d = data;
 
   const empty = !loading && (!d || d.count === 0);
 
-  const body = d && d.count > 0 && (
-    <>
-      <Summary d={d} wide={wide} />
-      <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1fr' : '1fr', gap: wide ? 18 : 12 }}>
-        {d.inverters.map((inv) => (
-          <InverterCard key={inv.id} inv={inv} />
-        ))}
-      </div>
-      <NightNote daylight={d.daylight} />
-    </>
-  );
-
-  const emptyState = empty && (
-    <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-      <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--solar-wash)', color: 'var(--solar)', flex: 'none' }}>
-        <Icon name="sun" size={16} />
-      </span>
-      <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
-        No solar inverters configured yet. Add the WiNet-S dongle IPs under{' '}
-        <strong style={{ color: 'var(--text-1)' }}>Settings → Connections → Sungrow</strong>.
-      </div>
-    </Card>
-  );
-
-  if (wide) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {stale && <StaleBanner updatedAt={updatedAt} />}
-        {body}
-        {emptyState}
-      </div>
-    );
-  }
-
   return (
-    <>
-      <MobileHeader eyebrow="Solar · Jávea" title="Inverters" right={<Avatar />} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: wide ? 18 : 12 }}>
       {stale && <StaleBanner updatedAt={updatedAt} />}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
-        {body}
-        {emptyState}
-      </div>
-    </>
+      {d && d.count > 0 && (
+        <>
+          <Summary d={d} wide={wide} />
+          <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1fr' : '1fr', gap: wide ? 18 : 12 }}>
+            {d.inverters.map((inv) => (
+              <InverterCard key={inv.id} inv={inv} />
+            ))}
+          </div>
+          <NightNote daylight={d.daylight} />
+        </>
+      )}
+      {empty && (
+        <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+          <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--solar-wash)', color: 'var(--solar)', flex: 'none' }}>
+            <Icon name="sun" size={16} />
+          </span>
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
+            No solar inverters configured yet. Add the WiNet-S dongle IPs under{' '}
+            <strong style={{ color: 'var(--text-1)' }}>Settings → Connections → Sungrow</strong>.
+          </div>
+        </Card>
+      )}
+    </div>
   );
 }
 

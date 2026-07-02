@@ -3,15 +3,18 @@ import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_BATTERIES } from '../lib/mock';
 import type { BatteriesResponse, BatteryDetail, FlowDir } from '../lib/types';
-import { Card, StatTile, RadialGauge, ProgressBar, Badge, StatusDot, Icon } from '../components/ui';
+import { Card, StatTile, RadialGauge, ProgressBar, Badge, StatusDot, Icon, Eyebrow } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
+import { SolarGenerationSection } from './SolarInverters';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * Batteries — index. Combined storage summary + a rich, tappable card per
- * device. Each card opens the per-battery detail page. The two devices have
- * deliberately different roles (Sonnen = fast self-consumption actuator,
- * Tesla = backup + policy), so the cards surface different things.
+ * Energy hub (/batteries) — the house's generation + storage in one place, told
+ * as an energy-flow story: SOLAR GENERATION (the Sungrow inverters) on top, then
+ * BATTERY STORAGE (Sonnen + Tesla) below. The two batteries have deliberately
+ * different roles (Sonnen = fast self-consumption actuator, Tesla = backup +
+ * policy), so their cards surface different things; each opens a detail page.
+ * (Merged from the former standalone Solar Inverters + Charging pages.)
  * ==========================================================================*/
 
 export interface PowerState {
@@ -194,25 +197,41 @@ export function Batteries({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
+  // Battery storage section (existing content, now under its own heading).
+  const batterySection = (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: wide ? 14 : 10 }}>
+      <Eyebrow>Battery storage</Eyebrow>
+      {stale && <StaleBanner updatedAt={updatedAt} />}
+      <CombinedSummary d={view} wide={wide} />
+      {cards}
+      <BackupNote view={view} />
+    </section>
+  );
+
+  // Solar generation section (the Sungrow inverters), self-contained.
+  const solarSection = (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: wide ? 14 : 10 }}>
+      <Eyebrow>Solar generation</Eyebrow>
+      <SolarGenerationSection ctx={ctx} />
+    </section>
+  );
+
+  // Generation → storage, top to bottom.
   if (wide) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {stale && <StaleBanner updatedAt={updatedAt} />}
-        <CombinedSummary d={view} wide />
-        {cards}
-        <BackupNote view={view} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
+        {solarSection}
+        {batterySection}
       </div>
     );
   }
 
   return (
     <>
-      <MobileHeader eyebrow="Charging · Jávea" title="Storage" right={<Avatar />} />
-      {stale && <StaleBanner updatedAt={updatedAt} />}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
-        <CombinedSummary d={view} wide={false} />
-        {cards}
-        <BackupNote view={view} />
+      <MobileHeader eyebrow="Energy · Jávea" title="Solar & storage" right={<Avatar />} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, padding: '8px 14px 22px' }}>
+        {solarSection}
+        {batterySection}
       </div>
     </>
   );
