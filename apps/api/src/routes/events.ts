@@ -7,6 +7,7 @@ import {
   getEventById,
   streamEvents,
   setEventAck,
+  type EnergyEvent,
   type EventClass,
   type EventCategory,
   type Severity,
@@ -14,7 +15,33 @@ import {
   type EventState,
   type EventQuery,
 } from '../events';
+import { deviceNameIndex } from '../device-index';
 import * as store from '../store';
+
+/**
+ * Read-path enrichment: attach `deviceName` (friendly/user-assigned) + `deviceType` (routing
+ * hint) to every event that carries a `device` id, resolved from the cached device-name index.
+ * Falls back to the raw id when unresolved; the stored `device` id is left unchanged. Never
+ * throws — an index failure just returns the events as-is (raw id shown).
+ */
+async function withDeviceNames(events: EnergyEvent[]): Promise<EnergyEvent[]> {
+  if (!events.some((e) => e.device)) return events;
+  let index: Awaited<ReturnType<typeof deviceNameIndex>>;
+  try {
+    index = await deviceNameIndex();
+  } catch {
+    return events;
+  }
+  return events.map((e) => {
+    if (!e.device) return e;
+    const hit = index.get(e.device);
+    return {
+      ...e,
+      deviceName: hit?.name ?? e.device,
+      ...(hit?.type ? { deviceType: hit.type } : {}),
+    };
+  });
+}
 
 const CLASSES: EventClass[] = ['action', 'observation', 'system'];
 const CATEGORIES: EventCategory[] = [
@@ -79,20 +106,22 @@ function buildQuery(req: Request): EventQuery {
 }
 
 /** GET /api/events — filtered + searched + cursor-paginated (newest-first). */
-export function listEvents(req: Request): unknown {
+export async function listEvents(req: Request): Promise<unknown> {
   const page = queryEvents(buildQuery(req));
-  return { ts: new Date().toISOString(), ...page };
+  const events = await withDeviceNames(page.events);
+  return { ts: new Date().toISOString(), ...page, events };
 }
 
 /** GET /api/events/:id — full record incl. data payload. */
-export function getEvent(req: Request): unknown {
+export async function getEvent(req: Request): Promise<unknown> {
   const ev = getEventById(String(req.params.id));
   if (!ev) {
     const e = new Error('event not found') as Error & { code?: string };
     e.code = 'BAD_INPUT';
     throw e;
   }
-  return ev;
+  const [enriched] = await withDeviceNames([ev]);
+  return enriched;
 }
 
 /**

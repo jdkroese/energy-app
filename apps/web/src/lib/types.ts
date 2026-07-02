@@ -2034,6 +2034,10 @@ export interface EnergyEvent {
   summary: string;
   trigger: { source: EventTriggerSource; detail?: string };
   device?: string;
+  /** Server-resolved friendly/user-assigned device name (falls back to the raw id). */
+  deviceName?: string;
+  /** Server-resolved device category/type routing hint (climate/lighting/battery/…). */
+  deviceType?: string;
   entity?: string;
   change?: { from: unknown; to: unknown };
   ok?: boolean;
