@@ -19,13 +19,13 @@ export const NAV_TOP: NavItem[] = [
   { to: '/reports', label: 'Reports', icon: 'chart-column' },
 ];
 
-/** Devices section — Charging + per-category shortcuts, then the all-devices hub.
+/** Devices section — Energy (solar + batteries) + per-category shortcuts, then the all-devices hub.
  *  The category links carry a ?type= query that the Devices screen reads to open
  *  straight onto that category's listing. "Other devices" (no query) lands on the
  *  category-tile overview. Icons/hues mirror the device-type registry. */
 export const NAV_DEVICES: NavItem[] = [
-  { to: '/batteries', label: 'Charging', icon: 'battery-charging' },
-  { to: '/solar-inverters', label: 'Solar Inverters', icon: 'sun' },
+  // Energy hub = solar generation (Sungrow inverters) + battery storage (Sonnen + Tesla).
+  { to: '/batteries', label: 'Energy', icon: 'zap' },
   { to: '/devices?type=lighting', label: 'Lighting', icon: 'lightbulb' },
   { to: '/devices?type=cooling', label: 'Cooling', icon: 'snowflake' },
   { to: '/devices?type=heating', label: 'Heating', icon: 'flame' },
@@ -75,13 +75,13 @@ export function navMatches(to: string, loc: { pathname: string; search: string }
 }
 
 /* ---- Mobile ----------------------------------------------------------------
- * The bottom bar stays compact (Live · Reports · Charging · Devices + More); the
+ * The bottom bar stays compact (Live · Reports · Energy · Devices + More); the
  * category shortcuts, automation group and Settings live in the grouped More
  * sheet so the whole app is reachable on a phone. */
 export const MOBILE_TABS: NavItem[] = [
   NAV_TOP[0], // Live
   NAV_TOP[1], // Reports
-  NAV_DEVICES[0], // Charging
+  NAV_DEVICES[0], // Energy (solar + batteries)
   { to: '/devices', label: 'Devices', icon: 'layout-grid' },
 ];
 
@@ -90,7 +90,7 @@ const MOBILE_BOTTOM_PATHS = MOBILE_TABS.map((t) => t.to);
 
 /** Grouped destinations in the More sheet (each rendered under a section header). */
 export const MOBILE_MORE_SECTIONS: { title: string; items: NavItem[] }[] = [
-  // Category shortcuts (Charging + the all-devices hub are on the bottom bar already).
+  // Category shortcuts (Energy + the all-devices hub are on the bottom bar already).
   { title: 'Devices', items: NAV_DEVICES.filter((n) => !MOBILE_BOTTOM_PATHS.includes(n.to)) },
   { title: 'Media', items: NAV_MEDIA },
   { title: 'Automation', items: NAV_AUTOMATION },
