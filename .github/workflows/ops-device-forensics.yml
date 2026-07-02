@@ -1,10 +1,10 @@
 name: Ops - Device Registry Forensics
 
 # Manually-triggered, READ-ONLY diagnostics. Runs ON the mini (self-hosted runner)
-# to investigate the disappeared fan/light-switch/ventilator devices: dumps the
-# live deviceOnboarding state, looks for older state.json copies (leftover *.tmp,
-# Time Machine snapshots), and greps the api log for unsetup/persist-failure/tuya
-# traces. Changes NOTHING on the host.
+# to investigate the disappeared fan/light-switch/ventilator devices. Pass 2:
+# harvest every Tuya device id ever referenced in state.json + events.jsonl with
+# name context, so ghosts (ids no longer in the cloud fleet) can be identified.
+# Changes NOTHING on the host.
 on:
   workflow_dispatch:
 
@@ -13,92 +13,74 @@ jobs:
     runs-on: [self-hosted, mini]
     timeout-minutes: 8
     steps:
-      - name: Inspect device registry state + history
+      - name: Harvest device ids + names from state and event history
         run: |
           set -uo pipefail
-          SITE=/Users/joris/sites/energy
-          DATA=$SITE/.data
-          STATE=$DATA/state.json
-          LOG=$SITE/api.log
+          DATA=/Users/joris/sites/energy/.data
 
-          dump_onboarding() {
-            node -e '
-              try {
-                const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-                const o = d.deviceOnboarding || {};
-                const cfg = o.configured || {};
-                console.log(JSON.stringify({
-                  customDeviceTypes: o.customDeviceTypes ?? [],
-                  ignored: o.ignored ?? [],
-                  configuredCount: Object.keys(cfg).length,
-                  configured: Object.fromEntries(Object.entries(cfg).map(([id, c]) =>
-                    [id, { typeId: c.typeId, name: c.name, setupAt: c.setupAt }])),
-                }, null, 2));
-              } catch (e) { console.log("(unreadable: " + e.message + ")"); }
-            ' "$1"
-          }
+          node -e '
+            const fs = require("fs");
+            const state = JSON.parse(fs.readFileSync(process.env.DATA + "/state.json", "utf8"));
 
-          echo "===== .data directory listing ====="
-          ls -lat "$DATA" | head -60 || true
+            console.log("===== deviceSettings (id -> settings) =====");
+            const ds = state.deviceSettings || {};
+            for (const [id, v] of Object.entries(ds)) console.log(id, JSON.stringify(v));
 
-          echo
-          echo "===== LIVE state.json deviceOnboarding ====="
-          dump_onboarding "$STATE"
+            console.log("\n===== rooms =====");
+            for (const [id, r] of Object.entries(state.rooms || {})) console.log(id, r.name);
 
-          echo
-          echo "===== other state.json* files (tmp leftovers / backups) ====="
-          for f in "$DATA"/state.json.* "$DATA"/state*.bak "$SITE"/state.json*; do
-            [ -f "$f" ] || continue
-            echo "--- $f ($(stat -f '%Sm' "$f"))"
-            dump_onboarding "$f"
-          done
-          find "$SITE" -maxdepth 3 -name "state.json*" -not -path "*/node_modules/*" 2>/dev/null | head -20 || true
+            console.log("\n===== schedule scopes =====");
+            for (const s of state.schedules || []) console.log(s.name, "|", s.type, "|", JSON.stringify(s.scope));
+
+            console.log("\n===== light scene member ids =====");
+            console.log(JSON.stringify(state.lightScenes ?? state.scenes ?? null)?.slice(0, 2000));
+
+            // Every bf… token anywhere in state, with a rough JSON-path hint.
+            console.log("\n===== all bf-ids in state.json (id -> count) =====");
+            const txt = JSON.stringify(state);
+            const counts = {};
+            for (const m of txt.matchAll(/bf[0-9a-z]{15,25}/g)) counts[m[0]] = (counts[m[0]] || 0) + 1;
+            for (const [id, n] of Object.entries(counts).sort((a, b) => b[1] - a[1])) console.log(id, n);
+          ' 2>&1 | head -220
+          export DATA
 
           echo
-          echo "===== Time Machine: local APFS snapshots ====="
-          tmutil listlocalsnapshots / 2>&1 || echo "(tmutil failed)"
-          echo "--- latest external TM backup (if any):"
-          tmutil latestbackup 2>&1 || echo "(no external backup / not accessible)"
+          echo "===== events.jsonl: id -> sample names ====="
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync(process.env.DATA + "/events.jsonl", "utf8").split("\n").filter(Boolean);
+            console.log("total event lines:", lines.length);
+            const byId = new Map();
+            for (const ln of lines) {
+              for (const m of ln.matchAll(/bf[0-9a-z]{15,25}/g)) {
+                if (!byId.has(m[0])) byId.set(m[0], []);
+                const arr = byId.get(m[0]);
+                if (arr.length < 2) {
+                  try {
+                    const e = JSON.parse(ln);
+                    arr.push(`${e.ts ?? ""} [${e.category ?? ""}] ${e.title ?? e.summary ?? ""} dev=${e.device ?? ""}`);
+                  } catch { arr.push(ln.slice(0, 160)); }
+                }
+              }
+            }
+            for (const [id, samples] of byId) { console.log("--", id); for (const s of samples) console.log("   ", s); }
 
-          echo
-          echo "===== try reading state.json from local snapshots (best-effort, read-only) ====="
-          MNT=$(mktemp -d /tmp/tmsnap.XXXX)
-          for SNAP in $(tmutil listlocalsnapshots / 2>/dev/null | sed 's/^com.apple.TimeMachine.//' | tail -6); do
-            FULL="com.apple.TimeMachine.$SNAP"
-            if mount_apfs -o ro -s "$FULL" /System/Volumes/Data "$MNT" 2>/dev/null; then
-              F="$MNT/Users/joris/sites/energy/.data/state.json"
-              if [ -f "$F" ]; then
-                echo "--- snapshot $SNAP:"
-                dump_onboarding "$F"
-              else
-                echo "--- snapshot $SNAP: no state.json at expected path"
-              fi
-              umount "$MNT" 2>/dev/null || diskutil unmount "$MNT" 2>/dev/null || true
-            else
-              echo "--- snapshot $SNAP: mount failed (needs privileges) — skipped"
-            fi
-          done
-          rmdir "$MNT" 2>/dev/null || true
+            console.log("\n===== events mentioning fan/ventilator/switch by NAME =====");
+            let n = 0;
+            for (const ln of lines) {
+              if (/fan|entilator|light switch|fskg/i.test(ln)) {
+                try { const e = JSON.parse(ln); console.log(`${e.ts} [${e.category}/${e.class}] ${e.title ?? e.summary ?? ""} dev=${e.device ?? ""}`); }
+                catch { console.log(ln.slice(0, 200)); }
+                if (++n > 80) break;
+              }
+            }
 
-          echo
-          echo "===== api.log: store persist/load problems ====="
-          ls -la "$LOG"* 2>/dev/null || true
-          grep -n "\[store\]" "$LOG" 2>/dev/null | tail -30 || echo "(none)"
-
-          echo
-          echo "===== api.log: device setup / unsetup / custom-type traffic ====="
-          grep -inE "unsetup|devices/[A-Za-z0-9]+/setup|custom-types" "$LOG" 2>/dev/null | tail -60 || echo "(none)"
-
-          echo
-          echo "===== api.log: tuya connector errors (last 40) ====="
-          grep -inE "tuya" "$LOG" 2>/dev/null | grep -viE "GET /api" | tail -40 || echo "(none)"
-
-          echo
-          echo "===== events / history databases in .data ====="
-          ls -la "$DATA"/*.db "$DATA"/*.sqlite* 2>/dev/null || echo "(none)"
-          for DB in "$DATA"/*.db; do
-            [ -f "$DB" ] || continue
-            echo "--- tables in $DB:"
-            sqlite3 "$DB" ".tables" 2>/dev/null || echo "(sqlite3 failed)"
-            sqlite3 "$DB" "SELECT ts, category, severity, summary FROM events WHERE summary LIKE '%setup%' OR summary LIKE '%Fan%' OR summary LIKE '%switch%' OR summary LIKE '%entilator%' ORDER BY ts DESC LIMIT 60;" 2>/dev/null || true
-          done
+            console.log("\n===== devices-category events (last 60) =====");
+            const dev = lines.filter((l) => /"category":"devices"/.test(l)).slice(-60);
+            for (const ln of dev) {
+              try { const e = JSON.parse(ln); console.log(`${e.ts} [${e.class}] ${e.title ?? e.summary ?? ""} dev=${e.device ?? ""}`); }
+              catch { console.log(ln.slice(0, 200)); }
+            }
+          ' 2>&1 | head -400
+        env:
+          DATA: /Users/joris/sites/energy/.data
