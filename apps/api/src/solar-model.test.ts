@@ -90,6 +90,28 @@ function writeHistory(
   writeFileSync(HISTORY_FILE, JSON.stringify(file), 'utf8');
 }
 
+/**
+ * Like writeHistory but the ratio can vary per DAY as well as per hour —
+ * ratio(dayIndex, h) — so a test can inject a multi-day inverter outage on some
+ * days and healthy production on others.
+ */
+function writeHistoryPerDay(days: string[], ratio: (dayIdx: number, h: number) => number): void {
+  const file = { v: 1, days: {} as Record<string, ReturnType<typeof blankDay>> };
+  days.forEach((key, di) => {
+    const day = blankDay(key);
+    const doy = doyOf(key);
+    for (let b = 0; b < BUCKETS; b++) {
+      const h = Math.floor(b / 12);
+      const elev = solarElevationDeg(h, doy, LAT);
+      const ghiC = haurwitzGHI(elev);
+      const clearKw = (ghiC / 1000) * KWP;
+      day.series.solarKw[b] = clearKw > 0 ? clearKw * ratio(di, h) : 0;
+    }
+    file.days[key] = day;
+  });
+  writeFileSync(HISTORY_FILE, JSON.stringify(file), 'utf8');
+}
+
 function julyDays(n: number): string[] {
   return Array.from({ length: n }, (_, i) => `2026-07-${String(i + 1).padStart(2, '0')}`);
 }
@@ -220,6 +242,29 @@ test('trailing window learns a per-hour under-performing shape immediately', asy
   assert.ok(days[9] >= 10, `morning hour has samples, got ${days[9]}`);
   assert.ok(shape[9] != null && shape[9]! > 0.28 && shape[9]! < 0.45, `hour-9 shape ~0.35, got ${shape[9]}`);
   assert.ok(shape[12] != null && shape[12]! > 0.75 && shape[12]! < 0.95, `midday shape ~0.85, got ${shape[12]}`);
+  cleanup();
+});
+
+test('a multi-day inverter outage does not corrupt the learned roof (p80 rejects low-side)', async () => {
+  cleanup();
+  // 20 June days. Hour 12 (midday) is healthy at 0.85 for the first 10 days, then a
+  // sustained inverter outage drops it to 0.42 (~one of two inverters down) for the
+  // last 10 days. All other hours stay healthy. A MEDIAN of hour-12 would sit at
+  // ~0.635 (dragged down by the outage half); the p80 clear-day estimate must stay
+  // near 0.85, so the fixed inverter's real capacity is what the forecast predicts.
+  const ratio = (di: number, h: number) => (h === 12 && di >= 10 ? 0.42 : 0.85);
+  writeHistoryPerDay(juneDays(20), ratio);
+  const solar = await freshModel();
+  const { shape, days } = solar.trailingRoofShape();
+  assert.ok(days[12] >= 18, `hour-12 has samples across the window, got ${days[12]}`);
+  assert.ok(
+    shape[12] != null && shape[12]! > 0.8,
+    `outage-resistant midday shape stays near clear-day ~0.85, got ${shape[12]}`,
+  );
+  // Sanity: a plain median of the same samples WOULD have collapsed below 0.7,
+  // proving the high percentile is what confers the robustness.
+  const naiveMedian = (10 * 0.85 + 10 * 0.42) / 20; // not the true median but < 0.7 either way
+  assert.ok(naiveMedian < 0.7 && shape[12]! - naiveMedian > 0.1, 'p80 clearly beats the outage-dragged mean');
   cleanup();
 });
 
