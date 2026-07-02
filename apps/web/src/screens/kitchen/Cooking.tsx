@@ -452,7 +452,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
       );
     }
     return (
-      <Card style={{ padding: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+      <Card style={{ padding: 10, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
         {recipe ? (
           <div style={{ width: 56, flex: 'none', cursor: 'pointer' }} onClick={() => setQuickView({ recipe, day })}>
             <RecipePhoto recipe={recipe} height={56} radius="var(--radius-md)" style={{ width: 56 }} />
@@ -578,7 +578,8 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
         {rhythmStrip}
         {aiBar}
         {askResults}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))', gap: 12 }}>
+        {/* 7-across on a full desktop (mockup); auto-fit lets narrower windows wrap. */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(148px, 1fr))', gap: 12 }}>
           {plan.days.map((d) => (
             <DayCardWide key={d.date} day={d} />
           ))}
