@@ -392,6 +392,29 @@ export interface IntegrationsState {
   /** Sonos house-alarm. Local UPnP discovery (zero-config on the LAN); `seedIp` is a
    *  fallback for networks where SSDP multicast is blocked. Enabled by default. */
   sonos?: { enabled: boolean; seedIp?: string } | null;
+  /** Spotify (Music) — server-side Authorization-Code OAuth. Client id/secret are set by the
+   *  owner in Settings → Music; the refresh/access token + expiry are minted on connect and
+   *  auto-refreshed. NONE of these secrets are ever sent to the client (see routes/spotify.ts).
+   *  Playback targets are the owner's Sonos rooms exposed as Spotify Connect devices. */
+  spotify?: SpotifyIntegration | null;
+}
+
+/** Persisted Spotify OAuth state. Secrets never leave the server. */
+export interface SpotifyIntegration {
+  /** Spotify developer-app Client ID (public-ish, but still kept server-side). */
+  clientId: string;
+  /** Spotify developer-app Client Secret (write-only from the UI; never returned). */
+  clientSecret: string;
+  /** Long-lived refresh token from the Authorization-Code exchange (never returned). */
+  refreshToken: string | null;
+  /** Current short-lived access token (never returned to the client). */
+  accessToken: string | null;
+  /** Epoch ms the access token expires. */
+  expiresAt: number;
+  /** Cached account profile from /v1/me (display name + product tier), for the status card. */
+  displayName: string | null;
+  /** True when the linked account's product === 'premium' (playback on speakers needs it). */
+  premium: boolean;
 }
 
 /** A live house-alarm session (siren + light-blink). Persisted so the UI shows an
@@ -2097,6 +2120,21 @@ function mergeRules(raw: unknown, base: RuleState[]): RuleState[] {
   return [...persisted, ...missing];
 }
 
+/** Coerce a persisted Spotify integration blob onto a clean shape. Missing/invalid fields
+ *  default so a malformed on-disk value can never break hydration. */
+function hydrateSpotify(raw: unknown): SpotifyIntegration {
+  const p = (raw ?? {}) as Partial<SpotifyIntegration>;
+  return {
+    clientId: typeof p.clientId === "string" ? p.clientId : "",
+    clientSecret: typeof p.clientSecret === "string" ? p.clientSecret : "",
+    refreshToken: typeof p.refreshToken === "string" ? p.refreshToken : null,
+    accessToken: typeof p.accessToken === "string" ? p.accessToken : null,
+    expiresAt: typeof p.expiresAt === "number" ? p.expiresAt : 0,
+    displayName: typeof p.displayName === "string" ? p.displayName : null,
+    premium: p.premium === true,
+  };
+}
+
 /** Coerce persisted voltage-monitor config, clamping the band to a sane range and
  *  guaranteeing minV < maxV (falls back to defaults when invalid). */
 function hydrateVoltageMonitor(
@@ -2192,6 +2230,12 @@ function hydrate(raw: unknown): StoreSchema {
         ? { panasonic: p.integrations.panasonic }
         : {}),
       ...(p.integrations?.sonos ? { sonos: p.integrations.sonos } : {}),
+      // Carry over the Spotify OAuth block (client id/secret + tokens) so a connected
+      // account survives a restart/deploy. Defensively coerced so a malformed blob can't
+      // break hydration.
+      ...(p.integrations?.spotify
+        ? { spotify: hydrateSpotify(p.integrations.spotify) }
+        : {}),
     },
     deviceSettings: hydrateDeviceSettings(
       p.deviceSettings,

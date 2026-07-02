@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
@@ -1489,6 +1489,159 @@ function SonosConnection({ first, open, onToggle }: { first?: boolean; open: boo
 }
 
 /* ============================================================================
+ * Spotify (Music) — server-side OAuth (Authorization Code). The owner registers a
+ * Spotify developer app, pastes Client ID + Client Secret here (secret write-only),
+ * then Connect runs the consent flow. Playback targets the Sonos rooms (as Spotify
+ * Connect devices). Browse/playback UI lives on the Speakers page; only the
+ * credential/connect config lives here. Admin-only writes; no secret is ever
+ * rendered back. Web + mobile responsive.
+ * ==========================================================================*/
+
+function SpotifyConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState<SpotifyStatus | null>(null);
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState<'save' | 'connect' | 'disconnect' | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const load = async () => {
+    try {
+      const s = await api.spotify.status();
+      setStatus(s);
+    } catch {
+      /* shows as not-connected */
+    }
+  };
+  useEffect(() => { void load(); }, []);
+
+  // Surface the OAuth callback outcome (?spotify=connected | error:…) once, then clean the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const r = params.get('spotify');
+    if (!r) return;
+    if (r.startsWith('error')) setErr(`Spotify connect failed — ${r.replace(/^error:?/, '') || 'try again'}`);
+    void load();
+    params.delete('spotify');
+    const qs = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+  }, []);
+
+  const saveCreds = async () => {
+    if (!clientId.trim() || !clientSecret.trim()) { setErr('Enter your Client ID and Client Secret'); return; }
+    setBusy('save'); setErr(null);
+    try {
+      const r = await api.spotify.setCredentials(clientId.trim(), clientSecret.trim());
+      setStatus(r.status);
+      setClientSecret('');
+      setEditing(false);
+    } catch (e) {
+      setErr((e as Error).message || 'Could not save credentials');
+    } finally { setBusy(null); }
+  };
+
+  const connect = async () => {
+    setBusy('connect'); setErr(null);
+    try {
+      const r = await api.spotify.authUrl();
+      // Full-page redirect to Spotify's consent screen; it returns to /api/spotify/callback.
+      window.location.href = r.url;
+    } catch (e) {
+      setErr((e as Error).message || 'Could not start the Spotify connect flow');
+      setBusy(null);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy('disconnect'); setErr(null);
+    try { await api.spotify.disconnect(); await load(); setClientSecret(''); } finally { setBusy(null); }
+  };
+
+  const copyRedirect = () => {
+    if (!status?.redirectUri) return;
+    void navigator.clipboard?.writeText(status.redirectUri).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+  };
+
+  const configured = status?.configured ?? false;
+  const connected = status?.connected ?? false;
+  const statusText = status === null ? 'loading…' : connected ? `connected${status.premium ? ' · Premium' : ''}` : configured ? 'not connected' : 'not set up';
+  const statusTone = status === null ? 'text-3' : connected ? 'solar' : 'grid';
+
+  return (
+    <ConnectionRow
+      first={first}
+      icon="music"
+      tone={connected ? 'solar' : undefined}
+      name="Spotify"
+      statusText={statusText}
+      statusTone={statusTone}
+      showDot={status !== null}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Play Spotify on your Sonos speakers via the Spotify Web API. Register a Spotify developer app, paste its Client ID + Secret below, then Connect. Spotify Premium is required for playback on speakers.
+        </div>
+
+        {connected && status && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Badge tone="solar" variant="soft" icon={<Icon name="check" size={11} />}>
+              {status.displayName ? `Connected · ${status.displayName}` : 'Connected'}
+            </Badge>
+            {status.premium
+              ? <Badge tone="solar" variant="soft">Premium</Badge>
+              : <Badge tone="neutral" variant="soft">Free — playback disabled</Badge>}
+          </div>
+        )}
+
+        {/* Redirect URI to register — always shown so setup is copy-paste. */}
+        {status?.redirectUri && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            <span className="pwr-eyebrow">Redirect URI to register in your Spotify app</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <code style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: 'var(--text-2)', background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '7px 10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{status.redirectUri}</code>
+              <Button size="sm" variant="ghost" onClick={copyRedirect}>{copied ? 'Copied' : 'Copy'}</Button>
+            </div>
+          </div>
+        )}
+
+        {err && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{err}</div>}
+
+        {isAdmin ? (
+          <>
+            {(!configured || editing) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 380 }}>
+                <Input label="Client ID" type="text" autoComplete="off" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Spotify app Client ID" />
+                <Input label="Client Secret" type="password" autoComplete="off" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={configured ? '•••• set — enter to replace' : '••••••••'} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void saveCreds()}>Save credentials</Button>
+                  {configured && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setErr(null); setClientSecret(''); }}>Cancel</Button>}
+                </div>
+              </div>
+            )}
+
+            {configured && !editing && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {!connected && <Button size="sm" variant="primary" loading={busy === 'connect'} iconLeft={<Icon name="music" size={14} />} onClick={() => void connect()}>Connect Spotify</Button>}
+                {connected && <Button size="sm" variant="secondary" loading={busy === 'connect'} onClick={() => void connect()}>Re-connect</Button>}
+                <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setErr(null); }}>Change app</Button>
+                {connected && <Button size="sm" variant="ghost" loading={busy === 'disconnect'} onClick={() => void disconnect()}>Disconnect</Button>}
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can connect Spotify.</div>
+        )}
+      </div>
+    </ConnectionRow>
+  );
+}
+
+/* ============================================================================
  * House alarm — owner-configurable defaults for the house alarm (siren + light
  * blink). Lives in Settings → Notifications (alongside the channels + grid-voltage
  * alert). The alarm is triggered from the nav alarm button (everywhere); this card
@@ -1627,6 +1780,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
       <RainbirdConnection first={false} open={openId === 'rainbird'} onToggle={() => toggle('rainbird')} />
       <TuyaConnection first={false} open={openId === 'tuya'} onToggle={() => toggle('tuya')} />
       <SonosConnection first={false} open={openId === 'sonos'} onToggle={() => toggle('sonos')} />
+      <SpotifyConnection first={false} open={openId === 'spotify'} onToggle={() => toggle('spotify')} />
     </Card>
   );
 }

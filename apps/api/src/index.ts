@@ -205,6 +205,23 @@ import {
   updateSchedule as updateRadioSchedule,
   deleteSchedule as deleteRadioSchedule,
 } from "./routes/radio";
+import {
+  setCredentials as setSpotifyCredentials,
+  getStatus as getSpotifyStatus,
+  disconnect as disconnectSpotify,
+  getAuthUrl as getSpotifyAuthUrl,
+  handleCallback as handleSpotifyCallback,
+  getPlaylists as getSpotifyPlaylists,
+  getLiked as getSpotifyLiked,
+  search as spotifySearch,
+  getDevices as getSpotifyDevices,
+  play as spotifyPlay,
+  transport as spotifyTransport,
+  setShuffle as setSpotifyShuffle,
+  setRepeat as setSpotifyRepeat,
+  seek as spotifySeek,
+  nowPlaying as spotifyNowPlaying,
+} from "./routes/spotify";
 import { serveAlarmClip, startMediaLanListener } from "./routes/media";
 import { resumeAlarm } from "./control/alarm";
 import * as notify from "./notify";
@@ -269,6 +286,14 @@ app.use("/api/auth", authRouter);
 // tone — no sensitive data — and the trigger/stop endpoints below are still admin-gated.
 app.get("/api/media/alarm.mp3", serveAlarmClip);
 app.get("/api/media/alarm.wav", serveAlarmClip);
+
+// Spotify OAuth callback — UN-authed: the owner's browser is redirected here straight from
+// accounts.spotify.com after granting consent, so our session cookie context isn't guaranteed.
+// It only exchanges the one-time code (verified against a server-minted `state`) and 302s the
+// browser back to Settings. No secrets are read from the query beyond the code+state.
+app.get("/api/spotify/callback", (req: Request, res: Response) => {
+  void handleSpotifyCallback(req, res);
+});
 
 // --- Everything below this line requires a valid session ---
 app.use(requireAuth);
@@ -1011,6 +1036,89 @@ app.delete(
   "/api/radio/schedules/:id",
   requireAdmin,
   wrap((req) => deleteRadioSchedule(String(req.params.id))),
+);
+
+// ---- Spotify (Music) — Web API + Spotify Connect ----
+// Reads (status/browse/devices/now-playing) any-authed; credentials + playback are admin-gated.
+// The OAuth callback is registered UN-authed above (browser arrives from Spotify).
+app.get(
+  "/api/spotify/status",
+  wrap(() => getSpotifyStatus()),
+);
+app.put(
+  "/api/spotify/credentials",
+  requireAdmin,
+  wrap((req) => setSpotifyCredentials(req.body)),
+);
+app.get(
+  "/api/spotify/auth-url",
+  requireAdmin,
+  wrap(() => getSpotifyAuthUrl()),
+);
+app.post(
+  "/api/spotify/disconnect",
+  requireAdmin,
+  wrap(() => disconnectSpotify()),
+);
+app.get(
+  "/api/spotify/playlists",
+  wrap(() => getSpotifyPlaylists()),
+);
+app.get(
+  "/api/spotify/liked",
+  wrap(() => getSpotifyLiked()),
+);
+app.get(
+  "/api/spotify/search",
+  wrap((req) => spotifySearch(req.query.q)),
+);
+app.get(
+  "/api/spotify/devices",
+  wrap(() => getSpotifyDevices()),
+);
+app.get(
+  "/api/spotify/now-playing",
+  wrap(() => spotifyNowPlaying()),
+);
+app.post(
+  "/api/spotify/play",
+  requireKioskOrAdmin,
+  wrap((req) => spotifyPlay(req.body)),
+);
+app.post(
+  "/api/spotify/pause",
+  requireKioskOrAdmin,
+  wrap(() => spotifyTransport("pause")),
+);
+app.post(
+  "/api/spotify/resume",
+  requireKioskOrAdmin,
+  wrap(() => spotifyTransport("resume")),
+);
+app.post(
+  "/api/spotify/next",
+  requireKioskOrAdmin,
+  wrap(() => spotifyTransport("next")),
+);
+app.post(
+  "/api/spotify/previous",
+  requireKioskOrAdmin,
+  wrap(() => spotifyTransport("previous")),
+);
+app.put(
+  "/api/spotify/shuffle",
+  requireKioskOrAdmin,
+  wrap((req) => setSpotifyShuffle(req.body)),
+);
+app.put(
+  "/api/spotify/repeat",
+  requireKioskOrAdmin,
+  wrap((req) => setSpotifyRepeat(req.body)),
+);
+app.put(
+  "/api/spotify/seek",
+  requireKioskOrAdmin,
+  wrap((req) => spotifySeek(req.body)),
 );
 
 // ---- Tuya Cloud integration ----

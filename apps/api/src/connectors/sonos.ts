@@ -325,6 +325,36 @@ export async function groupAll(): Promise<number> {
   return joined;
 }
 
+/**
+ * Group the given speakers under ONE coordinator (the first id) so playback is synced across
+ * them, and return that coordinator's Sonos id plus the full set of joined ids. Used by the
+ * Spotify (Music) path: it groups the chosen rooms, then starts Connect playback on the
+ * coordinator's Connect device. A single speaker is a no-op group (it's its own coordinator).
+ * Best-effort per JoinGroup so one stubborn speaker doesn't abort the rest. Throws only when
+ * Sonos is unreachable or none of the requested ids are present.
+ */
+export async function groupSpeakers(
+  speakerIds: string[],
+): Promise<{ coordinator: string; joined: string[] }> {
+  const m = await getManager();
+  if (!m) throw new Error(lastError || 'Sonos not available');
+  const want = new Set(speakerIds);
+  const targets = m.Devices.filter((d) => want.has(d.Uuid));
+  if (targets.length === 0) throw new Error('no matching speakers found');
+  const coordinator = targets[0];
+  const joined: string[] = [coordinator.Uuid];
+  for (const d of targets.slice(1)) {
+    try {
+      await d.JoinGroup(coordinator.Name);
+      joined.push(d.Uuid);
+    } catch {
+      /* leave this speaker where it is; the rest still group */
+    }
+  }
+  lastFleetAt = 0; // force the next fleet read to reflect the new grouping
+  return { coordinator: coordinator.Uuid, joined };
+}
+
 /** The distinct group coordinators (one device per group). Firing a notification at each
  *  coordinator covers EVERY speaker — including stereo pairs (one logical coordinator per
  *  pair). Owner-validated: 8 coordinators cover the 8-zone / 13-player system.
