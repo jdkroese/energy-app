@@ -23,6 +23,20 @@ export interface IrrigationIssueResult {
   detail: string;
 }
 
+/** The last time the APP itself opened each zone's valve. issueIrrigation() is the SINGLE
+ *  write choke point — both manual commands (routes/irrigation) and the coordinator's
+ *  scheduled fires flow through here — so this is the one true record of "we started this
+ *  run". The coordinator's session-observer reads it to tell an app-initiated run (already
+ *  logged as run/fire) from an EXTERNAL one started at the keypad or by the controller's
+ *  onboard weekly program, so it can log every physical watering session without
+ *  double-logging our own. Keyed by zoneId → epoch ms. */
+const lastAppRunByZone = new Map<string, number>();
+
+/** When (epoch ms) the app last issued a successful `run` for this zone, or undefined. */
+export function lastAppRunTs(zoneId: string): number | undefined {
+  return lastAppRunByZone.get(zoneId);
+}
+
 function logEntry(
   deviceId: string,
   lever: IrrigationLever,
@@ -91,6 +105,7 @@ export async function issueIrrigation(
       if (!Number.isFinite(minutes) || minutes <= 0)
         return reject(deviceId, lever, "minutes must be > 0");
       await rainbird.startZone(deviceId, minutes);
+      lastAppRunByZone.set(deviceId, Date.now());
       logEntry(
         deviceId,
         lever,

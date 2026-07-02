@@ -219,6 +219,50 @@ export function logIrrigationDecision(
 }
 
 /**
+ * A physical watering SESSION observed at the controller (ground truth from the active-zone
+ * read the coordinator does every tick), start + end with duration. This is the guarantee
+ * that EVERY run lands in the timeline regardless of who started it: app-initiated runs, a run
+ * started at the keypad/physical switch, or the controller's onboard weekly program firing.
+ *
+ *  - `external` = the app has no record of starting this run → a keypad/onboard session. Bumped
+ *    to observation/medium so it stands out (and pairs with the app's own run/fire log being
+ *    absent). An app-initiated session is observation/low (its command was already logged).
+ *  - `start` events carry state 'active'; `end` events state 'cleared' with the same relatedId
+ *    so the viewer can pair them. Severity stays ≤ medium so this NEVER fans out to notify.
+ */
+export function logIrrigationSession(input: {
+  zoneId: string;
+  phase: 'start' | 'end';
+  external: boolean;
+  detail: string;
+  id?: string;
+  relatedId?: string;
+}): ReturnType<typeof logEvent> | undefined {
+  try {
+    return logEvent({
+      class: 'observation',
+      category: 'irrigation',
+      severity: input.external ? 'medium' : 'low',
+      summary: `Watering ${input.phase === 'start' ? 'started' : 'ended'} — ${input.zoneId}`,
+      trigger: {
+        source: input.external ? 'threshold' : 'coordinator',
+        detail: input.external ? 'not app-initiated (keypad/onboard)' : 'observed',
+      },
+      device: input.zoneId,
+      entity: `session-${input.phase}`,
+      ok: true,
+      detail: input.detail,
+      state: input.phase === 'start' ? 'active' : 'cleared',
+      ...(input.id ? { id: input.id } : {}),
+      ...(input.relatedId ? { relatedId: input.relatedId } : {}),
+    });
+  } catch {
+    /* ignore */
+    return undefined;
+  }
+}
+
+/**
  * Arbitrage event (from arbitrage-log.ts appendArbitrageEvent). `engage` → action/medium;
  * `deviation` → observation/medium; plan/revert/standdown → system/low. Carries the live
  * readings + plan headline as the reproduction payload.
