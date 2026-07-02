@@ -35,8 +35,14 @@ async function withDeviceNames(events: EnergyEvent[]): Promise<EnergyEvent[]> {
   return events.map((e) => {
     if (!e.device) return e;
     const hit = index.get(e.device);
+    // When the friendly name resolves (and differs from the raw id), also substitute the id
+    // substring inside the display `summary` so the row title + drawer header read the name,
+    // not the raw device id. Leave `e.device` (the id) and `e.data` untouched.
+    const summary =
+      hit?.name && hit.name !== e.device ? e.summary.split(e.device).join(hit.name) : e.summary;
     return {
       ...e,
+      summary,
       deviceName: hit?.name ?? e.device,
       ...(hit?.type ? { deviceType: hit.type } : {}),
     };

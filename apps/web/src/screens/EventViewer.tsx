@@ -466,6 +466,80 @@ function HeatStrip({ events, onPick }: { events: EnergyEvent[]; onPick: (ev: Ene
   );
 }
 
+/* ---- Per-action device grouping ------------------------------------------ */
+// One coordinator sweep (e.g. a surplus cooling pass) writes one action event per device
+// within a few minutes — same category + trigger.source + entity + change, differing only in
+// device + trigger.detail. Collapse a run of ≥2 such adjacent action events into ONE
+// expandable group row. Observations/system events never group.
+const GROUP_WINDOW_MS = 180_000; // 3 min: max ts gap between adjacent members.
+
+/** Stable identity for "same action" (ignores device + trigger.detail, which vary per member). */
+function actionGroupKey(ev: EnergyEvent): string {
+  return [
+    ev.category,
+    ev.trigger.source,
+    ev.entity ?? '',
+    JSON.stringify(ev.change?.from ?? null),
+    JSON.stringify(ev.change?.to ?? null),
+    String(ev.ok),
+  ].join('|');
+}
+
+/** A row is either a single event (with an exact-duplicate count) or a collapsible group. */
+type ListItem =
+  | { kind: 'single'; ev: EnergyEvent; count: number }
+  | { kind: 'group'; key: string; members: EnergyEvent[] };
+
+function maxSeverity(members: EnergyEvent[]): EventSeverity {
+  return members.reduce<EventSeverity>(
+    (acc, m) => (SEV_ORDER.indexOf(m.severity) > SEV_ORDER.indexOf(acc) ? m.severity : acc),
+    'low',
+  );
+}
+
+/**
+ * Bucket the (already newest-first) list within one date header into single rows + group runs.
+ * Two adjacent action events join iff same actionGroupKey AND ts gap to the previous member
+ * ≤ GROUP_WINDOW_MS. Exact-duplicate collapse (same summary/class/device) is preserved inside
+ * singles as `count`.
+ */
+function bucketRows(events: EnergyEvent[]): ListItem[] {
+  const items: ListItem[] = [];
+  for (const ev of events) {
+    const prev = items[items.length - 1];
+
+    // Try to extend an open action group.
+    if (ev.class === 'action') {
+      const key = actionGroupKey(ev);
+      if (prev && prev.kind === 'group' && prev.key === key) {
+        const last = prev.members[prev.members.length - 1];
+        const gap = new Date(last.ts).getTime() - new Date(ev.ts).getTime();
+        if (gap >= 0 && gap <= GROUP_WINDOW_MS) {
+          prev.members.push(ev);
+          continue;
+        }
+      }
+      // Try to seed a group from an adjacent matching single action.
+      if (prev && prev.kind === 'single' && prev.count === 1 && prev.ev.class === 'action' && actionGroupKey(prev.ev) === key) {
+        const gap = new Date(prev.ev.ts).getTime() - new Date(ev.ts).getTime();
+        if (gap >= 0 && gap <= GROUP_WINDOW_MS) {
+          items[items.length - 1] = { kind: 'group', key, members: [prev.ev, ev] };
+          continue;
+        }
+      }
+    }
+
+    // Exact-duplicate collapse into the previous single (unchanged legacy behavior).
+    if (prev && prev.kind === 'single' && prev.ev.summary === ev.summary && prev.ev.class === ev.class && prev.ev.device === ev.device) {
+      prev.count += 1;
+      continue;
+    }
+
+    items.push({ kind: 'single', ev, count: 1 });
+  }
+  return items;
+}
+
 /** Grouped, collapsed event list. */
 function EventList({
   events,
@@ -478,6 +552,16 @@ function EventList({
   selectedId: string | null;
   onSelect: (ev: EnergyEvent) => void;
 }) {
+  // Which per-action groups are expanded (keyed by the first member's id, which is stable).
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleGroup = (gid: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(gid)) next.delete(gid);
+      else next.add(gid);
+      return next;
+    });
+
   if (loading && events.length === 0) {
     return <div style={{ padding: '28px 0', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}><Icon name="loader" size={16} /> Loading events…</div>;
   }
@@ -489,36 +573,154 @@ function EventList({
     );
   }
 
-  // Group under date headers; collapse consecutive identical (summary) rows into "×N".
-  const groups: { date: string; rows: { ev: EnergyEvent; count: number }[] }[] = [];
+  // Group under date headers first (groups never span a date boundary), then bucket each
+  // date's rows into singles + per-action group runs.
+  const dateGroups: { date: string; evs: EnergyEvent[] }[] = [];
   for (const ev of events) {
     const date = dateHeader(ev.ts);
-    let g = groups[groups.length - 1];
+    let g = dateGroups[dateGroups.length - 1];
     if (!g || g.date !== date) {
-      g = { date, rows: [] };
-      groups.push(g);
+      g = { date, evs: [] };
+      dateGroups.push(g);
     }
-    const last = g.rows[g.rows.length - 1];
-    if (last && last.ev.summary === ev.summary && last.ev.class === ev.class && last.ev.device === ev.device) {
-      last.count += 1;
-    } else {
-      g.rows.push({ ev, count: 1 });
-    }
+    g.evs.push(ev);
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {groups.map((g) => (
-        <div key={g.date}>
-          <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-3)', padding: '10px 2px 6px' }}>{g.date}</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {g.rows.map(({ ev, count }) => (
-              <EventRow key={ev.id} ev={ev} count={count} selected={ev.id === selectedId} onSelect={() => onSelect(ev)} />
-            ))}
+      {dateGroups.map((g) => {
+        const items = bucketRows(g.evs);
+        return (
+          <div key={g.date}>
+            <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-3)', padding: '10px 2px 6px' }}>{g.date}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {items.map((item) =>
+                item.kind === 'single' ? (
+                  <EventRow key={item.ev.id} ev={item.ev} count={item.count} selected={item.ev.id === selectedId} onSelect={() => onSelect(item.ev)} />
+                ) : (
+                  <EventGroupRow
+                    key={item.members[0].id}
+                    members={item.members}
+                    expanded={expanded.has(item.members[0].id)}
+                    onToggle={() => toggleGroup(item.members[0].id)}
+                    selectedId={selectedId}
+                    onSelect={onSelect}
+                  />
+                ),
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
+  );
+}
+
+/** A noun for the group header, derived from category (concise, sentence-case). */
+function groupNoun(category: EventCategory): string {
+  if (category === 'climate') return 'AC units';
+  if (category === 'blinds') return 'blinds';
+  if (category === 'irrigation') return 'zones';
+  if (category === 'ev') return 'chargers';
+  return 'devices';
+}
+
+/** Collapsible header for a run of ≥2 same-action events across different devices. */
+function EventGroupRow({
+  members,
+  expanded,
+  onToggle,
+  selectedId,
+  onSelect,
+}: {
+  members: EnergyEvent[];
+  expanded: boolean;
+  onToggle: () => void;
+  selectedId: string | null;
+  onSelect: (ev: EnergyEvent) => void;
+}) {
+  const head = members[0]; // newest member (list is newest-first).
+  const sev = SEV_COLOR[maxSeverity(members)];
+  const badge = CLASS_BADGE[head.class];
+  const count = members.length;
+  const noun = groupNoun(head.category);
+  // Constructed title — devices differ, so don't reuse one member's summary.
+  const entityBit = head.entity ? ` · ${head.entity}` : '';
+  const changeBit = head.change ? ` ${fmtVal(head.change.from)} → ${fmtVal(head.change.to)}` : '';
+  const title = `${count} ${noun}${entityBit}${changeBit}`.trim();
+
+  return (
+    <div style={{ border: `1px solid var(--border-1)`, background: 'var(--surface-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+      <button
+        onClick={onToggle}
+        aria-expanded={expanded}
+        style={{ display: 'flex', alignItems: 'stretch', gap: 0, textAlign: 'left', width: '100%', border: 'none', background: 'transparent', cursor: 'pointer', padding: 0 }}
+      >
+        {/* severity left-rail = MAX among members */}
+        <span style={{ width: 4, flex: 'none', background: sev }} />
+        <span style={{ display: 'flex', gap: 10, padding: '10px 12px', flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
+          <span style={{ width: 26, height: 26, borderRadius: 8, flex: 'none', display: 'grid', placeItems: 'center', marginTop: 1, background: 'var(--surface-3)', color: sev }}>
+            <Icon name={CATEGORY_ICON[head.category]} size={14} />
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+              <span title={absTime(head.ts)} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)', flex: 'none' }}>{relTime(head.ts)}</span>
+              <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 5, background: 'var(--surface-3)', color: 'var(--text-2)', display: 'inline-flex', alignItems: 'center', gap: 4, flex: 'none' }}>
+                <Icon name={badge.icon} size={10} /> {badge.label}
+              </span>
+              <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 5, background: 'var(--solar-wash)', color: 'var(--solar)', flex: 'none' }}>{count}</span>
+            </span>
+            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--text-1)', marginTop: 3 }}>{title}</span>
+            <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
+              <span style={{ fontSize: 11, color: 'var(--text-3)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="git-branch" size={11} /> via {head.trigger.source}
+              </span>
+            </span>
+          </span>
+          <span style={{ flex: 'none', alignSelf: 'center', color: 'var(--text-3)', display: 'grid', placeItems: 'center' }}>
+            <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={16} />
+          </span>
+        </span>
+      </button>
+      {expanded && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '0 10px 10px 18px' }}>
+          {members.map((m) => (
+            <GroupMemberRow key={m.id} ev={m} selected={m.id === selectedId} onSelect={() => onSelect(m)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A nested member row inside an expanded group — device name + its own trigger.detail + ts. */
+function GroupMemberRow({ ev, selected, onSelect }: { ev: EnergyEvent; selected: boolean; onSelect: () => void }) {
+  const sev = SEV_COLOR[ev.severity];
+  const rejected = ev.ok === false;
+  return (
+    <button
+      onClick={onSelect}
+      style={{
+        display: 'flex', alignItems: 'stretch', gap: 0, textAlign: 'left', width: '100%',
+        border: `1px solid ${selected ? 'var(--border-2)' : 'var(--border-1)'}`,
+        background: selected ? 'var(--surface-3)' : 'var(--surface-2)',
+        borderRadius: 'var(--radius-md)', cursor: 'pointer', overflow: 'hidden', padding: 0,
+      }}
+    >
+      <span style={{ width: 3, flex: 'none', background: sev, opacity: ev.severity === 'low' ? 0.5 : 1 }} />
+      <span style={{ display: 'flex', gap: 10, padding: '8px 11px', flex: 1, minWidth: 0, alignItems: 'baseline' }}>
+        <span title={absTime(ev.ts)} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)', flex: 'none' }}>{relTime(ev.ts)}</span>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-1)' }}>
+            <DeviceLink ev={ev} />
+            {rejected && <span style={{ marginLeft: 8, fontSize: 10.5, padding: '1px 6px', borderRadius: 5, background: 'var(--danger-wash)', color: 'var(--danger)' }}>rejected</span>}
+          </span>
+          {ev.trigger.detail && (
+            <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{ev.trigger.detail}</span>
+          )}
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -552,7 +754,7 @@ function EventRow({ ev, count, selected, onSelect }: { ev: EnergyEvent; count: n
             {ev.state === 'cleared' && <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 5, background: 'var(--solar-wash)', color: 'var(--solar)', flex: 'none' }}>cleared</span>}
             {count > 1 && <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 5, background: 'var(--surface-3)', color: 'var(--text-3)', flex: 'none' }}>×{count}</span>}
           </span>
-          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--text-1)', marginTop: 3 }}>{ev.summary}</span>
+          <span title={ev.device || undefined} style={{ display: 'block', fontSize: 13, fontWeight: 600, color: 'var(--text-1)', marginTop: 3 }}>{ev.summary}</span>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
             <span style={{ fontSize: 11, color: 'var(--text-3)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
               <Icon name="git-branch" size={11} /> via {ev.trigger.source}
@@ -561,9 +763,6 @@ function EventRow({ ev, count, selected, onSelect }: { ev: EnergyEvent; count: n
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-2)' }}>
                 {fmtVal(ev.change.from)} → <span style={{ color: 'var(--text-1)' }}>{fmtVal(ev.change.to)}</span>
               </span>
-            )}
-            {ev.device && (
-              <span title={ev.device !== deviceLabel(ev) ? ev.device : undefined} style={{ fontSize: 11, color: 'var(--text-3)' }}>· {deviceLabel(ev)}</span>
             )}
           </span>
         </span>
