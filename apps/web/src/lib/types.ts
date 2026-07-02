@@ -2045,6 +2045,7 @@ export type EventCategory =
   | 'solar'
   | 'connectivity'
   | 'security'
+  | 'kitchen'
   | 'app';
 export type EventTriggerSource =
   | 'surplus-rule'
@@ -2119,3 +2120,204 @@ export interface EventsQuery {
   cursor?: string;
   limit?: number;
 }
+
+/* ---- Kitchen Hub (Cooking + Groceries, docs/38 + docs/39) ------------------
+ * Mirrors apps/api/src/kitchen/types.ts — the server is the source of truth. */
+
+export type KitchenCuisine = 'spanish' | 'dutch' | 'japanese' | 'italian' | 'global';
+export type KitchenSeason = 'spring' | 'summer' | 'autumn' | 'winter';
+
+export interface RecipeIngredient {
+  name: string;
+  /** Canonical Spanish name — drives Mercadona SKU search. */
+  es: string;
+  qty: number | null;
+  unit: string;
+  pantryStaple?: boolean;
+}
+
+export interface RecipeStep {
+  phase: 'mise' | 'cook';
+  text: string;
+  timerSec?: number;
+}
+
+export interface RecipeNutrition {
+  kcal: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  estimated: boolean;
+}
+
+export interface Recipe {
+  id: string;
+  title: string;
+  photo?: string | null;
+  source: 'seed' | 'url' | 'manual';
+  sourceUrl?: string;
+  servingsBase: number;
+  prepMin: number;
+  cookMin: number;
+  tags: string[];
+  cuisine: KitchenCuisine;
+  kidScore?: number;
+  season?: KitchenSeason[];
+  nutrition?: RecipeNutrition;
+  tools: string[];
+  ingredients: RecipeIngredient[];
+  steps: RecipeStep[];
+  lastCookedAt?: string | null;
+  ratings?: Record<string, number>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MealPlanDay {
+  date: string;
+  recipeId?: string | null;
+  servings: number;
+  skip?: boolean;
+  pinned?: boolean;
+  note?: string;
+}
+
+export interface MealPlan {
+  weekStart: string;
+  days: MealPlanDay[];
+}
+
+export interface StaplesItem {
+  id: string;
+  productId?: string | null;
+  name: string;
+  defaultQty: number;
+  cadence: 'weekly' | 'biweekly' | 'monthly';
+  lastOrderedAt?: string | null;
+  priceEur?: number | null;
+}
+
+export interface OrderSuggestion {
+  id: string;
+  kind: 'pack' | 'merge' | 'cadence';
+  text: string;
+  state: 'open' | 'confirmed' | 'ignored';
+  auto?: boolean;
+}
+
+export interface OrderLine {
+  id: string;
+  source: 'recipe' | 'staple' | 'manual' | 'tablet';
+  recipeIds?: string[];
+  productId?: string | null;
+  ingredientKey: string;
+  label: string;
+  qty: number;
+  unit: string;
+  packsNeeded?: number;
+  coverageNote?: string;
+  needsMapping?: boolean;
+  checked: boolean;
+  priceEur?: number | null;
+  pantry?: boolean;
+}
+
+export interface OrderDraft {
+  weekStart?: string;
+  lines: OrderLine[];
+  suggestions: OrderSuggestion[];
+  status: 'draft' | 'filled' | 'submitted';
+  targetSlot?: { day: string; window: string };
+  submitBy?: string;
+  pushedAt?: string | null;
+  totalEur: number;
+  updatedAt: string;
+}
+
+export interface OrderHistoryEntry {
+  id: string;
+  date: string;
+  lines: OrderLine[];
+  totalEur: number;
+  deliveredAt?: string | null;
+}
+
+export interface KitchenHouseholdGoals {
+  mode: 'weight-loss' | 'maintain' | 'high-protein' | null;
+  kcalPerDinner: number | null;
+  notes?: string;
+}
+
+export interface KitchenHousehold {
+  adults: number;
+  kids: number;
+  allergies: string[];
+  dislikes: string[];
+  loves: string[];
+  weeknightMaxMin: number;
+  cuisineWeights: Record<KitchenCuisine, number>;
+  goals: KitchenHouseholdGoals;
+  showNutritionOnCards: boolean;
+}
+
+export interface KitchenReminders {
+  planWeekDow: number;
+  planWeekHour: number;
+  submitByDow: number;
+  submitByHour: number;
+  targetSlotLabel: string;
+}
+
+export interface KitchenProductHit {
+  id: string;
+  name: string;
+  photo: string | null;
+  unitPrice: number | null;
+  packSizeDisplay: string | null;
+  packSize: { qty: number; unit: string } | null;
+  referencePrice: string | null;
+}
+
+export interface KitchenIntelligence {
+  enabled: boolean;
+  features: {
+    importParsing: boolean;
+    cookingSuggestions: boolean;
+    plannerRequestBox: boolean;
+    weeklyPlanAssist: boolean;
+  };
+  usage: { month: string; inputTokens: number; outputTokens: number; eur: number };
+  keyMasked: string | null;
+  envKey: boolean;
+  configured: boolean;
+}
+
+export interface MercadonaStatus {
+  ok: boolean;
+  warehouse: string | null;
+  products: number | null;
+  searchOk: boolean;
+  latencyMs: number;
+  detail?: string;
+}
+
+export interface RecipesResponse { ts: string; recipes: Recipe[] }
+export interface RecipeResponse { ts: string; recipe: Recipe }
+export interface RecipeImportResponse {
+  ts: string;
+  ok: boolean;
+  recipe?: Recipe;
+  prefill?: { title?: string; photo?: string | null; sourceUrl: string };
+  detail?: string;
+}
+export interface MealPlanResponse { ts: string; plan: MealPlan }
+export interface PlanAskResponse { ts: string; ok: boolean; reason?: string; candidateIds: string[]; note?: string }
+export interface StaplesResponse { ts: string; staples: StaplesItem[] }
+export interface OrderDraftResponse { ts: string; draft: OrderDraft }
+export interface OrderHistoryResponse { ts: string; history: OrderHistoryEntry[] }
+export interface ChecklistResponse { ts: string; ok: boolean; text: string; entry: OrderHistoryEntry }
+export interface KitchenSearchResponse { ts: string; available: boolean; products: KitchenProductHit[] }
+export interface KitchenPickResponse { ts: string; entry: unknown; draft: OrderDraft }
+export interface KitchenHouseholdResponse { ts: string; household: KitchenHousehold }
+export interface KitchenRemindersResponse { ts: string; reminders: KitchenReminders }
+export interface KitchenIntelligenceResponse { ts: string; intelligence: KitchenIntelligence }

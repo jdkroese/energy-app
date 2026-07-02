@@ -38,6 +38,12 @@ export const NAV_MEDIA: NavItem[] = [
   { to: '/music', label: 'Music', icon: 'music' },
 ];
 
+/** Kitchen section — the Cooking + Groceries hub (docs/38 D4), between Media and Automation. */
+export const NAV_KITCHEN: NavItem[] = [
+  { to: '/cooking', label: 'Cooking', icon: 'chef-hat' },
+  { to: '/groceries', label: 'Groceries', icon: 'shopping-basket' },
+];
+
 /** Automation section — below a second divider. */
 export const NAV_AUTOMATION: NavItem[] = [
   // Autopilot folded into Automations (Summary · Schedules · Smart Rules · Events ·
@@ -51,7 +57,7 @@ export const NAV_AUTOMATION: NavItem[] = [
 export const NAV_SETTINGS: NavItem = { to: '/settings', label: 'Settings', icon: 'settings' };
 
 /** Ordered rail sections — a divider is drawn between each. */
-export const RAIL_SECTIONS: NavItem[][] = [NAV_TOP, NAV_DEVICES, NAV_MEDIA, NAV_AUTOMATION];
+export const RAIL_SECTIONS: NavItem[][] = [NAV_TOP, NAV_DEVICES, NAV_MEDIA, NAV_KITCHEN, NAV_AUTOMATION];
 
 /**
  * Active-state match for a nav `to` that may carry a ?type= query (the device
@@ -94,6 +100,7 @@ export const MOBILE_MORE_SECTIONS: { title: string; items: NavItem[] }[] = [
   // Category shortcuts (Energy + the all-devices hub are on the bottom bar already).
   { title: 'Devices', items: NAV_DEVICES.filter((n) => !MOBILE_BOTTOM_PATHS.includes(n.to)) },
   { title: 'Media', items: NAV_MEDIA },
+  { title: 'Kitchen', items: NAV_KITCHEN },
   { title: 'Automation', items: NAV_AUTOMATION },
   { title: 'Account', items: [NAV_SETTINGS] },
 ];

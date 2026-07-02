@@ -1436,6 +1436,123 @@ export interface StoreSchema {
    *  coordinator ships in 'shadow' by default — it actuates nothing until the owner
    *  flips it to 'live' AND the Devices layer is armed. */
   irrigation: IrrigationState;
+  /** Kitchen Hub connector settings (docs/38 + docs/39). Only the small config lives
+   *  here — the bulky content (recipes, plans, drafts) lives in .data/kitchen.json. */
+  kitchen: KitchenSettings;
+}
+
+// ---- Kitchen Hub (docs/38 + docs/39) — connector settings -------------------
+
+/** Mercadona READ-ONLY connector config. Warehouse is resolved once via the
+ *  postal-code endpoint (never hardcoded); Algolia keys are scraped from the
+ *  tienda JS bundle and refreshed on 4xx. */
+export interface KitchenMercadonaConfig {
+  postalCode: string;
+  warehouse: string | null;
+  algolia: { appId: string; apiKey: string; scrapedAt: string } | null;
+}
+
+/** Settings ▸ Intelligence (D2): the Claude API helper config. Every feature
+ *  fails soft to the deterministic path when off/unavailable. */
+export interface KitchenIntelligenceConfig {
+  enabled: boolean;
+  /** Stored key; env ANTHROPIC_API_KEY overrides when set. */
+  apiKey: string | null;
+  features: {
+    importParsing: boolean;
+    cookingSuggestions: boolean;
+    plannerRequestBox: boolean;
+    weeklyPlanAssist: boolean;
+  };
+  /** Local usage counter — tokens priced locally, reset per calendar month. */
+  usage: { month: string; inputTokens: number; outputTokens: number; eur: number };
+}
+
+export interface KitchenSettings {
+  mercadona: KitchenMercadonaConfig;
+  intelligence: KitchenIntelligenceConfig;
+}
+
+export function defaultKitchen(): KitchenSettings {
+  return {
+    mercadona: {
+      postalCode: process.env.MERCADONA_POSTAL_CODE || "03730",
+      warehouse: null,
+      algolia: null,
+    },
+    intelligence: {
+      enabled: false,
+      apiKey: null,
+      features: {
+        importParsing: true,
+        cookingSuggestions: true,
+        plannerRequestBox: true,
+        weeklyPlanAssist: false,
+      },
+      usage: { month: "", inputTokens: 0, outputTokens: 0, eur: 0 },
+    },
+  };
+}
+
+function hydrateKitchen(p: unknown): KitchenSettings {
+  const base = defaultKitchen();
+  if (!p || typeof p !== "object") return base;
+  const k = p as Partial<KitchenSettings>;
+  const m = (k.mercadona ?? {}) as Partial<KitchenMercadonaConfig>;
+  const i = (k.intelligence ?? {}) as Partial<KitchenIntelligenceConfig>;
+  const f = (i.features ?? {}) as Partial<KitchenIntelligenceConfig["features"]>;
+  const u = (i.usage ?? {}) as Partial<KitchenIntelligenceConfig["usage"]>;
+  return {
+    mercadona: {
+      postalCode:
+        typeof m.postalCode === "string" && m.postalCode
+          ? m.postalCode
+          : base.mercadona.postalCode,
+      warehouse: typeof m.warehouse === "string" ? m.warehouse : null,
+      algolia:
+        m.algolia &&
+        typeof m.algolia === "object" &&
+        typeof m.algolia.appId === "string" &&
+        typeof m.algolia.apiKey === "string"
+          ? {
+              appId: m.algolia.appId,
+              apiKey: m.algolia.apiKey,
+              scrapedAt:
+                typeof m.algolia.scrapedAt === "string"
+                  ? m.algolia.scrapedAt
+                  : new Date().toISOString(),
+            }
+          : null,
+    },
+    intelligence: {
+      enabled: typeof i.enabled === "boolean" ? i.enabled : base.intelligence.enabled,
+      apiKey: typeof i.apiKey === "string" && i.apiKey ? i.apiKey : null,
+      features: {
+        importParsing:
+          typeof f.importParsing === "boolean"
+            ? f.importParsing
+            : base.intelligence.features.importParsing,
+        cookingSuggestions:
+          typeof f.cookingSuggestions === "boolean"
+            ? f.cookingSuggestions
+            : base.intelligence.features.cookingSuggestions,
+        plannerRequestBox:
+          typeof f.plannerRequestBox === "boolean"
+            ? f.plannerRequestBox
+            : base.intelligence.features.plannerRequestBox,
+        weeklyPlanAssist:
+          typeof f.weeklyPlanAssist === "boolean"
+            ? f.weeklyPlanAssist
+            : base.intelligence.features.weeklyPlanAssist,
+      },
+      usage: {
+        month: typeof u.month === "string" ? u.month : "",
+        inputTokens: typeof u.inputTokens === "number" ? Math.max(0, u.inputTokens) : 0,
+        outputTokens: typeof u.outputTokens === "number" ? Math.max(0, u.outputTokens) : 0,
+        eur: typeof u.eur === "number" ? Math.max(0, u.eur) : 0,
+      },
+    },
+  };
 }
 
 /**
@@ -1789,6 +1906,7 @@ function defaults(): StoreSchema {
     radioSchedules: [],
     radioNowPlaying: null,
     irrigation: defaultIrrigation(),
+    kitchen: defaultKitchen(),
   };
 }
 
@@ -2346,6 +2464,7 @@ function hydrate(raw: unknown): StoreSchema {
     radioSchedules: hydrateRadioSchedules(p.radioSchedules),
     radioNowPlaying: hydrateRadioNowPlaying(p.radioNowPlaying),
     irrigation: hydrateIrrigation(p.irrigation),
+    kitchen: hydrateKitchen(p.kitchen),
   };
 }
 

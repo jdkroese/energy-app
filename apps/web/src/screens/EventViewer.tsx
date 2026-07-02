@@ -50,6 +50,7 @@ const CATEGORY_ICON: Record<EventCategory, string> = {
   solar: 'sun',
   connectivity: 'wifi',
   security: 'shield',
+  kitchen: 'chef-hat',
   app: 'layout-dashboard',
 };
 const ALL_CATEGORIES: EventCategory[] = [
@@ -63,6 +64,7 @@ const ALL_CATEGORIES: EventCategory[] = [
   'solar',
   'connectivity',
   'security',
+  'kitchen',
   'app',
 ];
 

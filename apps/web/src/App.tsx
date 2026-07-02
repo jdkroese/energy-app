@@ -29,6 +29,9 @@ const SceneControllerDetail = lazy(() =>
 const RoomsManage = lazy(() => import('./screens/RoomsManage').then((m) => ({ default: m.RoomsManage })));
 const Automations = lazy(() => import('./screens/Automations').then((m) => ({ default: m.Automations })));
 const AlarmScreen = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.AlarmScreen })));
+// Kitchen Hub (docs/38 + docs/39) — Cooking (planner + library) & Groceries (order builder).
+const Cooking = lazy(() => import('./screens/kitchen/Cooking').then((m) => ({ default: m.Cooking })));
+const Groceries = lazy(() => import('./screens/kitchen/Groceries').then((m) => ({ default: m.Groceries })));
 const MusicScreen = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.MusicScreen })));
 // AlarmActiveBanner renders on every authed page but shares a module with the
 // Radio/Speakers panels (~1k lines). Lazy-load it with a null fallback so it
@@ -84,6 +87,9 @@ function AppRoutes() {
           <Route path="/automations" element={<Automations ctx={ctx} />} />
           {/* Music — dedicated Spotify + radio experience (also the mini-player target). */}
           <Route path="/music" element={<MusicScreen ctx={ctx} />} />
+          {/* Kitchen Hub — the weekly food loop (plan → order → cook). */}
+          <Route path="/cooking" element={<Cooking ctx={ctx} />} />
+          <Route path="/groceries" element={<Groceries ctx={ctx} />} />
           {/* House-alarm panic page — a big trigger/STOP button for a phone shortcut. */}
           <Route path="/alarm" element={<AlarmScreen ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}

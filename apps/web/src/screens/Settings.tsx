@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
@@ -1835,6 +1835,197 @@ function AlarmPanicCard() {
   );
 }
 
+/**
+ * Mercadona (Kitchen Hub, docs/38 + docs/39) — READ-ONLY grocery catalog connector.
+ * Admin sees the live status probe (warehouse + category + search check); non-admins a
+ * read-only description. No credentials to manage in P1 (cart writes are P2).
+ */
+function MercadonaConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState<MercadonaStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [probed, setProbed] = useState(false);
+
+  const probe = async () => {
+    setBusy(true);
+    try {
+      setStatus(await api.kitchen.mercadonaStatus());
+    } catch {
+      setStatus(null);
+    } finally {
+      setBusy(false);
+      setProbed(true);
+    }
+  };
+  // Probe lazily on first expand (it does live Mercadona fetches — don't run on page load).
+  useEffect(() => {
+    if (open && isAdmin && !probed && !busy) void probe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const ok = Boolean(status?.ok);
+  const statusText = !probed ? 'linked' : busy ? 'checking…' : ok ? `connected · ${status?.warehouse ?? ''}` : 'offline';
+  return (
+    <ConnectionRow
+      first={first}
+      icon="shopping-basket"
+      tone={!probed || ok ? 'solar' : undefined}
+      name="Mercadona"
+      statusText={statusText}
+      statusTone={!probed || ok ? 'solar' : 'grid'}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Live grocery catalog, prices and photos for the Groceries order builder. Read-only and anonymous —
+          warehouse resolved from the postal code (03730 → Jávea), responses cached 30 min. Cart writes are a later,
+          opt-in step; the app never checks out.
+        </div>
+        {status && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <DetailLine label="Status" value={ok ? 'connected' : status.detail ?? 'unreachable'} tone={ok ? 'solar' : 'grid'} />
+            <DetailLine label="Store" value={status.warehouse ?? 'unresolved'} />
+            <DetailLine label="Search" value={status.searchOk ? 'ok (Algolia)' : 'degraded — category walk'} tone={status.searchOk ? 'solar' : 'grid'} />
+            <DetailLine label="Probe" value={`${status.products ?? '?'} products in the first category · ${status.latencyMs} ms`} />
+          </div>
+        )}
+        {isAdmin ? (
+          <div>
+            <Button size="sm" variant="secondary" loading={busy} onClick={() => void probe()}>Test connection</Button>
+          </div>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Managed automatically — nothing to configure here.</div>
+        )}
+      </div>
+    </ConnectionRow>
+  );
+}
+
+/**
+ * Settings ▸ Intelligence (Kitchen Hub D2) — the Claude API helper. Master switch,
+ * per-feature toggles, masked API key + month usage counter. Every feature fails soft
+ * to the deterministic engine when off. Editing is admin-only (the PUT is admin-gated).
+ */
+function IntelligenceCard() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [intel, setIntel] = useState<KitchenIntelligence | null>(null);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [editingKey, setEditingKey] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.kitchen
+      .intelligence()
+      .then((r) => setIntel(r.intelligence))
+      .catch(() => {});
+  }, []);
+
+  const put = async (patch: Parameters<typeof api.kitchen.setIntelligence>[0]) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.kitchen.setIntelligence(patch);
+      setIntel(r.intelligence);
+    } catch (e) {
+      setErr((e as Error).message || 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!intel) return null;
+  const featureRow = (
+    key: keyof KitchenIntelligence['features'],
+    label: string,
+    hint: string,
+  ) => (
+    <div style={{ ...row, padding: '11px 16px', borderTop: '1px solid var(--border-1)' }}>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14 }}>{label}</div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>{hint}</div>
+      </div>
+      <Switch
+        checked={intel.features[key]}
+        disabled={!isAdmin || busy}
+        onChange={(e) => void put({ features: { [key]: e.target.checked } })}
+      />
+    </div>
+  );
+
+  return (
+    <Card title="Intelligence" subtitle="Claude assistance for the Kitchen Hub — fails soft to the deterministic engine" style={{ padding: 0 }}>
+      <div style={{ ...row, borderTop: '1px solid var(--border-1)' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14 }}>Claude assistance</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>
+            Master switch — everything falls back to the deterministic engine when off
+          </div>
+        </div>
+        <Switch checked={intel.enabled} disabled={!isAdmin || busy} onChange={(e) => void put({ enabled: e.target.checked })} />
+      </div>
+      <div style={{ ...row, padding: '11px 16px', borderTop: '1px solid var(--border-1)' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14 }}>API key</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>
+            {intel.envKey ? 'Using ANTHROPIC_API_KEY from the server environment' : 'Or set ANTHROPIC_API_KEY in .env'}
+          </div>
+        </div>
+        {editingKey ? (
+          <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Input
+              type="password"
+              placeholder="sk-ant-…"
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.target.value)}
+              style={{ width: 190 }}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={busy}
+              onClick={() => {
+                void put({ apiKey: keyDraft.trim() }).then(() => {
+                  setEditingKey(false);
+                  setKeyDraft('');
+                });
+              }}
+            >
+              Save
+            </Button>
+          </span>
+        ) : (
+          <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <code style={{ fontSize: 11.5, color: 'var(--text-2)', background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '6px 10px' }}>
+              {intel.keyMasked ?? (intel.envKey ? 'env key' : 'not set')}
+            </code>
+            {isAdmin && (
+              <Button size="sm" variant="ghost" onClick={() => setEditingKey(true)}>
+                {intel.keyMasked ? 'Replace' : 'Add key'}
+              </Button>
+            )}
+          </span>
+        )}
+      </div>
+      {featureRow('importParsing', 'Recipe import parsing', 'URL → structured recipe + nutrition estimate when JSON-LD is missing')}
+      {featureRow('cookingSuggestions', 'Cooking suggestions', '“What can I make with…” free-form ideas (arrives with cooking mode)')}
+      {featureRow('plannerRequestBox', 'Planner request box', '“Ask for anything” on the week planner')}
+      {featureRow('weeklyPlanAssist', 'Weekly-plan assist', 'Blends with the rotation + preference engine')}
+      <div style={{ ...row, padding: '11px 16px', borderTop: '1px solid var(--border-1)' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14 }}>Usage this month</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>Household volume ≈ cents · counted + priced locally</div>
+        </div>
+        <b style={{ fontFamily: 'var(--font-mono)', fontSize: 14 }}>{intel.usage.eur.toFixed(2).replace('.', ',')} €</b>
+      </div>
+      {err && <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--grid)' }}>{err}</div>}
+    </Card>
+  );
+}
+
 /** Connections card — single-open accordion across all integrations. */
 function ConnectionsCard({ connections }: { connections: SettingsResponse['connections'] }) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -1875,6 +2066,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
       <TuyaConnection first={false} open={openId === 'tuya'} onToggle={() => toggle('tuya')} />
       <SonosConnection first={false} open={openId === 'sonos'} onToggle={() => toggle('sonos')} />
       <SpotifyConnection first={false} open={openId === 'spotify'} onToggle={() => toggle('spotify')} />
+      <MercadonaConnection first={false} open={openId === 'mercadona'} onToggle={() => toggle('mercadona')} />
     </Card>
   );
 }
@@ -1934,6 +2126,8 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
       {active === 'Connections' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <ConnectionsCard connections={s.connections} />
+          {/* Kitchen Hub Intelligence (Claude API) — docs/38 D2. */}
+          <IntelligenceCard />
         </div>
       )}
 
