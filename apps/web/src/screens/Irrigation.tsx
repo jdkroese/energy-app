@@ -1,18 +1,17 @@
-// Irrigation screen (Rain Bird ESP-TM2 + LNK/LNK2) — Phase 2 smart-watering.
+// Irrigation screen (Rain Bird ESP-TM2 + LNK/LNK2) — Phase 2 smart-watering, production.
 //
-// A photo ZONE GRID (each card = the garden photo + name + next-run + running indicator +
-// today's weather-trim). Tap a zone → a SCHEDULE EDITOR of watering-time cards, each with a
-// start time + a prominent duration STEPPER (− min +), a live ≈L estimate, and weekday toggle
-// pills, plus per-zone weather-adjust chips and agronomic config. Header stats (next run,
-// planned today, weather-trim %, zones). Per-zone "water now". A mode control (Off/Shadow/Live)
-// — Live is gated behind admin + the Devices arm and an explicit confirm. Baseline-drift surfaced.
+// Sections (top→bottom): header stats · Watering brain (Off/Live + bypass rules) · forecast
+// outlook (upcoming rain + bypass markers) · photo ZONE GRID (schedule + Water-now slider) ·
+// Weekly plan (the whole configured program) · Activity (the unified irrigation event feed).
 //
-// SHADOW-FIRST: the coordinator actuates nothing until mode === 'live' AND the Devices layer is
-// armed. Manual run/stop/rain-delay still go through the Phase-1 admin+arm command path.
+// PRODUCTION: the coordinator actuates only when mode === 'live' AND the Devices layer is armed
+// (docs/39 §7 removed the old 'shadow' mode). A 2h-ahead rain-bypass decision skips a run whose
+// forecast crosses the bypass thresholds (docs/39 §6).
 //
 // Responsive (CLAUDE.md web+mobile rule): branches on ctx.desktop. "Power" design system.
 
 import { useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
 import { useAuth } from "../auth/AuthProvider";
@@ -22,9 +21,9 @@ import type {
   IrrigationPlanZone,
   IrrigationWateringTime,
   IrrigationMode,
-  IrrigationWindow,
   IrrigationPlantType,
   IrrigationEmitterType,
+  EnergyEvent,
 } from "../lib/types";
 import {
   Card,
@@ -34,6 +33,7 @@ import {
   Switch,
   Badge,
   SegmentedControl,
+  Slider,
   Modal,
   EmptyState,
   LoadingState,
@@ -42,6 +42,8 @@ import {
 import { MobileHeader, Avatar, StaleBanner } from "./_shared";
 
 const DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+/** Weekly plan renders Monday-first. */
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const PLANT_TYPES: IrrigationPlantType[] = [
   "lawn",
   "shrubs",
@@ -59,19 +61,94 @@ const EMITTER_TYPES: IrrigationEmitterType[] = [
   "bubbler",
   "soaker",
 ];
-const WINDOWS: { value: IrrigationWindow; label: string }[] = [
-  { value: "early-morning", label: "Early morning" },
-  { value: "solar-surplus", label: "Solar surplus" },
-  { value: "off-peak-P3", label: "Off-peak (P3)" },
-  { value: "none", label: "No preference" },
-];
+
+/** Default minutes for a manual "Water now". */
+const WATER_NOW_DEFAULT_MIN = 20;
 
 function uid() {
   return `wt-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/**
+ * Re-encode any picked image to a downscaled JPEG before upload. iPhone "Take Photo" hands the
+ * browser an HEIC/HEIF file (and full-res 12 MP, often over the 8 MB server cap) — the API only
+ * accepts jpeg/png/webp, so those were silently rejected. Safari can decode HEIC into an <img>,
+ * so drawing to a canvas + exporting JPEG normalises BOTH format and size. Falls back to the
+ * original file if the browser can't decode it (e.g. desktop Chrome + HEIC).
+ */
+async function normalizePhoto(file: File): Promise<File> {
+  const MAX_DIM = 1600;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error("decode failed"));
+      im.src = url;
+    });
+    const scale = Math.min(
+      1,
+      MAX_DIM / Math.max(img.naturalWidth || 1, img.naturalHeight || 1),
+    );
+    const w = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+    const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const cx = canvas.getContext("2d");
+    if (!cx) return file;
+    cx.drawImage(img, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((res) =>
+      canvas.toBlob(res, "image/jpeg", 0.85),
+    );
+    if (!blob) return file;
+    return new File([blob], "zone.jpg", { type: "image/jpeg" });
+  } catch {
+    return file; // let the server validate; at least the upload is attempted
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+interface WeeklyRun {
+  zoneName: string;
+  station: number;
+  startTime: string;
+  durationMin: number;
+  liters: number;
+}
+
+/** Group every app-managed zone's watering times into a Monday-first weekly overview. */
+function buildWeeklyPlan(
+  zones: IrrigationPlanZone[],
+): { weekday: number; runs: WeeklyRun[]; totalMin: number }[] {
+  return WEEK_ORDER.map((weekday) => {
+    const runs: WeeklyRun[] = [];
+    for (const z of zones) {
+      if (z.managedBy !== "app") continue;
+      for (const w of z.wateringTimes) {
+        if (w.days[weekday])
+          runs.push({
+            zoneName: z.name,
+            station: z.station,
+            startTime: w.startTime,
+            durationMin: w.durationMin,
+            liters: Math.round(w.durationMin * z.flowLpm),
+          });
+      }
+    }
+    runs.sort((a, b) => a.startTime.localeCompare(b.startTime));
+    return {
+      weekday,
+      runs,
+      totalMin: runs.reduce((s, r) => s + r.durationMin, 0),
+    };
+  });
+}
+
 export function Irrigation({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
+  const nav = useNavigate();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
@@ -81,6 +158,7 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [openZoneId, setOpenZoneId] = useState<string | null>(null);
+  const [waterZone, setWaterZone] = useState<IrrigationPlanZone | null>(null);
   const [confirmLive, setConfirmLive] = useState(false);
 
   const openZone = useMemo(
@@ -112,6 +190,9 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
     }
     await run(`mode-${mode}`, () => api.irrigation.setMode(mode));
   };
+
+  const appManaged =
+    data?.zones.filter((z) => z.managedBy === "app").length ?? 0;
 
   const body = (
     <>
@@ -163,11 +244,11 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
             <StatTile
               label="Zones"
               value={String(data.stats.zoneCount)}
-              footnote={data.window}
+              footnote={`${appManaged} app-managed`}
             />
           </div>
 
-          {/* Mode control + weather + global rules */}
+          {/* Mode control + weather + bypass rules */}
           <Card padded>
             <div
               style={{
@@ -207,7 +288,7 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
               )}
             </div>
 
-            <div style={{ marginTop: 14, maxWidth: wide ? 420 : "100%" }}>
+            <div style={{ marginTop: 14, maxWidth: wide ? 320 : "100%" }}>
               <SegmentedControl
                 block
                 value={data.mode}
@@ -216,11 +297,6 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
                 }
                 options={[
                   { value: "off", label: "Off" },
-                  {
-                    value: "shadow",
-                    label: "Shadow",
-                    dot: data.mode === "shadow" ? "var(--text-2)" : undefined,
-                  },
                   {
                     value: "live",
                     label: "Live",
@@ -248,64 +324,70 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
               )}
             </div>
 
-            {/* Global weather rules */}
+            {/* Bypass rules — the forecast thresholds that skip a run */}
             {isAdmin && (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  flexWrap: "wrap",
-                  marginTop: 14,
-                  alignItems: "flex-end",
-                }}
-              >
-                <div style={{ minWidth: 140 }}>
-                  <Select
-                    label="Watering window"
-                    value={data.window}
-                    onChange={(e) =>
-                      void run("window", () =>
-                        api.irrigation.setGlobal({
-                          window: e.target.value as IrrigationWindow,
-                        }),
-                      )
-                    }
-                    options={WINDOWS}
-                  />
+              <div style={{ marginTop: 16 }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--text-1)",
+                    marginBottom: 8,
+                  }}
+                >
+                  Rain-bypass rules
+                  <span
+                    style={{
+                      fontWeight: 400,
+                      color: "var(--text-2)",
+                      marginLeft: 6,
+                    }}
+                  >
+                    — decided 2h before each run on the freshest forecast
+                  </span>
                 </div>
-                <div style={{ minWidth: 120 }}>
-                  <Select
-                    label="Rain-skip (mm)"
-                    value={String(data.globalRainSkipMm)}
-                    onChange={(e) =>
-                      void run("rainmm", () =>
-                        api.irrigation.setGlobal({
-                          globalRainSkipMm: Number(e.target.value),
-                        }),
-                      )
-                    }
-                    options={["2", "3", "5", "8", "10", "15"].map((v) => ({
-                      value: v,
-                      label: `${v} mm`,
-                    }))}
-                  />
-                </div>
-                <div style={{ minWidth: 120 }}>
-                  <Select
-                    label="Rain prob."
-                    value={String(data.rainSkipProbabilityPct)}
-                    onChange={(e) =>
-                      void run("rainprob", () =>
-                        api.irrigation.setGlobal({
-                          rainSkipProbabilityPct: Number(e.target.value),
-                        }),
-                      )
-                    }
-                    options={["40", "50", "60", "70", "80"].map((v) => ({
-                      value: v,
-                      label: `${v}%`,
-                    }))}
-                  />
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    flexWrap: "wrap",
+                    alignItems: "flex-end",
+                  }}
+                >
+                  <div style={{ minWidth: 150 }}>
+                    <Select
+                      label="Skip if rain ≥"
+                      value={String(data.globalRainSkipMm)}
+                      onChange={(e) =>
+                        void run("rainmm", () =>
+                          api.irrigation.setGlobal({
+                            globalRainSkipMm: Number(e.target.value),
+                          }),
+                        )
+                      }
+                      options={["2", "3", "5", "8", "10", "15"].map((v) => ({
+                        value: v,
+                        label: `${v} mm`,
+                      }))}
+                    />
+                  </div>
+                  <div style={{ minWidth: 150 }}>
+                    <Select
+                      label="Skip if chance ≥"
+                      value={String(data.rainSkipProbabilityPct)}
+                      onChange={(e) =>
+                        void run("rainprob", () =>
+                          api.irrigation.setGlobal({
+                            rainSkipProbabilityPct: Number(e.target.value),
+                          }),
+                        )
+                      }
+                      options={["40", "50", "60", "70", "80"].map((v) => ({
+                        value: v,
+                        label: `${v}%`,
+                      }))}
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -321,6 +403,9 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
           </Card>
 
           {err && <div style={errBox}>{err}</div>}
+
+          {/* Forecast outlook + bypass markers */}
+          <ForecastStrip data={data} wide={wide} />
 
           {/* Photo zone grid */}
           {data.zones.length === 0 ? (
@@ -349,18 +434,7 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
                   armed={data.armed}
                   busy={busy === `now-${z.zoneId}`}
                   onOpen={() => setOpenZoneId(z.zoneId)}
-                  onWaterNow={() =>
-                    void run(`now-${z.zoneId}`, () =>
-                      api.irrigation.command(
-                        z.zoneId,
-                        "run",
-                        Math.max(
-                          1,
-                          z.trimmedMinToday || z.scheduledMinToday || 10,
-                        ),
-                      ),
-                    )
-                  }
+                  onWaterNow={() => setWaterZone(z)}
                   onStop={() =>
                     void run(`now-${z.zoneId}`, () =>
                       api.irrigation.command("rb-all", "stop"),
@@ -371,47 +445,11 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
             </div>
           )}
 
-          {/* Activity log */}
-          {data.log.length > 0 && (
-            <Card padded>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
-                Recent decisions
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {data.log.slice(0, 8).map((e, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      fontSize: 11.5,
-                      color: e.ok ? "var(--text-2)" : "var(--grid)",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                  >
-                    <span style={{ opacity: 0.6, flex: "none" }}>
-                      {new Date(e.ts).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                    <Badge tone={e.live ? "solar" : "neutral"}>
-                      {e.live ? "live" : "shadow"}
-                    </Badge>
-                    <span
-                      style={{
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {e.zoneId} · {e.detail}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
+          {/* Weekly schedule overview */}
+          <WeeklyPlanCard zones={data.zones} wide={wide} />
+
+          {/* Irrigation event feed */}
+          <ActivityFeed onViewAll={() => nav("/automations?tab=events")} />
         </>
       )}
     </>
@@ -442,6 +480,19 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
           onClose={() => setOpenZoneId(null)}
           onSaved={() => void refetch()}
           onError={setErr}
+        />
+      )}
+
+      {waterZone && (
+        <WaterNowModal
+          zone={waterZone}
+          onClose={() => setWaterZone(null)}
+          onConfirm={async (mins) => {
+            await run(`now-${waterZone.zoneId}`, () =>
+              api.irrigation.command(waterZone.zoneId, "run", mins),
+            );
+            setWaterZone(null);
+          }}
         />
       )}
 
@@ -493,13 +544,450 @@ function modeBlurb(
 ): string {
   if (mode === "off")
     return "Off — the controller's own program runs. App suppresses nothing.";
-  if (mode === "shadow")
-    return "Shadow — computes + logs the plan, but opens no valves.";
   return liveAllowed
     ? "Live — suppressing the onboard program and firing the weather-trimmed plan."
     : armed
       ? "Live — armed."
       : "Live — but disarmed, so nothing is actuated.";
+}
+
+// ---- Forecast strip ---------------------------------------------------------
+
+function ForecastStrip({
+  data,
+  wide,
+}: {
+  data: IrrigationPlanResponse;
+  wide: boolean;
+}) {
+  if (!data.outlook || data.outlook.length === 0) return null;
+  const todayIso = localIso(new Date());
+  return (
+    <Card padded>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Forecast</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-2)" }}>
+          runs skip when rain ≥ {data.globalRainSkipMm}mm or chance ≥{" "}
+          {data.rainSkipProbabilityPct}%
+        </div>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: wide
+            ? `repeat(${data.outlook.length}, 1fr)`
+            : "repeat(3, 1fr)",
+          gap: 8,
+        }}
+      >
+        {data.outlook.map((d) => {
+          const bypass =
+            d.precipMm >= data.globalRainSkipMm ||
+            d.precipProbabilityPct >= data.rainSkipProbabilityPct;
+          const isToday = d.date === todayIso;
+          return (
+            <div
+              key={d.date}
+              style={{
+                border: `1px solid ${bypass ? "var(--solar)" : "var(--border-1)"}`,
+                borderRadius: "var(--radius-md)",
+                padding: "8px 6px",
+                textAlign: "center",
+                background: bypass ? "var(--solar-wash, var(--surface-3))" : "var(--surface-2)",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: isToday ? "var(--text-1)" : "var(--text-2)",
+                }}
+              >
+                {isToday ? "Today" : weekdayShort(d.date)}
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 15,
+                  fontWeight: 600,
+                  marginTop: 4,
+                }}
+              >
+                {d.precipMm}mm
+              </div>
+              <div
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11.5,
+                  color: "var(--text-2)",
+                }}
+              >
+                {d.precipProbabilityPct}% · {Math.round(d.tMaxC)}°
+              </div>
+              {bypass && (
+                <div style={{ marginTop: 5 }}>
+                  <Badge tone="solar">skip</Badge>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+// ---- Weekly plan overview ---------------------------------------------------
+
+function WeeklyPlanCard({
+  zones,
+  wide,
+}: {
+  zones: IrrigationPlanZone[];
+  wide: boolean;
+}) {
+  const plan = useMemo(() => buildWeeklyPlan(zones), [zones]);
+  const totalRuns = plan.reduce((s, d) => s + d.runs.length, 0);
+  const today = new Date().getDay();
+
+  return (
+    <Card padded>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Weekly plan</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-2)" }}>
+          the full configured program (ceiling — weather trims down)
+        </div>
+      </div>
+
+      {totalRuns === 0 ? (
+        <div style={{ fontSize: 12.5, color: "var(--text-2)" }}>
+          No app-managed watering times scheduled yet. Open a zone to add one.
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: wide ? "repeat(7, 1fr)" : "1fr",
+            gap: wide ? 8 : 6,
+          }}
+        >
+          {plan.map((d) => {
+            const isToday = d.weekday === today;
+            return (
+              <div
+                key={d.weekday}
+                style={{
+                  border: `1px solid ${isToday ? "var(--accent)" : "var(--border-1)"}`,
+                  borderRadius: "var(--radius-md)",
+                  background: "var(--surface-2)",
+                  padding: wide ? "8px 8px 10px" : "8px 10px",
+                  minHeight: wide ? 96 : undefined,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 6,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 11.5,
+                      fontWeight: 700,
+                      color: isToday ? "var(--accent)" : "var(--text-1)",
+                    }}
+                  >
+                    {DOW[d.weekday]}
+                    {isToday ? " · today" : ""}
+                  </span>
+                  {d.runs.length > 0 && (
+                    <span
+                      style={{
+                        fontSize: 10.5,
+                        color: "var(--text-2)",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      {d.totalMin}m
+                    </span>
+                  )}
+                </div>
+                {d.runs.length === 0 ? (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-2)",
+                      opacity: 0.6,
+                    }}
+                  >
+                    —
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    {d.runs.map((r, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          display: "flex",
+                          gap: 6,
+                          fontSize: 11,
+                          alignItems: "baseline",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            color: "var(--text-1)",
+                            flex: "none",
+                          }}
+                        >
+                          {r.startTime}
+                        </span>
+                        <span
+                          style={{
+                            color: "var(--text-2)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            minWidth: 0,
+                            flex: 1,
+                          }}
+                        >
+                          {r.zoneName}
+                        </span>
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            color: "var(--text-2)",
+                            flex: "none",
+                          }}
+                        >
+                          {r.durationMin}m
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ---- Activity feed (unified irrigation events) ------------------------------
+
+function ActivityFeed({ onViewAll }: { onViewAll: () => void }) {
+  const { data } = usePolling(
+    () => api.events.list({ category: ["irrigation"], limit: 12 }),
+    20_000,
+  );
+  const events: EnergyEvent[] = data?.events ?? [];
+
+  return (
+    <Card padded>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>Activity</div>
+        <Button size="sm" variant="ghost" onClick={onViewAll}>
+          View all
+        </Button>
+      </div>
+      {events.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--text-2)" }}>
+          No irrigation events yet. Runs, skips, and sessions appear here.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {events.map((e) => (
+            <div
+              key={e.id}
+              style={{
+                display: "flex",
+                gap: 8,
+                fontSize: 11.5,
+                alignItems: "baseline",
+              }}
+            >
+              <span
+                style={{
+                  opacity: 0.6,
+                  flex: "none",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                {new Date(e.ts).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+              <span
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: 999,
+                  flex: "none",
+                  alignSelf: "center",
+                  background: severityColor(e.severity),
+                }}
+              />
+              <span
+                style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  color: e.ok === false ? "var(--grid)" : "var(--text-1)",
+                }}
+                title={e.detail ?? e.summary}
+              >
+                {e.summary}
+                {e.detail ? (
+                  <span style={{ color: "var(--text-2)" }}> · {e.detail}</span>
+                ) : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function severityColor(sev: EnergyEvent["severity"]): string {
+  switch (sev) {
+    case "critical":
+    case "high":
+      return "var(--grid)";
+    case "medium":
+      return "var(--solar)";
+    default:
+      return "var(--text-2)";
+  }
+}
+
+// ---- Water-now modal (duration slider) --------------------------------------
+
+function WaterNowModal({
+  zone,
+  onClose,
+  onConfirm,
+}: {
+  zone: IrrigationPlanZone;
+  onClose: () => void;
+  onConfirm: (mins: number) => Promise<void>;
+}) {
+  const [mins, setMins] = useState(WATER_NOW_DEFAULT_MIN);
+  const [busy, setBusy] = useState(false);
+  const liters = Math.round(mins * zone.flowLpm);
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Water ${zone.name}`}
+      subtitle={`Station ${zone.station} · manual run`}
+      tone="solar"
+    >
+      <div style={{ padding: "4px 0 2px" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "center",
+            gap: 6,
+            marginBottom: 12,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 40,
+              fontWeight: 700,
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {mins}
+          </span>
+          <span style={{ fontSize: 15, color: "var(--text-2)" }}>min</span>
+          <span
+            style={{
+              fontSize: 13,
+              color: "var(--text-2)",
+              fontFamily: "var(--font-mono)",
+              marginLeft: 8,
+            }}
+          >
+            ≈{liters}L
+          </span>
+        </div>
+        <Slider
+          value={mins}
+          min={1}
+          max={60}
+          step={1}
+          onChange={(v) => setMins(v)}
+          showValue={false}
+        />
+      </div>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          justifyContent: "flex-end",
+          marginTop: 18,
+        }}
+      >
+        <Button variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          loading={busy}
+          onClick={() =>
+            void (async () => {
+              setBusy(true);
+              try {
+                await onConfirm(mins);
+              } finally {
+                setBusy(false);
+              }
+            })()
+          }
+        >
+          Water {mins}m
+        </Button>
+      </div>
+    </Modal>
+  );
 }
 
 // ---- Zone card --------------------------------------------------------------
@@ -521,6 +1009,7 @@ function ZoneCard({
   onWaterNow: () => void;
   onStop: () => void;
 }) {
+  const willSkip = zone.nextRunSkip?.decision === "skip";
   return (
     <Card style={{ overflow: "hidden", padding: 0 }}>
       {/* Photo / placeholder */}
@@ -606,6 +1095,31 @@ function ZoneCard({
                 {r}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* Next-run rain-bypass note */}
+        {willSkip && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginTop: 8,
+              fontSize: 11,
+              color: "var(--solar)",
+            }}
+          >
+            <Icon name="cloud-rain" size={13} />
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Next run skipped — {zone.nextRunSkip?.reason}
+            </span>
           </div>
         )}
 
@@ -696,6 +1210,7 @@ function ZoneEditor({
     zone.wateringTimes,
   );
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // ≈L per minute for this zone (effective flow). Used for the live estimate in the stepper.
@@ -722,11 +1237,15 @@ function ZoneEditor({
   };
 
   const uploadPhoto = async (file: File) => {
+    setUploading(true);
     try {
-      await api.irrigation.uploadPhoto(zone.zoneId, file);
+      const normalized = await normalizePhoto(file);
+      await api.irrigation.uploadPhoto(zone.zoneId, normalized);
       onSaved();
     } catch (e) {
       onError(e instanceof Error ? e.message : "Photo upload failed");
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -784,7 +1303,7 @@ function ZoneEditor({
             <input
               ref={fileRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/*"
               style={{ display: "none" }}
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -796,6 +1315,7 @@ function ZoneEditor({
               <Button
                 size="sm"
                 variant="secondary"
+                loading={uploading}
                 onClick={() => fileRef.current?.click()}
               >
                 {zone.photoUrl ? "Change photo" : "Add photo"}
@@ -1080,6 +1600,18 @@ function TimeCard({
       </div>
     </div>
   );
+}
+
+// ---- helpers ----------------------------------------------------------------
+
+function localIso(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function weekdayShort(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  return DOW[d.getDay()];
 }
 
 // ---- styles -----------------------------------------------------------------

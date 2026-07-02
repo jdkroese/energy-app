@@ -190,7 +190,7 @@ export function logIrrigationAction(
   }
 }
 
-/** Irrigation coordinator decision (plan/fire/trim/skip/suppress/confirm/alert) — an
+/** Irrigation coordinator decision (plan/fire/trim/skip/suppress/confirm/decide/alert) — an
  *  'alert' is an observation; everything else is an action-side note. */
 export function logIrrigationDecision(
   zoneId: string,
@@ -206,7 +206,7 @@ export function logIrrigationDecision(
       category: 'irrigation',
       severity: !ok ? 'high' : isObservation ? 'medium' : 'low',
       summary: `Irrigation ${action} — ${zoneId}`,
-      trigger: { source: 'coordinator', detail: live ? 'live' : 'shadow' },
+      trigger: { source: 'coordinator', detail: live ? 'live' : 'planned' },
       device: zoneId,
       entity: action,
       ok,

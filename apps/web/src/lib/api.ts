@@ -102,7 +102,6 @@ import type {
   RainbirdIntegrationStatus,
   IrrigationPlanResponse,
   IrrigationMode,
-  IrrigationWindow,
   IrrigationZonePatch,
   EnergyEvent,
   EventsListResponse,
@@ -727,7 +726,6 @@ export const api = {
     setGlobal: (patch: {
       globalRainSkipMm?: number;
       rainSkipProbabilityPct?: number;
-      window?: IrrigationWindow;
     }) => putJSON<{ ts: string }>("/api/irrigation/settings", patch),
     setZone: (id: string, patch: IrrigationZonePatch) =>
       putJSON<{ ts: string; zone: unknown }>(

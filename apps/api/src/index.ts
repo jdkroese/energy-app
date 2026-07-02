@@ -1595,12 +1595,11 @@ startControllerCoordinator();
 // radio schedules and never touches the battery/climate control authority.
 startRadioCoordinator();
 
-// Start the Rain Bird irrigation coordinator (Phase 2 smart-watering brain). SHADOW-FIRST:
-// it ships in mode 'off' and only actuates (suppression rain-delay refresh + zone firing)
-// when irrigation.mode === 'live' AND the Devices layer is armed. In 'shadow' it computes +
-// logs the plan but fires nothing. Dead-man's-switch: while healthy + live it holds a rolling
-// 1-day rain-delay to suppress the controller's onboard program; if the mini/LAN fails the
-// delay lapses (≤1 day) and the controller resumes on its own. Never opens a valve on boot.
+// Start the Rain Bird irrigation coordinator (Phase 2 smart-watering brain). It only actuates
+// (suppression rain-delay refresh + zone firing) when irrigation.mode === 'live' AND the Devices
+// layer is armed; mode 'off' is dormant. Dead-man's-switch: while healthy + live it holds a
+// rolling 1-day rain-delay to suppress the controller's onboard program; if the mini/LAN fails
+// the delay lapses (≤1 day) and the controller resumes on its own. Never opens a valve on boot.
 startIrrigationCoordinator();
 
 // Start circuit-breaker usage metering (additive + READ-ONLY: reads the Tuya
