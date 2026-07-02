@@ -28,7 +28,8 @@ import type { ShellContext } from '../components/shell/AppShell';
  * are pinned in the header on every tab, and every write runs through a confirm
  * dialog with always-enforced guardrails.
  *
- * Embeddable: when hosted inside the Automations screen (`embedded`), the host
+ * Embeddable: when hosted inside another screen (`embedded` — today the general
+ * Settings screen hosts the Settings panel at /settings?tab=autopilot), the host
  * renders the page header + tab strip and passes the active `tab` in as a prop,
  * so this component skips its own header/tab bar and drops the page padding.
  * ==========================================================================*/

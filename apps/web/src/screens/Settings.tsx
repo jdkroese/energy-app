@@ -12,10 +12,11 @@ import { InstallSheet } from '../components/InstallSheet';
 import { HomeSceneBuilder } from '../components/home/HomeSceneBuilder';
 import { isStandalone } from '../lib/install';
 import { useAuth } from '../auth/AuthProvider';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { SegmentedControl } from '../components/ui';
 import type { ShellContext } from '../components/shell/AppShell';
 import { settingsTabsFor, type SettingsTabLabel } from '../components/shell/nav';
+import { Autopilot } from './Autopilot';
 // Leaflet (map + CSS, ~150KB) is heavy and only used by this one card — load it
 // on demand so it never enters the main bundle.
 const SiteLocationCard = lazy(() =>
@@ -1902,12 +1903,34 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
 
   const isAdmin = user?.role === 'admin';
   const tabs = settingsTabsFor(isAdmin);
+  // ctx.settingsTab is already deep-link aware (AppShell reads ?tab=… when on /settings),
+  // so it is the single source of truth here.
   const active: SettingsTabLabel = (tabs as readonly string[]).includes(ctx.settingsTab)
     ? (ctx.settingsTab as SettingsTabLabel)
     : 'Connections';
+  // Selecting a tab updates both the shell state and the URL (?tab=<lowercase label>) so
+  // the TopBar title, the strip, and deep-links like /settings?tab=autopilot all agree.
+  // Connections is the default tab, so it keeps the clean /settings URL.
+  const [, setParams] = useSearchParams();
+  const selectTab = (t: string) => {
+    ctx.setSettingsTab(t);
+    setParams((prev) => {
+      const p = new URLSearchParams(prev);
+      if (t === 'Connections') p.delete('tab');
+      else p.set('tab', t.toLowerCase());
+      return p;
+    }, { replace: true });
+  };
 
   const sections = (
     <>
+      {/* Battery Autopilot — arm/mode/kill + manual levers, relocated from
+          /automations?tab=settings. The embedded Autopilot renders only its settings
+          panel (armed strip + Master + Manual controls, or the view-only lock card for
+          non-admins) and keeps its own confirm-dialog + toast plumbing. It polls the
+          control plane only while this tab is mounted. */}
+      {active === 'Autopilot' && <Autopilot ctx={ctx} embedded tab="settings" />}
+
       {active === 'Connections' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <ConnectionsCard connections={s.connections} />
@@ -1996,13 +2019,22 @@ export function Settings({ ctx }: { ctx: ShellContext }) {
   );
 
   // Autopilot-style layout: a full-width SegmentedControl tab bar in the page body,
-  // content beneath. The desktop TopBar supplies the eyebrow + "System" title (so no
+  // content beneath. The desktop TopBar supplies the eyebrow + active-tab title (so no
   // page header on desktop); mobile (no TopBar) renders its own header.
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 820, margin: '0 auto', width: '100%', padding: ctx.desktop ? 0 : '8px 14px 22px' }}>
-      {!ctx.desktop && <ScreenHeader eyebrow="Settings" title="System" padding="4px 2px 0" />}
+      {!ctx.desktop && <ScreenHeader eyebrow="Settings" title={active} padding="4px 2px 0" />}
       {stale && <StaleBanner updatedAt={updatedAt} />}
-      <SegmentedControl block options={tabs} value={active} onChange={ctx.setSettingsTab} />
+      {/* Six tabs (five for non-admins) are too wide for one row at ~360px, so mobile
+          splits into two stacked rows (Automations-style); desktop keeps one block. */}
+      {ctx.desktop ? (
+        <SegmentedControl block options={tabs} value={active} onChange={selectTab} />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <SegmentedControl block options={tabs.slice(0, 3)} value={active} onChange={selectTab} />
+          <SegmentedControl block options={tabs.slice(3)} value={active} onChange={selectTab} />
+        </div>
+      )}
       {sections}
       {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
       {isAdmin && <HomeSceneBuilder open={scenesOpen} onClose={() => setScenesOpen(false)} />}

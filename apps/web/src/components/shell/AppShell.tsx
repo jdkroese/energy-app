@@ -11,7 +11,7 @@ import { MobileAlarmFab } from './NavAlarm';
 import { MobileMiniPlayer } from './NavMiniPlayer';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
-import { settingsTabsFor } from './nav';
+import { settingsTabsFor, settingsTabFromParam } from './nav';
 import { useKiosk } from '../../lib/kiosk';
 import { useAuth } from '../../auth/AuthProvider';
 
@@ -24,7 +24,8 @@ const META: Record<string, { eyebrow: string; title: string }> = {
   '/irrigation': { eyebrow: 'Home', title: 'Irrigation' },
   '/rooms': { eyebrow: 'Home', title: 'Rooms' },
   '/alerts': { eyebrow: 'Alerts', title: 'Notifications' },
-  '/settings': { eyebrow: 'Settings', title: 'System' },
+  // /settings title is dynamic — the TopBar shows the active Settings tab (Reports-style).
+  '/settings': { eyebrow: 'Settings', title: 'Settings' },
   '/scenarios': { eyebrow: 'Scenarios', title: 'Strategy profiles' },
   '/automations': { eyebrow: 'Home', title: 'Automations' },
   '/music': { eyebrow: 'Media', title: 'Music' },
@@ -59,7 +60,16 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
   const { user } = useAuth();
   const settingsTabs = settingsTabsFor(user?.role === 'admin');
   const [settingsTab, setSettingsTab] = useState<string>('Connections');
-  const activeSettingsTab = (settingsTabs as readonly string[]).includes(settingsTab) ? settingsTab : 'Connections';
+  // Deep-links win: /settings?tab=autopilot (lowercase param → tab label) selects the
+  // tab directly; otherwise the last state-selected tab, falling back to Connections.
+  const urlSettingsTab =
+    location.pathname === '/settings' ? settingsTabFromParam(new URLSearchParams(location.search).get('tab')) : null;
+  const activeSettingsTab =
+    urlSettingsTab && (settingsTabs as readonly string[]).includes(urlSettingsTab)
+      ? urlSettingsTab
+      : (settingsTabs as readonly string[]).includes(settingsTab)
+        ? settingsTab
+        : 'Connections';
 
   useEffect(() => {
     try {
@@ -97,7 +107,9 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
                   : range === 'Day'
                     ? 'Today'
                     : `This ${range.toLowerCase()}`
-                : meta.title
+                : location.pathname === '/settings'
+                  ? activeSettingsTab
+                  : meta.title
             }
             actions={
               location.pathname === '/reports' ? (
