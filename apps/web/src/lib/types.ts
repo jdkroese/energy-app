@@ -225,6 +225,9 @@ export interface VoltageSample {
   voltageV: number;
   currentA: number;
   powerW: number;
+  /** Sonnen inverter AC terminal voltage (V), when recorded. Runs higher than the
+   *  breaker meter and governs the over-voltage trip; absent/0 where unavailable. */
+  sonnenUacV?: number;
 }
 
 /** GET /api/voltage/history — 48h grid-voltage history for the Live tile overlay. */

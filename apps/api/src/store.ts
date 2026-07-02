@@ -1391,6 +1391,9 @@ export const DEFAULT_RULES: RuleState[] = [
   { id: "rule-offline", enabled: true },
   { id: "rule-outage", enabled: true },
   { id: "rule-export", enabled: false },
+  // Sonnen sitting idle while the house exports surplus (armed+auto) — usually a grid
+  // over-voltage trip that stops the inverter charging. Debounced in the alert loop.
+  { id: "rule-charge-stall", enabled: true },
   // The voltage rule's enable-state is owned by voltageMonitor.enabled (its own config),
   // but it appears in the rules list so it surfaces in the feed/labels like the others.
   { id: "rule-voltage", enabled: true },

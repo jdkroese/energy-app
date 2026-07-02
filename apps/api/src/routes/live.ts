@@ -238,6 +238,8 @@ export async function getLive(): Promise<unknown> {
       voltageV: breaker.voltageV,
       currentA: breaker.currentA,
       powerW: breaker.powerW,
+      // Sonnen inverter Uac — governs the over-voltage trip; only when it's a real reading.
+      ...(s && s.uacV > 0 ? { sonnenUacV: s.uacV } : {}),
     });
   }
 

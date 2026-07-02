@@ -111,6 +111,7 @@ export interface SonnenStatusRaw {
   SystemStatus?: string; // "OnGrid" / "OffGrid"
   BatteryCharging?: boolean;
   BatteryDischarging?: boolean;
+  Uac?: number; // inverter AC terminal voltage (V) — governs the over-voltage trip
 }
 
 export interface SonnenNormalized {
@@ -122,6 +123,9 @@ export interface SonnenNormalized {
   productionW: number;
   gridFeedInW: number;
   consumptionW: number;
+  /** Inverter AC terminal voltage (V, rounded). 0 when the device omits it. Runs
+   *  higher than the breaker meter and governs the over-voltage protection trip. */
+  uacV: number;
   online: true;
 }
 
@@ -160,6 +164,7 @@ export async function getNormalized(): Promise<SonnenNormalized> {
     productionW: raw.Production_W ?? 0,
     gridFeedInW: raw.GridFeedIn_W ?? 0,
     consumptionW: raw.Consumption_W ?? 0,
+    uacV: Number.isFinite(raw.Uac) ? Math.round(raw.Uac as number) : 0,
     online: true,
   };
 }

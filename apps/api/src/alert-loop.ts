@@ -20,7 +20,9 @@ const RENOTIFY_AFTER_MS = 6 * 3600_000;
 // 75s) while a one-off blip is ignored.
 // rule-voltage is debounced too: grid voltage fluctuates a lot, so require 2 consecutive
 // observations before notifying so a single spike past the band doesn't fire an alert.
-const DEBOUNCE_RULES = new Set(['rule-offline', 'rule-outage', 'rule-voltage']);
+// rule-charge-stall is debounced as well: the coordinator commands every 90s and the Sonnen
+// ramps up, so require 2 consecutive ticks to avoid firing during a normal ramp/cloud transient.
+const DEBOUNCE_RULES = new Set(['rule-offline', 'rule-outage', 'rule-voltage', 'rule-charge-stall']);
 const DEBOUNCE_MIN_STREAK = 2;
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -128,6 +130,15 @@ async function tick(): Promise<void> {
           device: a.device,
           title: 'Grid voltage back to normal',
           body: `Voltage returned to the ${vm.minV}–${vm.maxV} V band`,
+        });
+      }
+      // Charge-stall opts into a recovery message too: the owner wants to know when the
+      // battery starts soaking the surplus again (e.g. the over-voltage trip cleared).
+      if (a.rule === 'rule-charge-stall') {
+        recoveryWatch.set(a.id, {
+          device: a.device,
+          title: 'Sonnen absorbing surplus again',
+          body: 'Battery is charging from the solar surplus again',
         });
       }
     }
