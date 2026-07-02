@@ -1,13 +1,17 @@
-// Kitchen Hub HTTP surface (docs/39): /api/kitchen/* — household prefs, recipe CRUD +
-// URL import, week planner (deterministic suggest + AI request box), staples, order
-// draft with pack-size consolidation, product search proxy + mapping memory, and the
-// admin Mercadona status probe. Mounted behind the global requireAuth in index.ts;
-// mutations are any-household-member by design (docs/39) — only the status probe and
-// Intelligence settings are admin-gated.
+// Kitchen Hub HTTP surface (docs/39 + docs/41 P2): /api/kitchen/* — household prefs,
+// recipe CRUD + URL import, week planner (deterministic suggest + AI request box),
+// staples (+ myregulars seeding), order draft with pack-size consolidation and
+// interactive smart suggestions, CART FILL (spend cap · dry-run · human checkout),
+// delivery-slot + order-status reads, product search proxy + mapping memory, the
+// Mercadona account link (token bootstrap) and the admin status probe. Mounted behind
+// the global requireAuth in index.ts; mutations are any-household-member by design
+// (docs/39) — the status probe, Intelligence settings and account link/unlink/
+// guardrail settings are admin-gated.
 
 import { Router, type Request, type Response } from 'express';
 import { requireAdmin } from '../auth/middleware';
 import * as mercadona from '../connectors/mercadona';
+import * as mercadonaAuth from '../connectors/mercadona-auth';
 import * as claude from '../connectors/claude';
 import { logEvent } from '../events';
 import * as store from '../store';
@@ -18,10 +22,13 @@ import {
   formatQty,
   ingredientKey,
   normalizeQty,
-  packMath,
   suggestWeek,
   weekStartOf,
 } from '../kitchen/engine';
+import { enrichLines } from '../kitchen/enrich';
+import { assertUnderSpendCap, buildCartPlan, SpendCapError, wireLines } from '../kitchen/cart';
+import { applySuggestion, buildSuggestions, isMuted, muteKey } from '../kitchen/suggestions';
+import { syncOrderStatus } from '../kitchen/order-status';
 import { importRecipeFromUrl } from '../kitchen/import';
 import type {
   Cuisine,
@@ -29,7 +36,6 @@ import type {
   MealPlan,
   OrderDraft,
   OrderLine,
-  OrderSuggestion,
   ProductMapEntry,
   Recipe,
   Reminders,
@@ -436,50 +442,21 @@ function stapleDue(s: StaplesItem, now: Date): boolean {
   return days >= CADENCE_DAYS[s.cadence] - 1;
 }
 
-/** Server-side price + pack-math recompute for every line (docs/39: the server owns the math). */
-async function enrichLines(lines: OrderLine[], productMap: Record<string, ProductMapEntry>): Promise<OrderSuggestion[]> {
-  const autoSuggestions: OrderSuggestion[] = [];
-  for (const line of lines) {
-    const map = line.ingredientKey ? productMap[line.ingredientKey] : undefined;
-    if (map && !line.productId) line.productId = map.productId;
-    if (line.productId) {
-      line.needsMapping = false;
-      // Price via the connector (30-min cached). Degrades to null → "price unavailable".
-      const product = await mercadona.getProduct(line.productId);
-      const unitPrice = product?.unitPrice ?? map?.unitPrice ?? null;
-      const pack = product?.packSize
-        ? { qty: product.packSize.qty, unit: product.packSize.unit, display: product.packSizeDisplay ?? `${product.packSize.qty} ${product.packSize.unit}` }
-        : map?.packSize ?? null;
-      if (line.source === 'recipe') {
-        const math = packMath(line.qty, line.unit, line.recipeIds?.length ?? 1, pack);
-        if (math) {
-          line.packsNeeded = math.packsNeeded;
-          line.coverageNote = math.coverageNote;
-          line.priceEur = unitPrice != null ? Math.round(unitPrice * math.packsNeeded * 100) / 100 : null;
-          if ((line.recipeIds?.length ?? 0) > 1) {
-            autoSuggestions.push({
-              id: `auto-${line.id}`,
-              kind: 'pack',
-              text: `${line.label} merged: ${math.coverageNote}`,
-              state: 'confirmed',
-              auto: true,
-            });
-          }
-        } else {
-          // Units incomparable (or pack size unknown) → assume one unit of the product.
-          delete line.packsNeeded;
-          delete line.coverageNote;
-          line.priceEur = unitPrice;
-        }
-      } else {
-        line.priceEur = unitPrice != null ? Math.round(unitPrice * Math.max(1, line.qty) * 100) / 100 : null;
-      }
-    } else if (line.source === 'recipe' || line.source === 'manual' || line.source === 'tablet') {
-      line.needsMapping = true;
-      line.priceEur = null;
-    }
-  }
-  return autoSuggestions;
+// enrichLines (price + pack math) moved to kitchen/enrich.ts in P2 — parallel with a
+// connector-level unreachability short-circuit (docs/41 hardening #2).
+
+/** Regenerate auto (pack-merge) + interactive smart suggestions for the draft. */
+async function rebuildSuggestions(draft: OrderDraft, d: kitchen.KitchenData): Promise<void> {
+  const auto = await enrichLines(draft.lines, d.productMap);
+  const smart = await buildSuggestions({
+    draft,
+    staples: d.staples,
+    history: d.orderHistory,
+    mutes: d.suggestionMutes,
+    now: new Date(),
+    search: (q) => mercadona.searchProducts(q),
+  });
+  draft.suggestions = [...auto, ...smart];
 }
 
 function draftTotals(draft: OrderDraft): void {
@@ -520,14 +497,14 @@ kitchenRouter.put(
           unit: typeof l.unit === 'string' ? l.unit : 'count',
           checked: l.checked !== false,
           ...(l.pantry ? { pantry: true } : {}),
+          ...(l.incomparable ? { incomparable: true } : {}),
           // Client-carried price survives only for unmapped lines (mapped ones are
           // recomputed server-side in enrichLines below).
           ...(typeof l.priceEur === 'number' ? { priceEur: l.priceEur } : {}),
         }));
     }
     if (b.status === 'draft' || b.status === 'submitted') current.status = b.status;
-    const auto = await enrichLines(current.lines, d.productMap);
-    current.suggestions = [...auto, ...current.suggestions.filter((s) => !s.auto)];
+    await rebuildSuggestions(current, d);
     draftTotals(current);
     rhythmFor(current, d.reminders);
     current.updatedAt = ts();
@@ -596,6 +573,9 @@ kitchenRouter.post(
         unit: agg.unit,
         checked: !agg.pantry, // pantry staples pre-unchecked (owner requirement)
         ...(agg.pantry ? { pantry: true } : {}),
+        // Mixed units were aggregated — surface it so the UI can ask for a human look
+        // (docs/41 hardening #3).
+        ...(agg.incomparable ? { incomparable: true } : {}),
       });
     }
 
@@ -628,8 +608,7 @@ kitchenRouter.post(
       totalEur: 0,
       updatedAt: ts(),
     };
-    const auto = await enrichLines(draft.lines, d.productMap);
-    draft.suggestions = auto;
+    await rebuildSuggestions(draft, d);
     draftTotals(draft);
     rhythmFor(draft, d.reminders);
     kitchen.update((k) => {
@@ -674,6 +653,7 @@ kitchenRouter.post(
         date: ts(),
         lines: checked,
         totalEur: k.orderDraft.totalEur,
+        source: 'checklist' as const,
       };
       k.orderHistory.unshift(e);
       k.orderHistory = k.orderHistory.slice(0, 60);
@@ -749,14 +729,319 @@ kitchenRouter.post(
       return k;
     });
     // Re-enrich the current draft so the mapped line prices immediately.
-    const auto = await enrichLines(d.orderDraft.lines, d.productMap);
-    d.orderDraft.suggestions = [...auto, ...d.orderDraft.suggestions.filter((s) => !s.auto)];
+    await rebuildSuggestions(d.orderDraft, d);
     draftTotals(d.orderDraft);
     d.orderDraft.updatedAt = ts();
     kitchen.update((k) => {
       k.orderDraft = d.orderDraft;
     });
     return { ts: ts(), entry, draft: d.orderDraft };
+  }),
+);
+
+// ---- Interactive smart suggestions (P2, docs/41 §3) --------------------------------------------
+
+kitchenRouter.post(
+  '/order/suggestions/:id',
+  wrap(async (req) => {
+    const id = String(req.params.id);
+    const action = String((req.body as { action?: unknown })?.action ?? '');
+    if (action !== 'confirm' && action !== 'ignore') throw badInput("body.action must be 'confirm' or 'ignore'");
+    const d = kitchen.get();
+    const draft = d.orderDraft;
+    const s = draft.suggestions.find((x) => x.id === id && !x.auto);
+    if (!s) throw badInput(`suggestion ${id} not found`);
+
+    if (action === 'ignore') {
+      s.state = 'ignored';
+      const suppressed = kitchen.update((k) => {
+        if (!s.subject) return false;
+        const key = muteKey(s.kind, s.subject);
+        k.suggestionMutes[key] = (k.suggestionMutes[key] ?? 0) + 1;
+        k.orderDraft = draft;
+        return isMuted(k.suggestionMutes, s.kind, s.subject);
+      });
+      return { ts: ts(), draft, suppressed };
+    }
+
+    // Confirm — apply to the draft, then re-enrich so prices/packs follow the change.
+    applySuggestion(draft, s);
+    s.state = 'confirmed';
+    const auto = await enrichLines(draft.lines, d.productMap);
+    draft.suggestions = [...auto, ...draft.suggestions.filter((x) => !x.auto)];
+    draftTotals(draft);
+    draft.updatedAt = ts();
+    kitchen.update((k) => {
+      k.orderDraft = draft;
+    });
+    logEvent({
+      class: 'action',
+      category: 'kitchen',
+      severity: 'low',
+      summary: `Smart suggestion applied (${s.kind}): ${s.text.slice(0, 120)}`,
+      trigger: { source: 'user' },
+      ok: true,
+      data: { kind: s.kind, subject: s.subject },
+    });
+    return { ts: ts(), draft, suppressed: false };
+  }),
+);
+
+// ---- Cart fill (P2, docs/41 §2 — THE headline; never touches checkout) --------------------------
+
+kitchenRouter.post(
+  '/order/fill-cart',
+  wrap(async () => {
+    const cfg = store.get().kitchen.mercadona;
+    const d = kitchen.get();
+    const draft = d.orderDraft;
+    const plan = buildCartPlan(draft.lines);
+    if (!plan.items.length) throw badInput('no checked, product-mapped lines to send — pick products first');
+
+    // Server-side spend cap: refuse over-cap fills regardless of what the client shows.
+    try {
+      assertUnderSpendCap(plan, cfg.spendCapEur);
+    } catch (e) {
+      if (e instanceof SpendCapError) {
+        logEvent({
+          class: 'action',
+          category: 'kitchen',
+          severity: 'medium',
+          summary: `Cart fill REFUSED — ${plan.totalEur.toFixed(2)} € over the ${cfg.spendCapEur} € spend cap`,
+          trigger: { source: 'user' },
+          ok: false,
+          data: { totalEur: plan.totalEur, capEur: cfg.spendCapEur, items: plan.items.length },
+        });
+        throw badInput(e.message);
+      }
+      throw e;
+    }
+
+    const payload = { lines: wireLines(plan) };
+    const dryRun = cfg.dryRun || !cfg.account;
+    if (dryRun) {
+      // Build + validate + log the EXACT batched payload — nothing is sent (docs/41).
+      logEvent({
+        class: 'action',
+        category: 'kitchen',
+        severity: 'low',
+        summary: `Cart fill DRY RUN — ${plan.items.length} products · ${plan.totalEur.toFixed(2)} € (nothing sent)`,
+        trigger: { source: 'user' },
+        ok: true,
+        data: { dryRun: true, payload, totalEur: plan.totalEur, skipped: plan.skipped.length, capEur: cfg.spendCapEur },
+      });
+      return {
+        ts: ts(),
+        ok: true,
+        dryRun: true,
+        linked: Boolean(cfg.account),
+        payload,
+        items: plan.items,
+        skipped: plan.skipped,
+        totalEur: plan.totalEur,
+        unpricedCount: plan.unpricedCount,
+        capEur: cfg.spendCapEur,
+      };
+    }
+
+    // The cart must land on the store we priced against (docs/41 §2).
+    const wh = await mercadonaAuth.checkWarehouseMatch(cfg.warehouse);
+    if (!wh.ok) {
+      throw badInput(
+        `the linked account's delivery address (${wh.postalCode ?? '?'}) shops warehouse "${wh.accountWarehouse}", ` +
+          `but prices here are for "${cfg.warehouse}" — fix the delivery address or the app's postal code first`,
+      );
+    }
+
+    const result = await mercadonaAuth.fillCart(payload.lines);
+    const now = ts();
+    kitchen.update((k) => {
+      k.orderDraft.status = 'filled';
+      k.orderDraft.pushedAt = now;
+      k.orderDraft.updatedAt = now;
+    });
+    logEvent({
+      class: 'action',
+      category: 'kitchen',
+      severity: 'low',
+      summary: `Mercadona cart filled — ${plan.items.length} products · ${plan.totalEur.toFixed(2)} € (human checks out)`,
+      trigger: { source: 'user' },
+      ok: true,
+      data: { items: plan.items.length, totalEur: plan.totalEur, cartLines: result.cartLines, skipped: plan.skipped.length },
+    });
+    return {
+      ts: now,
+      ok: true,
+      dryRun: false,
+      linked: true,
+      added: result.added,
+      cartLines: result.cartLines,
+      items: plan.items,
+      skipped: plan.skipped,
+      totalEur: plan.totalEur,
+      unpricedCount: plan.unpricedCount,
+      capEur: cfg.spendCapEur,
+      cartUrl: 'https://tienda.mercadona.es',
+    };
+  }),
+);
+
+// ---- Delivery slots + order status (P2, docs/41 §4 — reads only; booking stays human) -----------
+
+let slotsCache: { at: number; value: unknown } | null = null;
+const SLOTS_CACHE_MS = 10 * 60_000;
+
+kitchenRouter.get(
+  '/order/slots',
+  wrap(async () => {
+    const cfg = store.get().kitchen.mercadona;
+    if (!cfg.account) return { ts: ts(), linked: false, available: false, slots: [] };
+    if (slotsCache && Date.now() - slotsCache.at < SLOTS_CACHE_MS) return slotsCache.value;
+    const slots = await mercadonaAuth.getSlots();
+    const value = { ts: ts(), linked: true, available: slots !== null, slots: slots ?? [] };
+    if (slots !== null) slotsCache = { at: Date.now(), value };
+    return value;
+  }),
+);
+
+// Poll the account's orders once (Groceries open); the hourly coordinator also calls this.
+kitchenRouter.post(
+  '/order/sync-status',
+  wrap(async () => {
+    const result = await syncOrderStatus();
+    return { ts: ts(), ...result, draft: kitchen.get().orderDraft };
+  }),
+);
+
+// ---- "My regulars" staples seeding (P2, docs/41 §4) ----------------------------------------------
+
+kitchenRouter.get(
+  '/staples/regulars',
+  wrap(async () => {
+    const cfg = store.get().kitchen.mercadona;
+    if (!cfg.account) return { ts: ts(), linked: false, available: false, products: [] };
+    const raw = await mercadonaAuth.getMyRegulars();
+    if (raw === null) return { ts: ts(), linked: true, available: false, products: [] };
+    const existing = new Set(kitchen.get().staples.map((s) => s.productId).filter(Boolean));
+    const products = raw
+      .map((r) => mercadona.normalizeProduct(r as unknown as mercadona.RawProduct))
+      .filter((p) => p.id && p.name)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        photo: p.photo,
+        unitPrice: p.unitPrice,
+        packSizeDisplay: p.packSizeDisplay,
+        alreadyStaple: existing.has(p.id),
+      }));
+    return { ts: ts(), linked: true, available: true, products };
+  }),
+);
+
+kitchenRouter.post(
+  '/staples/import-regulars',
+  wrap((req) => {
+    const b = (req.body ?? {}) as { products?: unknown };
+    if (!Array.isArray(b.products) || !b.products.length) throw badInput('body.products array required');
+    const incoming = (b.products as Array<Partial<{ productId: string; name: string; priceEur: number | null }>>).filter(
+      (p) => p && typeof p.productId === 'string' && p.productId && typeof p.name === 'string' && p.name.trim(),
+    );
+    if (!incoming.length) throw badInput('no valid products in body.products');
+    const added = kitchen.update((d) => {
+      const have = new Set(d.staples.map((s) => s.productId).filter(Boolean));
+      let n = 0;
+      for (const p of incoming) {
+        if (have.has(p.productId!)) continue;
+        d.staples.push({
+          id: kitchen.newId('staple'),
+          productId: p.productId!,
+          name: String(p.name).trim().slice(0, 80),
+          defaultQty: 1,
+          cadence: 'weekly',
+          lastOrderedAt: null,
+          priceEur: typeof p.priceEur === 'number' ? p.priceEur : null,
+        });
+        n++;
+      }
+      return n;
+    });
+    logEvent({
+      class: 'action',
+      category: 'kitchen',
+      severity: 'low',
+      summary: `Staples seeded from Mercadona regulars — ${added} added`,
+      trigger: { source: 'user' },
+      ok: true,
+      data: { added },
+    });
+    return { ts: ts(), ok: true, added, staples: kitchen.get().staples };
+  }),
+);
+
+// ---- Mercadona account link (P2, docs/41 §1 — token bootstrap, Tesla pattern) ---------------------
+
+// Status is readable by any household member (everything sensitive is masked).
+kitchenRouter.get('/mercadona/account', wrap(() => ({ ts: ts(), account: mercadonaAuth.getAccountStatus() })));
+
+kitchenRouter.post(
+  '/mercadona/account/link',
+  requireAdmin,
+  wrap(async (req) => {
+    const b = (req.body ?? {}) as { refreshToken?: unknown; customerId?: unknown };
+    const token = String(b.refreshToken ?? '').trim();
+    if (!token) throw badInput('body.refreshToken required');
+    const result = await mercadonaAuth.linkAccount(token, typeof b.customerId === 'string' ? b.customerId : undefined);
+    // A working link makes real cart fill available: dry-run off (docs/41 §2). The
+    // confirm modal + spend cap still guard every fill; unlink re-arms dry-run.
+    store.update((s) => {
+      s.kitchen.mercadona.dryRun = false;
+    });
+    logEvent({
+      class: 'action',
+      category: 'kitchen',
+      severity: 'low',
+      summary: `Mercadona account linked${result.label ? ` (${result.label})` : ''}`,
+      trigger: { source: 'user' },
+      ok: true,
+      data: { label: result.label }, // NEVER tokens/ids in the event payload
+    });
+    return { ts: ts(), ok: true, account: mercadonaAuth.getAccountStatus() };
+  }),
+);
+
+// Unlink = the kill switch: forgets the tokens and re-arms dry-run.
+kitchenRouter.delete(
+  '/mercadona/account',
+  requireAdmin,
+  wrap(() => {
+    mercadonaAuth.unlinkAccount();
+    slotsCache = null;
+    logEvent({
+      class: 'action',
+      category: 'kitchen',
+      severity: 'low',
+      summary: 'Mercadona account unlinked — cart fill disabled (kill switch)',
+      trigger: { source: 'user' },
+      ok: true,
+    });
+    return { ts: ts(), ok: true, account: mercadonaAuth.getAccountStatus() };
+  }),
+);
+
+// Guardrail settings: spend cap + dry-run toggle (admin).
+kitchenRouter.put(
+  '/mercadona/settings',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { spendCapEur?: unknown; dryRun?: unknown };
+    store.update((s) => {
+      const m = s.kitchen.mercadona;
+      if (typeof b.spendCapEur === 'number' && Number.isFinite(b.spendCapEur)) {
+        m.spendCapEur = Math.max(10, Math.min(2000, Math.round(b.spendCapEur)));
+      }
+      if (typeof b.dryRun === 'boolean') m.dryRun = b.dryRun;
+    });
+    return { ts: ts(), account: mercadonaAuth.getAccountStatus() };
   }),
 );
 

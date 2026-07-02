@@ -130,6 +130,14 @@ import type {
   KitchenIntelligence,
   KitchenIntelligenceResponse,
   MercadonaStatus,
+  MercadonaAccountResponse,
+  MercadonaLinkResponse,
+  FillCartResponse,
+  KitchenSlotsResponse,
+  KitchenSuggestionActionResponse,
+  KitchenOrderSyncResponse,
+  KitchenRegularsResponse,
+  KitchenImportRegularsResponse,
 } from "./types";
 
 /**
@@ -784,6 +792,36 @@ export const api = {
         ingredientKey,
         productId,
       }),
+    /* -- P2 (docs/41): suggestions · cart fill · slots · order status · regulars -- */
+    suggestionAction: (id: string, action: "confirm" | "ignore") =>
+      postJSON<KitchenSuggestionActionResponse>(
+        `/api/kitchen/order/suggestions/${enc(id)}`,
+        { action },
+      ),
+    fillCart: () => postJSON<FillCartResponse>("/api/kitchen/order/fill-cart"),
+    orderSlots: () => getJSON<KitchenSlotsResponse>("/api/kitchen/order/slots"),
+    syncOrderStatus: () =>
+      postJSON<KitchenOrderSyncResponse>("/api/kitchen/order/sync-status"),
+    regulars: () =>
+      getJSON<KitchenRegularsResponse>("/api/kitchen/staples/regulars"),
+    importRegulars: (
+      products: Array<{ productId: string; name: string; priceEur?: number | null }>,
+    ) =>
+      postJSON<KitchenImportRegularsResponse>(
+        "/api/kitchen/staples/import-regulars",
+        { products },
+      ),
+    mercadonaAccount: () =>
+      getJSON<MercadonaAccountResponse>("/api/kitchen/mercadona/account"),
+    linkMercadona: (refreshToken: string, customerId?: string) =>
+      postJSON<MercadonaLinkResponse>("/api/kitchen/mercadona/account/link", {
+        refreshToken,
+        ...(customerId ? { customerId } : {}),
+      }),
+    unlinkMercadona: () =>
+      delJSON<MercadonaLinkResponse>("/api/kitchen/mercadona/account"),
+    setMercadonaSettings: (patch: { spendCapEur?: number; dryRun?: boolean }) =>
+      putJSON<MercadonaAccountResponse>("/api/kitchen/mercadona/settings", patch),
     mercadonaStatus: () =>
       getJSON<MercadonaStatus>("/api/kitchen/mercadona/status"),
     intelligence: () =>

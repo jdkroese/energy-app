@@ -4,6 +4,7 @@
 // the recipe. Fails soft to a manual-entry prefill — never throws to the route.
 
 import * as claude from '../connectors/claude';
+import { guardedFetch, SsrfBlockedError } from './ssrf';
 import type { Cuisine, Recipe, RecipeIngredient, RecipeStep } from './types';
 
 const TIMEOUT_MS = 10_000;
@@ -21,20 +22,23 @@ export interface ImportResult {
 
 // ---- HTML fetch -------------------------------------------------------------------
 
+/** SSRF-guarded HTML fetch (docs/41 hardening #1): the hostname must resolve to a
+ *  public address, and every redirect hop is re-checked (guardedFetch). A blocked
+ *  URL throws SsrfBlockedError so the route can answer with the real reason. */
 async function fetchHtml(url: string): Promise<string | null> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
+    const res = await guardedFetch(url, {
       signal: ctl.signal,
       headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml' },
-      redirect: 'follow',
     });
     if (!res.ok) return null;
     const type = res.headers.get('content-type') ?? '';
     if (!type.includes('html') && !type.includes('text')) return null;
     return await res.text();
-  } catch {
+  } catch (e) {
+    if (e instanceof SsrfBlockedError) throw e;
     return null;
   } finally {
     clearTimeout(t);
@@ -312,7 +316,13 @@ export async function importRecipeFromUrl(url: string): Promise<ImportResult> {
   } catch {
     return { ok: false, prefill: { sourceUrl: url }, detail: 'not a valid URL' };
   }
-  const html = await fetchHtml(parsedUrl.toString());
+  let html: string | null;
+  try {
+    html = await fetchHtml(parsedUrl.toString());
+  } catch (e) {
+    // SSRF guard tripped — tell the user why instead of a generic "unreachable".
+    return { ok: false, prefill: { sourceUrl: url }, detail: (e as Error).message };
+  }
   if (!html) return { ok: false, prefill: { sourceUrl: url }, detail: 'page unreachable' };
 
   // 1) schema.org/Recipe JSON-LD — the deterministic path, works without Intelligence.

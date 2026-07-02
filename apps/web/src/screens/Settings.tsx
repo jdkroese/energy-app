@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaAccountStatus, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
@@ -1836,16 +1836,35 @@ function AlarmPanicCard() {
 }
 
 /**
- * Mercadona (Kitchen Hub, docs/38 + docs/39) — READ-ONLY grocery catalog connector.
- * Admin sees the live status probe (warehouse + category + search check); non-admins a
- * read-only description. No credentials to manage in P1 (cart writes are P2).
+ * Mercadona (Kitchen Hub, docs/38 + docs/39 + docs/41 P2) — grocery catalog connector
+ * (read-only, anonymous) + the OPT-IN account link for cart fill: one-time manual
+ * token bootstrap (login is reCAPTCHA-gated; Tesla-token pattern), then headless
+ * renewal. Guardrails surfaced here: spend cap, dry-run toggle, Unlink kill switch.
+ * The app NEVER checks out — the human picks the slot and pays in Mercadona.
  */
 function MercadonaConnection({ first, open, onToggle }: { first?: boolean; open: boolean; onToggle: () => void }) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [status, setStatus] = useState<MercadonaStatus | null>(null);
+  const [account, setAccount] = useState<MercadonaAccountStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [probed, setProbed] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState('');
+  const [customerDraft, setCustomerDraft] = useState('');
+  const [capDraft, setCapDraft] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const loadAccount = () => {
+    api.kitchen
+      .mercadonaAccount()
+      .then((r) => {
+        setAccount(r.account);
+        setCapDraft(String(r.account.spendCapEur));
+      })
+      .catch(() => setAccount(null));
+  };
 
   const probe = async () => {
     setBusy(true);
@@ -1861,11 +1880,70 @@ function MercadonaConnection({ first, open, onToggle }: { first?: boolean; open:
   // Probe lazily on first expand (it does live Mercadona fetches — don't run on page load).
   useEffect(() => {
     if (open && isAdmin && !probed && !busy) void probe();
+    if (open && !account) loadAccount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const flash = (msg: string) => {
+    setSaved(msg);
+    setTimeout(() => setSaved(null), 2200);
+  };
+
+  const link = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.kitchen.linkMercadona(tokenDraft.trim(), customerDraft.trim() || undefined);
+      setAccount(r.account);
+      setCapDraft(String(r.account.spendCapEur));
+      setTokenDraft('');
+      setCustomerDraft('');
+      setLinkOpen(false);
+      flash('Account linked ✓ — cart fill is live (dry-run off)');
+    } catch (e) {
+      setErr((e as Error).message || 'Link failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unlink = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.kitchen.unlinkMercadona();
+      setAccount(r.account);
+      flash('Unlinked — tokens forgotten, cart fill disabled');
+    } catch (e) {
+      setErr((e as Error).message || 'Unlink failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSettings = async (patch: { spendCapEur?: number; dryRun?: boolean }) => {
+    setErr(null);
+    try {
+      const r = await api.kitchen.setMercadonaSettings(patch);
+      setAccount(r.account);
+      setCapDraft(String(r.account.spendCapEur));
+      flash('Saved ✓');
+    } catch (e) {
+      setErr((e as Error).message || 'Save failed');
+    }
+  };
+
   const ok = Boolean(status?.ok);
-  const statusText = !probed ? 'linked' : busy ? 'checking…' : ok ? `connected · ${status?.warehouse ?? ''}` : 'offline';
+  const accountLinked = Boolean(account?.linked);
+  const statusText = !probed
+    ? accountLinked
+      ? `linked${account?.label ? ` · ${account.label}` : ''}`
+      : 'catalog only'
+    : busy
+      ? 'checking…'
+      : ok
+        ? `connected · ${status?.warehouse ?? ''}${accountLinked ? ' · account linked' : ''}`
+        : 'offline';
   return (
     <ConnectionRow
       first={first}
@@ -1879,9 +1957,10 @@ function MercadonaConnection({ first, open, onToggle }: { first?: boolean; open:
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          Live grocery catalog, prices and photos for the Groceries order builder. Read-only and anonymous —
-          warehouse resolved from the postal code (03730 → Jávea), responses cached 30 min. Cart writes are a later,
-          opt-in step; the app never checks out.
+          Live grocery catalog, prices and photos for the Groceries order builder (read-only, anonymous — warehouse from
+          postal code 03730 → Jávea, responses cached 30 min). Linking your account below additionally enables{' '}
+          <b>cart fill</b>: the app batches your checked list into your real Mercadona cart; <b>you</b> pick the slot and
+          pay — the app never checks out.
         </div>
         {status && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1891,9 +1970,134 @@ function MercadonaConnection({ first, open, onToggle }: { first?: boolean; open:
             <DetailLine label="Probe" value={`${status.products ?? '?'} products in the first category · ${status.latencyMs} ms`} />
           </div>
         )}
+
+        {/* ---- Account (cart fill) — docs/41 §1 ---- */}
+        <div style={{ borderTop: '1px solid var(--border-1)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-3)' }}>
+            Account · cart fill
+          </div>
+          {accountLinked && account ? (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <DetailLine label="Linked as" value={account.label ?? account.customerIdMasked ?? 'Mercadona account'} tone="solar" />
+                <DetailLine
+                  label="Token health"
+                  value={
+                    account.lastRefreshOk === false
+                      ? 'refresh failing — re-link if it persists'
+                      : `ok · rotated ${account.lastRefreshAt ? new Date(account.lastRefreshAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'at link time'}`
+                  }
+                  tone={account.lastRefreshOk === false ? 'grid' : 'solar'}
+                />
+                <DetailLine label="Refresh token" value={account.tokenMasked ?? '—'} />
+              </div>
+              {isAdmin && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <Input
+                      label="Spend cap (€, server-enforced)"
+                      type="number"
+                      value={capDraft}
+                      onChange={(e) => setCapDraft(e.target.value)}
+                      style={{ width: 120 }}
+                    />
+                    <Button size="sm" variant="secondary" onClick={() => void saveSettings({ spendCapEur: Math.round(Number(capDraft) || 150) })}>
+                      Save cap
+                    </Button>
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
+                    <Switch checked={account.dryRun} onChange={(e) => void saveSettings({ dryRun: e.target.checked })} />
+                    Dry-run mode — build &amp; show the payload, send nothing
+                  </label>
+                  <div>
+                    <Button size="sm" variant="danger" loading={busy} onClick={() => void unlink()}>
+                      Unlink account
+                    </Button>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                      The kill switch: forgets the tokens immediately and re-arms dry-run.
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          ) : isAdmin ? (
+            <>
+              {!linkOpen ? (
+                <div>
+                  <Button size="sm" variant="primary" onClick={() => setLinkOpen(true)}>
+                    Link account…
+                  </Button>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                    One-time, ~2 minutes. Until then the Fill-cart button runs in dry-run (payload preview only).
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--surface-2)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                    Mercadona's login has a captcha, so the link is a one-time manual copy (exactly like the Tesla
+                    token). After this the app renews the session by itself.
+                    <ol style={{ margin: '8px 0 0', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <li>
+                        On a computer, open <b>tienda.mercadona.es</b> in Chrome and <b>log in</b> as usual.
+                      </li>
+                      <li>
+                        Press <b>F12</b> to open DevTools → <b>Application</b> tab → left sidebar <b>Local storage</b> →
+                        click <b>https://tienda.mercadona.es</b>.
+                      </li>
+                      <li>
+                        In the list, find the entry whose name contains <b>refresh</b> (e.g. “refresh_token”). Its value
+                        is a long text starting with <b>ey…</b> — double-click it, select all, copy.
+                      </li>
+                      <li>
+                        Can't find it? Alternative: DevTools → <b>Network</b> tab → type <b>tokens</b> in the filter →
+                        reload the page → click the <b>tokens/</b> request → <b>Response</b> tab → copy the{' '}
+                        <b>refresh_token</b> value (without the quotes).
+                      </li>
+                      <li>Paste it below and press Link. Done — you can close DevTools.</li>
+                    </ol>
+                  </div>
+                  <Input
+                    label="Refresh token"
+                    type="password"
+                    placeholder="ey…"
+                    value={tokenDraft}
+                    onChange={(e) => setTokenDraft(e.target.value)}
+                  />
+                  <Input
+                    label="Customer id (optional — usually read from the token)"
+                    placeholder="only if the link asks for it"
+                    value={customerDraft}
+                    onChange={(e) => setCustomerDraft(e.target.value)}
+                  />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Button size="sm" variant="primary" loading={busy} disabled={!tokenDraft.trim()} onClick={() => void link()}>
+                      Link account
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setLinkOpen(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                    The token is validated against Mercadona before anything is stored, lives only in the server's
+                    private state, is never logged and is always shown masked. Guardrails once linked:{' '}
+                    {account?.spendCapEur ?? 150} € spend cap, explicit confirm on every fill, human checkout, Unlink
+                    kill switch.
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+              {accountLinked ? 'Account linked.' : 'No account linked yet.'} Only an admin can manage the Mercadona link.
+            </div>
+          )}
+        </div>
+
+        {err && <div style={{ fontSize: 12, color: 'var(--grid)' }}>{err}</div>}
+        {saved && <div style={{ fontSize: 12, color: 'var(--solar)' }}>{saved}</div>}
         {isAdmin ? (
           <div>
-            <Button size="sm" variant="secondary" loading={busy} onClick={() => void probe()}>Test connection</Button>
+            <Button size="sm" variant="secondary" loading={busy && !linkOpen} onClick={() => void probe()}>Test connection</Button>
           </div>
         ) : (
           <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Managed automatically — nothing to configure here.</div>
