@@ -383,10 +383,28 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
           zone={waterZone}
           onClose={() => setWaterZone(null)}
           onConfirm={async (mins) => {
-            await run(`now-${waterZone.zoneId}`, () =>
-              api.irrigation.command(waterZone.zoneId, "run", mins),
-            );
-            setWaterZone(null);
+            const zone = waterZone;
+            setErr(null);
+            setBusy(`now-${zone.zoneId}`);
+            try {
+              const res = await api.irrigation.command(
+                zone.zoneId,
+                "run",
+                mins,
+              );
+              setWaterZone(null);
+              // The HTTP call can succeed while the command is REJECTED (not armed, not
+              // connected, guardrail) — surface that reason instead of silently doing nothing.
+              if (!res.result.ok) {
+                setErr(`Couldn't start ${zone.name}: ${res.result.detail}`);
+              }
+              await refetch();
+            } catch (e) {
+              setWaterZone(null);
+              setErr(e instanceof Error ? e.message : "Water now failed");
+            } finally {
+              setBusy(null);
+            }
           }}
         />
       )}
@@ -552,9 +570,10 @@ function NowWateringBanner({
   onStop: () => void;
 }) {
   const names = zones.map((z) => z.name).join(", ");
+  const rem = zones[0]?.runningRemainingMin;
   const sub =
     zones.length === 1
-      ? `Station ${zones[0].station} · running`
+      ? `Station ${zones[0].station} · ${rem ? `~${rem}m left` : "running"}`
       : `${zones.length} zones running`;
   return (
     <Card

@@ -1338,6 +1338,7 @@ export interface IrrigationPlanZone {
   station: number;
   available: boolean;
   active: boolean;
+  runningRemainingMin: number | null;
   plantType: IrrigationPlantType;
   emitterType: IrrigationEmitterType;
   flowLpm: number;

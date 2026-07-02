@@ -12,6 +12,7 @@ import * as store from "../store";
 import { resolveRoomId } from "../rooms";
 import {
   issueIrrigation,
+  appRunRemainingMs,
   type IrrigationLever,
 } from "../control/irrigation-execute";
 import * as weather from "../connectors/weather";
@@ -381,6 +382,8 @@ export interface IrrigationPlanZone {
   station: number;
   available: boolean;
   active: boolean;
+  /** Minutes left in the app-initiated run (Water-now / scheduled fire), or null. */
+  runningRemainingMin: number | null;
   plantType: IrrigationPlantType;
   emitterType: IrrigationEmitterType;
   flowLpm: number; // effective (override or emitter default)
@@ -505,12 +508,18 @@ export async function getIrrigationPlan(): Promise<unknown> {
       const st = stationById.get(z.zoneId);
       const trim = trimById.get(z.zoneId);
       const scheduled = scheduledMinForDay(z, weekday);
+      // "Watering now" = the controller reports the station active OR the app itself started a
+      // run that should still be going (covers manual Water-now + scheduled fires even when the
+      // LNK's active-station register doesn't reflect a manual ManuallyRunStation run).
+      const appRemMs = appRunRemainingMs(z.zoneId);
+      const active = (st?.active ?? false) || appRemMs > 0;
       return {
         zoneId: z.zoneId,
         name: z.name,
         station: st?.station ?? (Number(z.zoneId.replace("rb-", "")) || 0),
         available: st?.available ?? false,
-        active: st?.active ?? false,
+        active,
+        runningRemainingMin: appRemMs > 0 ? Math.ceil(appRemMs / 60_000) : null,
         plantType: z.plantType,
         emitterType: z.emitterType,
         flowLpm: flowLpmFor(z),
