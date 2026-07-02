@@ -54,3 +54,10 @@ export function humanizeConnectorError(raw: string): string {
   // Fall back to the (de-prefixed) message, capped so a tile never shows a wall of text.
   return s.length > 90 ? `${s.slice(0, 88)}…` : s || 'Connector reported an error.';
 }
+
+/** Transient upstream failure (cloud 5xx / gateway timeout / dropped socket) that the
+ *  coordinator retries next tick — e.g. Tesla `/site_info -> HTTP 504`. Rendered as a
+ *  quiet amber "retrying", not a red hard fault, and not counted as an alert. */
+export function isTransientUpstream(detail: string): boolean {
+  return /HTTP\s*5\d\d|\b5\d\d\s+(?:bad gateway|gateway|service unavailable|server error)|gateway time-?out|\btimeouts?\b|timed out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|network error|temporarily unavailable/i.test(detail);
+}

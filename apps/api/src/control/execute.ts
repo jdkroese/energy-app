@@ -53,6 +53,15 @@ function key(device: ControlDevice, lever: Lever): string {
   return `${device}:${lever}`;
 }
 
+/** Transient upstream failures — cloud 5xx / gateway timeouts / dropped sockets that the
+ *  coordinator simply retries on the next tick (e.g. Tesla `/site_info -> HTTP 504`). Not a
+ *  standing fault, so they must not set a sticky lastError or alarm on the Status board. */
+export function isTransientUpstream(detail: string): boolean {
+  // Require the HTTP-5xx / gateway / timeout / socket SHAPE so a bare number in a guardrail
+  // message (e.g. "grid import 500W > cap") can't false-match.
+  return /HTTP\s*5\d\d|\b5\d\d\s+(?:bad gateway|gateway|service unavailable|server error)|gateway time-?out|\btimeouts?\b|timed out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|network error|temporarily unavailable/i.test(detail);
+}
+
 function logEntry(
   device: ControlDevice,
   lever: Lever,
@@ -61,12 +70,22 @@ function logEntry(
   reason: string,
   ok: boolean,
   detail: string,
+  opts: { policy?: boolean } = {},
 ): void {
   store.update((s) => {
     s.control.log.push({ ts: Date.now(), device, lever, from, to, reason, ok, detail });
     s.control.log = store.pruneLog(s.control.log);
     s.control.updatedAt = Date.now();
-    if (!ok) s.control.lastError = `${device}.${lever}: ${detail}`;
+    if (ok) {
+      // Self-heal: a successful command proves the link works — clear any stale error so a
+      // one-off blip doesn't red the control plane until the next arm toggle (mirrors PR #171).
+      s.control.lastError = null;
+    } else if (!opts.policy && !isTransientUpstream(detail)) {
+      // Only a genuine, NON-transient failure is a standing error. Policy rejects (not armed,
+      // rate-limited, guardrail) and transient cloud 5xx/timeouts must not set a sticky
+      // lastError — the coordinator retries next tick.
+      s.control.lastError = `${device}.${lever}: ${detail}`;
+    }
   });
   // Shim: mirror into the unified event bus (docs/37 §3) alongside the domain log.
   logBatteryAction(device, lever, from, to, reason, ok, detail);
@@ -78,7 +97,8 @@ function reject(
   from: string | number | null,
   reason: string,
 ): IssueResult {
-  logEntry(device, lever, from, null, reason, false, reason);
+  // Policy/guardrail reject (not armed, rate-limited, freshness) — not a connector fault.
+  logEntry(device, lever, from, null, reason, false, reason, { policy: true });
   return { ok: false, skipped: false, reason, from, to: null };
 }
 
