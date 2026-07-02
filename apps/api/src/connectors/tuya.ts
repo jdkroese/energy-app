@@ -20,7 +20,9 @@
 
 import crypto from 'node:crypto';
 import { cached, invalidate } from '../cache';
+import { logEvent } from '../events';
 import { tuyaConfig } from '../runtime-config';
+import * as store from '../store';
 
 // Datacenter → OpenAPI host. The region MUST match the data center your Tuya app
 // account is registered in (not just where you live). Spain is usually Central
@@ -245,7 +247,68 @@ async function listDevices(): Promise<TuyaDevice[]> {
     if (!r.has_more || !r.last_row_key) break;
     lastRowKey = r.last_row_key;
   }
-  return out;
+  return supplementDroppedDevices(out);
+}
+
+// ---- Fleet self-heal --------------------------------------------------------
+// Tuya's associated-users listing can silently DROP devices that are still
+// registered + online on the project (cloud-link decay: on 2026-07-02 it lost 13
+// at once — dimmers, blinds, plugs, a breaker — which emptied them out of the
+// Lights/Blinds/Rooms surfaces). The per-device endpoint keeps working for them,
+// so every fleet read supplements the bulk list with a direct read of each id
+// the app knows about that's missing. Runs inside the fleet cache, and each
+// direct read carries its own 20s/300s SWR cache, so the recovery adds at most
+// one extra call per missing device per refresh.
+
+/** Ids the app knows: set-up devices, room assignments, light-scene members. */
+function knownDeviceIds(): string[] {
+  try {
+    const s = store.get();
+    const ids = new Set<string>([
+      ...Object.keys(s.deviceOnboarding.configured),
+      ...Object.keys(s.deviceSettings),
+    ]);
+    for (const scene of s.lightScenes) for (const m of scene.members) ids.add(m.lightId);
+    // Only Tuya-shaped ids — deviceSettings also holds climate/irrigation ids ('air-1-1', 'rb-…').
+    return [...ids].filter((id) => /^bf[0-9a-z]{10,}$/.test(id));
+  } catch {
+    return [];
+  }
+}
+
+async function supplementDroppedDevices(fleet: TuyaDevice[]): Promise<TuyaDevice[]> {
+  const have = new Set(fleet.map((d) => d.id));
+  const missing = knownDeviceIds().filter((id) => !have.has(id));
+  if (!missing.length) {
+    lastDropoutKey = '';
+    return fleet;
+  }
+  const recovered = (await Promise.all(missing.map((id) => getDeviceDirect(id)))).filter(
+    (d): d is TuyaDevice => d !== null,
+  );
+  noteFleetDropout(missing, recovered);
+  return [...fleet, ...recovered];
+}
+
+let lastDropoutKey = '';
+
+/** Event-log a dropout once per distinct missing-set (not on every 20s refresh). */
+function noteFleetDropout(missing: string[], recovered: TuyaDevice[]): void {
+  const key = missing.slice().sort().join(',');
+  if (key === lastDropoutKey) return;
+  lastDropoutKey = key;
+  logEvent({
+    class: 'system',
+    category: 'connectivity',
+    severity: 'medium',
+    summary: `Tuya fleet list dropped ${missing.length} known device(s); ${recovered.length} recovered via direct reads`,
+    trigger: { source: 'health-probe', detail: 'associated-users listing missing known devices' },
+    data: {
+      missing,
+      recovered: recovered.map((d) => `${d.name} (${d.id})`),
+      unrecoverable: missing.filter((id) => !recovered.some((d) => d.id === id)),
+    },
+  });
 }
 
 const FLEET_KEY = 'tuya.devices';
