@@ -42,7 +42,7 @@ import {
   type ConnTone,
   type DeviceChip,
 } from '../components/status';
-import { deviceHrefFor, connectorHref, humanizeConnectorError } from '../components/status/resolve';
+import { deviceHrefFor, connectorHref, humanizeConnectorError, isTransientUpstream } from '../components/status/resolve';
 import { Autopilot } from './Autopilot';
 import type { ShellContext } from '../components/shell/AppShell';
 
@@ -401,22 +401,30 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
                 <Icon name="chevron-right" size={13} color="var(--text-3)" />
               </button>
             ))}
-            {rejected.map((l, i) => (
-              <button
-                key={`rej-${l.ts}-${i}`}
-                type="button"
-                className="pwr-press"
-                onClick={() => setDetail({ title: `Rejected · ${l.device} ${l.lever}`, summary: humanizeConnectorError(l.detail || l.reason || ''), raw: l.detail || l.reason, href: '/automations?tab=events', hrefLabel: 'Open Events' })}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--danger-wash)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px', textAlign: 'left', width: '100%', cursor: 'pointer', color: 'inherit', font: 'inherit' }}
-              >
-                <Icon name="x-circle" size={16} color="var(--danger)" />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>Rejected · {l.device} {l.lever}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{humanizeConnectorError(l.detail || l.reason || '')}</div>
-                </div>
-                <Icon name="chevron-right" size={13} color="var(--text-3)" />
-              </button>
-            ))}
+            {rejected.map((l, i) => {
+              // A transient upstream blip (cloud 5xx / timeout, e.g. Tesla /site_info 504)
+              // retries on the next tick — show it as a quiet amber "retrying", not a red
+              // hard rejection, so flaky-cloud noise doesn't alarm.
+              const transient = isTransientUpstream(l.detail || l.reason || '');
+              const tone = transient ? 'var(--grid)' : 'var(--danger)';
+              const wash = transient ? 'var(--grid-wash)' : 'var(--danger-wash)';
+              return (
+                <button
+                  key={`rej-${l.ts}-${i}`}
+                  type="button"
+                  className="pwr-press"
+                  onClick={() => setDetail({ title: `${transient ? 'Retrying' : 'Rejected'} · ${l.device} ${l.lever}`, summary: humanizeConnectorError(l.detail || l.reason || ''), raw: l.detail || l.reason, href: '/automations?tab=events', hrefLabel: 'Open Events' })}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, background: wash, border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px', textAlign: 'left', width: '100%', cursor: 'pointer', color: 'inherit', font: 'inherit' }}
+                >
+                  <Icon name={transient ? 'refresh-cw' : 'x-circle'} size={16} color={tone} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600 }}>{transient ? 'Retrying' : 'Rejected'} · {l.device} {l.lever}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{humanizeConnectorError(l.detail || l.reason || '')}</div>
+                  </div>
+                  <Icon name="chevron-right" size={13} color="var(--text-3)" />
+                </button>
+              );
+            })}
           </div>
         )}
       </Card>
