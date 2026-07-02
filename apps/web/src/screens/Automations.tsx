@@ -88,7 +88,7 @@ function RuleCard({ a, live, devData, canWrite, onSave, onDelete }: {
   const tone = heating ? 'var(--grid)' : 'var(--battery)';
   const wash = heating ? 'var(--grid-wash)' : 'var(--battery-wash)';
 
-  const surplus = live?.climateSurplusKw ?? 0;                 // real rule surplus (kW), may be negative
+  const surplus = live?.climateSurplusKw ?? 0;                 // rule surplus = grid export (kW), ≥ 0
   const batteryDataOk = live?.batteryDataComplete ?? true;
   const startThresholdKw = (p.startThresholdW ?? 3000) / 1000;
   const hasSurplus = batteryDataOk && surplus > startThresholdKw; // the rule would actually act

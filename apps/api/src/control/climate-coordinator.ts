@@ -10,10 +10,10 @@
 //     targetSetpointC. Acts on units enrolled via solarCoolEnabled.
 //   • solar_surplus_preheat — HEATING ONLY: a room BELOW heatRoomFloorC is HEATED toward
 //     heatTargetSetpointC. Acts on units enrolled via solarHeatEnabled.
-// Each runs only while solar surplus exceeds battery intake headroom, stops when surplus
-// clears sustained ≥ surplusClearSec, OR the room reaches target, OR the tariff turns to
-// the exit band (P1). Starts are staggered under the 14 kW cap. The Airzone underfloor
-// fleet (`air-*`) is excluded from both.
+// Each runs only while there is genuine solar surplus (grid export above the rule's start
+// threshold), stops when surplus clears sustained ≥ surplusClearSec, OR the room reaches
+// target, OR the tariff turns to the exit band (P1). Starts are staggered under the 14 kW
+// cap. The Airzone underfloor fleet (`air-*`) is excluded from both.
 //
 // Manual protection is PROVENANCE-BASED and persisted (store.devices.surplusStartedIds):
 // the rule owns ONLY the units it switched on itself. ANY powered-on unit NOT in that set

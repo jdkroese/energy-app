@@ -7,9 +7,10 @@
 // tariff band is active, and OFF otherwise — with hysteresis + an anti-chatter min-cycle.
 //
 // PRIORITY (owner decision): Battery → Car → Cooling. The surplus we reason about is
-// climateSurplusW (PV − houseLoad − battery intake headroom), so the battery soak-export loop
-// is unchanged. The car claims surplus FIRST and RESERVES its draw; the climate coordinator
-// subtracts reservedW before evaluating surplus cooling, so cooling only runs on the leftover.
+// climateSurplusW (grid export — the solar we're actually spilling to the grid), so the battery
+// soak-export loop is unchanged (whatever the batteries absorb is already netted out of export).
+// The car claims surplus FIRST and RESERVES its draw; the climate coordinator subtracts reservedW
+// before evaluating surplus cooling, so cooling only runs on the leftover.
 //
 // SAFE BY DEFAULT: solarP3Only defaults false everywhere ⇒ deploying this changes NOTHING
 // until the owner opts in per breaker. When off, or when not armed+auto, evaluateEvSurplus is a
