@@ -83,7 +83,30 @@ export class SpendCapError extends Error {
   }
 }
 
+export class UnpricedLinesError extends Error {
+  constructor(count: number) {
+    super(
+      `refused: ${count} item${count === 1 ? ' has' : 's have'} no live price, so the spend cap can't judge this fill — ` +
+        'try again when Mercadona is reachable, or send as checklist instead',
+    );
+    this.name = 'UnpricedLinesError';
+  }
+}
+
 /** Server-side spend cap (docs/41 §2): refuse any fill whose known total exceeds the cap. */
 export function assertUnderSpendCap(plan: CartPlan, capEur: number): void {
   if (plan.totalEur > capEur) throw new SpendCapError(plan.totalEur, capEur);
+}
+
+/**
+ * Pre-flight for a REAL (non-dry-run) cart fill. The cap alone is a NO-OP when the
+ * catalog is unreachable — enrich degrades every price to null, the known total sums
+ * to 0 and an effectively uncapped write would sail through (PR #191 review finding
+ * #2). So a real fill additionally requires EVERY item to be priced. Dry-run stays
+ * allowed with unpriced items — it sends nothing, and the payload preview is exactly
+ * how you would debug this state.
+ */
+export function assertRealFillAllowed(plan: CartPlan, capEur: number): void {
+  assertUnderSpendCap(plan, capEur);
+  if (plan.unpricedCount > 0) throw new UnpricedLinesError(plan.unpricedCount);
 }

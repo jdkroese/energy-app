@@ -30,15 +30,66 @@ function isPrivateV4(ip: string): boolean {
   return false;
 }
 
+/**
+ * Expand any textual IPv6 into its 8 numeric groups (handles `::` compression and a
+ * dotted-v4 tail). Returns null when unparseable — callers treat that as unsafe.
+ * Numeric expansion is the load-bearing part: `new URL()` CANONICALIZES literals
+ * (e.g. `[::ffff:192.168.1.165]` → `[::ffff:c0a8:1a5]`) BEFORE the guard sees them,
+ * so string checks against the dotted-mapped spelling alone are bypassable via the
+ * hex-mapped form (PR #191 review finding #1).
+ */
+export function expandV6(ip: string): number[] | null {
+  let s = ip.toLowerCase();
+  // Dotted-v4 tail ("…:a.b.c.d") → two hex groups, so one parser covers both spellings.
+  const v4m = s.match(/^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4m) {
+    const parts = [v4m[2], v4m[3], v4m[4], v4m[5]].map(Number);
+    if (parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return null;
+    s = `${v4m[1]}${((parts[0] << 8) | parts[1]).toString(16)}:${((parts[2] << 8) | parts[3]).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  let groupsStr: string[];
+  if (halves.length === 2) {
+    const missing = 8 - head.length - tail.length;
+    if (missing < 1) return null; // "::" must stand for at least one zero group
+    groupsStr = [...head, ...(Array(missing).fill('0') as string[]), ...tail];
+  } else {
+    groupsStr = head;
+  }
+  if (groupsStr.length !== 8) return null;
+  const out: number[] = [];
+  for (const g of groupsStr) {
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+    out.push(parseInt(g, 16));
+  }
+  return out;
+}
+
+/** The IPv4 embedded at two adjacent groups, as dotted text. */
+function embeddedV4(hi: number, lo: number): string {
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+}
+
 function isPrivateV6(ip: string): boolean {
-  const low = ip.toLowerCase();
-  // IPv4-mapped (::ffff:a.b.c.d) — judge the embedded v4.
-  const mapped = low.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isPrivateV4(mapped[1]);
-  if (low === '::' || low === '::1') return true; // unspecified + loopback
-  if (low.startsWith('fe8') || low.startsWith('fe9') || low.startsWith('fea') || low.startsWith('feb')) return true; // link-local fe80::/10
-  if (low.startsWith('fc') || low.startsWith('fd')) return true; // ULA fc00::/7
-  if (low.startsWith('ff')) return true; // multicast
+  const g = expandV6(ip);
+  if (!g) return true; // unparseable → unsafe
+  // v4-MAPPED ::ffff:0:0/96 (hex OR dotted spelling) and the deprecated v4-compatible
+  // ::/96 (which also covers :: and ::1): judge the embedded v4 with the v4 rules.
+  if (g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0 && (g[5] === 0xffff || g[5] === 0)) {
+    return isPrivateV4(embeddedV4(g[6], g[7]));
+  }
+  // NAT64 well-known prefix 64:ff9b::/96 also embeds a v4.
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) {
+    return isPrivateV4(embeddedV4(g[6], g[7]));
+  }
+  // 6to4 2002::/16 embeds a v4 in groups 1–2.
+  if (g[0] === 0x2002) return isPrivateV4(embeddedV4(g[1], g[2]));
+  if ((g[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
+  if ((g[0] & 0xfe00) === 0xfc00) return true; // ULA fc00::/7
+  if ((g[0] & 0xff00) === 0xff00) return true; // multicast ff00::/8
   return false;
 }
 

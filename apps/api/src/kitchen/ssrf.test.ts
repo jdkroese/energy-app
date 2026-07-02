@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { assertPublicUrl, guardedFetch, isPrivateIp, SsrfBlockedError } from './ssrf';
+import { assertPublicUrl, expandV6, guardedFetch, isPrivateIp, SsrfBlockedError } from './ssrf';
 
 // ---- isPrivateIp matrix -----------------------------------------------------------------
 
@@ -48,6 +48,33 @@ test('garbage that is not an IP is treated as unsafe', () => {
   assert.equal(isPrivateIp('999.1.1.1'), true);
 });
 
+test('HEX-spelled v4-mapped literals are judged by the embedded v4 (URL-canonicalized form)', () => {
+  // new URL() canonicalizes [::ffff:192.168.1.165] to [::ffff:c0a8:1a5] — the hex
+  // spelling MUST be caught too (PR #191 review finding #1).
+  assert.equal(isPrivateIp('::ffff:c0a8:1a5'), true); // 192.168.1.165
+  assert.equal(isPrivateIp('::ffff:7f00:1'), true); // 127.0.0.1
+  assert.equal(isPrivateIp('::ffff:a00:1'), true); // 10.0.0.1
+  assert.equal(isPrivateIp('::ffff:a9fe:a9fe'), true); // 169.254.169.254
+  assert.equal(isPrivateIp('::ffff:6440:1'), true); // 100.64.0.1 (CGNAT)
+  assert.equal(isPrivateIp('::ffff:808:808'), false); // 8.8.8.8 — public stays public
+  // Other v4-embedding prefixes: v4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16.
+  assert.equal(isPrivateIp('::c0a8:101'), true); // v4-compatible 192.168.1.1
+  assert.equal(isPrivateIp('64:ff9b::a00:1'), true); // NAT64 → 10.0.0.1
+  assert.equal(isPrivateIp('64:ff9b::808:808'), false); // NAT64 → 8.8.8.8
+  assert.equal(isPrivateIp('2002:c0a8:101::'), true); // 6to4 → 192.168.1.1
+});
+
+test('expandV6 parses compression + dotted tails and rejects garbage', () => {
+  assert.deepEqual(expandV6('::1'), [0, 0, 0, 0, 0, 0, 0, 1]);
+  assert.deepEqual(expandV6('::ffff:192.168.1.165'), [0, 0, 0, 0, 0, 0xffff, 0xc0a8, 0x01a5]);
+  assert.deepEqual(expandV6('::ffff:c0a8:1a5'), [0, 0, 0, 0, 0, 0xffff, 0xc0a8, 0x01a5]);
+  assert.deepEqual(expandV6('2606:4700:4700::1111'), [0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111]);
+  assert.equal(expandV6('1:2:3:4:5:6:7:8:9'), null);
+  assert.equal(expandV6('1::2::3'), null);
+  assert.equal(expandV6('::ffff:999.1.1.1'), null);
+  assert.equal(expandV6('nonsense'), null);
+});
+
 // ---- assertPublicUrl ---------------------------------------------------------------------
 
 const resolveTo = (ips: string[]) => async () => ips.map((address) => ({ address }));
@@ -56,6 +83,26 @@ test('IP-literal URLs in private ranges are blocked without a DNS call', async (
   for (const host of ['10.1.2.3', '127.0.0.1', '169.254.169.254', '192.168.1.10', '[::1]']) {
     await assert.rejects(assertPublicUrl(new URL(`http://${host}/recipe`)), SsrfBlockedError, host);
   }
+});
+
+test('v4-mapped IPv6 URLs are blocked THROUGH the production path — hex and dotted spellings', async () => {
+  // The load-bearing detail (PR #191 review finding #1): new URL() canonicalizes the
+  // literal BEFORE assertPublicUrl ever sees it (dotted → hex), so these must go
+  // through full URLs, not bare isPrivateIp() strings.
+  for (const url of [
+    'http://[::ffff:c0a8:1a5]/', // 192.168.1.165 (Airzone) — hex-mapped
+    'http://[::ffff:192.168.1.165]/', // same, dotted (canonicalized to hex by URL)
+    'http://[::ffff:127.0.0.1]/',
+    'http://[::ffff:7f00:1]/', // 127.0.0.1 — hex-mapped
+    'http://[::ffff:a00:1]/', // 10.0.0.1 — hex-mapped
+    'http://[::ffff:a9fe:a9fe]/', // 169.254.169.254 (metadata endpoint)
+    'http://[64:ff9b::c0a8:1a5]/', // NAT64-embedded 192.168.1.165
+  ]) {
+    const parsed = new URL(url); // never throws for these — the guard must do the work
+    await assert.rejects(assertPublicUrl(parsed), SsrfBlockedError, `${url} (hostname became "${parsed.hostname}")`);
+  }
+  // A public v4-mapped literal still passes the same path.
+  await assert.doesNotReject(assertPublicUrl(new URL('http://[::ffff:808:808]/')));
 });
 
 test('localhost / .local / .lan / .internal hostnames are blocked', async () => {

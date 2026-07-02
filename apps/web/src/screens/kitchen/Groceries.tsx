@@ -952,6 +952,10 @@ function ConfirmFillModal({
   const dryRun = !account?.linked || Boolean(account?.dryRun);
   const cap = account?.spendCapEur ?? 150;
   const overCap = draft.totalEur > cap;
+  // Mirror of the server rule: a REAL fill refuses when any item has no live price
+  // (the spend cap can't judge what it can't see); dry-run stays available.
+  const unpricedFillable = draft.lines.filter((l) => l.checked && l.productId && l.priceEur == null).length;
+  const blockedUnpriced = !dryRun && unpricedFillable > 0;
   return (
     <Modal
       open
@@ -967,7 +971,13 @@ function ConfirmFillModal({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" loading={busy} disabled={overCap && !dryRun} onClick={onConfirm} iconLeft={<Icon name={dryRun ? 'flask-conical' : 'shopping-basket'} size={14} />}>
+          <Button
+            variant="primary"
+            loading={busy}
+            disabled={(overCap || blockedUnpriced) && !dryRun}
+            onClick={onConfirm}
+            iconLeft={<Icon name={dryRun ? 'flask-conical' : 'shopping-basket'} size={14} />}
+          >
             {dryRun ? 'Build the payload' : `Fill cart · ${fmtEur(draft.totalEur)}`}
           </Button>
         </>
@@ -999,6 +1009,13 @@ function ConfirmFillModal({
           <div style={{ background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--grid)', fontSize: 12 }}>
             {fmtEur(draft.totalEur)} is over the {cap} € spend cap — the server will refuse. Raise the cap in Settings ▸
             Connections ▸ Mercadona or uncheck some lines.
+          </div>
+        )}
+        {blockedUnpriced && (
+          <div style={{ background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--grid)', fontSize: 12 }}>
+            {unpricedFillable} item{unpricedFillable > 1 ? 's have' : ' has'} no live price (Mercadona unreachable), so the
+            spend cap can’t judge this fill — the server refuses real fills until prices are back. Try again later, or send
+            as checklist.
           </div>
         )}
         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
