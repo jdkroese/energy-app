@@ -224,15 +224,15 @@ const CSS = `
 .pwr2__kw{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13px; font-weight:500; color:var(--_c, var(--text-1)); line-height:1; }
 .pwr2__kw small{ font-size:8px; color:var(--text-3); }
 .pwr2__sub{ font-family:var(--font-mono); font-size:9px; color:var(--text-3); line-height:1.1; }
-/* Per-source solar split (2× Sungrow + Tesla). A widened node fits the name+kW rows;
-   a tight gap/line-height keeps the 3 rows from pushing the node past the diagram top. */
-.pwr2__node--wide{ width:128px; gap:2px; }
-.pwr2__brk{ display:flex; flex-direction:column; gap:0; width:100%; margin-top:1px; }
-.pwr2__brk-row{ display:flex; justify-content:space-between; align-items:baseline; gap:8px;
-  font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:9px; line-height:1.15; }
-.pwr2__brk-label{ color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
-.pwr2__brk-val{ color:var(--text-2); flex:none; }
-.pwr2__brk-val::after{ content:" kW"; font-size:.8em; color:var(--text-3); }
+/* Per-source solar split (2× Sungrow + Tesla): a taller canvas with a row of
+   small inverter nodes feeding the Solar production node. */
+.pwr2--src{ aspect-ratio:0.9/1; min-height:400px; }
+.pwr2__node--src{ width:70px; gap:2px; }
+.pwr2__node--src .pwr2__chip{ width:34px; height:34px; border-radius:11px; }
+.pwr2__node--src .pwr2__chip svg{ width:15px; height:15px; }
+.pwr2__node--src .pwr2__name{ font-size:8px; }
+.pwr2__node--src .pwr2__kw{ font-size:11px; }
+.pwr2__node--src .pwr2__kw small{ font-size:7px; }
 .pwr2__hub{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:52px; height:52px; border-radius:50%;
   display:flex; align-items:center; justify-content:center; color:var(--accent);
   background:radial-gradient(circle at 50% 35%, var(--surface-3), var(--surface-1)); border:1px solid var(--border-3); box-shadow:var(--glow-soft, 0 0 20px rgba(46,230,160,.18)); }
@@ -247,10 +247,15 @@ const CSS = `
 .pwr2--lg .pwr2__kw{ font-size:14px; }
 .pwr2--lg .pwr2__kw small{ font-size:9px; }
 .pwr2--lg .pwr2__sub{ font-size:10px; }
-.pwr2--lg .pwr2__node--wide{ width:150px; }
-.pwr2--lg .pwr2__brk-row{ font-size:10px; }
 .pwr2--lg .pwr2__hub{ width:60px; height:60px; }
 .pwr2--lg .pwr2__hub svg{ width:24px; height:24px; }
+/* desktop, sources visible: taller canvas + slightly larger inverter nodes */
+.pwr2--lg.pwr2--src{ aspect-ratio:auto; min-height:400px; }
+.pwr2--lg .pwr2__node--src{ width:88px; }
+.pwr2--lg .pwr2__node--src .pwr2__chip{ width:40px; height:40px; border-radius:13px; }
+.pwr2--lg .pwr2__node--src .pwr2__chip svg{ width:18px; height:18px; }
+.pwr2--lg .pwr2__node--src .pwr2__name{ font-size:9px; }
+.pwr2--lg .pwr2__node--src .pwr2__kw{ font-size:12px; }
 
 /* ---- Input ---- */
 .pwr-input-field{ display:flex; flex-direction:column; gap:6px; }
