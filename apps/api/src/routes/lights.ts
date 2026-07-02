@@ -189,7 +189,8 @@ export async function bulkCommandLights(ids: string[], lever: LightLever, value:
 export async function getTuyaIntegration(): Promise<unknown> {
   const connected = tuya.isConfigured();
   const t = store.get().integrations.tuya;
-  const ignored = new Set(store.get().deviceOnboarding.ignored);
+  const onboarding = store.get().deviceOnboarding;
+  const ignored = new Set(onboarding.ignored);
   let deviceCount = 0;
   let lightCount = 0;
   let needsSetupCount = 0;
@@ -200,9 +201,11 @@ export async function getTuyaIntegration(): Promise<unknown> {
       const all = await tuya.getDevices();
       deviceCount = all.length;
       lightCount = all.filter((d) => lights.isLight(d)).length;
-      // "Needs setup" = paired devices no shipped screen renders, minus ignored.
+      // "Needs setup" = paired devices no shipped screen renders, minus ignored AND minus
+      // already-set-up devices — the same membership as the Discovered inbox, so the
+      // Connections card's "N devices not yet set up" matches what the inbox shows.
       needsSetupCount = all.filter(
-        (d) => !lights.isLight(d) && !isBlind(d) && !ignored.has(d.id),
+        (d) => !lights.isLight(d) && !isBlind(d) && !ignored.has(d.id) && !onboarding.configured[d.id],
       ).length;
       categories = tuya.categorize(all);
     } catch (e) {
