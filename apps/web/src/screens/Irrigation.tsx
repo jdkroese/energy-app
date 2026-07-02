@@ -38,6 +38,7 @@ import {
   EmptyState,
   LoadingState,
   StatTile,
+  StatusDot,
 } from "../components/ui";
 import { MobileHeader, Avatar, StaleBanner } from "./_shared";
 
@@ -193,6 +194,10 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
 
   const appManaged =
     data?.zones.filter((z) => z.managedBy === "app").length ?? 0;
+  const activeZones = useMemo(
+    () => data?.zones.filter((z) => z.active) ?? [],
+    [data],
+  );
 
   const body = (
     <>
@@ -213,6 +218,21 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
 
       {data && data.connected && (
         <>
+          {/* Live "watering now" banner — shown whenever ANY zone is running (scheduled
+              or a manual Water-now). The single, unmissable in-progress indicator. */}
+          {activeZones.length > 0 && (
+            <NowWateringBanner
+              zones={activeZones}
+              isAdmin={isAdmin}
+              busy={busy === "stop-all"}
+              onStop={() =>
+                void run("stop-all", () =>
+                  api.irrigation.command("rb-all", "stop"),
+                )
+              }
+            />
+          )}
+
           {/* Header stats */}
           <div
             style={{
@@ -551,6 +571,81 @@ function modeBlurb(
     : armed
       ? "Live — armed."
       : "Live — but disarmed, so nothing is actuated.";
+}
+
+// ---- Live "watering now" banner ---------------------------------------------
+
+function NowWateringBanner({
+  zones,
+  isAdmin,
+  busy,
+  onStop,
+}: {
+  zones: IrrigationPlanZone[];
+  isAdmin: boolean;
+  busy: boolean;
+  onStop: () => void;
+}) {
+  const names = zones.map((z) => z.name).join(", ");
+  const sub =
+    zones.length === 1
+      ? `Station ${zones[0].station} · running`
+      : `${zones.length} zones running`;
+  return (
+    <Card
+      padded
+      style={{
+        border: "1px solid var(--solar)",
+        background: "var(--solar-wash, var(--surface-2))",
+        boxShadow: "0 0 0 1px var(--solar) inset, 0 6px 24px -12px var(--solar)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <StatusDot tone="solar" live />
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 700,
+              color: "var(--solar)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <Icon name="droplets" size={16} />
+            Watering now — {names}
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--text-2)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {sub}
+          </div>
+        </div>
+        {isAdmin && (
+          <Button
+            size="sm"
+            variant="danger"
+            loading={busy}
+            onClick={onStop}
+          >
+            Stop
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
 }
 
 // ---- Forecast strip ---------------------------------------------------------
@@ -1013,7 +1108,19 @@ function ZoneCard({
 }) {
   const willSkip = zone.nextRunSkip?.decision === "skip";
   return (
-    <Card style={{ overflow: "hidden", padding: 0 }}>
+    <Card
+      style={{
+        overflow: "hidden",
+        padding: 0,
+        ...(zone.active
+          ? {
+              border: "1px solid var(--solar)",
+              boxShadow:
+                "0 0 0 1px var(--solar) inset, 0 6px 22px -12px var(--solar)",
+            }
+          : {}),
+      }}
+    >
       {/* Photo / placeholder */}
       <button
         onClick={onOpen}
@@ -1045,8 +1152,30 @@ function ZoneCard({
           </span>
         )}
         {zone.active && (
-          <span style={{ position: "absolute", top: 8, left: 8 }}>
-            <Badge tone="solar">Watering</Badge>
+          <span
+            style={{
+              position: "absolute",
+              top: 8,
+              left: 8,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "3px 9px 3px 8px",
+              borderRadius: 999,
+              background: "var(--surface-1, rgba(0,0,0,0.55))",
+              border: "1px solid var(--solar)",
+            }}
+          >
+            <StatusDot tone="solar" live />
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: "var(--solar)",
+              }}
+            >
+              Watering
+            </span>
           </span>
         )}
         {zone.savedPctToday > 0 && !zone.active && (
