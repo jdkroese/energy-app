@@ -29,7 +29,7 @@ const FILTERS: { value: 'all' | DeviceType; label: string }[] = [
   { value: 'lighting', label: 'Light' },
   { value: 'blinds', label: 'Blinds' },
   { value: 'circuit', label: 'Circ' },
-  { value: 'speakers', label: 'Radio' },
+  { value: 'speakers', label: 'Music' },
 ];
 
 /** Minimal schedulable-unit shape — climate devices and Tuya blinds both map to this. */
@@ -205,7 +205,7 @@ export function SchedulesPanel({ ctx }: { ctx: ShellContext }) {
         <LightSchedulesSection lights={lights} scenes={lightScenes} canControl={!!canConfig} heading="Lighting" icon="lightbulb" iconColor="var(--home)" />
       )}
 
-      {/* Radio — Sonos internet-radio schedules (play a saved station on chosen speakers). */}
+      {/* Music — radio station OR Spotify context schedules (play on chosen speakers). */}
       {(filter === 'all' || filter === 'speakers') && speakersData?.enabled && (
         <RadioSchedulesSection speakers={speakers} canControl={!!canConfig} wide={wide} />
       )}

@@ -5,6 +5,7 @@ import type {
   RadioStation, RadioFavoritesResponse, RadioSearchResult, SonosFavoritesResponse,
   RadioSchedule, RadioSchedulesResponse, SonosSpeaker,
   RadioNowPlaying, RadioNowPlayingResponse,
+  SpotifyScheduleTarget, SpotifyBrowseItem, SpotifyBrowseResponse, SpotifyStatus,
 } from '../../lib/types';
 import { RADIO_FAVORITE_SLOTS } from '../../lib/types';
 import { Card, Icon, Button, Switch, Slider, SegmentedControl, Input, Select } from '../ui';
@@ -552,41 +553,147 @@ function EditStationModal({ station, wide, onClose, onSaved }: {
 }
 
 /* ============================================================================
- * Radio schedules (mirrors the light-schedule model)
+ * Music schedules — play a radio station OR a Spotify context on a timer. One
+ * unified editor with a source toggle (Radio | Spotify). Mirrors the light-
+ * schedule model; responsive across desktop + mobile.
  * ==========================================================================*/
 function summarize(s: RadioSchedule, stations: RadioStation[]): string {
   const days = s.days.length === 7 ? 'Every day' : s.days.length === 0 ? 'No days' : s.days.slice().sort().map((d) => DOW[d]).join(' ');
-  const tgt = stations.find((x) => x.id === s.stationId)?.name ?? 'station';
+  const tgt = s.source === 'spotify'
+    ? (s.spotify?.contextName ?? 'Spotify')
+    : (stations.find((x) => x.id === s.stationId)?.name ?? 'station');
   const win = s.offTime ? `${s.onTime}–${s.offTime}` : `at ${s.onTime}`;
   const where = s.speakerIds.length ? `${s.speakerIds.length} speaker${s.speakerIds.length === 1 ? '' : 's'}` : 'all speakers';
   return `${days} · ${win} · ${tgt} · ${where}`;
 }
 
-function RadioScheduleEditor({ stations, speakers, sched, wide, onClose, onSaved }: {
+/* ---- Spotify context picker (reuses the Phase-1 browse endpoints) --------- */
+function SpotifyContextPicker({ selected, onPick }: {
+  selected: SpotifyScheduleTarget | null; onPick: (t: SpotifyScheduleTarget) => void;
+}) {
+  const [tab, setTab] = useState<'playlists' | 'liked' | 'search'>('playlists');
+  const [q, setQ] = useState('');
+  const [searchItems, setSearchItems] = useState<SpotifyBrowseItem[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchRan, setSearchRan] = useState(false);
+  const { data: status } = usePolling<SpotifyStatus>(api.spotify.status, 0);
+  const { data: playlists, loading: plLoading } = usePolling<SpotifyBrowseResponse>(api.spotify.playlists, 0);
+  const { data: liked, loading: likedLoading } = usePolling<SpotifyBrowseResponse>(api.spotify.liked, 0);
+
+  const runSearch = async () => {
+    const term = q.trim();
+    if (!term) return;
+    setSearching(true); setSearchRan(true);
+    try { const r = await api.spotify.search(term); setSearchItems(r.items); }
+    catch { setSearchItems([]); } finally { setSearching(false); }
+  };
+
+  const toTarget = (it: SpotifyBrowseItem): SpotifyScheduleTarget => ({
+    contextUri: it.uri,
+    contextName: it.name,
+    contextImage: it.image,
+    kind: it.kind === 'playlist' ? 'playlist' : it.kind === 'liked' ? 'liked' : 'track',
+  });
+
+  if (!status?.connected) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-2)', background: 'var(--surface-2)' }}>
+        <Icon name="music" size={15} color="var(--solar)" />
+        <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Spotify isn't connected. Connect it in <strong style={{ color: 'var(--text-1)' }}>Settings → Connections → Spotify</strong> to schedule a playlist. Premium is required for scheduled playback.
+        </div>
+      </div>
+    );
+  }
+
+  const list = tab === 'playlists' ? (playlists?.items ?? []) : tab === 'liked' ? (liked?.items ?? []) : searchItems;
+  const listLoading = (tab === 'playlists' && plLoading && !playlists) || (tab === 'liked' && likedLoading && !liked);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {selected && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-solar)', background: 'var(--solar-wash)' }}>
+          <StationLogo logo={selected.contextImage} size={30} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selected.contextName}</div>
+            <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'capitalize' }}>{selected.kind}</div>
+          </div>
+          <Icon name="check" size={16} color="var(--solar)" />
+        </div>
+      )}
+      <SegmentedControl block value={tab} options={[
+        { value: 'playlists', label: 'Playlists' },
+        { value: 'liked', label: 'Liked' },
+        { value: 'search', label: 'Search' },
+      ]} onChange={(v) => setTab(v as 'playlists' | 'liked' | 'search')} />
+      {tab === 'search' && (
+        <form onSubmit={(e) => { e.preventDefault(); void runSearch(); }} style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}><Input placeholder="Search tracks & playlists…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+          <Button size="md" variant="primary" type="submit" loading={searching}>Search</Button>
+        </form>
+      )}
+      {listLoading ? (
+        <div style={{ fontSize: 12.5, color: 'var(--text-3)', padding: '6px 2px' }}>Loading…</div>
+      ) : list.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: 'var(--text-3)', padding: '6px 2px' }}>
+          {tab === 'search' ? (searchRan && !searching ? 'No results.' : 'Search for a track or playlist.') : `No ${tab} found.`}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', maxHeight: 260, overflowY: 'auto' }}>
+          {list.map((it, i) => {
+            const on = selected?.contextUri === it.uri;
+            return (
+              <button key={`${it.uri}-${i}`} type="button" onClick={() => onPick(toTarget(it))} style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', cursor: 'pointer', textAlign: 'left',
+                border: 'none', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)',
+                background: on ? 'var(--solar-wash)' : 'transparent', color: 'var(--text-1)',
+              }}>
+                <StationLogo logo={it.image} size={30} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>
+                  <div style={{ fontSize: 10.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.subtitle}</div>
+                </div>
+                {on && <Icon name="check" size={15} color="var(--solar)" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MusicScheduleEditor({ stations, speakers, sched, wide, onClose, onSaved }: {
   stations: RadioStation[]; speakers: SonosSpeaker[]; sched: RadioSchedule | null; wide: boolean; onClose: () => void; onSaved: () => void;
 }) {
+  const [source, setSource] = useState<'radio' | 'spotify'>(sched?.source ?? 'radio');
   const [name, setName] = useState(sched?.name ?? '');
   const [days, setDays] = useState<number[]>(sched?.days ?? [1, 2, 3, 4, 5]);
   const [onTime, setOnTime] = useState(sched?.onTime ?? '08:00');
   const [autoOff, setAutoOff] = useState<boolean>(!!sched?.offTime);
   const [offTime, setOffTime] = useState(sched?.offTime ?? '09:00');
   const [stationId, setStationId] = useState(sched?.stationId ?? stations[0]?.id ?? '');
+  const [spotifyTarget, setSpotifyTarget] = useState<SpotifyScheduleTarget | null>(sched?.spotify ?? null);
   const [speakerIds, setSpeakerIds] = useState<string[]>(sched?.speakerIds ?? []);
   const [vol, setVol] = useState(sched?.volumePct ?? 25);
   const [busy, setBusy] = useState(false);
 
   const toggleDay = (d: number) => setDays((p) => (p.includes(d) ? p.filter((x) => x !== d) : [...p, d].sort()));
   const toggleSpeaker = (id: string) => setSpeakerIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
-  const valid = days.length > 0 && !!stationId;
+  const targetValid = source === 'radio' ? !!stationId : !!spotifyTarget?.contextUri;
+  const valid = days.length > 0 && targetValid;
 
   const save = async () => {
     setBusy(true);
     try {
       const payload = {
-        name: name.trim() || 'Radio schedule',
+        name: name.trim() || 'Music schedule',
         days, onTime,
         offTime: autoOff ? offTime : null,
-        stationId, speakerIds, volumePct: vol,
+        source,
+        stationId: source === 'radio' ? stationId : '',
+        spotify: source === 'spotify' ? spotifyTarget : null,
+        speakerIds, volumePct: vol,
         enabled: sched?.enabled ?? true,
       };
       if (sched) await api.radio.updateSchedule(sched.id, payload);
@@ -597,14 +704,38 @@ function RadioScheduleEditor({ stations, speakers, sched, wide, onClose, onSaved
   const remove = async () => { if (!sched) return; setBusy(true); try { await api.radio.deleteSchedule(sched.id); onSaved(); onClose(); } catch { setBusy(false); } };
 
   return (
-    <Overlay title={sched ? 'Edit radio schedule' : 'New radio schedule'} icon="calendar-clock" onClose={onClose} wide={wide} footer={
+    <Overlay title={sched ? 'Edit music schedule' : 'New music schedule'} icon="calendar-clock" onClose={onClose} wide={wide} footer={
       <>
         {sched && <Button size="sm" variant="ghost" onClick={() => void remove()} style={{ marginRight: 'auto', color: 'var(--danger)' }}>Delete</Button>}
         <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
         <Button size="sm" variant="primary" loading={busy} disabled={!valid} onClick={() => void save()}>Save</Button>
       </>
     }>
-      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Morning radio" />
+      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Morning music" />
+
+      {/* Source selector — Radio | Spotify */}
+      <div>
+        <div className="pwr-eyebrow" style={{ marginBottom: 7 }}>Source</div>
+        <SegmentedControl block value={source} options={[
+          { value: 'radio', label: 'Radio' },
+          { value: 'spotify', label: 'Spotify' },
+        ]} onChange={(v) => setSource(v as 'radio' | 'spotify')} />
+      </div>
+
+      {/* Per-source target */}
+      {source === 'radio' ? (
+        stations.length ? (
+          <Select label="Station" value={stationId} onChange={(e) => setStationId(e.target.value)} options={stations.map((s) => ({ value: s.id, label: s.name }))} />
+        ) : (
+          <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>Save a favourite station first, then schedule it.</div>
+        )
+      ) : (
+        <div>
+          <div className="pwr-eyebrow" style={{ marginBottom: 7 }}>Spotify playlist / liked songs</div>
+          <SpotifyContextPicker selected={spotifyTarget} onPick={setSpotifyTarget} />
+        </div>
+      )}
+
       <div>
         <div className="pwr-eyebrow" style={{ marginBottom: 7 }}>Days</div>
         <DaysPicker days={days} onToggle={toggleDay} />
@@ -622,11 +753,6 @@ function RadioScheduleEditor({ stations, speakers, sched, wide, onClose, onSaved
           {autoOff && <Input type="time" value={offTime} onChange={(e) => setOffTime(e.target.value)} />}
         </div>
       </div>
-      {stations.length ? (
-        <Select label="Station" value={stationId} onChange={(e) => setStationId(e.target.value)} options={stations.map((s) => ({ value: s.id, label: s.name }))} />
-      ) : (
-        <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>Save a favourite station first, then schedule it.</div>
-      )}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
           <span className="pwr-eyebrow">Speakers · {speakerIds.length ? `${speakerIds.length} selected` : 'all'}</span>
@@ -661,17 +787,21 @@ export function RadioSchedulesSection({ speakers, canControl, wide }: {
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <Icon name="calendar-clock" size={16} color="var(--solar)" />
-        <div style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>Radio schedules</div>
-        {canControl && <Button size="sm" variant="secondary" iconLeft={<Icon name="plus" size={14} />} disabled={stations.length === 0} onClick={() => setEditing(null)}>New</Button>}
+        <div style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>Music schedules</div>
+        {/* New is always available — a Spotify schedule needs no saved radio station. */}
+        {canControl && <Button size="sm" variant="secondary" iconLeft={<Icon name="plus" size={14} />} onClick={() => setEditing(null)}>New</Button>}
       </div>
       {schedules.length === 0 ? (
         <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-          {stations.length === 0 ? 'Save a favourite station first to schedule radio.' : `No radio schedules yet. ${canControl ? 'Play a station on a timer.' : ''}`}
+          No music schedules yet.{canControl ? ' Play a radio station or a Spotify playlist on a timer.' : ''}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {schedules.map((s, i) => (
             <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 2px', borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
+              <span style={{ width: 30, height: 30, borderRadius: 8, flex: 'none', display: 'grid', placeItems: 'center', background: 'var(--surface-3)', color: 'var(--solar)' }} title={s.source === 'spotify' ? 'Spotify' : 'Radio'}>
+                <Icon name={s.source === 'spotify' ? 'music' : 'radio'} size={15} />
+              </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>{summarize(s, stations)}</div>
@@ -684,8 +814,11 @@ export function RadioSchedulesSection({ speakers, canControl, wide }: {
         </div>
       )}
       {editing !== undefined && (
-        <RadioScheduleEditor stations={stations} speakers={speakers} sched={editing} wide={wide} onClose={() => setEditing(undefined)} onSaved={refetch} />
+        <MusicScheduleEditor stations={stations} speakers={speakers} sched={editing} wide={wide} onClose={() => setEditing(undefined)} onSaved={refetch} />
       )}
     </Card>
   );
 }
+
+/** Friendlier alias — the section now covers radio + Spotify schedules. */
+export const MusicSchedulesSection = RadioSchedulesSection;
