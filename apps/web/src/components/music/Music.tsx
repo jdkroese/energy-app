@@ -80,8 +80,9 @@ function SpeakerChips({ speakers, selected, onToggle }: {
  * chips + group/per-speaker volume. Drives the active Connect device back to a
  * Sonos zone so the right chips highlight.
  * ==========================================================================*/
-function NowPlayingPanel({ np, speakers, canControl, wide, onChanged }: {
+function NowPlayingPanel({ np, speakers, canControl, wide, onChanged, hideSpeakerControl }: {
   np: SpotifyNowPlaying; speakers: SonosSpeaker[]; canControl: boolean; wide: boolean; onChanged: () => void;
+  hideSpeakerControl?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
 
@@ -140,8 +141,10 @@ function NowPlayingPanel({ np, speakers, canControl, wide, onChanged }: {
         </div>
       )}
 
-      {/* Shared "Playing on" control — group volume, live zone toggles, per-zone volume. */}
-      {inScopeIds.length > 0 && (
+      {/* Shared "Playing on" control — group volume, live zone toggles, per-zone volume.
+          Hidden when the page hosts one shared, persistent Speakers section (e.g. /music)
+          to avoid stacking two identical controls. */}
+      {!hideSpeakerControl && inScopeIds.length > 0 && (
         <PlayingOnControl
           fleet={speakers}
           inScopeIds={inScopeIds}
@@ -329,8 +332,11 @@ function SearchList({ canControl, onPick }: { canControl: boolean; onPick: (i: S
 /* ============================================================================
  * The Music panel — surfaced on the Speakers page below Radio.
  * ==========================================================================*/
-export function MusicPanel({ speakers, canControl, wide }: {
+export function MusicPanel({ speakers, canControl, wide, hideSpeakerControl }: {
   speakers: SonosSpeaker[]; canControl: boolean; wide: boolean;
+  /** When true, the inline "Playing on" control is suppressed (the page shows one shared
+   *  persistent Speakers section instead). Defaults to false so other surfaces keep it. */
+  hideSpeakerControl?: boolean;
 }) {
   const { data: status } = usePolling<SpotifyStatus>(api.spotify.status, 0);
   const { data: npData, refetch: refetchNp } = usePolling<SpotifyNowPlayingResponse>(api.spotify.nowPlaying, POLL_NOW_MS);
@@ -367,7 +373,7 @@ export function MusicPanel({ speakers, canControl, wide }: {
           )}
 
           {nowPlaying && (
-            <NowPlayingPanel np={nowPlaying} speakers={speakers} canControl={canControl && premium} wide={wide} onChanged={refetchNp} />
+            <NowPlayingPanel np={nowPlaying} speakers={speakers} canControl={canControl && premium} wide={wide} onChanged={refetchNp} hideSpeakerControl={hideSpeakerControl} />
           )}
 
           <LibrarySection speakers={speakers} canControl={canControl && premium} wide={wide} onPlayed={refetchNp} />
