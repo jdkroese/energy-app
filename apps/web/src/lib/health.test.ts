@@ -36,8 +36,8 @@ test('healthTone maps states to StatusDot tones', () => {
   assert.equal(healthTone('ok'), 'solar');
   assert.equal(healthTone('warning'), 'grid');
   assert.equal(healthTone('error'), 'danger');
-  assert.equal(healthTone('offline'), 'offline');
-  assert.equal(healthTone('nosetup'), 'offline');
+  assert.equal(healthTone('offline'), 'grid'); // offline is a fault the owner should see — amber, not muted
+  assert.equal(healthTone('nosetup'), 'offline'); // only not-configured stays muted
 });
 
 test('climateHealth: offline > lowBattery > ok', () => {

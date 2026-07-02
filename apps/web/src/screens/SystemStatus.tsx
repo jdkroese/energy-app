@@ -108,7 +108,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
       const tele = d.online
         ? `${d.power ? d.mode : 'off'}${d.currentTempC != null ? ` ${d.currentTempC.toFixed(1)}°` : ''}${d.lowBattery ? ' · low batt' : ''}`
         : undefined;
-      return { id: d.id, name: d.name, state: h.state, telemetry: tele };
+      return { id: d.id, name: d.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     subsystems.push({ key: 'climate', icon: 'snowflake', name: 'Climate', rollup, chips });
   }
@@ -123,7 +123,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
       const tele = b.online
         ? `${Math.round(b.soc)}%${b.health != null ? ` · SoH ${Math.round(b.health)}%` : ''}`
         : undefined;
-      return { id: b.id, name: b.name, state: h.state, telemetry: tele };
+      return { id: b.id, name: b.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     subsystems.push({ key: 'batteries', icon: 'battery-charging', name: 'Batteries', rollup, chips });
   }
@@ -136,7 +136,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
     const chips: DeviceChip[] = devs.map((d) => {
       const h = lightHealth(d);
       const tele = d.online ? (d.power ? (d.brightnessPct != null ? `${d.brightnessPct}%` : 'on') : 'off') : undefined;
-      return { id: d.id, name: d.name, state: h.state, telemetry: tele };
+      return { id: d.id, name: d.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     subsystems.push({ key: 'lighting', icon: 'lightbulb', name: 'Lighting', rollup, chips });
   }
@@ -149,7 +149,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
     const chips: DeviceChip[] = devs.map((d) => {
       const h = circuitHealth(d);
       const tele = d.online ? (d.evState?.ruleOn ? `${Math.round((d.evState.reservedW ?? 0) / 100) / 10} kW reserved` : 'online') : undefined;
-      return { id: d.id, name: d.name, state: h.state, telemetry: tele };
+      return { id: d.id, name: d.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     if (devs.length > 0) subsystems.push({ key: 'circuits', icon: 'plug', name: 'Circuits', rollup, chips });
   }
@@ -162,7 +162,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
     const chips: DeviceChip[] = devs.map((d) => {
       const h = blindHealth(d);
       const tele = d.online ? (d.positionPct != null ? `${d.positionPct}% open${d.moving ? ' · moving' : ''}` : d.moving ? 'moving' : 'online') : undefined;
-      return { id: d.id, name: d.name, state: h.state, telemetry: tele };
+      return { id: d.id, name: d.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     if (devs.length > 0) subsystems.push({ key: 'blinds', icon: 'blinds', name: 'Blinds', rollup, chips });
   }
@@ -175,7 +175,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
     const chips: DeviceChip[] = devs.map((d) => {
       const h = speakerHealth(d);
       const tele = d.online ? (d.volumePct != null ? `vol ${d.volumePct}%` : 'online') : undefined;
-      return { id: d.id, name: d.name, state: h.state, telemetry: tele };
+      return { id: d.id, name: d.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     if (speakers.enabled && devs.length > 0) subsystems.push({ key: 'speakers', icon: 'speaker', name: 'Speakers', rollup, chips });
   }
@@ -188,7 +188,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
     const chips: DeviceChip[] = devs.map((z) => {
       const h = irrigationHealth(z);
       const tele = z.available ? (z.active ? 'running' : 'idle') : undefined;
-      return { id: z.id, name: z.name, state: h.state, telemetry: tele };
+      return { id: z.id, name: z.name, state: h.state, telemetry: tele, reason: h.reason };
     });
     if (irrigation.connected && devs.length > 0) subsystems.push({ key: 'irrigation', icon: 'droplet', name: 'Irrigation', rollup, chips });
   }
