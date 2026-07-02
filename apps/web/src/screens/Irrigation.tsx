@@ -23,6 +23,7 @@ import type {
   IrrigationMode,
   IrrigationPlantType,
   IrrigationEmitterType,
+  IrrigationDailyOutlook,
   EnergyEvent,
 } from "../lib/types";
 import {
@@ -32,7 +33,6 @@ import {
   Select,
   Switch,
   Badge,
-  SegmentedControl,
   Slider,
   Modal,
   EmptyState,
@@ -268,164 +268,37 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
             />
           </div>
 
-          {/* Mode control + weather + bypass rules */}
-          <Card padded>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                flexWrap: "wrap",
-              }}
-            >
-              <span style={iconChip}>
-                <Icon name="droplets" size={18} />
-              </span>
-              <div style={{ flex: 1, minWidth: 160 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>
-                  Watering brain
-                </div>
-                <div style={{ fontSize: 12, color: "var(--text-2)" }}>
-                  {modeBlurb(data.mode, data.liveAllowed, data.armed)}
-                </div>
-              </div>
-              {data.weather && (
-                <div
-                  style={{
-                    textAlign: "right",
-                    fontSize: 12,
-                    color: "var(--text-2)",
-                  }}
-                >
-                  <div style={{ fontFamily: "var(--font-mono)" }}>
-                    ET₀ {data.weather.et0Mm}mm
-                  </div>
-                  <div style={{ fontFamily: "var(--font-mono)" }}>
-                    rain {data.weather.precipMm}mm ·{" "}
-                    {data.weather.precipProbabilityPct}%
-                  </div>
-                </div>
-              )}
+          {/* Compact controller toggle: Rain Bird (off) ⇄ Home App (live) */}
+          <ModeToggle
+            mode={data.mode}
+            liveAllowed={data.liveAllowed}
+            armed={data.armed}
+            devicesMode={data.devicesMode}
+            isAdmin={isAdmin}
+            busy={busy === "mode-live" || busy === "mode-off"}
+            onChange={(m) => void changeMode(m)}
+          />
+
+          {data.baselineDrift && (
+            <div style={warnBox}>
+              Controller baseline changed (stations differ from our last mirror).
+              The onboard program is untouched — review the zones below if you
+              edited it at the keypad.
             </div>
-
-            <div style={{ marginTop: 14, maxWidth: wide ? 320 : "100%" }}>
-              <SegmentedControl
-                block
-                value={data.mode}
-                onChange={(v) =>
-                  isAdmin && void changeMode(v as IrrigationMode)
-                }
-                options={[
-                  { value: "off", label: "Off" },
-                  {
-                    value: "live",
-                    label: "Live",
-                    dot: data.mode === "live" ? "var(--solar)" : undefined,
-                  },
-                ]}
-              />
-              {!isAdmin && (
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    color: "var(--text-2)",
-                    marginTop: 6,
-                  }}
-                >
-                  Sign in as admin to change the mode or the schedule.
-                </div>
-              )}
-              {data.mode === "live" && !data.liveAllowed && (
-                <div style={warnBox}>
-                  Live, but not actuating — the Devices layer is disarmed (mode{" "}
-                  {data.devicesMode}). Arm it to let the coordinator suppress
-                  the controller program and fire zones.
-                </div>
-              )}
-            </div>
-
-            {/* Bypass rules — the forecast thresholds that skip a run */}
-            {isAdmin && (
-              <div style={{ marginTop: 16 }}>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: "var(--text-1)",
-                    marginBottom: 8,
-                  }}
-                >
-                  Rain-bypass rules
-                  <span
-                    style={{
-                      fontWeight: 400,
-                      color: "var(--text-2)",
-                      marginLeft: 6,
-                    }}
-                  >
-                    — decided 2h before each run on the freshest forecast
-                  </span>
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 10,
-                    flexWrap: "wrap",
-                    alignItems: "flex-end",
-                  }}
-                >
-                  <div style={{ minWidth: 150 }}>
-                    <Select
-                      label="Skip if rain ≥"
-                      value={String(data.globalRainSkipMm)}
-                      onChange={(e) =>
-                        void run("rainmm", () =>
-                          api.irrigation.setGlobal({
-                            globalRainSkipMm: Number(e.target.value),
-                          }),
-                        )
-                      }
-                      options={["2", "3", "5", "8", "10", "15"].map((v) => ({
-                        value: v,
-                        label: `${v} mm`,
-                      }))}
-                    />
-                  </div>
-                  <div style={{ minWidth: 150 }}>
-                    <Select
-                      label="Skip if chance ≥"
-                      value={String(data.rainSkipProbabilityPct)}
-                      onChange={(e) =>
-                        void run("rainprob", () =>
-                          api.irrigation.setGlobal({
-                            rainSkipProbabilityPct: Number(e.target.value),
-                          }),
-                        )
-                      }
-                      options={["40", "50", "60", "70", "80"].map((v) => ({
-                        value: v,
-                        label: `${v}%`,
-                      }))}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {data.baselineDrift && (
-              <div style={warnBox}>
-                Controller baseline changed (stations differ from our last
-                mirror). The onboard program is untouched — review the zones
-                below if you edited it at the keypad.
-              </div>
-            )}
-            {data.lastError && <div style={errBox}>{data.lastError}</div>}
-          </Card>
+          )}
+          {data.lastError && <div style={errBox}>{data.lastError}</div>}
 
           {err && <div style={errBox}>{err}</div>}
 
-          {/* Forecast outlook + bypass markers */}
-          <ForecastStrip data={data} wide={wide} />
+          {/* Forecast outlook + bypass rules + per-day weather */}
+          <ForecastStrip
+            data={data}
+            wide={wide}
+            isAdmin={isAdmin}
+            onBypassChange={(patch) =>
+              void run("bypass", () => api.irrigation.setGlobal(patch))
+            }
+          />
 
           {/* Photo zone grid */}
           {data.zones.length === 0 ? (
@@ -559,18 +432,110 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
   );
 }
 
-function modeBlurb(
-  mode: IrrigationMode,
-  liveAllowed: boolean,
-  armed: boolean,
-): string {
-  if (mode === "off")
-    return "Off — the controller's own program runs. App suppresses nothing.";
-  return liveAllowed
-    ? "Live — suppressing the onboard program and firing the weather-trimmed plan."
-    : armed
-      ? "Live — armed."
-      : "Live — but disarmed, so nothing is actuated.";
+// ---- Compact controller toggle (Rain Bird ⇄ Home App) -----------------------
+
+function ModeToggle({
+  mode,
+  liveAllowed,
+  armed,
+  devicesMode,
+  isAdmin,
+  busy,
+  onChange,
+}: {
+  mode: IrrigationMode;
+  liveAllowed: boolean;
+  armed: boolean;
+  devicesMode: string;
+  isAdmin: boolean;
+  busy: boolean;
+  onChange: (mode: IrrigationMode) => void;
+}) {
+  const live = mode === "live";
+  const caption = live
+    ? liveAllowed
+      ? "Home App runs the weather-trimmed plan."
+      : armed
+        ? "Home App selected."
+        : `Arm the Devices layer to actuate (mode ${devicesMode}).`
+    : "The Rain Bird controller's own weekly program runs.";
+  return (
+    <Card padded>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={iconChip}>
+          <Icon name="droplets" size={16} />
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <PoleLabel icon="cpu" label="Rain Bird" active={!live} />
+          <Switch
+            checked={live}
+            disabled={!isAdmin || busy}
+            onChange={(e) =>
+              onChange(e.currentTarget.checked ? "live" : "off")
+            }
+          />
+          <PoleLabel icon="house" label="Home App" active={live} />
+        </div>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 150,
+            fontSize: 12,
+            color: "var(--text-2)",
+          }}
+        >
+          {caption}
+        </div>
+      </div>
+      {live && !liveAllowed && (
+        <div style={warnBox}>
+          Home App is selected but the Devices layer is disarmed (mode{" "}
+          {devicesMode}). Arm it to let the app suppress the controller program
+          and fire zones.
+        </div>
+      )}
+      {!isAdmin && (
+        <div style={{ fontSize: 11.5, color: "var(--text-2)", marginTop: 8 }}>
+          Sign in as admin to change who runs watering.
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function PoleLabel({
+  icon,
+  label,
+  active,
+}: {
+  icon: string;
+  label: string;
+  active: boolean;
+}) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        fontSize: 12.5,
+        fontWeight: active ? 700 : 500,
+        color: active ? "var(--text-1)" : "var(--text-2)",
+        opacity: active ? 1 : 0.65,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <Icon name={icon} size={14} />
+      {label}
+    </span>
+  );
 }
 
 // ---- Live "watering now" banner ---------------------------------------------
@@ -648,33 +613,103 @@ function NowWateringBanner({
   );
 }
 
-// ---- Forecast strip ---------------------------------------------------------
+// ---- Forecast strip (outlook + bypass rules + per-day weather) --------------
+
+const RAIN_MM_OPTIONS = ["2", "3", "5", "8", "10", "15"];
+const RAIN_PROB_OPTIONS = ["40", "50", "60", "70", "80"];
+
+/** A weather glyph for the day, derived from rain likelihood then cloud cover. */
+function dayWeatherIcon(d: IrrigationDailyOutlook): {
+  name: string;
+  color: string;
+} {
+  if (d.precipMm >= 1 || d.precipProbabilityPct >= 50)
+    return { name: "cloud-rain", color: "var(--battery)" };
+  if (d.cloudCoverPct >= 70) return { name: "cloud", color: "var(--text-2)" };
+  if (d.cloudCoverPct >= 30) return { name: "cloud-sun", color: "var(--solar)" };
+  return { name: "sun", color: "var(--solar)" };
+}
 
 function ForecastStrip({
   data,
   wide,
+  isAdmin,
+  onBypassChange,
 }: {
   data: IrrigationPlanResponse;
   wide: boolean;
+  isAdmin: boolean;
+  onBypassChange: (patch: {
+    globalRainSkipMm?: number;
+    rainSkipProbabilityPct?: number;
+  }) => void;
 }) {
   if (!data.outlook || data.outlook.length === 0) return null;
   const todayIso = localIso(new Date());
   return (
     <Card padded>
+      {/* Header: title + the rain-bypass rules, on the same row */}
       <div
         style={{
           display: "flex",
-          alignItems: "baseline",
-          gap: 8,
-          marginBottom: 10,
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 12,
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600 }}>Forecast</div>
-        <div style={{ fontSize: 11.5, color: "var(--text-2)" }}>
-          runs skip when rain ≥ {data.globalRainSkipMm}mm or chance ≥{" "}
-          {data.rainSkipProbabilityPct}%
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Forecast</div>
+          <div
+            style={{ fontSize: 11.5, color: "var(--text-2)", marginTop: 2 }}
+          >
+            runs skip when rain ≥ {data.globalRainSkipMm}mm or chance ≥{" "}
+            {data.rainSkipProbabilityPct}% · decided 2h before each run
+          </div>
         </div>
+        {isAdmin && (
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "flex-end",
+            }}
+          >
+            <div style={{ width: 132 }}>
+              <Select
+                label="Skip if rain ≥"
+                value={String(data.globalRainSkipMm)}
+                onChange={(e) =>
+                  onBypassChange({ globalRainSkipMm: Number(e.target.value) })
+                }
+                options={RAIN_MM_OPTIONS.map((v) => ({
+                  value: v,
+                  label: `${v} mm`,
+                }))}
+              />
+            </div>
+            <div style={{ width: 132 }}>
+              <Select
+                label="Skip if chance ≥"
+                value={String(data.rainSkipProbabilityPct)}
+                onChange={(e) =>
+                  onBypassChange({
+                    rainSkipProbabilityPct: Number(e.target.value),
+                  })
+                }
+                options={RAIN_PROB_OPTIONS.map((v) => ({
+                  value: v,
+                  label: `${v}%`,
+                }))}
+              />
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Day cards */}
       <div
         style={{
           display: "grid",
@@ -689,47 +724,70 @@ function ForecastStrip({
             d.precipMm >= data.globalRainSkipMm ||
             d.precipProbabilityPct >= data.rainSkipProbabilityPct;
           const isToday = d.date === todayIso;
+          const wx = dayWeatherIcon(d);
           return (
             <div
               key={d.date}
               style={{
                 border: `1px solid ${bypass ? "var(--solar)" : "var(--border-1)"}`,
                 borderRadius: "var(--radius-md)",
-                padding: "8px 6px",
+                padding: "10px 8px 9px",
                 textAlign: "center",
-                background: bypass ? "var(--solar-wash, var(--surface-3))" : "var(--surface-2)",
+                background: bypass
+                  ? "var(--solar-wash, var(--surface-3))"
+                  : "var(--surface-2)",
               }}
             >
               <div
                 style={{
                   fontSize: 11,
-                  fontWeight: 600,
+                  fontWeight: 700,
                   color: isToday ? "var(--text-1)" : "var(--text-2)",
                 }}
               >
                 {isToday ? "Today" : weekdayShort(d.date)}
+              </div>
+              <div style={{ margin: "5px 0 2px", color: wx.color }}>
+                <Icon name={wx.name} size={26} />
               </div>
               <div
                 style={{
                   fontFamily: "var(--font-mono)",
                   fontSize: 15,
                   fontWeight: 600,
-                  marginTop: 4,
                 }}
               >
-                {d.precipMm}mm
+                {Math.round(d.tMaxC)}°
               </div>
               <div
                 style={{
                   fontFamily: "var(--font-mono)",
                   fontSize: 11.5,
-                  color: "var(--text-2)",
+                  color: "var(--text-1)",
+                  marginTop: 2,
                 }}
               >
-                {d.precipProbabilityPct}% · {Math.round(d.tMaxC)}°
+                {d.precipMm}mm · {d.precipProbabilityPct}%
               </div>
+
+              {/* Sun hours · humidity · cloud cover */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 2,
+                  marginTop: 8,
+                  paddingTop: 7,
+                  borderTop: "1px solid var(--border-1)",
+                }}
+              >
+                <Metric icon="sun" value={`${d.sunshineHours}h`} />
+                <Metric icon="droplet" value={`${d.humidityPct}%`} />
+                <Metric icon="cloud" value={`${d.cloudCoverPct}%`} />
+              </div>
+
               {bypass && (
-                <div style={{ marginTop: 5 }}>
+                <div style={{ marginTop: 8 }}>
                   <Badge tone="solar">skip</Badge>
                 </div>
               )}
@@ -738,6 +796,26 @@ function ForecastStrip({
         })}
       </div>
     </Card>
+  );
+}
+
+/** One tiny icon-over-value forecast metric (sun hours / humidity / cloud). */
+function Metric({ icon, value }: { icon: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 2,
+        color: "var(--text-2)",
+      }}
+    >
+      <Icon name={icon} size={12} />
+      <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)" }}>
+        {value}
+      </span>
+    </div>
   );
 }
 

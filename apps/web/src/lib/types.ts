@@ -1372,6 +1372,9 @@ export interface IrrigationDailyOutlook {
   precipProbabilityPct: number;
   et0Mm: number;
   tMaxC: number;
+  sunshineHours: number;
+  humidityPct: number;
+  cloudCoverPct: number;
 }
 
 export interface IrrigationLogEntry {
