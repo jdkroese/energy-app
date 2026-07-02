@@ -8,6 +8,9 @@
 import { evaluateLiveAlerts, type Severity } from './routes/alerts';
 import * as notify from './notify';
 import * as store from './store';
+import { emitAlertActive, emitAlertCleared, emitClearedForMissing } from './alert-events';
+import { runEventMonitors } from './monitors';
+import { pruneEventRing } from './events';
 
 const INTERVAL_MS = 60_000;
 // Re-notify only if an alert recurs after it has been gone for this long.
@@ -56,6 +59,11 @@ async function fanOut(
 
 async function tick(): Promise<void> {
   try {
+    // Run the new log-only observation monitors (high load / high current) + prune the
+    // event ring EVERY tick, before any early return (docs/37 §5, §7). Best-effort.
+    await runEventMonitors();
+    pruneEventRing();
+
     const firing = await evaluateLiveAlerts();
 
     // Maintain debounce streaks BEFORE any early return, so a recovered alert
@@ -87,8 +95,13 @@ async function tick(): Promise<void> {
         delete s.seenAlerts[id];
       });
       await fanOut(channels, { id, severity: 'ok', device: info.device, title: info.title, body: info.body });
+      // Emit a paired 'cleared' observation event (docs/37 §3 Phase 2).
+      await emitAlertCleared(id, info.device, info.title);
       console.log(`[alert-loop] recovery "${id}"`);
     }
+    // Emit a 'cleared' event for every previously-ACTIVE alert (tracked in alert-events)
+    // that is no longer firing, even without a recoveryWatch entry (no-op if never active).
+    await emitClearedForMissing(firing);
 
     if (firing.length === 0) return;
 
@@ -120,6 +133,9 @@ async function tick(): Promise<void> {
 
       const body = a.sub || a.title;
       await fanOut(channels, { id: a.id, title: a.title, body, device: a.device, severity: a.severity });
+      // Emit the firing alert as an ACTIVE observation event (docs/37 §3 Phase 2). It fans out
+      // via fanOut above, so the bus is told noNotify (no double-send) inside emitAlertActive.
+      await emitAlertActive(a);
       console.log(`[alert-loop] notified "${a.id}" (${a.severity})`);
 
       // Arm a recovery ("back to normal") message for rules that opt in. Grid

@@ -1870,3 +1870,88 @@ export interface InvoiceSaveResponse {
   id: string;
   invoice: InvoiceSummary;
 }
+
+/* ---- Unified Event Viewer (docs/37) --------------------------------------- */
+
+export type EventClass = 'action' | 'observation' | 'system';
+export type EventSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type EventCategory =
+  | 'battery'
+  | 'climate'
+  | 'blinds'
+  | 'ev'
+  | 'irrigation'
+  | 'arbitrage'
+  | 'grid'
+  | 'connectivity'
+  | 'security'
+  | 'app';
+export type EventTriggerSource =
+  | 'surplus-rule'
+  | 'schedule'
+  | 'arbitrage'
+  | 'manual'
+  | 'user'
+  | 'threshold'
+  | 'guardrail'
+  | 'health-probe'
+  | 'coordinator'
+  | 'boot'
+  | 'deploy';
+export type EventStateKind = 'active' | 'cleared';
+export type EventAckStatus = 'new' | 'ack' | 'resolved';
+
+export interface EnergyEvent {
+  id: string;
+  ts: string;
+  class: EventClass;
+  category: EventCategory;
+  severity: EventSeverity;
+  summary: string;
+  trigger: { source: EventTriggerSource; detail?: string };
+  device?: string;
+  entity?: string;
+  change?: { from: unknown; to: unknown };
+  ok?: boolean;
+  detail?: string;
+  data?: Record<string, unknown>;
+  state?: EventStateKind;
+  relatedId?: string;
+  ackStatus?: EventAckStatus;
+  notified?: EventTriggerSource[];
+}
+
+export interface EventsListResponse {
+  ts: string;
+  events: EnergyEvent[];
+  nextCursor: string | null;
+}
+
+export interface EventsConfig {
+  highLoadEnabled: boolean;
+  highLoadKw: number;
+  highCurrentEnabled: boolean;
+  highCurrentA: number;
+  dwellSec: number;
+  hysteresisFrac: number;
+}
+
+export interface EventsConfigResponse {
+  ts: string;
+  eventsConfig: EventsConfig;
+}
+
+/** Query params for GET /api/events (all optional; multi-values comma-joined). */
+export interface EventsQuery {
+  class?: EventClass[];
+  category?: EventCategory[];
+  severity?: EventSeverity[];
+  source?: EventTriggerSource[];
+  device?: string;
+  state?: EventStateKind;
+  q?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}

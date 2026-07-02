@@ -20,6 +20,7 @@ import {
   type ControlSnapshot,
   type Lever,
 } from './guardrails';
+import { logBatteryAction } from './log-adapters';
 
 /** ≥60s between writes to the SAME device+lever. */
 const RATE_LIMIT_MS = 60_000;
@@ -67,6 +68,8 @@ function logEntry(
     s.control.updatedAt = Date.now();
     if (!ok) s.control.lastError = `${device}.${lever}: ${detail}`;
   });
+  // Shim: mirror into the unified event bus (docs/37 §3) alongside the domain log.
+  logBatteryAction(device, lever, from, to, reason, ok, detail);
 }
 
 function reject(
@@ -98,6 +101,8 @@ function noop(
     s.control.log = store.pruneLog(s.control.log);
     s.control.updatedAt = Date.now();
   });
+  // Shim: mirror the no-op into the unified event bus (mapped to action/low).
+  logBatteryAction(device, lever, value, value, reason, true, NOOP_DETAIL);
   return { ok: true, skipped: true, reason, from: value, to: value };
 }
 

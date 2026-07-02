@@ -37,6 +37,7 @@ import {
   type ZoneTrim,
 } from "./irrigation-engine";
 import { bandFor } from "../tariff";
+import { logIrrigationDecision } from "./log-adapters";
 import { climateSurplusW } from "./climate-snapshot";
 import * as sonnen from "../connectors/sonnen";
 import * as tesla from "../connectors/tesla";
@@ -163,6 +164,8 @@ function log(
     s.irrigation.updatedAt = Date.now();
     if (!ok) s.irrigation.lastError = `${zoneId}.${action}: ${detail}`;
   });
+  // Shim: mirror the coordinator decision into the unified event bus (docs/37 §3).
+  logIrrigationDecision(zoneId, action, live, ok, detail);
 }
 
 /** Whether the live actuation path may run: irrigation in 'live' AND Devices armed. The

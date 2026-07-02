@@ -12,6 +12,7 @@
 
 import * as rainbird from "../connectors/rainbird";
 import * as store from "../store";
+import { logIrrigationAction } from "./log-adapters";
 
 /** The irrigation levers (NOT setpoint/mode like climate). */
 export type IrrigationLever = "run" | "stop" | "rainDelay";
@@ -46,6 +47,8 @@ function logEntry(
     s.devices.updatedAt = Date.now();
     if (!ok) s.devices.lastError = `${deviceId}.${lever}: ${detail}`;
   });
+  // Shim: mirror into the unified event bus (docs/37 §3).
+  logIrrigationAction(deviceId, lever, from, to, reason, ok, detail);
 }
 
 function reject(

@@ -63,6 +63,35 @@ export function setVoltageMonitor(body: unknown): unknown {
   return { ts: new Date().toISOString(), voltageMonitor };
 }
 
+/** GET /api/settings/events-config → the high-load / high-current monitor thresholds. */
+export function getEventsConfig(): unknown {
+  return { ts: new Date().toISOString(), eventsConfig: store.get().eventsConfig };
+}
+
+/**
+ * PATCH /api/settings/events-config → validate + persist the event-monitor thresholds
+ * (docs/37 §5). Both monitors are LOG-ONLY (§10.2); this only tunes what counts as an event.
+ * The store clamps to sane ranges on hydrate; we clamp on write too.
+ */
+export function setEventsConfig(body: unknown): unknown {
+  const b = (body ?? {}) as Partial<store.EventsConfig>;
+  const eventsConfig = store.update((s) => {
+    const c = s.eventsConfig;
+    if (typeof b.highLoadEnabled === 'boolean') c.highLoadEnabled = b.highLoadEnabled;
+    if (typeof b.highCurrentEnabled === 'boolean') c.highCurrentEnabled = b.highCurrentEnabled;
+    if (typeof b.highLoadKw === 'number' && Number.isFinite(b.highLoadKw))
+      c.highLoadKw = Math.max(0.5, Math.min(50, b.highLoadKw));
+    if (typeof b.highCurrentA === 'number' && Number.isFinite(b.highCurrentA))
+      c.highCurrentA = Math.max(1, Math.min(200, b.highCurrentA));
+    if (typeof b.dwellSec === 'number' && Number.isFinite(b.dwellSec))
+      c.dwellSec = Math.max(0, Math.min(600, Math.round(b.dwellSec)));
+    if (typeof b.hysteresisFrac === 'number' && Number.isFinite(b.hysteresisFrac))
+      c.hysteresisFrac = Math.max(0, Math.min(0.5, b.hysteresisFrac));
+    return c;
+  });
+  return { ts: new Date().toISOString(), eventsConfig };
+}
+
 export async function getSettings(): Promise<unknown> {
   const probe = await probeAll();
   const channels = store.get().channels;

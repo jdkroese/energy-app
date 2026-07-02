@@ -11,6 +11,7 @@ import * as blinds from '../connectors/tuya-blinds';
 import { isManualOverrideActive } from './climate-coordinator';
 import { sunriseSunsetMin } from '../solar-model';
 import { config } from '../config';
+import { logBlindsAction } from './log-adapters';
 
 /** ≥60s between scheduled writes to the SAME blind (motors are slow; avoid spam). */
 const WRITE_COOLDOWN_MS = 60_000;
@@ -70,6 +71,8 @@ function logBlind(
     st.devices.updatedAt = Date.now();
     if (!ok) st.devices.lastError = `blind ${deviceId}: ${detail}`;
   });
+  // Shim: mirror into the unified event bus (docs/37 §3).
+  logBlindsAction(deviceId, from, to, reason, ok, detail);
 }
 
 /**

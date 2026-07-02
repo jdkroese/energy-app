@@ -19,6 +19,7 @@ import {
   type ClimateLever,
   type ClimateSnapshot,
 } from './climate-guardrails';
+import { logClimateAction } from './log-adapters';
 
 export type { ClimateLever } from './climate-guardrails';
 
@@ -63,6 +64,8 @@ function logEntry(
     s.devices.updatedAt = Date.now();
     if (!ok) s.devices.lastError = `${deviceId}.${lever}: ${detail}`;
   });
+  // Shim: mirror into the unified event bus (docs/37 §3) alongside the domain log.
+  logClimateAction(deviceId, lever, from, to, reason, ok, detail);
 }
 
 function reject(

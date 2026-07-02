@@ -28,6 +28,7 @@ import { deriveCapabilities, applyOverrides, type Capability } from '../connecto
 import { buildGenericCommands } from '../connectors/tuya-generic';
 import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import type { RichClimateSnapshot } from './climate-snapshot';
+import { logEvAction } from './log-adapters';
 
 /** EMA smoothing for the learned draw (0..1). 0.2 = ~10-sample memory, robust to a noisy read. */
 const LEARN_ALPHA = 0.2;
@@ -82,6 +83,8 @@ function logEv(deviceId: string, to: 'on' | 'off' | null, reason: string, detail
     s.devices.log = store.pruneLog(s.devices.log);
     if (!ok) s.devices.lastError = `EV breaker ${deviceId}: ${detail}`;
   });
+  // Shim: mirror into the unified event bus (docs/37 §3).
+  logEvAction(deviceId, to, reason, ok, detail);
 }
 
 /** Read + coerce the persisted per-breaker EV runtime state (defaults when absent). */
