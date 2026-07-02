@@ -27,6 +27,19 @@ import {
 import type { IrrigationZoneConfig } from "../store";
 import { __test, liveAllowed } from "./irrigation-coordinator";
 import type { StoreSchema } from "../store";
+import { _resetEvents, queryEvents } from "../events";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/** Point the durable event JSONL at a throwaway file + clear the ring/observer for a clean run. */
+function freshEventLog(): void {
+  process.env.EVENTS_LOG_FILE = join(
+    tmpdir(),
+    `irrigation-session-test-${process.pid}.jsonl`,
+  );
+  _resetEvents(); // re-resolves the (now-overridden) path + empties the ring
+  __test.resetObserver();
+}
 
 // ---- Fixtures ---------------------------------------------------------------
 
@@ -351,4 +364,55 @@ test("liveAllowed actuates ONLY in mode live AND armed AND devices not off", () 
   assert.equal(liveAllowed(mk("off", true, "auto")), false); // not live
   assert.equal(liveAllowed(mk("live", false, "auto")), false); // disarmed
   assert.equal(liveAllowed(mk("live", true, "off")), false); // devices layer off
+});
+
+// ---- Session observer (every physical run logged, whoever started it) -------
+
+test("session observer logs an external keypad/onboard run as start + end with duration", () => {
+  freshEventLog();
+
+  // Idle → rb-5 active: the app never issued a run for rb-5, so this reads as EXTERNAL.
+  __test.observeSessions("rb-5", true);
+  // rb-5 → idle: the session ended.
+  __test.observeSessions(null, true);
+
+  const events = queryEvents({ category: ["irrigation"] }).events; // newest-first
+  assert.equal(events.length, 2);
+  const [end, start] = events;
+
+  assert.equal(start.entity, "session-start");
+  assert.equal(start.severity, "medium"); // external stands out
+  assert.equal(start.state, "active");
+  assert.equal(start.device, "rb-5");
+  assert.match(start.summary, /Watering started — rb-5/);
+
+  assert.equal(end.entity, "session-end");
+  assert.equal(end.state, "cleared");
+  assert.equal(end.relatedId, start.id); // end pairs back to its start
+  assert.match(end.detail ?? "", /ran ~\d+ min/);
+});
+
+test("session observer does NOT fabricate a session end on an unreachable tick", () => {
+  freshEventLog();
+
+  __test.observeSessions("rb-2", true); // start observed (1 event)
+  __test.observeSessions(null, false); // controller unreachable — must NOT log an end
+
+  const events = queryEvents({ category: ["irrigation"] }).events;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].entity, "session-start");
+});
+
+test("session observer logs a hand-off (zone A → zone B) as end(A) + start(B)", () => {
+  freshEventLog();
+
+  __test.observeSessions("rb-1", true); // A starts
+  __test.observeSessions("rb-3", true); // A stops, B starts — same tick
+
+  const events = queryEvents({ category: ["irrigation"] }).events; // newest-first
+  // Expect: start(rb-1), end(rb-1), start(rb-3)  → newest-first the last two are end(rb-1)+start(rb-3)
+  const entities = events.map((e) => `${e.entity}:${e.device}`);
+  assert.ok(entities.includes("session-start:rb-1"));
+  assert.ok(entities.includes("session-end:rb-1"));
+  assert.ok(entities.includes("session-start:rb-3"));
 });

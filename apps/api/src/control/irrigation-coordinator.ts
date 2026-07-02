@@ -28,7 +28,7 @@
 import * as store from "../store";
 import * as rainbird from "../connectors/rainbird";
 import * as weather from "../connectors/weather";
-import { issueIrrigation } from "./irrigation-execute";
+import { issueIrrigation, lastAppRunTs } from "./irrigation-execute";
 import {
   trimZone,
   rollupDayWeather,
@@ -37,7 +37,7 @@ import {
   type ZoneTrim,
 } from "./irrigation-engine";
 import { bandFor } from "../tariff";
-import { logIrrigationDecision } from "./log-adapters";
+import { logIrrigationDecision, logIrrigationSession } from "./log-adapters";
 import { climateSurplusW } from "./climate-snapshot";
 import * as sonnen from "../connectors/sonnen";
 import * as tesla from "../connectors/tesla";
@@ -50,6 +50,18 @@ import type {
 const TICK_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 let last: { day: number; min: number } | null = null;
+
+/** The zone we last OBSERVED physically running (ground truth from the controller's
+ *  active-zone read), when it started, and the id of its 'start' event (to pair the 'end').
+ *  Drives the session-observer so EVERY watering run lands in the event log — app-initiated,
+ *  keypad, or the onboard weekly program — with its measured duration. Null = valves idle. */
+let observedRun: { zoneId: string; startedAt: number; startEventId?: string } | null =
+  null;
+
+/** A physical valve open counts as APP-initiated (already logged as run/fire) only if the app
+ *  issued a run for that zone within this window before we first observed it active. Two ticks
+ *  covers the fire→read-back→next-tick lag; anything older reads as an external/keypad start. */
+const APP_RUN_CLAIM_MS = 2 * TICK_MS;
 
 /** The rolling rain-delay (days) we hold on the controller to SUPPRESS its onboard program
  *  while we're healthy. 1 day = the shortest fail-safe lapse; refreshed every tick. */
@@ -207,6 +219,64 @@ async function confirmActive(zoneId: string): Promise<boolean> {
   }
 }
 
+/**
+ * SESSION OBSERVER — reconcile the freshly-read active zone against what we last saw running and
+ * log a full physical watering SESSION (start → end + duration) for EVERY run, whoever started it.
+ * This closes the gap where a run started at the keypad or by the controller's onboard weekly
+ * program left no trace: the coordinator read the active zone each tick but threw it away.
+ *
+ * Runs in shadow AND live (both already read the active zone every tick — zero extra LNK traffic).
+ * Called only when the controller answered this tick: an unreachable read is NOT "valves idle", so
+ * we never fabricate an end — an in-flight session's end is logged once the box answers again.
+ *
+ * An app-initiated open (issueIrrigation recorded a run for that zone in the last ~2 ticks) is
+ * already logged as run/fire, so its 'start' is suppressed to avoid a duplicate; its 'end' (with
+ * the measured duration) is still logged — that end + duration is new, useful information.
+ */
+function observeSessions(activeId: string | null, reachable: boolean): void {
+  if (!reachable) return; // a failed read ≠ valves closed — don't invent a session end
+  const now = Date.now();
+  const prev = observedRun;
+
+  // A previously-running zone stopped (went idle, or handed off to a different zone).
+  if (prev && prev.zoneId !== activeId) {
+    const mins = Math.max(1, Math.round((now - prev.startedAt) / 60_000));
+    const external = !appClaimed(prev.zoneId, prev.startedAt);
+    logIrrigationSession({
+      zoneId: prev.zoneId,
+      phase: "end",
+      external,
+      detail: `watering ended — ran ~${mins} min (observed at the controller)`,
+      relatedId: prev.startEventId,
+    });
+    observedRun = null;
+  }
+
+  // A zone just became active (idle→zone, or a hand-off to a new zone this same tick).
+  if (activeId && (!prev || prev.zoneId !== activeId)) {
+    const external = !appClaimed(activeId, now);
+    let startEventId: string | undefined;
+    if (external) {
+      // Only log a 'start' for runs the app didn't initiate — an app run/fire already covers ours.
+      const ev = logIrrigationSession({
+        zoneId: activeId,
+        phase: "start",
+        external: true,
+        detail: "watering started at the controller (keypad or onboard program)",
+      });
+      startEventId = ev?.id;
+    }
+    observedRun = { zoneId: activeId, startedAt: now, startEventId };
+  }
+}
+
+/** True when the app issued a `run` for this zone close enough to `observedAt` to own the
+ *  physical open (so we don't double-log it as an external keypad/onboard session). */
+function appClaimed(zoneId: string, observedAt: number): boolean {
+  const ts = lastAppRunTs(zoneId);
+  return ts !== undefined && observedAt - ts < APP_RUN_CLAIM_MS && ts <= observedAt + TICK_MS;
+}
+
 /** Prefer the owner's watering window — but only as a tie-breaker, NEVER at the expense of plant
  *  health. We return whether NOW is a "good" time; the coordinator still fires a due run regardless
  *  (deferring water risks the plant). This only annotates the log / future nudging. */
@@ -320,6 +390,11 @@ async function tick(): Promise<void> {
         `unreachable: ${(e as Error).message}`,
       );
     }
+
+    // Log the physical watering session (start/end + duration) for whatever the valves are
+    // actually doing — app-fired, keypad, or the onboard weekly program. Ground truth from the
+    // read above; skipped on an unreachable tick so we never fabricate a session end.
+    observeSessions(activeId, reachable);
 
     const wf = await forecastCached();
     const day: DayWeather = wf
@@ -471,6 +546,7 @@ export function stopIrrigationCoordinator(): void {
     clearInterval(timer);
     timer = null;
   }
+  observedRun = null;
 }
 
 // Exposed for tests (pure-ish helpers that need no real box).
@@ -479,4 +555,8 @@ export const __test = {
   dueWateringTimes,
   scheduledMinForDay,
   windowFavorable,
+  observeSessions,
+  resetObserver: (): void => {
+    observedRun = null;
+  },
 };
