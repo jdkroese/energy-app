@@ -13,9 +13,10 @@ interacting invisibly:
 | Incident | What happened | Root cause class |
 |---|---|---|
 | **P2 import, batteries full** (2026-07-02 evening) | 3.7 kW grid import at P2 while Tesla idled at 100% (27 kWh), Sonnen 0% | Scenario `gridCharge:true` silently pins Tesla to vendor-`autonomous`; **no invariant** notices "importing expensive while battery holds energy" |
-| **Sonnen discharge runaway** (PR #178) | Sonnen thrashed force-discharge↔soak-charge every 90s, dumped battery to grid at P1 | Discharge target counted the Sonnen's own discharge as house load (self-latch); two meter domains (Tesla CT vs Sonnen meter) feed different rules |
+| **Sonnen discharge runaway** (PR #178) | Live P1 with a 7.7 kW PV surplus: Sonnen thrashed force-discharge↔soak-charge every 90s and dumped battery to grid | Discharge target `drawW = sonnenDis + teslaDis + gridImport` counted the Sonnen's **own discharge** as house load → self-latched to 4.6 kW (log showed impossible "draw 9030W"). The actuator moved the very meter deciding its next action |
 | **Overnight AC reclaim** (PR #154) | Surplus rule re-adopted manual-on AC units at 3am | Provenance/hold semantics differed between two rules touching the same units |
 | **Solar 15.6 kW spike** (PR #175) | Impossible reading charted verbatim | No plausibility layer between source and consumer |
+| **Sticky transient faults** (PR #182) | One Tesla `/site_info` HTTP 504 became a standing red fault until re-arm | No transient-vs-permanent distinction in error handling; `control.lastError` never self-healed (same class as the climate tile, PR #171) |
 
 Each fix was correct and local. The pattern is global: **decisions are silent, ordering is
 implicit, config is scattered, and there are no invariants watching the outcome.** The trust
@@ -42,8 +43,15 @@ default-deny guardrail layer). Structurally:
 - **No decision trace.** Arbitrage logs richly; battery-priority logs only in shadow;
   Tesla-mode decisions log nothing. "Why is the battery doing X?" requires reading source.
 - **No invariant watchdogs.** Nothing detects state-contradicts-intent.
-- **Two meter domains** (Tesla CT vs Sonnen meter) feed different rules without a shared
-  reconciled view (root enabler of the #178 runaway).
+- **Two unreconciled meter domains — the deepest structural enabler.** The coordinator
+  arbitrates grid direction off the **Tesla gateway meter** (`snapshot.ts` prefers `t.gridKw`;
+  Sonnen only as fallback), which is blind to the Sonnen+Sungrow metering domain. `/api/live`'s
+  grid+home come from the Tesla meter and do not reconcile with the Sonnen/Sungrow flows — a
+  **~7 kW energy-balance gap** has been observed. Consequence: an actuator (the Sonnen) moves
+  the very meter that decides its own next action → feedback loops like #178. PR #178's fix
+  (`decideDischargeTarget()`: decide from the Sonnen's own meter residual `max(0, consumption −
+  production)`, stand down on PV surplus, clamp to residual, 300 W deadband) is the *local*
+  instance of the general principle the engine must own globally.
 
 ## 3. Target architecture
 
@@ -107,7 +115,12 @@ in `auto`, corrective safe-reverts) rather than economic optimizations:
 - **push-to-grid**: battery force-discharge exceeding house residual (the #178 runaway class).
 - **mode-drift**: vendor state ≠ engine intent for N ticks (Tesla ignored a write).
 - **stale-manual**: manual setpoint alive with no owning rule (strand detection).
-- **meter-disagreement**: Tesla CT vs Sonnen meter diverging beyond tolerance.
+- **meter-disagreement**: Tesla CT vs Sonnen+Sungrow domains diverging beyond tolerance
+  (the observed ~7 kW balance gap).
+
+Error handling follows the PR #171/#182 self-heal pattern engine-wide: transient upstream
+failures (5xx/timeouts) retry next tick and never become standing faults; `lastError`-style
+state clears on the next success; policy rejects are decisions (traced), not errors.
 
 ### Unified config + scenarios demoted to presets
 
@@ -136,9 +149,15 @@ regression suite: replay the #178 runaway day and assert the push-to-grid watchd
 - **D4 — Single scheduler, per-domain cadence.** One engine loop; battery rules evaluate every
   90s, climate/EV every 45s (per-rule `cadence` field). Removes cross-loop implicit
   coordination (EV draw reservation becomes an ordinary priority interaction).
-- **D5 — Reconciled snapshot.** One snapshot builder that reconciles both meter domains and
-  exposes named derived values (`houseResidualW`, `surplusW-after-reservations`) so every rule
-  reads the same physics. (#178's fix generalized.)
+- **D5 — Reconciled snapshot (load-bearing).** One snapshot builder reconciles both meter
+  domains into a single agreed physics view every rule must read: `gridDirection` and
+  `houseResidualW` computed so they are **not corrupted by any actuator's own flow** (subtract
+  known battery flows from the deciding signal), plus `surplusW-after-reservations`. Every
+  actuator claim carries a clamp that can never exceed real demand (`≤ houseResidualW` for
+  discharge, `≤ exportW` for absorb) — enforced by the arbiter, not left to each rule. A
+  `meter-disagreement` watchdog alerts when the two domains diverge beyond tolerance (the
+  observed ~7 kW balance gap becomes a first-class alert, not a silent corruption source).
+  This generalizes #178's `decideDischargeTarget()` fix from one rule to the whole engine.
 - **D6 — Migration by shadow-compare, cutover per domain.** New engine runs in shadow beside
   the legacy coordinator; a comparator logs divergences; a domain cuts over when divergence ≈ 0
   for N days, then its legacy path is DELETED (end state is the redesign, not two systems).
