@@ -18,12 +18,13 @@ const fmtKw = (kw: number) => (Math.abs(kw) >= 10 ? Math.abs(kw).toFixed(1) : Ma
 
 /**
  * Battery node for the live-flow diagram. The HERO readout is the live flow
- * (signed kW, bold + tone colour, grey when idle); SoC % and stored kWh are the
- * secondary grey sub-line — so the diagram always reads as power in motion.
+ * (signed kW, bold + tone colour, grey when idle); `soc` renders as a ring
+ * gauge around the chip + a prominent bold % line, with stored kWh trailing
+ * small + grey — so the diagram reads power in motion AND state at a glance.
  */
 function batteryNode(name: string, b: { soc: number; kwh: number; kw: number; dir: FlowDir }): FlowNode {
   const val = b.dir === 'charging' ? `+${fmtKw(b.kw)}` : b.dir === 'discharging' ? `−${fmtKw(b.kw)}` : '0.0';
-  return { name, val, unit: 'kW', sub: `${Math.round(b.soc)} % · ${b.kwh} kWh`, kw: b.kw, dir: b.dir };
+  return { name, val, unit: 'kW', sub: `${b.kwh} kWh`, kw: b.kw, dir: b.dir, soc: b.soc };
 }
 
 function toFlow(d: LiveResponse): FlowData {

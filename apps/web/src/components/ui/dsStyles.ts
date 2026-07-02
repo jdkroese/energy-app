@@ -214,13 +214,17 @@ const CSS = `
 .pwr2--src{ aspect-ratio:0.86/1; min-height:420px; }
 .pwr2__svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
 .pwr2__base{ stroke:var(--border-2); stroke-width:1.2; fill:none; }
-/* live flows: soft glow underlay + the crisp animated dash (speed set inline per-kW) */
-.pwr2__glow{ fill:none; stroke-width:6; stroke-linecap:round; opacity:.14; }
-.pwr2__line{ fill:none; stroke-width:2.6; stroke-linecap:round; stroke-dasharray:5 6; animation:pwr2move .9s linear infinite; }
+/* live flows: soft glow underlay + the crisp animated dash. Stroke width AND
+   dash speed are set inline per-link ∝ the flow's share of the biggest flow,
+   so the dominant stream visibly races and carries the thickest channel. */
+.pwr2__glow{ fill:none; stroke-linecap:round; opacity:.14; }
+.pwr2__line{ fill:none; stroke-linecap:round; stroke-dasharray:5 6; animation:pwr2move .9s linear infinite; }
 @keyframes pwr2move{ from{stroke-dashoffset:11;} to{stroke-dashoffset:0;} }
 /* the node anchor IS the chip centre — labels hang off it without moving it,
    so every line starts/ends exactly at the middle of a box */
-.pwr2__node{ position:absolute; transform:translate(-50%,-50%); }
+.pwr2__node{ position:absolute; transform:translate(-50%,-50%); animation:pwr2in .5s var(--ease-out) both; }
+@keyframes pwr2in{ from{ opacity:0; transform:translate(-50%,-44%) scale(.92); } to{ opacity:1; transform:translate(-50%,-50%) scale(1); } }
+@media (prefers-reduced-motion: reduce){ .pwr2__node{ animation:none; } .pwr2__line{ animation:none; } }
 .pwr2__chip{ display:flex; align-items:center; justify-content:center; width:46px; height:46px; border-radius:14px;
   background:var(--surface-2); border:1px solid var(--border-2); color:var(--_c, var(--text-3)); box-shadow:var(--shadow-1), var(--hairline-top); transition:box-shadow var(--dur) var(--ease-out),border-color var(--dur) var(--ease-out),color var(--dur) var(--ease-out); }
 .pwr2__chip svg{ width:20px; height:20px; }
@@ -238,6 +242,14 @@ const CSS = `
 .pwr2__kw small{ font-size:9px; font-weight:400; color:var(--text-3); }
 .pwr2__node:not(.pwr2__node--active) .pwr2__kw{ color:var(--text-2); }
 .pwr2__sub{ font-family:var(--font-mono); font-size:9px; color:var(--text-3); line-height:1.2; }
+/* battery state of charge: prominent bold % (kWh trails small + grey) … */
+.pwr2__soc{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:12px; font-weight:600; color:var(--text-1); line-height:1.2; white-space:nowrap; }
+.pwr2__soc small{ font-size:9px; font-weight:400; color:var(--text-3); }
+/* … plus a tone-coloured ring gauge around the battery chip */
+.pwr2__ring{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) rotate(-90deg); pointer-events:none; }
+.pwr2__ring-track{ fill:none; stroke:var(--border-2); stroke-width:2.5; }
+.pwr2__ring-fill{ fill:none; stroke:var(--_c); stroke-width:2.5; stroke-linecap:round; opacity:.9;
+  transition:stroke-dasharray var(--dur-slow, .6s) var(--ease-out); }
 /* inverter source nodes (top row feeding Solar) */
 .pwr2__node--src .pwr2__chip{ width:34px; height:34px; border-radius:11px; }
 .pwr2__node--src .pwr2__chip svg{ width:15px; height:15px; }
@@ -260,6 +272,8 @@ const CSS = `
 .pwr2--lg .pwr2__kw{ font-size:17px; }
 .pwr2--lg .pwr2__kw small{ font-size:10px; }
 .pwr2--lg .pwr2__sub{ font-size:10px; }
+.pwr2--lg .pwr2__soc{ font-size:13px; }
+.pwr2--lg .pwr2__soc small{ font-size:10px; }
 .pwr2--lg .pwr2__hub{ width:60px; height:60px; }
 .pwr2--lg .pwr2__hub svg{ width:24px; height:24px; }
 .pwr2--lg .pwr2__node--src .pwr2__chip{ width:40px; height:40px; border-radius:13px; }
