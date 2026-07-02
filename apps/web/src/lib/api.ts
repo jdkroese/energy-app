@@ -108,6 +108,28 @@ import type {
   EventsQuery,
   EventsConfig,
   EventsConfigResponse,
+  Recipe,
+  RecipesResponse,
+  RecipeResponse,
+  RecipeImportResponse,
+  MealPlanResponse,
+  PlanAskResponse,
+  StaplesItem,
+  StaplesResponse,
+  OrderLine,
+  OrderDraft,
+  OrderDraftResponse,
+  OrderHistoryResponse,
+  ChecklistResponse,
+  KitchenSearchResponse,
+  KitchenPickResponse,
+  KitchenHousehold,
+  KitchenHouseholdResponse,
+  KitchenReminders,
+  KitchenRemindersResponse,
+  KitchenIntelligence,
+  KitchenIntelligenceResponse,
+  MercadonaStatus,
 } from "./types";
 
 /**
@@ -700,6 +722,77 @@ export const api = {
       putJSON<{ ok: boolean }>("/api/spotify/repeat", { mode }),
     seek: (positionMs: number) =>
       putJSON<{ ok: boolean }>("/api/spotify/seek", { positionMs }),
+  },
+
+  /* ---- Kitchen Hub (Cooking + Groceries, docs/38 + docs/39); any-authed ---- */
+  kitchen: {
+    household: () => getJSON<KitchenHouseholdResponse>("/api/kitchen/household"),
+    setHousehold: (patch: Partial<KitchenHousehold>) =>
+      putJSON<KitchenHouseholdResponse>("/api/kitchen/household", patch),
+    reminders: () => getJSON<KitchenRemindersResponse>("/api/kitchen/reminders"),
+    setReminders: (patch: Partial<KitchenReminders>) =>
+      putJSON<KitchenRemindersResponse>("/api/kitchen/reminders", patch),
+    recipes: () => getJSON<RecipesResponse>("/api/kitchen/recipes"),
+    createRecipe: (recipe: Partial<Recipe>) =>
+      postJSON<RecipeResponse>("/api/kitchen/recipes", recipe),
+    updateRecipe: (id: string, recipe: Partial<Recipe>) =>
+      putJSON<RecipeResponse>(`/api/kitchen/recipes/${enc(id)}`, recipe),
+    deleteRecipe: (id: string) =>
+      delJSON<{ ok: boolean }>(`/api/kitchen/recipes/${enc(id)}`),
+    importRecipe: (url: string) =>
+      postJSON<RecipeImportResponse>("/api/kitchen/recipes/import", { url }),
+    plan: (week?: string) =>
+      getJSON<MealPlanResponse>(
+        `/api/kitchen/plan${week ? `?week=${enc(week)}` : ""}`,
+      ),
+    setPlanDay: (
+      week: string,
+      patch: {
+        date: string;
+        recipeId?: string | null;
+        skip?: boolean;
+        clear?: boolean;
+        servings?: number;
+        pinned?: boolean;
+      },
+    ) => putJSON<MealPlanResponse>(`/api/kitchen/plan?week=${enc(week)}`, patch),
+    suggest: (week: string, day?: string) =>
+      postJSON<MealPlanResponse>(
+        `/api/kitchen/plan/suggest?week=${enc(week)}`,
+        day ? { day } : {},
+      ),
+    ask: (text: string) =>
+      postJSON<PlanAskResponse>("/api/kitchen/plan/ask", { text }),
+    staples: () => getJSON<StaplesResponse>("/api/kitchen/staples"),
+    setStaples: (staples: StaplesItem[]) =>
+      putJSON<StaplesResponse>("/api/kitchen/staples", { staples }),
+    orderDraft: () => getJSON<OrderDraftResponse>("/api/kitchen/order/draft"),
+    setOrderDraft: (patch: { lines?: OrderLine[]; status?: OrderDraft["status"] }) =>
+      putJSON<OrderDraftResponse>("/api/kitchen/order/draft", patch),
+    draftFromPlan: (week: string) =>
+      postJSON<OrderDraftResponse>(
+        `/api/kitchen/order/draft/from-plan?week=${enc(week)}`,
+      ),
+    orderHistory: () =>
+      getJSON<OrderHistoryResponse>("/api/kitchen/order/history"),
+    sendChecklist: () =>
+      postJSON<ChecklistResponse>("/api/kitchen/order/checklist"),
+    searchProducts: (q: string) =>
+      getJSON<KitchenSearchResponse>(`/api/kitchen/products/search?q=${enc(q)}`),
+    pickProduct: (ingredientKey: string, productId: string) =>
+      postJSON<KitchenPickResponse>("/api/kitchen/products/pick", {
+        ingredientKey,
+        productId,
+      }),
+    mercadonaStatus: () =>
+      getJSON<MercadonaStatus>("/api/kitchen/mercadona/status"),
+    intelligence: () =>
+      getJSON<KitchenIntelligenceResponse>("/api/kitchen/intelligence"),
+    setIntelligence: (patch: {
+      enabled?: boolean;
+      apiKey?: string;
+      features?: Partial<KitchenIntelligence["features"]>;
+    }) => putJSON<KitchenIntelligenceResponse>("/api/kitchen/intelligence", patch),
   },
 
   /* ---- Irrigation (Rain Bird); run/stop/rain-delay are admin + require armed ---- */

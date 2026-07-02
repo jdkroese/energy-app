@@ -29,6 +29,8 @@ const META: Record<string, { eyebrow: string; title: string }> = {
   '/scenarios': { eyebrow: 'Scenarios', title: 'Strategy profiles' },
   '/automations': { eyebrow: 'Home', title: 'Automations' },
   '/music': { eyebrow: 'Media', title: 'Music' },
+  '/cooking': { eyebrow: 'Kitchen', title: 'Cooking' },
+  '/groceries': { eyebrow: 'Kitchen', title: 'Groceries' },
 };
 
 const RAIL_KEY = 'power.rail.expanded';

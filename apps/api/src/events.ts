@@ -36,6 +36,7 @@ export type EventCategory =
   | 'solar'
   | 'connectivity'
   | 'security'
+  | 'kitchen'
   | 'app';
 export type TriggerSource =
   | 'surplus-rule'

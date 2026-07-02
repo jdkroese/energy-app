@@ -160,6 +160,8 @@ import {
 } from "./routes/irrigation";
 import type { IrrigationLever } from "./control/irrigation-execute";
 import { startIrrigationCoordinator } from "./control/irrigation-coordinator";
+import { kitchenRouter } from "./routes/kitchen";
+import { startKitchenCoordinator } from "./control/kitchen-coordinator";
 import {
   getDiscovered,
   ignoreDiscovered,
@@ -306,6 +308,12 @@ app.get("/api/spotify/callback", (req: Request, res: Response) => {
 
 // --- Everything below this line requires a valid session ---
 app.use(requireAuth);
+
+// ---- Kitchen Hub (Cooking + Groceries, docs/38 + docs/39) ----
+// Reads + household mutations are any-authed (any household member plans dinners);
+// the Mercadona status probe + Intelligence settings are admin-gated INSIDE the router.
+// Additive feature — no control-loop involvement anywhere behind this mount.
+app.use("/api/kitchen", kitchenRouter);
 
 const wrap =
   (fn: (req: Request) => Promise<unknown> | unknown) =>
@@ -1601,6 +1609,10 @@ startRadioCoordinator();
 // rolling 1-day rain-delay to suppress the controller's onboard program; if the mini/LAN fails
 // the delay lapses (≤1 day) and the controller resumes on its own. Never opens a valve on boot.
 startIrrigationCoordinator();
+
+// Start the Kitchen Hub reminders coordinator (hourly tick; LOG-ONLY + push nudges —
+// plan-your-week + submit-before-cutoff, docs/39). No control-loop interaction at all.
+startKitchenCoordinator();
 
 // Start circuit-breaker usage metering (additive + READ-ONLY: reads the Tuya
 // fleet, writes its own SQLite store; no control authority). Fail-soft — if the
