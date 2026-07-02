@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { StatusDot, Icon } from '../ui';
 import type { HealthState, SubsystemRollup } from '../../lib/health';
 import { healthTone, isIssue } from '../../lib/health';
@@ -19,6 +20,8 @@ export interface DeviceChip {
   /** Why the device is not ok (offline / re-anchor needed / low battery …).
    *  Shown for every non-ok state so the board always explains an amber/red dot. */
   reason?: string;
+  /** Detail-page route — makes the chip a click-through to resolve/review. */
+  href?: string | null;
 }
 
 export interface SubsystemRowProps {
@@ -39,24 +42,36 @@ function Chip({ c }: { c: DeviceChip }) {
       ? 'var(--danger)'
       : 'var(--grid)'
     : 'var(--text-3)';
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        background: 'var(--surface-1)',
-        border: `1px solid ${issue ? (tone === 'danger' ? 'var(--danger)' : 'var(--grid)') : 'var(--border-1)'}`,
-        borderRadius: 8,
-        padding: '5px 9px',
-        fontSize: 11.5,
-        maxWidth: '100%',
-      }}
-    >
+  const inner = (
+    <>
       <StatusDot tone={tone} live={c.state === 'ok'} />
       <span style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
       {note && <span className="pwr-mono" style={{ color: noteColor, fontSize: 10.5 }}>{note}</span>}
-    </span>
+      {c.href && <Icon name="chevron-right" size={12} color="var(--text-3)" />}
+    </>
+  );
+  const style = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    background: 'var(--surface-1)',
+    border: `1px solid ${issue ? (tone === 'danger' ? 'var(--danger)' : 'var(--grid)') : 'var(--border-1)'}`,
+    borderRadius: 8,
+    padding: '5px 9px',
+    fontSize: 11.5,
+    maxWidth: '100%',
+    textDecoration: 'none',
+    color: 'inherit',
+    cursor: c.href ? 'pointer' : 'default',
+  } as const;
+  // A chip links to its device detail page when one exists (click-through to
+  // resolve/review); otherwise it's a plain span.
+  return c.href ? (
+    <Link to={c.href} className="pwr-press" style={style}>
+      {inner}
+    </Link>
+  ) : (
+    <span style={style}>{inner}</span>
   );
 }
 
