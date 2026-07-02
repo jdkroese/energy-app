@@ -2006,6 +2006,7 @@ export type EventCategory =
   | 'irrigation'
   | 'arbitrage'
   | 'grid'
+  | 'solar'
   | 'connectivity'
   | 'security'
   | 'app';

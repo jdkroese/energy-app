@@ -12,7 +12,15 @@ import { takeEventSnapshot } from './control/event-snapshot';
 /** Map the alert severity scale onto the event scale (§4). Safety events lift to critical. */
 function mapSeverity(a: Alert): Severity {
   // True safety events → critical (grid outage/island, over/under-voltage trip).
-  if (a.rule === 'rule-outage' || a.rule === 'rule-voltage') return 'critical';
+  // A solar inverter unreachable in daylight IS an outage, and repeated inverter
+  // grid-voltage trips are the same class as rule-voltage → lift both to critical.
+  if (
+    a.rule === 'rule-outage' ||
+    a.rule === 'rule-voltage' ||
+    a.rule === 'rule-inverter-offline' ||
+    a.rule === 'rule-inverter-grid-quality'
+  )
+    return 'critical';
   switch (a.severity) {
     case 'danger':
       return 'high';
@@ -40,6 +48,15 @@ function categoryFor(a: Alert): EventCategory {
     case 'rule-reserve':
     case 'rule-charge-stall':
       return 'battery';
+    // Solar inverters (Sungrow SG5.0RS ×2, docs/36). Grid-quality trips are a grid
+    // phenomenon (like rule-voltage); the rest are solar-production events.
+    case 'rule-inverter-grid-quality':
+      return 'grid';
+    case 'rule-inverter-fault':
+    case 'rule-inverter-offline':
+    case 'rule-inverter-stall':
+    case 'rule-inverter-imbalance':
+      return 'solar';
     default:
       return 'grid';
   }
