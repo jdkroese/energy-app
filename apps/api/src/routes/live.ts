@@ -169,23 +169,29 @@ export async function getLive(): Promise<unknown> {
   const breaker = bRes.status === 'fulfilled' ? bRes.value : null;
   const inv = invRes.status === 'fulfilled' ? invRes.value : null;
 
-  // Solar: Tesla solar_power is the PW3-metered array (Array B). If Sonnen reports
-  // production (Array A), add it. Best-effort A/B split.
+  // Solar comes from THREE physical sources: the 2× Sungrow SG5.0RS (Array A, read
+  // directly per-inverter over WiNet-S) + the Tesla PW3-metered array (Array B).
+  // The Sonnen meter's productionW is only a PROXY for Array A's AC output — so once
+  // the Sungrows are reachable we use their MEASURED per-inverter values as Array A
+  // (avoiding a double-count) and fall back to the Sonnen proxy only when they aren't.
   const teslaSolar = t?.solarKw ?? 0;
   const sonnenSolar = s ? round(s.productionW / 1000) : 0;
-  const solarKw = round(teslaSolar + sonnenSolar);
-  // Two physical arrays: A (Sonnen/Sungrow-side) + B (Tesla PW3-metered). Plus, when
-  // the Sungrow dongles are reachable, one entry PER inverter (the SG5.0RS ×2 drive
-  // Array A) so the Live surface shows per-string production. Returned as the
-  // {name,kw}[] the web contract (LiveResponse.solar.arrays) expects.
-  const arrays: { name: string; kw: number }[] = [
-    { name: 'A', kw: sonnenSolar },
-    { name: 'B', kw: teslaSolar },
-  ];
-  if (inv) {
-    for (const i of inv.inverters) {
-      if (i.reachable) arrays.push({ name: i.name, kw: round(i.acPowerW / 1000) });
-    }
+  const reachableInv = inv ? inv.inverters.filter((i) => i.reachable) : [];
+  let arrays: { name: string; kw: number }[];
+  let solarKw: number;
+  if (reachableInv.length > 0) {
+    // True 3-way split: one entry per reachable Sungrow + the Tesla array.
+    const sungrowKw = round(reachableInv.reduce((sum, i) => sum + i.acPowerW / 1000, 0));
+    arrays = reachableInv.map((i) => ({ name: i.name, kw: round(i.acPowerW / 1000) }));
+    arrays.push({ name: 'Tesla', kw: teslaSolar });
+    solarKw = round(sungrowKw + teslaSolar);
+  } else {
+    // No live Sungrow data (e.g. dongles asleep at night) → the A/B proxy split.
+    arrays = [
+      { name: 'A', kw: sonnenSolar },
+      { name: 'B', kw: teslaSolar },
+    ];
+    solarKw = round(teslaSolar + sonnenSolar);
   }
 
   // Home load: prefer Tesla load_power; else Sonnen consumption.

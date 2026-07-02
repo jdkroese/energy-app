@@ -282,6 +282,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
     ok: true,
     service: "energy-api",
     env: config.env,
+    node: process.version,
     time: new Date().toISOString(),
   });
 });
