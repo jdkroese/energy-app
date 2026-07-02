@@ -20,6 +20,7 @@
 import { WebSocket as WsWebSocket } from 'ws';
 import { cached } from '../cache';
 import { sungrowConfig, type SungrowDongle } from '../runtime-config';
+import { logEvent } from '../events';
 
 // ---- Normalized shapes (also the Modbus-ready interface) -------------------
 
@@ -61,6 +62,14 @@ export interface InverterNormalized {
   lastSeen: string | null;
   /** Currently-Active faults/alarms from the dongle fault log (empty when healthy). */
   faults: InverterFault[];
+  /**
+   * True when THIS poll's raw AC-power reading was physically impossible (> the
+   * plausibility ceiling for this inverter, e.g. a WiNet-S catch-up spike after a
+   * brief reconnect) and was therefore dropped. acPowerW is forced to 0 so the bad
+   * value never inflates the production sum, and callers skip it when writing
+   * per-inverter power history. Yield/temp/faults/work-state from the poll are kept.
+   */
+  powerRejected?: boolean;
   /** Short reason when unreachable / parse failed (for the UI + probe). */
   detail?: string;
 }
@@ -92,6 +101,30 @@ interface WsEnvelope {
 
 const WS_PORT = 8082;
 const WS_TIMEOUT_MS = 9000;
+
+// ---- Per-inverter plausibility bound --------------------------------------
+// The WiNet-S dongle occasionally emits a garbage/doubled active-power value after a
+// brief reconnect (a "catch-up" sample), which — with no bound in the pipeline — got
+// summed into solarKw and drawn verbatim (e.g. a physically-impossible ~15.6 kW single
+// sample at 18:25 with the sun already low). Each SG5.0RS is rated 5.0 kW AC, so any
+// reading more than 10% over rated is impossible and must be dropped for that poll.
+const DEFAULT_RATED_KW = 5.0; // SG5.0RS nameplate AC rating.
+const PLAUSIBILITY_MARGIN = 1.1; // Allow a 10% over-rated headroom (brief boost) before rejecting.
+
+/**
+ * Is this AC-power reading (W) physically plausible for an inverter of `ratedKw`?
+ * A reading at/under ratedKw × 1.1 is accepted; anything higher is a bad sample.
+ * Pure + side-effect-free so it can be unit-tested directly.
+ */
+export function plausibleAcPowerW(acPowerW: number, ratedKw = DEFAULT_RATED_KW): boolean {
+  if (!Number.isFinite(acPowerW)) return false;
+  return acPowerW <= ratedKw * PLAUSIBILITY_MARGIN * 1000;
+}
+
+/** Round to 1 decimal (for the rejection-event payload). */
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
 
 // We use the `ws` package's WebSocket rather than a runtime global: the mini's
 // launchd Node runtime does not expose a global `WebSocket` (Node < 21), so the old
@@ -384,7 +417,41 @@ async function readOne(dongle: SungrowDongle, index: number): Promise<InverterNo
   // unreachable). The dongle rate-limits guest sockets, so we never open a second one.
   try {
     const v = await wsReadLive(ip);
-    base.acPowerW = v.acPowerW;
+    // Per-inverter plausibility guard: a WiNet-S catch-up spike can report an AC power
+    // far above the inverter's rating. Keep everything ELSE from the poll (yield/temp/
+    // faults/work-state are unaffected by the bad power field) but drop this power
+    // sample so it can't inflate the production sum or land in per-inverter history.
+    const ratedKw = dongle.ratedKw ?? DEFAULT_RATED_KW;
+    if (plausibleAcPowerW(v.acPowerW, ratedKw)) {
+      base.acPowerW = v.acPowerW;
+    } else {
+      base.acPowerW = 0;
+      base.powerRejected = true;
+      const ceilingKw = ratedKw * PLAUSIBILITY_MARGIN;
+      // Fail-soft: a logging hiccup must never make a healthy inverter read unreachable.
+      try {
+        logEvent({
+          class: 'observation',
+          category: 'solar',
+          severity: 'medium',
+          summary: `Implausible solar reading dropped — ${name} ${(v.acPowerW / 1000).toFixed(1)} kW`,
+          trigger: {
+            source: 'threshold',
+            detail: `> ${ceilingKw.toFixed(1)} kW (rated ${ratedKw} kW ×${PLAUSIBILITY_MARGIN})`,
+          },
+          device: name,
+          entity: 'inverter.acKw',
+          detail:
+            `Sungrow ${name} (${ip}) reported ${(v.acPowerW / 1000).toFixed(2)} kW AC — above the ` +
+            `${ceilingKw.toFixed(1)} kW plausibility ceiling (likely a WiNet-S catch-up spike). ` +
+            `This poll's power was excluded from production; yield/temp/faults kept.`,
+          data: { ip, reportedKw: round1(v.acPowerW / 1000), ceilingKw: round1(ceilingKw), ratedKw },
+          noNotify: true,
+        });
+      } catch {
+        /* logging is best-effort — never block or fail the read */
+      }
+    }
     base.dailyKwh = v.dailyKwh;
     base.totalKwh = v.totalKwh;
     base.tempC = v.tempC;

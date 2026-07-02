@@ -43,6 +43,12 @@ export function tuyaConfig(): { region: string; accessId: string; accessSecret: 
 export interface SungrowDongle {
   ip: string;
   name?: string;
+  /**
+   * Nameplate AC rating (kW) of the inverter behind this dongle. Used by the connector's
+   * per-inverter plausibility guard to reject physically-impossible catch-up spikes.
+   * Defaults to the SG5.0RS's 5.0 kW when unset. Tunable per dongle via the Settings override.
+   */
+  ratedKw?: number;
 }
 
 /**
@@ -56,7 +62,11 @@ export function sungrowConfig(): SungrowDongle[] {
   const s = store.get().integrations?.sungrow;
   const configured = s?.dongles?.filter((d) => d && typeof d.ip === 'string' && d.ip.trim());
   if (configured && configured.length > 0) {
-    return configured.map((d) => ({ ip: d.ip.trim(), name: d.name?.trim() || undefined }));
+    return configured.map((d) => ({
+      ip: d.ip.trim(),
+      name: d.name?.trim() || undefined,
+      ...(typeof d.ratedKw === 'number' && d.ratedKw > 0 ? { ratedKw: d.ratedKw } : {}),
+    }));
   }
   const ip1 = process.env.SUNGROW_HOST_1?.trim() || '192.168.1.67';
   const ip2 = process.env.SUNGROW_HOST_2?.trim() || '192.168.1.181';
