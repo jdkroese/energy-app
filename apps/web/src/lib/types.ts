@@ -785,6 +785,15 @@ export interface RadioPlayResponse {
   coordinator: string;
 }
 
+/** A Spotify context a music schedule can play (playlist/album/liked/track). */
+export interface SpotifyScheduleTarget {
+  contextUri: string;
+  contextName: string;
+  contextImage?: string | null;
+  kind: 'playlist' | 'album' | 'track' | 'liked';
+}
+
+/** A music schedule — plays a radio station OR a Spotify context. `source` selects the target. */
 export interface RadioSchedule {
   id: string;
   name: string;
@@ -792,7 +801,12 @@ export interface RadioSchedule {
   days: number[];
   onTime: string;
   offTime?: string | null;
+  /** Which source this schedule plays. Legacy entries default to 'radio'. */
+  source: 'radio' | 'spotify';
+  /** Radio target (source='radio'). */
   stationId: string;
+  /** Spotify target (source='spotify'). */
+  spotify?: SpotifyScheduleTarget | null;
   speakerIds: string[];
   volumePct: number;
 }

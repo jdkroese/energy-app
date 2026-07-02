@@ -256,7 +256,26 @@ export async function stopRadio(body: unknown): Promise<unknown> {
   return { ts: new Date().toISOString(), ok: true };
 }
 
-// ---- Radio schedules --------------------------------------------------------
+// ---- Music schedules (radio OR Spotify) -------------------------------------
+// A schedule plays either an internet-radio station (source:'radio', stationId) OR a Spotify
+// context (source:'spotify', spotify:{contextUri,…}). The array is still persisted as
+// `radioSchedules` (see store.ts) but these routes accept + return the unified music schedule.
+
+/** Coerce a Spotify schedule target from request input; null when unusable. */
+function sanitizeSpotifyTarget(raw: unknown): store.SpotifyScheduleTarget | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Partial<store.SpotifyScheduleTarget>;
+  const contextUri = typeof t.contextUri === 'string' ? t.contextUri.trim() : '';
+  if (!contextUri) return null;
+  const kind = t.kind === 'album' || t.kind === 'track' || t.kind === 'liked' ? t.kind : 'playlist';
+  const contextImage = typeof t.contextImage === 'string' && t.contextImage.trim() ? t.contextImage.trim() : null;
+  return {
+    contextUri,
+    contextName: typeof t.contextName === 'string' && t.contextName.trim() ? t.contextName.trim() : 'Spotify',
+    contextImage,
+    kind,
+  };
+}
 
 function sanitizeSchedule(body: Partial<store.RadioSchedule>, base?: store.RadioSchedule): store.RadioSchedule {
   const onTime = typeof body.onTime === 'string' && HHMM_RE.test(body.onTime) ? body.onTime : base?.onTime ?? '08:00';
@@ -267,15 +286,22 @@ function sanitizeSchedule(body: Partial<store.RadioSchedule>, base?: store.Radio
       : typeof offRaw === 'string' && HHMM_RE.test(offRaw)
         ? offRaw
         : base?.offTime ?? null;
+  // Source: explicit if valid, else fall back to the base's source, else 'radio' (legacy default).
+  const source: 'radio' | 'spotify' =
+    body.source === 'spotify' || body.source === 'radio' ? body.source : base?.source ?? 'radio';
   const stationId = typeof body.stationId === 'string' && body.stationId ? body.stationId : base?.stationId ?? '';
+  const spotify =
+    body.spotify !== undefined ? sanitizeSpotifyTarget(body.spotify) : base?.spotify ?? null;
   return {
-    id: base?.id ?? newId('rsched'),
-    name: body.name?.trim() || base?.name || 'Radio schedule',
+    id: base?.id ?? newId('msched'),
+    name: body.name?.trim() || base?.name || 'Music schedule',
     enabled: typeof body.enabled === 'boolean' ? body.enabled : base?.enabled ?? true,
     days: Array.isArray(body.days) ? body.days.filter((d) => d >= 0 && d <= 6) : base?.days ?? [1, 2, 3, 4, 5],
     onTime,
     offTime,
-    stationId,
+    source,
+    stationId: source === 'radio' ? stationId : '',
+    spotify: source === 'spotify' ? spotify : null,
     speakerIds: Array.isArray(body.speakerIds)
       ? body.speakerIds.filter((x): x is string => typeof x === 'string')
       : base?.speakerIds ?? [],
@@ -286,13 +312,20 @@ function sanitizeSchedule(body: Partial<store.RadioSchedule>, base?: store.Radio
   };
 }
 
+/** Reject a schedule whose chosen source has no usable target. */
+function assertTarget(sched: store.RadioSchedule): void {
+  if (sched.source === 'radio' && !sched.stationId) badInput('stationId is required for a radio schedule');
+  if (sched.source === 'spotify' && (!sched.spotify || !sched.spotify.contextUri))
+    badInput('a Spotify context is required for a Spotify schedule');
+}
+
 export function listSchedules(): unknown {
   return { ts: new Date().toISOString(), schedules: store.get().radioSchedules };
 }
 
 export function createSchedule(body: Partial<store.RadioSchedule>): unknown {
   const sched = sanitizeSchedule(body ?? {});
-  if (!sched.stationId) badInput('stationId is required');
+  assertTarget(sched);
   store.update((s) => {
     s.radioSchedules.push(sched);
   });
@@ -300,15 +333,15 @@ export function createSchedule(body: Partial<store.RadioSchedule>): unknown {
 }
 
 export function updateSchedule(id: string, body: Partial<store.RadioSchedule>): unknown {
-  const saved = store.update((s) => {
+  const existing = store.get().radioSchedules.find((x) => x.id === id);
+  if (!existing) badInput(`music schedule ${id} not found`);
+  const merged = sanitizeSchedule(body, existing);
+  assertTarget(merged);
+  store.update((s) => {
     const idx = s.radioSchedules.findIndex((x) => x.id === id);
-    if (idx < 0) return null;
-    const merged = sanitizeSchedule(body, s.radioSchedules[idx]);
-    s.radioSchedules[idx] = merged;
-    return merged;
+    if (idx >= 0) s.radioSchedules[idx] = merged;
   });
-  if (!saved) badInput(`radio schedule ${id} not found`);
-  return { ts: new Date().toISOString(), schedule: saved };
+  return { ts: new Date().toISOString(), schedule: merged };
 }
 
 export function deleteSchedule(id: string): unknown {

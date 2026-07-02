@@ -1140,18 +1140,45 @@ export interface RadioStation {
   codec?: string;
 }
 
+/** A Spotify context (playlist / album / liked songs / single track) a music schedule can play.
+ *  `kind` decides how the coordinator starts it: 'playlist'/'album' as a context_uri, everything
+ *  else ('track' | 'liked') as an explicit track uri list. Name + image are cached for the UI so
+ *  the list can render the target without a live Spotify call. */
+export interface SpotifyScheduleTarget {
+  /** The Spotify URI chosen when the schedule was saved (context_uri or track uri). */
+  contextUri: string;
+  /** Cached display name (playlist/track title) for the schedule list. */
+  contextName: string;
+  /** Cached art URL (optional; the list falls back to a music glyph). */
+  contextImage?: string | null;
+  /** How to start it: a context (playlist/album) or explicit track uris (track/liked). */
+  kind: "playlist" | "album" | "track" | "liked";
+}
+
+/**
+ * A MUSIC schedule — plays either an internet-radio station OR a Spotify context on chosen
+ * speakers at a chosen volume, on chosen weekdays, at an on-time, optionally stopping at an
+ * off-time. The `source` discriminator selects which target is used: 'radio' reads `stationId`
+ * (kept for backward-compat with the original radio schedules), 'spotify' reads `spotify`.
+ * (The persisted array is still named `radioSchedules` so parallel churn on that hot field
+ * doesn't clash; a one-time migration stamps legacy entries with source:'radio'.)
+ */
 export interface RadioSchedule {
   id: string;
   name: string;
   enabled: boolean;
   /** Days of week the schedule runs on (0=Sun..6=Sat). */
   days: number[];
-  /** Local "HH:MM" — when to start the station. */
+  /** Local "HH:MM" — when to start playback. */
   onTime: string;
   /** Optional local "HH:MM" — stop the speakers. null = no auto-stop. */
   offTime?: string | null;
-  /** The favourite station to play (by id). */
+  /** Which source this schedule plays. Defaults to 'radio' for legacy entries (migration). */
+  source: "radio" | "spotify";
+  /** RADIO target: the favourite station to play (by id). Empty when source='spotify'. */
   stationId: string;
+  /** SPOTIFY target: the context to play. Present only when source='spotify'. */
+  spotify?: SpotifyScheduleTarget | null;
   /** Speaker UUIDs to play on; empty = ALL discovered speakers. */
   speakerIds: string[];
   /** Playback volume 0–100. */
@@ -2626,17 +2653,53 @@ function hydrateRadioFavorites(raw: unknown): RadioStation[] {
 }
 
 /** Coerce persisted radio schedules; drops malformed entries. */
+/** Coerce a persisted Spotify schedule target; null when structurally unusable. */
+function hydrateSpotifyTarget(raw: unknown): SpotifyScheduleTarget | null {
+  if (!raw || typeof raw !== "object") return null;
+  const t = raw as Partial<SpotifyScheduleTarget>;
+  if (typeof t.contextUri !== "string" || !t.contextUri) return null;
+  const kind =
+    t.kind === "album" || t.kind === "track" || t.kind === "liked"
+      ? t.kind
+      : "playlist";
+  return {
+    contextUri: t.contextUri,
+    contextName:
+      typeof t.contextName === "string" && t.contextName
+        ? t.contextName
+        : "Spotify",
+    contextImage:
+      typeof t.contextImage === "string" && t.contextImage
+        ? t.contextImage
+        : null,
+    kind,
+  };
+}
+
+/**
+ * Rehydrate the music (radio + Spotify) schedules. ONE-TIME migration: legacy entries persisted
+ * before the Spotify source existed have no `source` — they are stamped source:'radio' here so
+ * nothing breaks (a radio schedule always has a stationId). Spotify entries need a valid target;
+ * a spotify entry with an unusable target is dropped rather than fired blindly.
+ */
 function hydrateRadioSchedules(raw: unknown): RadioSchedule[] {
   if (!Array.isArray(raw)) return [];
   const out: RadioSchedule[] = [];
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
   for (const item of raw) {
     const r = (item ?? {}) as Partial<RadioSchedule>;
-    if (typeof r.id !== "string" || typeof r.stationId !== "string") continue;
+    if (typeof r.id !== "string") continue;
     if (typeof r.onTime !== "string" || !HHMM.test(r.onTime)) continue;
+    // Migration: absent source ⇒ 'radio' (the only kind that existed before).
+    const source: "radio" | "spotify" = r.source === "spotify" ? "spotify" : "radio";
+    const spotify = source === "spotify" ? hydrateSpotifyTarget(r.spotify) : null;
+    const stationId = typeof r.stationId === "string" ? r.stationId : "";
+    // A schedule with no usable target is unusable — skip it.
+    if (source === "radio" && !stationId) continue;
+    if (source === "spotify" && !spotify) continue;
     out.push({
       id: r.id,
-      name: typeof r.name === "string" && r.name ? r.name : "Radio schedule",
+      name: typeof r.name === "string" && r.name ? r.name : "Music schedule",
       enabled: typeof r.enabled === "boolean" ? r.enabled : true,
       days: Array.isArray(r.days)
         ? r.days.filter((d) => typeof d === "number" && d >= 0 && d <= 6)
@@ -2646,7 +2709,9 @@ function hydrateRadioSchedules(raw: unknown): RadioSchedule[] {
         typeof r.offTime === "string" && HHMM.test(r.offTime)
           ? r.offTime
           : null,
-      stationId: r.stationId,
+      source,
+      stationId,
+      spotify,
       speakerIds: Array.isArray(r.speakerIds)
         ? r.speakerIds.filter((x): x is string => typeof x === "string")
         : [],
