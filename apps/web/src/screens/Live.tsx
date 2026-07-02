@@ -4,7 +4,7 @@ import { usePolling } from '../lib/usePolling';
 import { MOCK_LIVE, MOCK_HISTORY_DAY } from '../lib/mock';
 import type { FlowDir, HistoryDayResponse, LiveResponse, VoltageMonitor } from '../lib/types';
 import { Card, StatTile, Badge, Eyebrow, Icon } from '../components/ui';
-import { EnergyFlow, type FlowData } from '../components/energy/EnergyFlow';
+import { EnergyFlow, type FlowData, type FlowNode } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
 import { VoltageHistoryOverlay } from '../components/energy/VoltageHistoryOverlay';
 import { TariffBand } from '../components/energy/TariffBand';
@@ -17,25 +17,22 @@ import type { ShellContext } from '../components/shell/AppShell';
 const fmtKw = (kw: number) => (Math.abs(kw) >= 10 ? Math.abs(kw).toFixed(1) : Math.abs(kw).toFixed(1));
 
 /**
- * Battery sub-line for the live-flow diagram. The big readout stays SoC %, so the
- * stored kWh and — crucially — the live charge/discharge rate go here, signed so the
- * flows visibly balance against Solar/Grid/Home (e.g. "8.9 kWh · +1.2 kW" charging,
- * "27 kWh · −2.4 kW" discharging, "8.9 kWh · idle" when not flowing).
+ * Battery node for the live-flow diagram. The HERO readout is the live flow
+ * (signed kW, bold + tone colour, grey when idle); SoC % and stored kWh are the
+ * secondary grey sub-line — so the diagram always reads as power in motion.
  */
-function batterySub(kwh: number, kw: number, dir?: FlowDir): string {
-  const stored = `${kwh} kWh`;
-  if (dir === 'charging') return `${stored} · +${fmtKw(kw)} kW`;
-  if (dir === 'discharging') return `${stored} · −${fmtKw(kw)} kW`;
-  return `${stored} · idle`;
+function batteryNode(name: string, b: { soc: number; kwh: number; kw: number; dir: FlowDir }): FlowNode {
+  const val = b.dir === 'charging' ? `+${fmtKw(b.kw)}` : b.dir === 'discharging' ? `−${fmtKw(b.kw)}` : '0.0';
+  return { name, val, unit: 'kW', sub: `${Math.round(b.soc)} % · ${b.kwh} kWh`, kw: b.kw, dir: b.dir };
 }
 
 function toFlow(d: LiveResponse): FlowData {
   return {
     solar: (() => {
       // Show the true per-source split (2× Sungrow + Tesla) as inverter nodes
-      // feeding the combined Solar node — but only when the backend sends real,
-      // named arrays. The night-time A/B proxy (single-letter names) is skipped so
-      // we don't render meaningless sources when the dongles are asleep.
+      // feeding the combined Solar node — whenever the backend sends real, named
+      // arrays (the API now keeps the names at night too, with `est` values).
+      // The legacy single-letter A/B proxy stays on the compact layout.
       const named =
         d.solar.arrays && d.solar.arrays.length >= 2 && d.solar.arrays.every((a) => a.name.length > 1)
           ? d.solar.arrays
@@ -46,11 +43,11 @@ function toFlow(d: LiveResponse): FlowData {
         unit: 'kW',
         sub: named ? 'combined feed' : `${d.solar.arrays?.length || 2} arrays`,
         kw: d.solar.kw,
-        breakdown: named ? named.map((a) => ({ label: a.name, kw: a.kw })) : undefined,
+        breakdown: named ? named.map((a) => ({ label: a.name, kw: a.kw, est: a.est })) : undefined,
       };
     })(),
-    sonnen: { name: 'Sonnen', val: String(Math.round(d.sonnen.soc)), unit: '%', sub: batterySub(d.sonnen.kwh, d.sonnen.kw, d.sonnen.dir), kw: d.sonnen.kw, dir: d.sonnen.dir },
-    tesla: { name: 'Tesla', val: String(Math.round(d.tesla.soc)), unit: '%', sub: batterySub(d.tesla.kwh, d.tesla.kw, d.tesla.dir), kw: d.tesla.kw, dir: d.tesla.dir },
+    sonnen: batteryNode('Sonnen', d.sonnen),
+    tesla: batteryNode('Tesla', d.tesla),
     grid: { name: 'Grid', val: fmtKw(d.grid.kw), unit: 'kW', sub: d.grid.dir === 'exporting' ? 'Export' : d.grid.dir === 'importing' ? 'Import' : 'Idle', kw: d.grid.kw, dir: d.grid.dir },
     home: { name: 'Home', val: fmtKw(d.home.kw), unit: 'kW', sub: 'Load', kw: d.home.kw },
   };

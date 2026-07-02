@@ -198,7 +198,7 @@ export async function getLive(): Promise<unknown> {
   const teslaSolar = t?.solarKw ?? 0;
   const sonnenSolar = s ? round(s.productionW / 1000) : 0;
   const reachableInv = inv ? inv.inverters.filter((i) => i.reachable) : [];
-  let arrays: { name: string; kw: number }[];
+  let arrays: { name: string; kw: number; est?: boolean }[];
   let solarKw: number;
   if (reachableInv.length > 0) {
     // True 3-way split: one entry per reachable Sungrow + the Tesla array.
@@ -206,8 +206,16 @@ export async function getLive(): Promise<unknown> {
     arrays = reachableInv.map((i) => ({ name: i.name, kw: round(i.acPowerW / 1000) }));
     arrays.push({ name: 'Tesla', kw: teslaSolar });
     solarKw = round(sungrowKw + teslaSolar);
+  } else if (inv && inv.inverters.length > 0) {
+    // Dongles configured but none reachable (usually asleep at night): keep the
+    // named per-inverter nodes in the UI by splitting the Sonnen-metered Array A
+    // proxy evenly across them, flagged `est` so the UI can mark the values (~).
+    const per = sonnenSolar / inv.inverters.length;
+    arrays = inv.inverters.map((i) => ({ name: i.name, kw: round(per), est: true }));
+    arrays.push({ name: 'Tesla', kw: teslaSolar });
+    solarKw = round(sonnenSolar + teslaSolar);
   } else {
-    // No live Sungrow data (e.g. dongles asleep at night) → the A/B proxy split.
+    // No Sungrow dongles configured at all → the legacy A/B proxy split.
     arrays = [
       { name: 'A', kw: sonnenSolar },
       { name: 'B', kw: teslaSolar },

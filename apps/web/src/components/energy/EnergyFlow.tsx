@@ -4,22 +4,22 @@ import { ensureDsStyles } from '../ui/dsStyles';
 import type { FlowDir } from '../../lib/types';
 
 export interface FlowNode {
-  /** big readout value, already formatted (e.g. "11.1" or "100") */
+  /** big readout value, already formatted (e.g. "11.1" or "+1.9") */
   val: string;
   /** unit shown small after the value ("kW" / "%") */
   unit: string;
-  /** sub line under the value ("2 arrays", "9.2 kWh · idle") */
+  /** sub line under the value — the SECONDARY params, small + grey ("88 % · 8.1 kWh") */
   sub: string;
   name: string;
   kw: number;
   dir?: FlowDir;
   /**
    * Optional per-source split of the solar total (2× Sungrow inverters + the
-   * Tesla-metered array). When present (≥2 real, named sources) the diagram
-   * renders each as its own node at the top, feeding a line into the combined
-   * Solar "production feed" node. Absent → the compact single-Solar layout.
+   * Tesla-metered array). When present (≥2 entries) the diagram renders each
+   * as its own node across the top, feeding a line into the combined Solar
+   * "production feed" node. `est` marks proxy-estimated values (shown as ~).
    */
-  breakdown?: { label: string; kw: number }[];
+  breakdown?: { label: string; kw: number; est?: boolean }[];
 }
 
 export interface FlowData {
@@ -34,28 +34,29 @@ type NodeKey = keyof FlowData;
 type Pt = { x: number; y: number };
 type Layout = { hub: Pt; pos: Record<NodeKey, Pt>; srcY: number };
 
-// Two layouts per breakpoint. `compact` is the original 5-node diagram (Solar
-// feeds the hub from the top). `sources` pushes the whole graph down and frees
-// the top ~22% for a row of inverter source nodes that feed into Solar.
+// Node positions are the CHIP CENTRES (labels hang off the chip and don't move
+// the anchor), so every line starts/ends exactly at the middle of a box.
+// Two layouts per breakpoint: `compact` (no source row) and `src` (inverter
+// sources across the top, everything else pushed down; uses the full height).
 const L_SM_COMPACT: Layout = {
-  hub: { x: 50, y: 50 },
+  hub: { x: 50, y: 52 },
   srcY: 0,
-  pos: { solar: { x: 50, y: 18 }, sonnen: { x: 15, y: 42 }, tesla: { x: 15, y: 80 }, grid: { x: 85, y: 42 }, home: { x: 50, y: 80 } },
+  pos: { solar: { x: 50, y: 26 }, sonnen: { x: 16, y: 40 }, tesla: { x: 16, y: 75 }, grid: { x: 84, y: 40 }, home: { x: 50, y: 75 } },
 };
 const L_SM_SRC: Layout = {
-  hub: { x: 50, y: 62 },
-  srcY: 11,
-  pos: { solar: { x: 50, y: 33 }, sonnen: { x: 15, y: 55 }, tesla: { x: 15, y: 86 }, grid: { x: 85, y: 55 }, home: { x: 50, y: 86 } },
+  hub: { x: 50, y: 58 },
+  srcY: 12,
+  pos: { solar: { x: 50, y: 33 }, sonnen: { x: 16, y: 54 }, tesla: { x: 16, y: 82 }, grid: { x: 84, y: 54 }, home: { x: 50, y: 82 } },
 };
 const L_LG_COMPACT: Layout = {
-  hub: { x: 50, y: 50 },
+  hub: { x: 50, y: 52 },
   srcY: 0,
-  pos: { solar: { x: 50, y: 17 }, sonnen: { x: 13, y: 40 }, tesla: { x: 13, y: 80 }, grid: { x: 87, y: 40 }, home: { x: 50, y: 80 } },
+  pos: { solar: { x: 50, y: 25 }, sonnen: { x: 14, y: 40 }, tesla: { x: 14, y: 76 }, grid: { x: 86, y: 40 }, home: { x: 50, y: 76 } },
 };
 const L_LG_SRC: Layout = {
-  hub: { x: 50, y: 61 },
-  srcY: 10,
-  pos: { solar: { x: 50, y: 34 }, sonnen: { x: 13, y: 55 }, tesla: { x: 13, y: 84 }, grid: { x: 87, y: 55 }, home: { x: 50, y: 84 } },
+  hub: { x: 50, y: 58 },
+  srcY: 13,
+  pos: { solar: { x: 50, y: 34 }, sonnen: { x: 14, y: 54 }, tesla: { x: 14, y: 81 }, grid: { x: 86, y: 54 }, home: { x: 50, y: 81 } },
 };
 
 const COLOR: Record<NodeKey, string> = {
@@ -85,17 +86,21 @@ function shortSource(label: string): string {
   return label.replace(/^solar\s+/i, '');
 }
 
+/** Dash-flow period: more power → faster flow (0.45s at ≥6 kW, 1.25s near idle). */
+function flowDur(kw: number): number {
+  return Math.max(0.45, 1.25 - Math.min(Math.abs(kw), 6) * 0.13);
+}
+
 /**
  * EnergyFlow — the signature two-battery live diagram (`pwr2`). A central hub
  * links Solar, Sonnen, Tesla, Grid and Home; power animates along each line in
- * its real direction. When the live solar split is available, the Solar node
- * becomes a "combined production feed" fed by the individual inverter nodes.
+ * its real direction, with flow speed scaled to the actual kW. When the live
+ * solar split is available, individual inverter nodes across the top feed the
+ * combined Solar "production feed" node.
  */
 export function EnergyFlow({ flow, size = 'sm' }: Props) {
   ensureDsStyles();
   const lg = size === 'lg';
-  // Only split into source nodes when there are ≥2 real, named arrays (the
-  // night-time A/B proxy is filtered upstream so it stays on the compact layout).
   const sources = flow.solar.breakdown && flow.solar.breakdown.length >= 2 ? flow.solar.breakdown : null;
   const hasSrc = !!sources;
   const layout = lg ? (hasSrc ? L_LG_SRC : L_LG_COMPACT) : hasSrc ? L_SM_SRC : L_SM_COMPACT;
@@ -110,21 +115,25 @@ export function EnergyFlow({ flow, size = 'sm' }: Props) {
     return { ...s, x, y: layout.srcY };
   });
 
-  const seg = (color: string, a: Pt, b: Pt) => ({ d: `M${a.x} ${a.y} L${b.x} ${b.y}`, color });
+  const seg = (color: string, kw: number, a: Pt, b: Pt) => ({
+    d: `M${a.x} ${a.y} L${b.x} ${b.y}`,
+    color,
+    kw,
+  });
 
-  // Animated flow links (only real, moving flows).
-  const links: { key: string; d: string; color: string }[] = [];
-  if (flow.solar.kw > 0.05) links.push({ key: 'solar', ...seg(COLOR.solar, POS.solar, HUB) });
-  if (flow.home.kw > 0.05) links.push({ key: 'home', ...seg(COLOR.home, HUB, POS.home) });
-  if (flow.grid.dir === 'exporting' && flow.grid.kw > 0.05) links.push({ key: 'grid', ...seg(COLOR.grid, HUB, POS.grid) });
-  if (flow.grid.dir === 'importing' && flow.grid.kw > 0.05) links.push({ key: 'grid', ...seg(COLOR.grid, POS.grid, HUB) });
+  // Animated flow links (only real, moving flows), speed scaled by kW.
+  const links: { key: string; d: string; color: string; kw: number }[] = [];
+  if (flow.solar.kw > 0.05) links.push({ key: 'solar', ...seg(COLOR.solar, flow.solar.kw, POS.solar, HUB) });
+  if (flow.home.kw > 0.05) links.push({ key: 'home', ...seg(COLOR.home, flow.home.kw, HUB, POS.home) });
+  if (flow.grid.dir === 'exporting' && flow.grid.kw > 0.05) links.push({ key: 'grid', ...seg(COLOR.grid, flow.grid.kw, HUB, POS.grid) });
+  if (flow.grid.dir === 'importing' && flow.grid.kw > 0.05) links.push({ key: 'grid', ...seg(COLOR.grid, flow.grid.kw, POS.grid, HUB) });
   (['sonnen', 'tesla'] as const).forEach((b) => {
-    if (flow[b].dir === 'charging') links.push({ key: b, ...seg(COLOR[b], HUB, POS[b]) });
-    if (flow[b].dir === 'discharging') links.push({ key: b, ...seg(COLOR[b], POS[b], HUB) });
+    if (flow[b].dir === 'charging' && flow[b].kw > 0.05) links.push({ key: b, ...seg(COLOR[b], flow[b].kw, HUB, POS[b]) });
+    if (flow[b].dir === 'discharging' && flow[b].kw > 0.05) links.push({ key: b, ...seg(COLOR[b], flow[b].kw, POS[b], HUB) });
   });
   // Each producing inverter feeds a line down into the Solar production node.
   srcPts.forEach((s, i) => {
-    if (s.kw > 0.05) links.push({ key: `src${i}`, ...seg(COLOR.solar, { x: s.x, y: s.y }, POS.solar) });
+    if (s.kw > 0.05) links.push({ key: `src${i}`, ...seg(COLOR.solar, s.kw, { x: s.x, y: s.y }, POS.solar) });
   });
 
   const activeMain = new Set(links.map((l) => l.key));
@@ -140,53 +149,48 @@ export function EnergyFlow({ flow, size = 'sm' }: Props) {
         {srcPts.map((s, i) => (
           <line key={`sb${i}`} className="pwr2__base" x1={s.x} y1={s.y} x2={POS.solar.x} y2={POS.solar.y} />
         ))}
+        {/* live flows: a soft glow underlay + the crisp animated dash on top */}
         {links.map((l) => (
-          <path key={l.key} className="pwr2__line" d={l.d} style={{ stroke: l.color }} />
+          <path key={`g-${l.key}`} className="pwr2__glow" d={l.d} style={{ stroke: l.color }} />
+        ))}
+        {links.map((l) => (
+          <path
+            key={l.key}
+            className="pwr2__line"
+            d={l.d}
+            style={{ stroke: l.color, animationDuration: `${flowDur(l.kw)}s` }}
+          />
         ))}
       </svg>
 
-      {/* main nodes */}
+      {/* main nodes — the chip sits exactly on the line anchor; labels hang off it */}
       {keys.map((k) => {
         const n = flow[k];
         const on = activeMain.has(k);
-        const above = k === 'solar';
-        const chip = (
-          <div className="pwr2__chip">
-            <Icon name={ICON[k]} />
-          </div>
-        );
-        const labels = (
-          <>
-            <span className="pwr2__name">{n.name}</span>
-            <span className="pwr2__kw">
-              {n.val}
-              <small> {n.unit}</small>
-            </span>
-            <span className="pwr2__sub">{n.sub}</span>
-          </>
-        );
+        const lbl = k === 'solar' ? (hasSrc ? 'right' : 'above') : 'below';
         return (
           <div
             key={k}
             className={'pwr2__node' + (on ? ' pwr2__node--active' : '')}
             style={{ left: POS[k].x + '%', top: POS[k].y + '%', '--_c': COLOR[k] } as CSSProperties}
           >
-            {above ? (
-              <>
-                {labels}
-                {chip}
-              </>
-            ) : (
-              <>
-                {chip}
-                {labels}
-              </>
-            )}
+            <div className="pwr2__chip">
+              <Icon name={ICON[k]} />
+            </div>
+            <div className={`pwr2__lbl pwr2__lbl--${lbl}`}>
+              <span className="pwr2__name">{n.name}</span>
+              <span className="pwr2__kw">
+                {n.val}
+                <small> {n.unit}</small>
+              </span>
+              {n.sub && <span className="pwr2__sub">{n.sub}</span>}
+            </div>
           </div>
         );
       })}
 
-      {/* inverter source nodes (top row, feeding Solar) */}
+      {/* inverter source nodes (top row, feeding Solar); labels above so the
+          feed lines below the chips never cross text */}
       {srcPts.map((s, i) => (
         <div
           key={`src${i}`}
@@ -196,11 +200,14 @@ export function EnergyFlow({ flow, size = 'sm' }: Props) {
           <div className="pwr2__chip">
             <Icon name="sun" />
           </div>
-          <span className="pwr2__name">{shortSource(s.label)}</span>
-          <span className="pwr2__kw">
-            {s.kw.toFixed(1)}
-            <small> kW</small>
-          </span>
+          <div className="pwr2__lbl pwr2__lbl--above">
+            <span className="pwr2__name">{shortSource(s.label)}</span>
+            <span className="pwr2__kw">
+              {s.est ? '~' : ''}
+              {s.kw.toFixed(1)}
+              <small> kW</small>
+            </span>
+          </div>
         </div>
       ))}
 

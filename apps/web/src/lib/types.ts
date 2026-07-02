@@ -13,7 +13,7 @@ export type Band = "P1" | "P2" | "P3";
 
 export interface LiveResponse {
   ts: string;
-  solar: { kw: number; arrays?: { name: string; kw: number }[] };
+  solar: { kw: number; arrays?: { name: string; kw: number; est?: boolean }[] };
   home: { kw: number };
   grid: { kw: number; dir: "importing" | "exporting" | "idle" };
   sonnen: { soc: number; kwh: number; kw: number; dir: FlowDir; mode?: string };

@@ -210,52 +210,62 @@ const CSS = `
 .pwr-select option{ background:var(--surface-2); color:var(--text-1); }
 
 /* ---- EnergyFlow (pwr2 two-battery) ---- */
-.pwr2{ position:relative; width:100%; aspect-ratio:1.34/1; min-height:268px; font-family:var(--font-sans); }
+.pwr2{ position:relative; width:100%; aspect-ratio:1.3/1; min-height:280px; font-family:var(--font-sans); }
+.pwr2--src{ aspect-ratio:0.86/1; min-height:420px; }
 .pwr2__svg{ position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
 .pwr2__base{ stroke:var(--border-2); stroke-width:1.2; fill:none; }
-.pwr2__line{ fill:none; stroke-width:2.4; stroke-linecap:round; stroke-dasharray:5 6; animation:pwr2move .9s linear infinite; }
+/* live flows: soft glow underlay + the crisp animated dash (speed set inline per-kW) */
+.pwr2__glow{ fill:none; stroke-width:6; stroke-linecap:round; opacity:.14; }
+.pwr2__line{ fill:none; stroke-width:2.6; stroke-linecap:round; stroke-dasharray:5 6; animation:pwr2move .9s linear infinite; }
 @keyframes pwr2move{ from{stroke-dashoffset:11;} to{stroke-dashoffset:0;} }
-.pwr2__node{ position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:3px; width:88px; text-align:center; }
+/* the node anchor IS the chip centre — labels hang off it without moving it,
+   so every line starts/ends exactly at the middle of a box */
+.pwr2__node{ position:absolute; transform:translate(-50%,-50%); }
 .pwr2__chip{ display:flex; align-items:center; justify-content:center; width:46px; height:46px; border-radius:14px;
   background:var(--surface-2); border:1px solid var(--border-2); color:var(--_c, var(--text-3)); box-shadow:var(--shadow-1), var(--hairline-top); transition:box-shadow var(--dur) var(--ease-out),border-color var(--dur) var(--ease-out),color var(--dur) var(--ease-out); }
 .pwr2__chip svg{ width:20px; height:20px; }
-.pwr2__node--active .pwr2__chip{ border-color:var(--_c); box-shadow:0 0 0 1px var(--_c), 0 0 16px color-mix(in srgb, var(--_c) 45%, transparent); }
+.pwr2__node--active .pwr2__chip{ border-color:var(--_c); animation:pwr2chip 2.4s ease-in-out infinite; }
+@keyframes pwr2chip{
+  0%,100%{ box-shadow:0 0 0 1px var(--_c), 0 0 12px color-mix(in srgb, var(--_c) 35%, transparent); }
+  50%{ box-shadow:0 0 0 1px var(--_c), 0 0 22px color-mix(in srgb, var(--_c) 60%, transparent); } }
+.pwr2__lbl{ position:absolute; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:2px; width:96px; text-align:center; pointer-events:none; }
+.pwr2__lbl--below{ top:calc(100% + 5px); }
+.pwr2__lbl--above{ bottom:calc(100% + 5px); }
+.pwr2__lbl--right{ left:calc(100% + 9px); top:50%; transform:translateY(-50%); align-items:flex-start; text-align:left; width:max-content; max-width:110px; }
 .pwr2__name{ font-size:9px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-2); }
-.pwr2__kw{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13px; font-weight:500; color:var(--_c, var(--text-1)); line-height:1; }
-.pwr2__kw small{ font-size:8px; color:var(--text-3); }
-.pwr2__sub{ font-family:var(--font-mono); font-size:9px; color:var(--text-3); line-height:1.1; }
-/* Per-source solar split (2× Sungrow + Tesla): a taller canvas with a row of
-   small inverter nodes feeding the Solar production node. */
-.pwr2--src{ aspect-ratio:0.9/1; min-height:400px; }
-.pwr2__node--src{ width:70px; gap:2px; }
+/* the LIVE kW flow is the hero: bold + tone colour; secondary params stay small/grey */
+.pwr2__kw{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:15px; font-weight:700; color:var(--_c, var(--text-1)); line-height:1; }
+.pwr2__kw small{ font-size:9px; font-weight:400; color:var(--text-3); }
+.pwr2__node:not(.pwr2__node--active) .pwr2__kw{ color:var(--text-2); }
+.pwr2__sub{ font-family:var(--font-mono); font-size:9px; color:var(--text-3); line-height:1.2; }
+/* inverter source nodes (top row feeding Solar) */
 .pwr2__node--src .pwr2__chip{ width:34px; height:34px; border-radius:11px; }
 .pwr2__node--src .pwr2__chip svg{ width:15px; height:15px; }
 .pwr2__node--src .pwr2__name{ font-size:8px; }
-.pwr2__node--src .pwr2__kw{ font-size:11px; }
-.pwr2__node--src .pwr2__kw small{ font-size:7px; }
+.pwr2__node--src .pwr2__kw{ font-size:12px; }
+.pwr2__node--src .pwr2__kw small{ font-size:8px; }
 .pwr2__hub{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:52px; height:52px; border-radius:50%;
   display:flex; align-items:center; justify-content:center; color:var(--accent);
   background:radial-gradient(circle at 50% 35%, var(--surface-3), var(--surface-1)); border:1px solid var(--border-3); box-shadow:var(--glow-soft, 0 0 20px rgba(46,230,160,.18)); }
 .pwr2__hub svg{ width:22px; height:22px; }
 .pwr2__hub::after{ content:""; position:absolute; inset:-6px; border-radius:50%; border:1px solid var(--border-solar); animation:pwr2ring 2.6s ease-out infinite; }
 @keyframes pwr2ring{ 0%{transform:scale(.85);opacity:.7;} 70%{transform:scale(1.5);opacity:0;} 100%{opacity:0;} }
-.pwr2--lg{ aspect-ratio:auto; height:100%; min-height:300px; }
-.pwr2--lg .pwr2__node{ width:104px; gap:4px; }
+/* desktop: fill the card's full height */
+.pwr2--lg{ aspect-ratio:auto; height:100%; min-height:320px; }
+.pwr2--lg.pwr2--src{ min-height:420px; }
 .pwr2--lg .pwr2__chip{ width:52px; height:52px; border-radius:16px; }
 .pwr2--lg .pwr2__chip svg{ width:22px; height:22px; }
+.pwr2--lg .pwr2__lbl{ width:110px; gap:3px; }
 .pwr2--lg .pwr2__name{ font-size:10px; }
-.pwr2--lg .pwr2__kw{ font-size:14px; }
-.pwr2--lg .pwr2__kw small{ font-size:9px; }
+.pwr2--lg .pwr2__kw{ font-size:17px; }
+.pwr2--lg .pwr2__kw small{ font-size:10px; }
 .pwr2--lg .pwr2__sub{ font-size:10px; }
 .pwr2--lg .pwr2__hub{ width:60px; height:60px; }
 .pwr2--lg .pwr2__hub svg{ width:24px; height:24px; }
-/* desktop, sources visible: taller canvas + slightly larger inverter nodes */
-.pwr2--lg.pwr2--src{ aspect-ratio:auto; min-height:400px; }
-.pwr2--lg .pwr2__node--src{ width:88px; }
 .pwr2--lg .pwr2__node--src .pwr2__chip{ width:40px; height:40px; border-radius:13px; }
 .pwr2--lg .pwr2__node--src .pwr2__chip svg{ width:18px; height:18px; }
 .pwr2--lg .pwr2__node--src .pwr2__name{ font-size:9px; }
-.pwr2--lg .pwr2__node--src .pwr2__kw{ font-size:12px; }
+.pwr2--lg .pwr2__node--src .pwr2__kw{ font-size:13px; }
 
 /* ---- Input ---- */
 .pwr-input-field{ display:flex; flex-direction:column; gap:6px; }
