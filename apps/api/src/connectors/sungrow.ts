@@ -17,6 +17,7 @@
 // so parsing is deliberately tolerant/fail-soft and keyed off the confirmed shapes
 // (docs/36 live discovery 2026-07-02). See the PR checklist.
 
+import { WebSocket as WsWebSocket } from 'ws';
 import { cached } from '../cache';
 import { sungrowConfig, type SungrowDongle } from '../runtime-config';
 
@@ -92,11 +93,11 @@ interface WsEnvelope {
 const WS_PORT = 8082;
 const WS_TIMEOUT_MS = 9000;
 
-/** A WebSocket global is available on Node ≥ 22 (build target node22); guarded so a
- *  runtime without it fails soft rather than throwing. */
-function hasWebSocket(): boolean {
-  return typeof (globalThis as { WebSocket?: unknown }).WebSocket === 'function';
-}
+// We use the `ws` package's WebSocket rather than a runtime global: the mini's
+// launchd Node runtime does not expose a global `WebSocket` (Node < 21), so the old
+// `globalThis.WebSocket` path threw on every poll → both dongles read "offline"
+// despite REST /product/list succeeding. `ws` works on any Node and is bundled by
+// esbuild (pure JS, no native binary → no vendoring needed). (2026-07-02 live debug.)
 
 /** Pick a numeric value out of a WiNet real-data item, tolerating "3.94"/"--"/units. */
 function num(v: unknown): number | null {
@@ -123,12 +124,10 @@ async function wsReadLive(ip: string): Promise<{
   tempC: number | null;
   workState: string;
 }> {
-  if (!hasWebSocket()) throw new Error('WebSocket unavailable in this runtime');
-  const WebSocketCtor = (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket;
   const url = `ws://${ip}:${WS_PORT}/ws/home/overview`;
 
   return await new Promise((resolve, reject) => {
-    const ws = new WebSocketCtor(url);
+    const ws = new WsWebSocket(url);
     let settled = false;
     let token = '';
     let devId: number | null = null;
@@ -161,9 +160,10 @@ async function wsReadLive(ip: string): Promise<{
     ws.onerror = () => done(new Error('WS error'));
     ws.onclose = () => done(new Error('WS closed before data'));
 
-    ws.onmessage = (ev: MessageEvent) => {
+    ws.onmessage = (ev: { data: unknown }) => {
       let msg: WsEnvelope;
       try {
+        // `ws` delivers text frames as a Buffer (or string); normalize to string.
         const text = typeof ev.data === 'string' ? ev.data : String(ev.data);
         msg = JSON.parse(text) as WsEnvelope;
       } catch {
@@ -213,21 +213,28 @@ function resolveFromRealList(
   const valOf = (item: Record<string, unknown> | null) => (item ? num(item.data_value ?? item.value) : null);
   const unitOf = (item: Record<string, unknown> | null) => String(item?.data_unit ?? item?.unit ?? '').toLowerCase();
 
-  // Active power — WiNet reports it in W or kW depending on the unit field.
-  const powerItem = pick(list, ['active power', 'total active power', 'ac power', 'output power']);
+  // The WiNet `real` service returns raw I18N keys as data_name (e.g.
+  // "I18N_COMMON_ACTIVE_POWER"), NOT localized labels (confirmed by live capture
+  // 2026-07-02). Match the exact I18N key first, keep human-label substrings as a
+  // fallback for other firmwares. `pick` lowercases, so keys are lowercase here.
+
+  // Active power — reported in kW (unit field) on the SG5.0RS; scaled to W.
+  // Exact key avoids matching I18N_COMMON_REACTIVE_POWER / _APPARENT_POWER.
+  const powerItem = pick(list, ['i18n_common_active_power', 'active power', 'ac power', 'output power']);
   let acPowerW = valOf(powerItem) ?? 0;
   if (unitOf(powerItem).startsWith('kw')) acPowerW *= 1000;
 
-  const dailyItem = pick(list, ['daily yield', 'today yield', 'daily energy', 'today energy', 'daily power yields']);
+  const dailyItem = pick(list, ['i18n_common_daily_power_yield', 'daily yield', 'today yield', 'daily energy']);
   const dailyKwh = valOf(dailyItem) ?? 0;
 
-  const totalItem = pick(list, ['total yield', 'total energy', 'lifetime', 'total power yields']);
+  const totalItem = pick(list, ['i18n_common_total_yield', 'total yield', 'total energy', 'lifetime']);
   const totalKwh = valOf(totalItem) ?? 0;
 
-  const tempItem = pick(list, ['internal temperature', 'temperature', 'inverter temp']);
+  const tempItem = pick(list, ['i18n_common_air_tem_inside_machine', 'air_tem', 'internal temperature', 'temperature']);
   const tempC = valOf(tempItem);
 
-  const stateItem = pick(list, ['work state', 'device state', 'running state', 'system state', 'state']);
+  // Running state value is itself an I18N key, e.g. "I18N_COMMON_STATUS_RUN".
+  const stateItem = pick(list, ['i18n_common_running_state', 'running state', 'work state', 'device state', 'system state', 'state']);
   const workState = normalizeWorkState(stateItem ? String(stateItem.data_value ?? stateItem.value ?? '') : '');
 
   done(null, { acPowerW: Math.max(0, Math.round(acPowerW)), dailyKwh, totalKwh, tempC, workState });

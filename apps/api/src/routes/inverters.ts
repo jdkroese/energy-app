@@ -39,6 +39,8 @@ export async function getInverters(): Promise<unknown> {
       lastSeen: i.lastSeen,
       // "asleep" = not reachable but it's night (expected); "offline" = daylight miss.
       status: i.reachable ? 'online' : daylight ? 'offline' : 'asleep',
+      // Short reason when a read failed (surfaced for diagnosis; null when healthy).
+      detail: i.reachable ? undefined : i.detail,
       faults: i.faults.slice(0, 8),
       activeFaultCount: active.length,
     };
