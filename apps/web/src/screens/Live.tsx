@@ -48,13 +48,40 @@ function toFlow(d: LiveResponse): FlowData {
     })(),
     sonnen: batteryNode('Sonnen', d.sonnen),
     tesla: batteryNode('Tesla', d.tesla),
-    grid: { name: 'Grid', val: fmtKw(d.grid.kw), unit: 'kW', sub: d.grid.dir === 'exporting' ? 'Export' : d.grid.dir === 'importing' ? 'Import' : 'Idle', kw: d.grid.kw, dir: d.grid.dir },
+    // Grid + Home read from the TESLA GATEWAY meter — a separate metering domain
+    // from Sonnen/Sungrow (which meter themselves), so the five flows around the
+    // hub don't always sum: the Tesla meter can't see the Sonnen/Sungrow side.
+    // The grid sub + the caption under the diagram make that explicit.
+    grid: { name: 'Grid', val: fmtKw(d.grid.kw), unit: 'kW', sub: (d.grid.dir === 'exporting' ? 'Export' : d.grid.dir === 'importing' ? 'Import' : 'Idle') + ' · Tesla meter', kw: d.grid.kw, dir: d.grid.dir },
     home: { name: 'Home', val: fmtKw(d.home.kw), unit: 'kW', sub: 'Load', kw: d.home.kw },
   };
 }
 
 function bandLabel(b: string) {
   return b === 'P1' ? 'peak' : b === 'P2' ? 'shoulder' : 'off-peak';
+}
+
+/**
+ * Metering-domain caption for the live flow. The site has TWO independent meter
+ * domains that can't see each other — Grid/Home come from the Tesla gateway
+ * meter, while Sonnen + the Sungrows meter themselves — so the flows around the
+ * hub don't always visually sum. Saying so beats looking wrong.
+ */
+function MeterDomainsNote() {
+  return (
+    <div
+      style={{
+        marginTop: 6,
+        textAlign: 'center',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 10,
+        lineHeight: 1.5,
+        color: 'var(--text-3)',
+      }}
+    >
+      Grid &amp; Home · Tesla gateway meter&ensp;—&ensp;Sonnen &amp; inverters metered separately
+    </div>
+  );
 }
 
 /**
@@ -299,6 +326,7 @@ export function Live({ ctx }: { ctx: ShellContext }) {
             </Badge>
           </div>
           <EnergyFlow flow={flow} />
+          <MeterDomainsNote />
         </Card>
 
         {/* forecast — production & consumption (measured + forecast) */}
@@ -399,6 +427,7 @@ function LiveDesktop({ live, flow, plan, stale }: { live: LiveResponse; flow: Fl
           <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
             <EnergyFlow flow={flow} size="lg" />
           </div>
+          <MeterDomainsNote />
         </Card>
         <DayChartCard height={300} subtitle="today · 5-min · measured + forecast · kW left · SoC % right" />
       </div>
