@@ -44,3 +44,18 @@ work, and broken deploys, every session MUST follow these. Detail: `docs/18-mult
    `deploy.yml` and do not deploy at all.
 6. **Activate the shared git guard once per clone:** `git config core.hooksPath scripts/githooks`
    (the helper-made worktrees inherit it automatically). It blocks force/stale pushes to `main`.
+
+## Formatting — do NOT run Prettier blind (standing rule)
+
+`package.json` ships a `format` script (`prettier --write .`) and Prettier as a devDep, but
+there is **no `.prettierrc`**, and the codebase is **hand-formatted and not Prettier-clean**
+(single quotes, semicolons, ~120-col hand wrapping). Running `prettier --write .` reformats
+**~75% of files** — and on Prettier's defaults it flips every string literal to double quotes.
+That produces a massive diff that collides with the many parallel branches and buries real
+changes in style churn (this has already bitten an agent mid-task).
+
+- **Do not run `prettier --write` / the `format` script** as part of a feature or fix. Match
+  the surrounding style by hand instead.
+- Adopting Prettier for real is a **deliberate, standalone, repo-wide reformat** that must be
+  coordinated when few branches are open and land with a committed config in the same commit —
+  not something to trigger incidentally. Raise it with the owner first.
