@@ -13,8 +13,12 @@ export interface DeviceChip {
   id: string;
   name: string;
   state: HealthState;
-  /** Key telemetry line (temp/mode, brightness, position, SoC, volume). */
+  /** Key telemetry line for healthy devices (temp/mode, brightness, position,
+   *  SoC, volume). Shown only when the device is `ok`. */
   telemetry?: string;
+  /** Why the device is not ok (offline / re-anchor needed / low battery …).
+   *  Shown for every non-ok state so the board always explains an amber/red dot. */
+  reason?: string;
 }
 
 export interface SubsystemRowProps {
@@ -25,6 +29,16 @@ export interface SubsystemRowProps {
 }
 
 function Chip({ c }: { c: DeviceChip }) {
+  const tone = healthTone(c.state);
+  const issue = isIssue(c.state);
+  // Healthy → quiet telemetry; anything else → the reason, tinted to the dot's
+  // tone so an amber/red dot is never left unexplained.
+  const note = issue ? c.reason : c.telemetry;
+  const noteColor = issue
+    ? tone === 'danger'
+      ? 'var(--danger)'
+      : 'var(--grid)'
+    : 'var(--text-3)';
   return (
     <span
       style={{
@@ -32,16 +46,16 @@ function Chip({ c }: { c: DeviceChip }) {
         alignItems: 'center',
         gap: 6,
         background: 'var(--surface-1)',
-        border: '1px solid var(--border-1)',
+        border: `1px solid ${issue ? (tone === 'danger' ? 'var(--danger)' : 'var(--grid)') : 'var(--border-1)'}`,
         borderRadius: 8,
         padding: '5px 9px',
         fontSize: 11.5,
         maxWidth: '100%',
       }}
     >
-      <StatusDot tone={healthTone(c.state)} live={c.state === 'ok'} />
+      <StatusDot tone={tone} live={c.state === 'ok'} />
       <span style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
-      {c.telemetry && <span className="pwr-mono" style={{ color: 'var(--text-3)', fontSize: 10.5 }}>{c.telemetry}</span>}
+      {note && <span className="pwr-mono" style={{ color: noteColor, fontSize: 10.5 }}>{note}</span>}
     </span>
   );
 }

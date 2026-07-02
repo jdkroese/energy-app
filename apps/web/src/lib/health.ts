@@ -58,8 +58,10 @@ export function isIssue(state: HealthState): boolean {
   return state === 'warning' || state === 'offline' || state === 'error';
 }
 
-/** Map a health state → a StatusDot tone (the ui StatusDot has no nosetup/ok-solar
- *  distinction, so nosetup borrows the muted offline tone). */
+/** Map a health state → a StatusDot tone. Offline is a problem the owner should
+ *  see, so it gets the amber `grid` tone (not the muted grey) — only `nosetup`
+ *  (discovered-but-not-configured, not a fault) stays muted. Hard faults (fleet
+ *  error / rejected command) are red `danger`. */
 export function healthTone(
   state: HealthState,
 ): 'solar' | 'grid' | 'danger' | 'offline' {
@@ -67,10 +69,10 @@ export function healthTone(
     case 'ok':
       return 'solar';
     case 'warning':
+    case 'offline':
       return 'grid';
     case 'error':
       return 'danger';
-    case 'offline':
     case 'nosetup':
     default:
       return 'offline';
