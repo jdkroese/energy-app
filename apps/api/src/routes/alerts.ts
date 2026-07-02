@@ -1,8 +1,10 @@
 import * as sonnen from '../connectors/sonnen';
 import * as tesla from '../connectors/tesla';
+import * as sungrow from '../connectors/sungrow';
 import { bandFor } from '../tariff';
 import { probeAll } from './health-probe';
 import { getMonitoredBreaker } from '../connectors/tuya-voltage';
+import { expectMeaningfulProductionNow } from '../solar-daylight';
 import * as store from '../store';
 
 export type Severity = 'danger' | 'warning' | 'info' | 'ok';
@@ -31,7 +33,48 @@ const RULE_META: Record<string, { icon: string; label: string }> = {
   'rule-export': { icon: 'arrow-up-from-line', label: 'Exporting during P1 (wasted value)' },
   'rule-charge-stall': { icon: 'battery-warning', label: 'Sonnen not absorbing surplus' },
   'rule-voltage': { icon: 'zap', label: 'Grid voltage out of band' },
+  'rule-inverter-fault': { icon: 'triangle-alert', label: 'Solar inverter fault/alarm' },
+  'rule-inverter-offline': { icon: 'wifi-off', label: 'Solar inverter offline (daylight)' },
+  'rule-inverter-stall': { icon: 'sun-dim', label: 'Solar inverter not producing' },
+  'rule-inverter-grid-quality': { icon: 'zap', label: 'Repeated grid-voltage trips (inverter)' },
+  'rule-inverter-imbalance': { icon: 'scale', label: 'Solar inverters producing unevenly' },
 };
+
+// ---- Grid-quality trip aggregation (rule-inverter-grid-quality) -------------
+// Voltage trips auto-recover in seconds, so we DON'T page on every flap. We track
+// each inverter's under/over-voltage fault transitions over a rolling 1h window and
+// only fire when the count in the window crosses a threshold. Keyed by inverter id;
+// each new Active transition (a fault key not currently marked active) records a ts.
+const GRID_TRIP_WINDOW_MS = 60 * 60 * 1000;
+const GRID_TRIP_THRESHOLD = 4; // trips within the window before we corroborate rule-voltage
+const gridTripTimes = new Map<string, number[]>(); // inverterId → [epoch ms of Active transitions]
+const gridTripActive = new Map<string, Set<string>>(); // inverterId → fault keys currently Active
+
+function isVoltageTrip(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.includes('voltage') && (n.includes('under') || n.includes('over'));
+}
+
+/** Fold this poll's fault list into the rolling voltage-trip counter for an inverter. */
+function trackGridTrips(inverterId: string, faults: sungrow.InverterFault[]): number {
+  const now = Date.now();
+  const active = gridTripActive.get(inverterId) ?? new Set<string>();
+  const times = (gridTripTimes.get(inverterId) ?? []).filter((t) => now - t < GRID_TRIP_WINDOW_MS);
+  const seenNow = new Set<string>();
+  for (const f of faults) {
+    if (!isVoltageTrip(f.name)) continue;
+    const key = `${f.name}#${f.code ?? ''}`;
+    const isActive = f.status.toLowerCase().includes('active');
+    if (isActive) {
+      seenNow.add(key);
+      // A NEW Active transition (wasn't active last poll) counts as one trip.
+      if (!active.has(key)) times.push(now);
+    }
+  }
+  gridTripActive.set(inverterId, seenNow);
+  gridTripTimes.set(inverterId, times);
+  return times.length;
+}
 
 // A small seeded set of historical/resolved alerts so the feed is never empty.
 function seeded(): Alert[] {
@@ -226,6 +269,147 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
         status: 'new',
         rule: 'rule-voltage',
       });
+    }
+  }
+
+  // ---- Solar inverters (Sungrow SG5.0RS ×2; docs/36) --------------------------
+  // READ-ONLY. Night-gated where relevant: the string inverters + their WiNet-S
+  // dongles de-energize at dusk, so an unreachable/zero-output reading is only an
+  // alert when clear-sky expects meaningful production.
+  const wantInverterRules =
+    ruleEnabled('rule-inverter-fault') ||
+    ruleEnabled('rule-inverter-offline') ||
+    ruleEnabled('rule-inverter-stall') ||
+    ruleEnabled('rule-inverter-grid-quality') ||
+    ruleEnabled('rule-inverter-imbalance');
+  if (wantInverterRules) {
+    const invRes = await sungrow.getNormalized().catch(() => null);
+    if (invRes && invRes.inverters.length > 0) {
+      // Daylight/expected-production gate — computed once for the offline/stall rules.
+      const daylight = await expectMeaningfulProductionNow().catch(() => false);
+
+      for (const iv of invRes.inverters) {
+        // 1) Fault/alarm Active — page immediately, naming the cause. Not night-gated
+        //    (a real fault while asleep is unusual but still worth surfacing).
+        if (ruleEnabled('rule-inverter-fault')) {
+          const active = sungrow.activeFaults(iv.faults);
+          const nonVoltage = active.filter((f) => !isVoltageTrip(f.name));
+          const primary = nonVoltage[0] ?? active[0];
+          if (iv.reachable && iv.workState === 'Fault' && active.length === 0) {
+            // Work-state says Fault but the log had nothing parseable — still alert.
+            live.push({
+              id: `inverter-fault-${iv.id}`,
+              severity: 'danger',
+              icon: 'triangle-alert',
+              title: `Fault on ${iv.name}`,
+              sub: `${iv.name} reports work-state Fault`,
+              device: iv.name,
+              ts: now,
+              status: 'new',
+              rule: 'rule-inverter-fault',
+            });
+          } else if (primary) {
+            live.push({
+              id: `inverter-fault-${iv.id}`,
+              severity: primary.type.toLowerCase() === 'fault' ? 'danger' : 'warning',
+              icon: 'triangle-alert',
+              title: `${primary.name} on ${iv.name}`,
+              sub: `${primary.type} · fault code ${primary.code ?? '—'}${primary.id != null ? ` (ID ${primary.id})` : ''}`,
+              device: iv.name,
+              ts: now,
+              status: 'new',
+              rule: 'rule-inverter-fault',
+            });
+          }
+        }
+
+        // 2) Dongle offline — DAYLIGHT-GATED (night misses are expected + suppressed).
+        //    Debounced ~5 min in the alert loop (N consecutive misses).
+        if (ruleEnabled('rule-inverter-offline') && !iv.reachable && daylight) {
+          live.push({
+            id: `inverter-offline-${iv.id}`,
+            severity: 'danger',
+            icon: 'wifi-off',
+            title: `${iv.name} unreachable`,
+            sub: `No response from ${iv.ip} while the roof should be producing — ${iv.detail ?? 'check the inverter/dongle'}`,
+            device: iv.name,
+            ts: now,
+            status: 'new',
+            rule: 'rule-inverter-offline',
+          });
+        }
+
+        // 3) Stall — reachable, Run/Standby, but ~0 output while daylight expects some.
+        if (
+          ruleEnabled('rule-inverter-stall') &&
+          iv.reachable &&
+          daylight &&
+          (iv.workState === 'Run' || iv.workState === 'Standby') &&
+          iv.acPowerW < 50
+        ) {
+          live.push({
+            id: `inverter-stall-${iv.id}`,
+            severity: 'warning',
+            icon: 'sun-dim',
+            title: `${iv.name} not producing`,
+            sub: `${iv.name} is ${iv.workState} but at ~0 W while clear-sky expects output — possible string/MPPT fault or derating`,
+            device: iv.name,
+            ts: now,
+            status: 'new',
+            rule: 'rule-inverter-stall',
+          });
+        }
+
+        // 4) Grid-quality aggregation — count under/over-voltage trips over the last
+        //    hour; fire once past the threshold (corroborates rule-voltage without
+        //    paging on every auto-recovering flap).
+        const trips = trackGridTrips(iv.id, iv.faults);
+        if (ruleEnabled('rule-inverter-grid-quality') && trips >= GRID_TRIP_THRESHOLD) {
+          live.push({
+            id: `inverter-grid-quality-${iv.id}`,
+            severity: 'warning',
+            icon: 'zap',
+            title: `Repeated grid-voltage trips on ${iv.name}`,
+            sub: `${trips} grid under/over-voltage trips in the last hour — weak-grid event corroborating the voltage monitor`,
+            device: iv.name,
+            ts: now,
+            status: 'new',
+            rule: 'rule-inverter-grid-quality',
+          });
+        }
+      }
+
+      // 5) Imbalance — the two arrays are near-identical, so under the SAME daylight
+      //    conditions one producing materially less than its twin flags slow
+      //    degradation (soiling/shading/string fault). Only when BOTH are reachable,
+      //    daylight expects output, and the leader is producing a meaningful amount.
+      if (ruleEnabled('rule-inverter-imbalance')) {
+        const daylightNow = await expectMeaningfulProductionNow().catch(() => false);
+        const both = invRes.inverters.filter((i) => i.reachable);
+        if (daylightNow && both.length === 2) {
+          const [a, b] = both;
+          const hi = Math.max(a.acPowerW, b.acPowerW);
+          const lo = Math.min(a.acPowerW, b.acPowerW);
+          const lagging = a.acPowerW < b.acPowerW ? a : b;
+          const leader = a.acPowerW < b.acPowerW ? b : a;
+          // Require a meaningful leader (>1 kW) and the laggard <60% of it, both healthy
+          // (no active fault — a fault is already covered by rule-inverter-fault).
+          const laggingHasFault = sungrow.activeFaults(lagging.faults).length > 0;
+          if (hi > 1000 && lo < hi * 0.6 && !laggingHasFault) {
+            live.push({
+              id: `inverter-imbalance-${lagging.id}`,
+              severity: 'info',
+              icon: 'scale',
+              title: `${lagging.name} under-producing`,
+              sub: `${lagging.name} at ${(lo / 1000).toFixed(1)} kW vs ${leader.name} at ${(hi / 1000).toFixed(1)} kW under the same sun — check for shading/soiling/string fault`,
+              device: lagging.name,
+              ts: now,
+              status: 'new',
+              rule: 'rule-inverter-imbalance',
+            });
+          }
+        }
+      }
     }
   }
 

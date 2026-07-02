@@ -219,7 +219,6 @@ const CONN_INFO: Record<string, { desc: string; setup: string }> = {
   'Tesla cloud': { desc: 'Tesla Fleet API — Powerwall live status & history over the cloud.', setup: 'Authenticated server-side via the Fleet API token.' },
   'Sonnen LAN': { desc: 'sonnenBatterie local JSON API on the home network.', setup: 'Reached over the LAN / VPN; configured server-side.' },
   Weather: { desc: 'Open-Meteo forecast for Jávea — drives solar & load planning.', setup: 'Public API — no credentials required.' },
-  Sungrow: { desc: 'Sungrow inverter direct read (Array A).', setup: 'Not yet wired — pending integration.' },
 };
 
 /** Read-only info panel for a server-managed connection. */
@@ -1113,6 +1112,99 @@ function AirzoneConnection({ first, open, onToggle, cfg, reload }: { first?: boo
 }
 
 /* ============================================================================
+ * Sungrow — solar inverters (SG5.0RS ×2, one WiNet-S dongle each) on the LAN.
+ * READ-ONLY monitoring (docs/36). Two dongle-IP fields; the backend probes each via
+ * the open local product endpoint before persisting. Distinguishes "asleep" (night —
+ * both dongles down, expected) from "offline" so the row isn't a scary red every night.
+ * ==========================================================================*/
+
+function SungrowConnection({ first, open, onToggle, cfg, reload }: { first?: boolean; open: boolean; onToggle: () => void; cfg: IntegrationsConfig | null; reload: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const [status, setStatus] = useState<ProbeResult | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [ip1, setIp1] = useState('');
+  const [ip2, setIp2] = useState('');
+  const [busy, setBusy] = useState<'test' | 'save' | null>(null);
+  const [res, setRes] = useState<ProbeResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Seed the dongle-IP fields once config arrives.
+  useEffect(() => {
+    const d = cfg?.sungrow.dongles ?? [];
+    if (d[0]?.ip) setIp1(d[0].ip);
+    if (d[1]?.ip) setIp2(d[1].ip);
+  }, [cfg?.sungrow.dongles]);
+
+  // Live status for the row (read-only probe of the configured dongles).
+  useEffect(() => {
+    api.integrations.testSungrow().then(setStatus).catch(() => {}).finally(() => setChecked(true));
+  }, []);
+
+  const dongles = () => {
+    const out: { ip: string; name?: string }[] = [];
+    if (ip1.trim()) out.push({ ip: ip1.trim(), name: 'Solar Inverter 1' });
+    if (ip2.trim()) out.push({ ip: ip2.trim(), name: 'Solar Inverter 2' });
+    return out;
+  };
+
+  const run = async (kind: 'test' | 'save') => {
+    setBusy(kind); setErr(null); setRes(null);
+    try {
+      if (kind === 'test') setRes(await api.integrations.testSungrow(dongles()));
+      else {
+        const r = await api.integrations.setSungrow(dongles());
+        setRes({ ok: r.ok, detail: r.detail });
+        setStatus({ ok: r.ok, detail: r.detail });
+        reload();
+      }
+    } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); }
+  };
+
+  // A reachable probe = producing (day). An unreachable probe at NIGHT is expected
+  // (both dongles sleep), so show it calmly rather than as a hard error.
+  const statusText = !checked ? 'loading…' : status ? (status.ok ? status.detail : 'asleep / unreachable') : '2 inverters';
+  const statusTone = !checked ? 'text-3' : status?.ok ? 'solar' : status ? 'grid' : 'text-2';
+
+  return (
+    <ConnectionRow
+      first={first}
+      icon="sun"
+      tone={status?.ok ? 'solar' : undefined}
+      name="Sungrow"
+      statusText={statusText}
+      statusTone={statusTone}
+      showDot={status !== null}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={cfgDesc}>Sungrow SG5.0RS ×2 (Array A) — read over each WiNet-S dongle on the home network. Read-only; the inverters sleep at night, which is normal.</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <DetailLine label="Status" value={status ? status.detail : '—'} tone={status?.ok ? 'solar' : 'grid'} />
+          {(cfg?.sungrow.dongles ?? []).map((d, i) => (
+            <DetailLine key={d.ip || i} label={d.name || `Inverter ${i + 1}`} value={d.ip} />
+          ))}
+        </div>
+        {isAdmin ? (
+          <>
+            <Input label="Dongle 1 host / IP" value={ip1} onChange={(e) => setIp1(e.target.value)} placeholder="192.168.1.67" />
+            <Input label="Dongle 2 host / IP" value={ip2} onChange={(e) => setIp2(e.target.value)} placeholder="192.168.1.181" />
+            <ResultLine r={res} err={err} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="secondary" loading={busy === 'test'} onClick={() => void run('test')}>Test</Button>
+              <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void run('save')}>Save</Button>
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can change the Sungrow dongle IPs.</div>
+        )}
+      </div>
+    </ConnectionRow>
+  );
+}
+
+/* ============================================================================
  * Rain Bird — irrigation controller (ESP-TM2 + LNK/LNK2 WiFi module) on the LAN.
  * Host is prefilled with the known module IP; the PASSWORD is required and never
  * leaves the server (we only learn whether one is set). The backend PROBES the box
@@ -1777,6 +1869,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
       })}
       <AcCloudConnection first={false} open={openId === 'accloud'} onToggle={() => toggle('accloud')} />
       <AirzoneConnection first={false} open={openId === 'airzone'} onToggle={() => toggle('airzone')} cfg={cfg} reload={loadCfg} />
+      <SungrowConnection first={false} open={openId === 'sungrow'} onToggle={() => toggle('sungrow')} cfg={cfg} reload={loadCfg} />
       <RainbirdConnection first={false} open={openId === 'rainbird'} onToggle={() => toggle('rainbird')} />
       <TuyaConnection first={false} open={openId === 'tuya'} onToggle={() => toggle('tuya')} />
       <SonosConnection first={false} open={openId === 'sonos'} onToggle={() => toggle('sonos')} />

@@ -90,7 +90,13 @@ import {
   testTesla,
   setTeslaSite,
   reauthTesla,
+  testSungrow,
+  setSungrow,
 } from "./routes/integrations-config";
+import { getInverters, getInvertersHistory } from "./routes/inverters";
+import {
+  startInverterHistory,
+} from "./control/inverter-history";
 import {
   getLights,
   getLight,
@@ -330,6 +336,17 @@ app.get(
 app.get(
   "/api/batteries",
   wrap(() => getBatteries()),
+);
+
+// ---- Solar inverters (Sungrow SG5.0RS ×2) — READ-ONLY ----
+// Literal /history sub-path registered before the bare index so it isn't shadowed.
+app.get(
+  "/api/inverters/history",
+  wrap((req) => getInvertersHistory(String(req.query.range ?? "day"))),
+);
+app.get(
+  "/api/inverters",
+  wrap(() => getInverters()),
 );
 
 app.get(
@@ -1210,6 +1227,22 @@ app.put(
     return setAirzone(b.host);
   }),
 );
+// Sungrow solar inverters — read-only probe (any signed-in user) + admin save.
+app.post(
+  "/api/integrations/sungrow/test",
+  wrap((req) => {
+    const b = (req.body ?? {}) as { dongles?: unknown };
+    return testSungrow(b.dongles);
+  }),
+);
+app.put(
+  "/api/integrations/sungrow",
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { dongles?: unknown };
+    return setSungrow(b.dongles);
+  }),
+);
 
 // ---- Rain Bird irrigation ----
 // Reads any-authed; commands + connect are admin-gated. Commands ALSO require the
@@ -1581,6 +1614,19 @@ try {
 } catch (e) {
   console.error(
     "[energy-api] energy-history init failed (history disabled, API unaffected):",
+    (e as Error).message,
+  );
+}
+
+// Start the per-inverter solar-production history rollup loop (Sungrow; docs/36).
+// Additive + READ-ONLY, shares the same fail-soft SQLite store; the 5m recorder is
+// driven by the /api/live path (recordInverterSamples). Guarded so it can never
+// throw into the boot path or the armed control loop.
+try {
+  startInverterHistory();
+} catch (e) {
+  console.error(
+    "[energy-api] inverter-history init failed (history disabled, API unaffected):",
     (e as Error).message,
   );
 }

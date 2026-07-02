@@ -38,3 +38,30 @@ export function tuyaConfig(): { region: string; accessId: string; accessSecret: 
     accessSecret: t?.accessSecret || config.tuya.accessSecret,
   };
 }
+
+/** One Sungrow WiNet-S dongle: its LAN IP + an optional friendly name. */
+export interface SungrowDongle {
+  ip: string;
+  name?: string;
+}
+
+/**
+ * Sungrow dongle list — the two WiNet-S dongles (one per SG5.0RS inverter), keyed on
+ * dongle IP (both COM names are identical). Precedence mirrors airzoneHost()/sonnenHost():
+ * a Settings override (store.integrations.sungrow.dongles) wins, else the env fallback
+ * (SUNGROW_HOST_1 / SUNGROW_HOST_2), else the discovered defaults (docs/36). Always
+ * returns ≥1 entry so the connector/health-probe have something to poll.
+ */
+export function sungrowConfig(): SungrowDongle[] {
+  const s = store.get().integrations?.sungrow;
+  const configured = s?.dongles?.filter((d) => d && typeof d.ip === 'string' && d.ip.trim());
+  if (configured && configured.length > 0) {
+    return configured.map((d) => ({ ip: d.ip.trim(), name: d.name?.trim() || undefined }));
+  }
+  const ip1 = process.env.SUNGROW_HOST_1?.trim() || '192.168.1.67';
+  const ip2 = process.env.SUNGROW_HOST_2?.trim() || '192.168.1.181';
+  return [
+    { ip: ip1, name: 'Solar Inverter 1' },
+    { ip: ip2, name: 'Solar Inverter 2' },
+  ];
+}

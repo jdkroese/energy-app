@@ -912,7 +912,10 @@ export function Devices({ ctx }: { ctx: ShellContext }) {
       .filter((c) => byType(c.id).length > 0)
       .map((c) => { const m = resolveTypeMeta(c.id, customTypes); return { id: c.id, label: c.label, hue: m.hue, icon: m.icon, count: byType(c.id).length }; });
     return [
-      ...DEVICE_TYPES.map((m) => ({ id: m.type, label: m.label, hue: m.hue, icon: m.icon, count: counts[m.type] })),
+      // 'solar-inverter' is a MONITOR-only fleet with its own dedicated /solar-inverters
+      // screen — it carries registry metadata (label/hue/icon) but is NOT a Devices-hub
+      // control tab, so exclude it here (it never classifies from /api/devices anyway).
+      ...DEVICE_TYPES.filter((m) => m.type !== 'solar-inverter').map((m) => ({ id: m.type, label: m.label, hue: m.hue, icon: m.icon, count: counts[m.type] })),
       ...customTabSpecs,
     ];
   }, [counts, customTypes, configured]);

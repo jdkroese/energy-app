@@ -1181,6 +1181,8 @@ export interface IntegrationsConfig {
   tesla: { siteId: string; overridden: boolean };
   weather: { lat: number; lon: number; overridden: boolean };
   airzone: { host: string; overridden: boolean };
+  /** Sungrow solar inverters — the two WiNet-S dongles (docs/36). */
+  sungrow: { dongles: { ip: string; name: string }[]; overridden: boolean };
 }
 
 /** Result of a connection test / save. */
@@ -1189,6 +1191,54 @@ export interface ProbeResult {
   detail: string;
   /** A LAN scan located the controller at this IP — the UI offers to switch to it. */
   suggestedHost?: string;
+}
+
+/* ============================================================================
+ * Solar inverters (Sungrow SG5.0RS ×2; docs/36). READ-ONLY monitoring — live
+ * per-inverter production + health + fault log, and per-inverter production history.
+ * ==========================================================================*/
+
+export interface InverterFault {
+  name: string;
+  type: string;
+  status: string;
+  code: number | null;
+  id: number | null;
+  time: string;
+}
+
+export interface InverterView {
+  id: string;
+  name: string;
+  ip: string;
+  model: string;
+  kw: number;
+  dailyKwh: number;
+  totalKwh: number;
+  tempC: number | null;
+  workState: string;
+  reachable: boolean;
+  lastSeen: string | null;
+  /** 'online' (producing/reachable), 'asleep' (night — expected), 'offline' (daylight miss). */
+  status: 'online' | 'asleep' | 'offline';
+  faults: InverterFault[];
+  activeFaultCount: number;
+}
+
+export interface InvertersResponse {
+  ts: string;
+  daylight: boolean;
+  productionKw: number;
+  todayKwh: number;
+  count: number;
+  inverters: InverterView[];
+}
+
+export interface InvertersHistoryResponse {
+  ts: string;
+  range: string;
+  labels: string[];
+  series: { id: string; name: string; kwh: number[]; totalKwh: number }[];
 }
 
 /* ============================================================================

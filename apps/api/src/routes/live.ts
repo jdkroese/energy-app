@@ -1,10 +1,12 @@
 import * as sonnen from '../connectors/sonnen';
 import * as tesla from '../connectors/tesla';
+import * as sungrow from '../connectors/sungrow';
 import { bandInfo } from '../tariff';
 import { config } from '../config';
 import * as history5m from '../history5m';
 import * as voltageHistory from '../voltage-history';
 import { recordEnergySample } from '../control/energy-history';
+import { recordInverterSamples } from '../control/inverter-history';
 import { climateSurplusW } from '../control/climate-snapshot';
 import { getMonitoredBreaker } from '../connectors/tuya-voltage';
 
@@ -153,29 +155,38 @@ async function todayFromHistory(): Promise<{
 }
 
 export async function getLive(): Promise<unknown> {
-  const [sRes, tRes, hRes, bRes] = await Promise.allSettled([
+  const [sRes, tRes, hRes, bRes, invRes] = await Promise.allSettled([
     sonnen.getNormalized(),
     tesla.getNormalized(),
     todayFromHistory(),
     getMonitoredBreaker(),
+    sungrow.getNormalized(),
   ]);
 
   const s = sRes.status === 'fulfilled' ? sRes.value : null;
   const t = tRes.status === 'fulfilled' ? tRes.value : null;
   const hist = hRes.status === 'fulfilled' ? hRes.value : null;
   const breaker = bRes.status === 'fulfilled' ? bRes.value : null;
+  const inv = invRes.status === 'fulfilled' ? invRes.value : null;
 
   // Solar: Tesla solar_power is the PW3-metered array (Array B). If Sonnen reports
   // production (Array A), add it. Best-effort A/B split.
   const teslaSolar = t?.solarKw ?? 0;
   const sonnenSolar = s ? round(s.productionW / 1000) : 0;
   const solarKw = round(teslaSolar + sonnenSolar);
-  // Two physical arrays: A (Sonnen/Sungrow-side) + B (Tesla PW3-metered). Returned
-  // as the {name,kw}[] the web contract (LiveResponse.solar.arrays) expects.
-  const arrays = [
+  // Two physical arrays: A (Sonnen/Sungrow-side) + B (Tesla PW3-metered). Plus, when
+  // the Sungrow dongles are reachable, one entry PER inverter (the SG5.0RS ×2 drive
+  // Array A) so the Live surface shows per-string production. Returned as the
+  // {name,kw}[] the web contract (LiveResponse.solar.arrays) expects.
+  const arrays: { name: string; kw: number }[] = [
     { name: 'A', kw: sonnenSolar },
     { name: 'B', kw: teslaSolar },
   ];
+  if (inv) {
+    for (const i of inv.inverters) {
+      if (i.reachable) arrays.push({ name: i.name, kw: round(i.acPowerW / 1000) });
+    }
+  }
 
   // Home load: prefer Tesla load_power; else Sonnen consumption.
   const homeKw = t ? t.loadKw : s ? round(s.consumptionW / 1000) : 0;
@@ -231,6 +242,22 @@ export async function getLive(): Promise<unknown> {
   // Additive + fail-soft: a null DB / any error no-ops, and history5m's JSON above
   // remains the DayChart fallback. Never throws into the control loop.
   recordEnergySample(sample);
+  // Durable per-inverter production history (5m/hourly/daily; docs/36). Only
+  // REACHABLE inverters are recorded so an unreachable dongle doesn't average a
+  // spurious 0 into its production. Additive + fail-soft — never throws here.
+  if (inv) {
+    const reachable = inv.inverters.filter((i) => i.reachable);
+    if (reachable.length > 0) {
+      recordInverterSamples(
+        reachable.map((i) => ({
+          id: i.id,
+          acKw: i.acPowerW / 1000,
+          dailyKwh: i.dailyKwh,
+          totalKwh: i.totalKwh,
+        })),
+      );
+    }
+  }
   // Persistent 5-minute grid-voltage history (its own file) — only when the
   // breaker reported a real voltage; the 5-min bucketing dedupes the 10s polls.
   if (breaker && breaker.voltageV > 0) {

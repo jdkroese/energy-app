@@ -126,13 +126,9 @@ export async function getSettings(): Promise<unknown> {
         status: statusLabel(probe.weather.ok),
         detail: probe.weather.detail,
       },
-      {
-        name: 'Sungrow',
-        icon: 'sun',
-        tone: 'warning',
-        status: 'pending',
-        detail: 'Array A direct read not yet wired',
-      },
+      // Sungrow solar inverters are rendered by a DEDICATED settings row
+      // (SungrowConnection) with its own live probe + dongle-IP config — like Airzone —
+      // so they are intentionally NOT in this generic list.
     ],
     tariff: {
       bands: [

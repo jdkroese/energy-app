@@ -4,7 +4,8 @@
 
 import * as store from '../store';
 import * as tesla from '../connectors/tesla';
-import { sonnenHost, sonnenToken, teslaSiteId, weatherCoords, airzoneHost } from '../runtime-config';
+import * as sungrow from '../connectors/sungrow';
+import { sonnenHost, sonnenToken, teslaSiteId, weatherCoords, airzoneHost, sungrowConfig } from '../runtime-config';
 
 function badInput(msg: string): never {
   const e = new Error(msg) as Error & { code?: string };
@@ -27,6 +28,10 @@ export function getIntegrationsConfig(): unknown {
     tesla: { siteId: teslaSiteId(), overridden: Boolean(i?.tesla?.siteId) },
     weather: { lat: coords.lat, lon: coords.lon, overridden: Boolean(i?.weather) },
     airzone: { host: airzoneHost(), overridden: Boolean(i?.airzone?.host) },
+    sungrow: {
+      dongles: sungrowConfig().map((d) => ({ ip: d.ip, name: d.name ?? '' })),
+      overridden: Boolean(i?.sungrow?.dongles && i.sungrow.dongles.length > 0),
+    },
   };
 }
 
@@ -183,6 +188,61 @@ export async function setAirzone(hostRaw?: unknown): Promise<unknown> {
   store.update((s) => {
     s.integrations = s.integrations ?? { intesis: null };
     s.integrations.airzone = { host };
+  });
+  return { ts: new Date().toISOString(), ...probe, config: getIntegrationsConfig() };
+}
+
+// ---- Sungrow solar inverters --------------------------------------------
+// Two WiNet-S dongles (one per SG5.0RS). Probe each via the confirmed-open local
+// REST product endpoint (guest; no dongle reconfig needed — docs/36). A test/save is
+// OK if AT LEAST ONE dongle answers (at night both may be asleep, which is expected).
+
+/** Probe a candidate set of dongle IPs without persisting. */
+async function probeSungrow(ips: string[]): Promise<ProbeResult> {
+  const results = await Promise.allSettled(ips.map((ip) => sungrow.probeProduct(ip)));
+  const okCount = results.filter((r) => r.status === 'fulfilled').length;
+  if (okCount === 0) {
+    const first = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+    return { ok: false, detail: (first?.reason as Error)?.message?.slice(0, 60) ?? 'no dongle reachable (asleep at night?)' };
+  }
+  const names = results
+    .map((r) => (r.status === 'fulfilled' ? r.value.productName : null))
+    .filter(Boolean);
+  return { ok: true, detail: `${okCount}/${ips.length} reachable · ${names.join(', ') || 'WiNet-S'}` };
+}
+
+/** Parse a raw dongles payload (array of {ip,name}) into a validated IP/name list. */
+function parseDongles(raw: unknown): { ip: string; name?: string }[] {
+  if (!Array.isArray(raw)) badInput('dongles must be an array of { ip, name }');
+  const out: { ip: string; name?: string }[] = [];
+  for (const d of raw) {
+    const ip = String((d as { ip?: unknown })?.ip ?? '').trim();
+    if (!ip) continue;
+    if (!HOST_RE.test(ip)) badInput(`Invalid dongle IP: ${ip}`);
+    const name = String((d as { name?: unknown })?.name ?? '').trim();
+    out.push(name ? { ip, name } : { ip });
+  }
+  if (out.length === 0) badInput('Enter at least one dongle IP (e.g. 192.168.1.67)');
+  return out;
+}
+
+export async function testSungrow(donglesRaw?: unknown): Promise<ProbeResult> {
+  const ips =
+    donglesRaw === undefined ? sungrowConfig().map((d) => d.ip) : parseDongles(donglesRaw).map((d) => d.ip);
+  if (ips.length === 0) badInput('at least one dongle IP required');
+  return probeSungrow(ips);
+}
+
+export async function setSungrow(donglesRaw?: unknown): Promise<unknown> {
+  const dongles = parseDongles(donglesRaw);
+  const probe = await probeSungrow(dongles.map((d) => d.ip));
+  // Save even if asleep-at-night (probe.ok false) is NOT allowed — but a night save
+  // with no reachable dongle would look broken. Require at least one reachable so the
+  // owner can't accidentally save an unreachable typo; they can retry in daylight.
+  if (!probe.ok) badInput(`Could not reach any Sungrow dongle — ${probe.detail}`);
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.sungrow = { dongles };
   });
   return { ts: new Date().toISOString(), ...probe, config: getIntegrationsConfig() };
 }
