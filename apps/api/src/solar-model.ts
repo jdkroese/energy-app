@@ -332,6 +332,22 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+/**
+ * p-th percentile (0..1) with linear interpolation. p=0.5 ≡ median. Used to learn
+ * the roof's CLEAR-DAY efficiency from the high end of the measured/clear-sky
+ * distribution (see trailingRoofShape).
+ */
+function percentile(xs: number[], p: number): number {
+  if (xs.length === 0) return NaN;
+  if (xs.length === 1) return xs[0];
+  const s = [...xs].sort((a, b) => a - b);
+  const idx = clamp(p, 0, 1) * (s.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return s[lo];
+  return s[lo] + (s[hi] - s[lo]) * (idx - lo);
+}
+
 // ---- Public model API ------------------------------------------------------
 
 /**
@@ -353,6 +369,24 @@ export function effectivePR(monthKey?: string): { prEff: number; confidence: num
 /** Retained days looked back over for the LIVE trailing-window roof shape (~4 weeks). */
 const TRAILING_LOOKBACK_DAYS = 28;
 
+/**
+ * Percentile of the per-hour measured/clear-sky distribution used as the learned
+ * roof shape. We take a HIGH percentile (not the median) so the shape reflects the
+ * roof's CLEAR-DAY efficiency — the best (clear, fully-healthy) days — rather than
+ * the typical day. This (1) removes weather double-counting (the separate live
+ * weatherFactor already applies today's clouds, so the learned factor must NOT also
+ * bake in historical cloudiness), and (2) makes the model robust to inverter
+ * outages and cloudy days: those are LOW-side samples the high percentile ignores,
+ * so a fault day no longer drags the learned roof down and the forecast keeps
+ * predicting full potential (the shortfall then shows as a visible actual-vs-forecast
+ * gap instead of being silently "learned"). Genuine shading (a hill-shaded hour that
+ * is low even on clear days) still reads low → correctly learned.
+ */
+const ROOF_SHAPE_PERCENTILE = 0.8;
+/** Below this many sample-days for an hour, fall back to the median (percentile of a
+ *  tiny sample ≈ max, which is noisy). The confidence blend then leans on prEff too. */
+const ROOF_SHAPE_MIN_DAYS_FOR_PCTL = 4;
+
 /** Memo for the trailing-window roof shape, invalidated when the day-key set changes. */
 let trailingCache: { key: string; shape: number[]; days: number[] } | null = null;
 
@@ -367,11 +401,14 @@ let trailingCache: { key: string; shape: number[]; days: number[] } | null = nul
  *
  * For each retained day we take that day's per-hour measured/clear-sky ratios
  * (dayHourlyPRFromHistory, null where no usable daytime production), then for each
- * hour take the MEDIAN of the non-null ratios across days (robust to cloudy-day
- * outliers — same intent as the scalar model's per-day median). Returns the 24
- * medians (clamped 0..HOURLY_PR_MAX) + per-hour sample-day counts. Memoized on the
- * set of available day keys so the per-request forecast (Live poll + Autopilot)
- * doesn't re-scan 28×288 buckets each call.
+ * hour take a HIGH PERCENTILE (ROOF_SHAPE_PERCENTILE ≈ p80) of the non-null ratios
+ * across days — the roof's CLEAR-DAY efficiency, robust to cloudy days AND inverter
+ * outages (both are low-side samples the percentile ignores). See
+ * ROOF_SHAPE_PERCENTILE for why a high percentile (not the median) is correct. Falls
+ * back to the median for hours with < ROOF_SHAPE_MIN_DAYS_FOR_PCTL sample-days.
+ * Returns the 24 learned factors (clamped 0..HOURLY_PR_MAX) + per-hour sample-day
+ * counts. Memoized on the set of available day keys so the per-request forecast
+ * (Live poll + Autopilot) doesn't re-scan 28×288 buckets each call.
  */
 export function trailingRoofShape(): { shape: (number | null)[]; days: number[] } {
   let dayKeys: string[];
@@ -407,7 +444,13 @@ export function trailingRoofShape(): { shape: (number | null)[]; days: number[] 
   const cacheShape = zeros24();
   for (let h = 0; h < 24; h++) {
     if (perHour[h].length > 0) {
-      const m = clamp(median(perHour[h]), 0, HOURLY_PR_MAX);
+      // High percentile = clear-day roof efficiency (rejects cloudy/outage days);
+      // median for thin samples where a percentile ≈ max would be noisy.
+      const raw =
+        perHour[h].length >= ROOF_SHAPE_MIN_DAYS_FOR_PCTL
+          ? percentile(perHour[h], ROOF_SHAPE_PERCENTILE)
+          : median(perHour[h]);
+      const m = clamp(raw, 0, HOURLY_PR_MAX);
       shape[h] = m;
       cacheShape[h] = m;
       days[h] = perHour[h].length;

@@ -60,6 +60,35 @@ In `solar-model.ts`:
 New export: `forecastSolarKw(weather: WeatherForecast | null, date: Date): number[]`
 (24 hourly kW). Keep `effectivePR()` for the confidence badge the UI shows.
 
+### Addendum (2026-07-02) — learn from the CLEAR-DAY percentile, not the median
+
+Two problems surfaced with a median-based roof shape:
+
+1. **Weather double-count.** `measured/clearSky` on a historical day already bakes in
+   *that day's* clouds, and we *also* apply today's live `weatherFactor` on top — so a
+   median (≈ the typical, partly-cloudy day) under-reads clear days by ~10%.
+2. **Outage contamination.** A real multi-day inverter fault (2026-07-01: one of two
+   Sungrow inverters down → array at ~50%) is a run of low `measured/clearSky` days. A
+   median gets dragged down by a sustained outage and then under-forecasts for days
+   *after* the fix.
+
+Fix (both at once): learn the per-hour roof factor as a **high percentile (p80)** of
+the `measured/clearSky` distribution instead of the median — i.e. the roof's
+**clear-day efficiency** (its best, clear, fully-healthy days). The live
+`weatherFactor` then cleanly applies today's actual clouds on top (no double-count).
+Cloudy days *and* inverter-outage days are low-side samples the p80 ignores, so a
+fault no longer corrupts the learned roof and the forecast keeps predicting full
+potential — the shortfall shows up as a visible actual-vs-forecast gap. Genuine
+shading (a hour that is low even on clear days) still reads low → correctly learned.
+Thin hours (< 4 sample-days) fall back to the median. Constants:
+`ROOF_SHAPE_PERCENTILE = 0.8`, `ROOF_SHAPE_MIN_DAYS_FOR_PCTL = 4`.
+
+Follow-ups (not in this change): (a) persist hourly **irradiance** alongside
+production so future learning can compute a truly weather-independent roof efficiency
+(`measured / actualIrradiance`); (b) once Sungrow per-inverter telemetry is connected,
+raise a **production-vs-forecast deviation alert** to auto-detect exactly this kind of
+inverter outage.
+
 Model persistence changes (`solar-model.ts` `MonthRecord`):
 - Add `hourlyPR: number[]` (24) + `hourlyDays: number[]` (24 per-hour sample counts).
 - `dayHourlyPRFromHistory(dateKey)` → per-hour ratio array (null where that hour had
