@@ -17,7 +17,20 @@ import {
   setWhatsAppNumber,
   getVoltageMonitor,
   setVoltageMonitor,
+  getEventsConfig,
+  setEventsConfig,
 } from "./routes/settings";
+import {
+  listEvents,
+  getEvent,
+  setEventStatus,
+  exportEvents,
+} from "./routes/events";
+import {
+  warmEventRingFromDisk,
+  setEventForwarder,
+  type EnergyEvent,
+} from "./events";
 import { getVoltageHistory } from "./routes/voltage-history";
 import { getPlan } from "./routes/brain";
 import {
@@ -216,6 +229,7 @@ import {
 } from "./auth/middleware";
 import { bootstrapAdmin } from "./auth/users";
 import multer from "multer";
+import * as store from "./store";
 import type {
   ScenarioDef,
   AlertStatus,
@@ -355,10 +369,49 @@ app.post(
   ),
 );
 
+// ---- Events (unified Event Viewer — read + ack/resolve/export; docs/37) ----
+// Literal sub-paths registered BEFORE /:id so they aren't captured as an :id.
+app.get(
+  "/api/events/export",
+  (req: Request, res: Response) => {
+    try {
+      exportEvents(req, res);
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  },
+);
+app.get(
+  "/api/events",
+  wrap((req) => listEvents(req)),
+);
+app.post(
+  "/api/events/:id/ack",
+  wrap((req) => setEventStatus(String(req.params.id), "ack")),
+);
+app.post(
+  "/api/events/:id/resolve",
+  wrap((req) => setEventStatus(String(req.params.id), "resolved")),
+);
+app.get(
+  "/api/events/:id",
+  wrap((req) => getEvent(req)),
+);
+
 // ---- Settings ----
 app.get(
   "/api/settings",
   wrap(() => getSettings()),
+);
+// Event-monitor thresholds (high-load / high-current) — read any-authed; PATCH follows
+// the alert-config pattern (not admin-gated, like voltage-monitor beside it).
+app.get(
+  "/api/settings/events-config",
+  wrap(() => getEventsConfig()),
+);
+app.patch(
+  "/api/settings/events-config",
+  wrap((req) => setEventsConfig(req.body)),
 );
 app.put(
   "/api/settings/whatsapp",
@@ -1325,6 +1378,35 @@ try {
 } catch (e) {
   console.error("[energy-api] auth bootstrap failed:", (e as Error).message);
 }
+
+// Warm the event ring from the durable JSONL tail so the timeline survives a restart.
+warmEventRingFromDisk();
+
+// Register the event → notify forwarder (docs/37 §3). A high/critical ACTIVE observation
+// emitted through logEvent() (that isn't already fanned out by the alert loop, and isn't a
+// log-only monitor with noNotify) is delivered over the enabled channels here. Returns the
+// channels that fired. Best-effort; notify swallows its own failures.
+setEventForwarder((ev: EnergyEvent) => {
+  const channels = store.get().channels;
+  const title = ev.summary;
+  const body = ev.detail ?? ev.summary;
+  const device = ev.device ?? "System";
+  let fired = false;
+  if (channels.push.enabled) {
+    void notify.sendPush(title, body, { id: ev.id, severity: ev.severity, device });
+    fired = true;
+  }
+  if (channels.whatsapp.enabled && channels.whatsapp.number) {
+    void notify.sendWhatsApp(channels.whatsapp.number, `⚡ ${title}\n${body}\n(${device})`);
+    fired = true;
+  }
+  if (channels.email.enabled && channels.email.address) {
+    void notify.sendEmail(channels.email.address, `Power alert: ${title}`, `${title}\n${body}\n(${device})`);
+    fired = true;
+  }
+  // `notified` marks that delivery fired (the model types it as TriggerSource[]).
+  return fired ? (["threshold"] as EnergyEvent["notified"]) : undefined;
+});
 
 // Start the background alert loop (shadow/read-only — notifications only).
 startAlertLoop();

@@ -14,6 +14,7 @@ import { AutomationRow } from '../components/AutomationRow';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { SchedulesPanel } from './Schedules';
 import { Autopilot, type TabKey as AutopilotTabKey } from './Autopilot';
+import { EventViewer } from './EventViewer';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import type { ReactNode } from 'react';
@@ -852,8 +853,9 @@ function AutomationsSummary({ wide, setTab, ctrl, climateAutomations, arbAutomat
 type AutoTab = 'summary' | 'schedules' | 'rules' | 'events' | 'status' | 'settings';
 const AUTO_TABS: readonly AutoTab[] = ['summary', 'schedules', 'rules', 'events', 'status', 'settings'];
 // Tabs hosted by the embedded Autopilot — their keys line up 1:1 with its TabKey.
-// (Summary is now owned by this screen — see AutomationsSummary.)
-const AUTOPILOT_TABS: readonly AutoTab[] = ['events', 'status', 'settings'];
+// (Summary is now owned by this screen — see AutomationsSummary; Events is now the unified
+// Event Viewer — see EventViewer — so it no longer routes to the embedded Autopilot.)
+const AUTOPILOT_TABS: readonly AutoTab[] = ['status', 'settings'];
 
 export function Automations({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
@@ -982,6 +984,8 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
       arbAutomations={arbAutomations}
       climateStatus={status ?? null}
     />
+  ) : tab === 'events' ? (
+    <EventViewer wide={wide} />
   ) : AUTOPILOT_TABS.includes(tab) ? (
     <Autopilot ctx={ctx} embedded tab={tab as AutopilotTabKey} />
   ) : tab === 'schedules' ? (

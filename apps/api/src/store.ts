@@ -66,6 +66,39 @@ export interface VoltageMonitor {
   breakerId?: string;
 }
 
+/**
+ * Event-monitor thresholds (docs/37 §5) — the "what counts as an event" knobs for the
+ * new observation monitors folded into the alert/monitor tick. Both are LOG-ONLY (locked
+ * decision §10.2: record but never notify), with hysteresis + min-dwell so steady state is
+ * silent and only edges log. Editable in Settings ▸ Notifications alongside the voltage band.
+ */
+export interface EventsConfig {
+  /** High house-load monitor master toggle (log-only observation). */
+  highLoadEnabled: boolean;
+  /** House load (kW) above which a high-load event logs, sustained ≥ dwell. Default 5. */
+  highLoadKw: number;
+  /** High-current monitor master toggle (log-only observation). */
+  highCurrentEnabled: boolean;
+  /** Monitored-breaker current (A) above which a high-current event logs. Default 32. */
+  highCurrentA: number;
+  /** Seconds the signal must stay above threshold before an ACTIVE event logs. Default 60. */
+  dwellSec: number;
+  /** Fractional hysteresis: clears once the signal drops below threshold×(1−this). Default 0.1. */
+  hysteresisFrac: number;
+}
+
+/** Event-monitor defaults — thresholds from docs/37 §10 (5 kW / 32 A), log-only, 60s dwell. */
+export function defaultEventsConfig(): EventsConfig {
+  return {
+    highLoadEnabled: true,
+    highLoadKw: 5,
+    highCurrentEnabled: true,
+    highCurrentA: 32,
+    dwellSec: 60,
+    hysteresisFrac: 0.1,
+  };
+}
+
 export interface ScenarioWeights {
   save: number;
   self: number;
@@ -1277,6 +1310,8 @@ export interface StoreSchema {
   rules: RuleState[];
   /** Grid-voltage band monitor (Live KPI + `rule-voltage` alert). */
   voltageMonitor: VoltageMonitor;
+  /** Event-monitor thresholds (high-load / high-current) — docs/37 §5. */
+  eventsConfig: EventsConfig;
   alertOverrides: Record<string, AlertOverride>;
   activeScenario: string;
   scenarios: Record<string, ScenarioDef>;
@@ -1641,6 +1676,7 @@ function defaults(): StoreSchema {
     },
     rules: DEFAULT_RULES.map((r) => ({ ...r })),
     voltageMonitor: defaultVoltageMonitor(),
+    eventsConfig: defaultEventsConfig(),
     alertOverrides: {},
     activeScenario: "balanced",
     scenarios: structuredClone(DEFAULT_SCENARIOS),
@@ -2083,6 +2119,26 @@ function hydrateVoltageMonitor(
   };
 }
 
+/** Coerce persisted event-monitor config, clamping to sane ranges. */
+function hydrateEventsConfig(
+  p: Partial<EventsConfig> | undefined,
+  base: EventsConfig,
+): EventsConfig {
+  if (!p || typeof p !== 'object') return { ...base };
+  return {
+    highLoadEnabled:
+      typeof p.highLoadEnabled === 'boolean' ? p.highLoadEnabled : base.highLoadEnabled,
+    highLoadKw: clampNum(p.highLoadKw, base.highLoadKw, 0.5, 50),
+    highCurrentEnabled:
+      typeof p.highCurrentEnabled === 'boolean'
+        ? p.highCurrentEnabled
+        : base.highCurrentEnabled,
+    highCurrentA: clampNum(p.highCurrentA, base.highCurrentA, 1, 200),
+    dwellSec: clampNum(p.dwellSec, base.dwellSec, 0, 600),
+    hysteresisFrac: clampNum(p.hysteresisFrac, base.hysteresisFrac, 0, 0.5),
+  };
+}
+
 /** Merge persisted JSON onto defaults so new fields appear with sane values. */
 function hydrate(raw: unknown): StoreSchema {
   const base = defaults();
@@ -2099,6 +2155,7 @@ function hydrate(raw: unknown): StoreSchema {
       p.voltageMonitor,
       base.voltageMonitor,
     ),
+    eventsConfig: hydrateEventsConfig(p.eventsConfig, base.eventsConfig),
     alertOverrides: p.alertOverrides ?? base.alertOverrides,
     activeScenario: p.activeScenario ?? base.activeScenario,
     scenarios:

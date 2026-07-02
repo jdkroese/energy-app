@@ -17,6 +17,7 @@ import { buildGenericCommands } from '../connectors/tuya-generic';
 import type { TuyaDevice, TuyaSpec } from '../connectors/tuya';
 import { sunriseSunsetMin } from '../solar-model';
 import { config } from '../config';
+import { logScheduleAction } from './log-adapters';
 
 const TICK_MS = 30_000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -111,6 +112,8 @@ function logCircuit(
     st.devices.updatedAt = Date.now();
     if (!ok) st.devices.lastError = `device ${deviceId}: ${detail}`;
   });
+  // Shim: mirror into the unified event bus (docs/37 §3).
+  logScheduleAction(deviceId, lever, from, to, reason, ok, detail);
 }
 
 /** Turn a scheduled device ON, optionally at a fan speed / direction. */

@@ -9,6 +9,7 @@ import { issue, type IssueValue } from '../control/execute';
 import { applyActiveScenario, revertToSafe } from '../control/coordinator';
 import { takeSnapshot } from '../control/snapshot';
 import type { Lever } from '../control/guardrails';
+import { logEvent } from '../events';
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -115,6 +116,8 @@ export async function setArm(armed: boolean, mode?: ControlMode): Promise<unknow
   const nextMode: ControlMode = mode && validModes.includes(mode) ? mode : armed ? 'manual' : 'off';
 
   const disarming = !armed || nextMode === 'off';
+  const prev = store.get().control;
+  const prevState = `${prev.armed ? 'armed' : 'disarmed'}/${prev.mode}`;
 
   if (disarming) {
     // revertToSafe handles the writes and forces the store to DISARMED/off.
@@ -127,6 +130,18 @@ export async function setArm(armed: boolean, mode?: ControlMode): Promise<unknow
       st.control.lastError = null;
     });
   }
+  // System event (docs/37 §3) — arm/disarm/mode change is a lifecycle event, medium severity.
+  logEvent({
+    class: 'system',
+    category: 'battery',
+    severity: 'medium',
+    summary: disarming ? 'Battery control disarmed' : `Battery control armed — ${nextMode}`,
+    trigger: { source: 'user', detail: 'arm endpoint' },
+    device: 'Autopilot',
+    entity: 'armed',
+    change: { from: prevState, to: `${disarming ? 'disarmed' : 'armed'}/${disarming ? 'off' : nextMode}` },
+    ok: true,
+  });
   return getStatus();
 }
 

@@ -96,6 +96,11 @@ import type {
   IrrigationMode,
   IrrigationWindow,
   IrrigationZonePatch,
+  EnergyEvent,
+  EventsListResponse,
+  EventsQuery,
+  EventsConfig,
+  EventsConfigResponse,
 } from "./types";
 
 /**
@@ -228,6 +233,25 @@ export const patchJSON = <T>(path: string, body?: unknown) =>
 
 const enc = encodeURIComponent;
 
+/** Build the /api/events query string from an EventsQuery (multi-values comma-joined). */
+function eventsQS(query: EventsQuery, format?: "jsonl" | "csv"): string {
+  const p = new URLSearchParams();
+  if (query.class?.length) p.set("class", query.class.join(","));
+  if (query.category?.length) p.set("category", query.category.join(","));
+  if (query.severity?.length) p.set("severity", query.severity.join(","));
+  if (query.source?.length) p.set("source", query.source.join(","));
+  if (query.device) p.set("device", query.device);
+  if (query.state) p.set("state", query.state);
+  if (query.q) p.set("q", query.q);
+  if (query.from) p.set("from", query.from);
+  if (query.to) p.set("to", query.to);
+  if (query.cursor) p.set("cursor", query.cursor);
+  if (query.limit != null) p.set("limit", String(query.limit));
+  if (format) p.set("format", format);
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
 /** Typed API clients for each endpoint in the contract (docs/11-build-spec §6). */
 export const api = {
   // reads
@@ -254,6 +278,28 @@ export const api = {
       type,
       enabled,
     }),
+
+  /* ---- Unified Event Viewer (docs/37); reads any-authed, ack/resolve observations ---- */
+  events: {
+    list: (query: EventsQuery = {}) =>
+      getJSON<EventsListResponse>(`/api/events${eventsQS(query)}`),
+    get: (id: string) => getJSON<EnergyEvent>(`/api/events/${enc(id)}`),
+    ack: (id: string) =>
+      postJSON<{ ts: string; id: string; status: string }>(
+        `/api/events/${enc(id)}/ack`,
+        {},
+      ),
+    resolve: (id: string) =>
+      postJSON<{ ts: string; id: string; status: string }>(
+        `/api/events/${enc(id)}/resolve`,
+        {},
+      ),
+    exportUrl: (query: EventsQuery = {}, format: "jsonl" | "csv" = "jsonl") =>
+      `/api/events/export${eventsQS({ ...query }, format)}`,
+    config: () => getJSON<EventsConfigResponse>("/api/settings/events-config"),
+    setConfig: (patch: Partial<EventsConfig>) =>
+      patchJSON<EventsConfigResponse>("/api/settings/events-config", patch),
+  },
 
   // grid-voltage band monitor
   voltageMonitor: () =>

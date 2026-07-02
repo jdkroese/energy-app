@@ -12,6 +12,7 @@ import { dirname, resolve } from 'node:path';
 import * as store from '../store';
 import type { ArbitrageEvent } from '../store';
 import { ARBITRAGE_LOG_RING_MAX } from '../store';
+import { logArbitrageEvent } from './log-adapters';
 
 /**
  * Resolve the JSONL path. MIRRORS store.statePath():
@@ -65,6 +66,8 @@ function r3(v: number): number {
  */
 export function appendArbitrageEvent(ev: ArbitrageEvent): void {
   appendJsonl(ev);
+  // Shim: mirror into the unified event bus (docs/37 §3) alongside the arbitrage JSONL/ring.
+  logArbitrageEvent(ev);
   try {
     store.update((s) => {
       const ctrl = s.control;

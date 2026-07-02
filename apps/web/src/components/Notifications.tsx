@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_ALERTS } from '../lib/mock';
-import type { Alert, AlertsResponse, AlertSeverity, AlertStatus, VoltageMonitor } from '../lib/types';
+import type { Alert, AlertsResponse, AlertSeverity, AlertStatus, VoltageMonitor, EventsConfig } from '../lib/types';
 import { Card, Switch, Icon, Button, Input } from './ui';
 
 /* ============================================================================
@@ -256,6 +256,103 @@ export function VoltageMonitorCard() {
             onBlur={commitMax}
             onKeyDown={(e) => { if (e.key === 'Enter') commitMax(); }}
           />
+        </label>
+      </div>
+      {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', padding: '0 16px 12px' }}>{err}</div>}
+    </Card>
+  );
+}
+
+const DEFAULT_EC: EventsConfig = {
+  highLoadEnabled: true,
+  highLoadKw: 5,
+  highCurrentEnabled: true,
+  highCurrentA: 32,
+  dwellSec: 60,
+  hysteresisFrac: 0.1,
+};
+
+/**
+ * Event-monitor thresholds (Settings → Notifications; docs/37 §5). High house-load and
+ * high-current monitors that LOG into the Event Viewer timeline but do NOT notify (locked
+ * §10.2). Each has an enable toggle + a numeric threshold; persists via PATCH
+ * /api/settings/events-config. Self-contained + optimistic. Works on desktop and mobile.
+ */
+export function EventMonitorsCard() {
+  const { data } = usePolling<{ eventsConfig: EventsConfig }>(api.events.config, 0);
+  const [local, setLocal] = useState<EventsConfig | null>(null);
+  useEffect(() => { if (data?.eventsConfig) setLocal(data.eventsConfig); }, [data]);
+  const ec = local ?? data?.eventsConfig ?? DEFAULT_EC;
+  const [loadDraft, setLoadDraft] = useState<string | null>(null);
+  const [curDraft, setCurDraft] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const persist = async (patch: Partial<EventsConfig>) => {
+    const prev = ec;
+    setLocal({ ...ec, ...patch });
+    setErr(null);
+    try {
+      const res = await api.events.setConfig(patch);
+      setLocal(res.eventsConfig);
+    } catch {
+      setLocal(prev);
+      setErr('Could not save — reverted');
+    }
+  };
+
+  const commitLoad = () => {
+    const n = Number(loadDraft);
+    setLoadDraft(null);
+    if (loadDraft === null || !Number.isFinite(n) || n < 0.5 || n > 50) {
+      if (loadDraft !== null) setErr('Load threshold must be 0.5–50 kW');
+      return;
+    }
+    void persist({ highLoadKw: n });
+  };
+  const commitCur = () => {
+    const n = Number(curDraft);
+    setCurDraft(null);
+    if (curDraft === null || !Number.isFinite(n) || n < 1 || n > 200) {
+      if (curDraft !== null) setErr('Current threshold must be 1–200 A');
+      return;
+    }
+    void persist({ highCurrentA: n });
+  };
+
+  const fieldWrap: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 5, flex: 1, minWidth: 120 };
+  const fieldLabel: CSSProperties = { fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.04em' };
+
+  return (
+    <Card title="Event monitors" style={{ padding: 0 }}>
+      <div style={{ padding: '11px 16px 4px', fontSize: 12, color: 'var(--text-3)' }}>
+        Log-only observations in the Event Viewer timeline (no push/WhatsApp).
+      </div>
+      <div style={{ ...row, borderTop: 'none' }}>
+        <span style={{ color: 'var(--text-2)' }}><Icon name="activity" size={17} /></span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14 }}>High house load</div>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>Log when house load stays above the threshold</div>
+        </div>
+        <Switch checked={ec.highLoadEnabled} onChange={(e) => void persist({ highLoadEnabled: e.target.checked })} />
+      </div>
+      <div style={{ borderTop: '1px solid var(--border-1)', padding: '13px 16px', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <label style={fieldWrap}>
+          <span style={fieldLabel}>Load threshold (kW)</span>
+          <Input type="number" inputMode="decimal" value={loadDraft ?? String(ec.highLoadKw)} onChange={(e) => setLoadDraft(e.target.value)} onBlur={commitLoad} onKeyDown={(e) => { if (e.key === 'Enter') commitLoad(); }} />
+        </label>
+      </div>
+      <div style={{ ...row, borderTop: '1px solid var(--border-1)' }}>
+        <span style={{ color: 'var(--text-2)' }}><Icon name="zap" size={17} /></span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14 }}>High current</div>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>Log when the monitored breaker current exceeds the threshold</div>
+        </div>
+        <Switch checked={ec.highCurrentEnabled} onChange={(e) => void persist({ highCurrentEnabled: e.target.checked })} />
+      </div>
+      <div style={{ borderTop: '1px solid var(--border-1)', padding: '13px 16px', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <label style={fieldWrap}>
+          <span style={fieldLabel}>Current threshold (A)</span>
+          <Input type="number" inputMode="numeric" value={curDraft ?? String(ec.highCurrentA)} onChange={(e) => setCurDraft(e.target.value)} onBlur={commitCur} onKeyDown={(e) => { if (e.key === 'Enter') commitCur(); }} />
         </label>
       </div>
       {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', padding: '0 16px 12px' }}>{err}</div>}
