@@ -842,6 +842,11 @@ export interface ClimateGuardrails {
   minCycleMin: number;
   /** After a manual command, automation defers on that unit for this long (min). */
   manualOverrideMin: number;
+  /** One-time migration flag: the default manual-override hold was raised 120 → 480 min
+   *  (2h → 8h). On first hydrate after that change, a persisted config still sitting on the
+   *  OLD default (120) is bumped to 480 once; set true so it runs exactly once and never
+   *  overrides a future deliberate owner change. */
+  manualOverrideBumpedTo480?: boolean;
 }
 
 export interface ClimateLogEntry {
@@ -1526,7 +1531,8 @@ export function defaultDevices(): DevicesState {
       setpointMaxC: 30,
       gridImportCapKw: 14,
       minCycleMin: 8,
-      manualOverrideMin: 120,
+      manualOverrideMin: 480,
+      manualOverrideBumpedTo480: true,
     },
     manualOverrides: {},
     surplusStartedIds: [],
@@ -2722,6 +2728,22 @@ function hydrateDevices(
   base: DevicesState,
 ): DevicesState {
   if (!p || typeof p !== "object") return base;
+  const guardrails: ClimateGuardrails = {
+    ...base.guardrails,
+    ...(p.guardrails ?? {}),
+    manualOverrideBumpedTo480:
+      typeof p.guardrails?.manualOverrideBumpedTo480 === "boolean"
+        ? p.guardrails.manualOverrideBumpedTo480
+        : false,
+  };
+  // ONE-TIME migration: the default manual-override hold was raised 120 → 480 min (2h → 8h).
+  // If this config predates the change (flag absent) and is still sitting on the OLD default
+  // (120) — i.e. the owner never deliberately changed it — bump it to 480 once. A deliberate
+  // value (anything other than 120) is left untouched. Flag flips true so it runs once.
+  if (!guardrails.manualOverrideBumpedTo480) {
+    if (guardrails.manualOverrideMin === 120) guardrails.manualOverrideMin = 480;
+    guardrails.manualOverrideBumpedTo480 = true;
+  }
   return {
     armed: FORCE_DISARM_ON_BOOT
       ? false
@@ -2736,10 +2758,7 @@ function hydrateDevices(
     updatedAt: typeof p.updatedAt === "number" ? p.updatedAt : base.updatedAt,
     lastError: typeof p.lastError === "string" ? p.lastError : null,
     log: Array.isArray(p.log) ? pruneLog(p.log) : base.log,
-    guardrails: {
-      ...base.guardrails,
-      ...(p.guardrails ?? {}),
-    },
+    guardrails,
     manualOverrides:
       p.manualOverrides && typeof p.manualOverrides === "object"
         ? p.manualOverrides
