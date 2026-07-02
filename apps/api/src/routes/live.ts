@@ -263,10 +263,10 @@ export async function getLive(): Promise<unknown> {
     solar: { kw: solarKw, arrays },
     home: { kw: round(homeKw) },
     grid: { kw: gridKw, dir: gridDir },
-    // Surplus the climate rule actually gates on (PV − load − battery intake
-    // headroom) — the same number takeClimateSnapshot uses, via the shared helper.
+    // Surplus the climate rule actually gates on = grid export (the solar we're actually
+    // spilling to the grid) — the same number takeClimateSnapshot uses, via the shared helper.
     climateSurplusKw: round(climateSurplusW(s, t) / 1000),
-    batteryDataComplete: s !== null && t !== null,
+    batteryDataComplete: s !== null || t !== null,
     sonnen: s
       ? { soc: s.soc, kwh: s.kwh, kw: s.kw, dir: s.dir, mode: s.mode }
       : { soc: 0, kwh: 0, kw: 0, dir: 'idle', offline: true },
