@@ -9,6 +9,8 @@ import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { RadioPanel, RadioSchedulesSection } from '../components/radio/Radio';
 import { MusicPanel } from '../components/music/Music';
+import { PlayingOnControl } from '../components/music/PlayingOnControl';
+import { useNowPlaying } from '../components/shell/NavMiniPlayer';
 
 /* ============================================================================
  * Speakers — the Sonos fleet (local UPnP): per-speaker volume + Test. The house
@@ -316,13 +318,78 @@ export function MusicScreen({ ctx }: { ctx: ShellContext }) {
       {stale && <StaleBanner updatedAt={updatedAt} />}
       {!data && loading && <Card padded style={{ color: 'var(--text-3)', fontSize: 13 }}>Discovering speakers…</Card>}
 
+      {/* Persistent Speakers section — always visible, even with nothing playing. While a
+          source is playing it reflects the active group + live-retargets; idle it shows every
+          zone's volume. Because it hosts the ONE shared control on this page, the panels below
+          suppress their inline copy (hideSpeakerControl). */}
+      <SpeakersSection fleet={speakers} canControl={canControl} wide={wide} />
+
       {/* Music (Spotify) — now-playing + browse/search; stands alone without speakers. */}
-      <MusicPanel speakers={speakers} canControl={canControl} wide={wide} />
+      <MusicPanel speakers={speakers} canControl={canControl} wide={wide} hideSpeakerControl />
 
       {/* Internet radio — favourites grid + play + schedules. */}
-      <RadioPanel speakers={speakers} canControl={canControl} wide={wide} />
+      <RadioPanel speakers={speakers} canControl={canControl} wide={wide} hideSpeakerControl />
       <RadioSchedulesSection speakers={speakers} canControl={canControl} wide={wide} />
     </div>
+  );
+}
+
+/* ---- persistent Speakers section for /music -------------------------------
+ *  A Card that always shows the fleet's speakers + volume, near the top of the
+ *  Music page. Driven by useNowPlaying() (the same shared poll the mini player
+ *  uses) so it mirrors the mini-player wiring exactly:
+ *   • Playing (radio/Spotify): shows the active group's in-scope zones + group master;
+ *     toggling a zone re-targets LIVE via the active source's setSpeakers.
+ *   • Idle (nothing playing): renders in `standalone` mode — every zone with a per-zone
+ *     volume slider + a group master. No join/leave toggles (volume-only), since there's
+ *     no active group to reconcile. Sonos volume is persistent, so it's settable anytime.
+ * ------------------------------------------------------------------------- */
+function SpeakersSection({ fleet, canControl, wide }: {
+  fleet: SonosSpeaker[]; canControl: boolean; wide: boolean;
+}) {
+  const { np, refetch } = useNowPlaying();
+  // useNowPlaying carries its own fleet while playing; when idle fall back to the
+  // screen's fleet so the section still lists every zone.
+  const activeFleet = np?.fleet.length ? np.fleet : fleet;
+
+  const label = np
+    ? (np.source === 'spotify' ? 'Spotify' : 'Radio')
+    : 'Idle';
+
+  return (
+    <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Icon name="cast" size={16} color="var(--solar)" />
+        <div style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>Speakers</div>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-3)' }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', flex: 'none', background: np ? 'var(--solar)' : 'var(--text-3)', boxShadow: np ? '0 0 6px var(--solar)' : 'none' }} />
+          {label}
+        </span>
+      </div>
+
+      {np ? (
+        <PlayingOnControl
+          fleet={np.fleet}
+          inScopeIds={np.inScopeIds}
+          canControl={canControl}
+          onSetSpeakers={np.setSpeakers}
+          onSetVolume={(id, pct) => api.speakers.setVolume(id, pct)}
+          onChanged={refetch}
+        />
+      ) : (
+        <PlayingOnControl
+          standalone
+          fleet={activeFleet}
+          inScopeIds={[]}
+          canControl={canControl}
+          onSetSpeakers={async () => {}}
+          onSetVolume={(id, pct) => api.speakers.setVolume(id, pct)}
+          onChanged={refetch}
+        />
+      )}
+
+      {!canControl && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Read-only — only an admin can change speaker volume.</div>}
+    </Card>
   );
 }
 

@@ -318,8 +318,9 @@ function speakerScopeLabel(np: RadioNowPlaying, speakers: SonosSpeaker[]): strin
   return `${names.length} speakers`;
 }
 
-function NowPlayingBanner({ np, speakers, canControl, onChanged }: {
+function NowPlayingBanner({ np, speakers, canControl, onChanged, hideSpeakerControl }: {
   np: RadioNowPlaying; speakers: SonosSpeaker[]; canControl: boolean; onChanged: () => void;
+  hideSpeakerControl?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
 
@@ -349,16 +350,19 @@ function NowPlayingBanner({ np, speakers, canControl, onChanged }: {
         {canControl && <Button size="sm" variant="secondary" loading={busy} iconLeft={<Icon name="square" size={13} />} onClick={() => void stop()}>Stop</Button>}
       </div>
 
-      {/* Shared "Playing on" control — group volume, live zone toggles, per-zone volume. */}
-      <PlayingOnControl
-        fleet={speakers}
-        inScopeIds={inScopeIds}
-        canControl={canControl}
-        fallbackVolume={25}
-        onSetSpeakers={async (ids) => { await api.radio.setSpeakers(ids); }}
-        onSetVolume={(id, pct) => api.speakers.setVolume(id, pct)}
-        onChanged={onChanged}
-      />
+      {/* Shared "Playing on" control — group volume, live zone toggles, per-zone volume.
+          Hidden when the page hosts one shared, persistent Speakers section (e.g. /music). */}
+      {!hideSpeakerControl && (
+        <PlayingOnControl
+          fleet={speakers}
+          inScopeIds={inScopeIds}
+          canControl={canControl}
+          fallbackVolume={25}
+          onSetSpeakers={async (ids) => { await api.radio.setSpeakers(ids); }}
+          onSetVolume={(id, pct) => api.speakers.setVolume(id, pct)}
+          onChanged={onChanged}
+        />
+      )}
     </div>
   );
 }
@@ -366,8 +370,11 @@ function NowPlayingBanner({ np, speakers, canControl, onChanged }: {
 /* ============================================================================
  * Favourites grid + now-playing
  * ==========================================================================*/
-export function RadioPanel({ speakers, canControl, wide }: {
+export function RadioPanel({ speakers, canControl, wide, hideSpeakerControl }: {
   speakers: SonosSpeaker[]; canControl: boolean; wide: boolean;
+  /** When true, the inline "Playing on" control is suppressed (the page shows one shared
+   *  persistent Speakers section instead). Defaults to false so other surfaces keep it. */
+  hideSpeakerControl?: boolean;
 }) {
   const { data, refetch } = usePolling<RadioFavoritesResponse>(api.radio.favorites, 0);
   // Drive the now-playing banner from server state so it shows the REAL target speakers and
@@ -397,6 +404,7 @@ export function RadioPanel({ speakers, canControl, wide }: {
           speakers={speakers}
           canControl={canControl}
           onChanged={refetchNp}
+          hideSpeakerControl={hideSpeakerControl}
         />
       )}
 

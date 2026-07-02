@@ -54,27 +54,40 @@ export interface PlayingOnControlProps {
   fallbackVolume?: number;
   /** Compact spacing (used in the mini-player popover/sheet). */
   compact?: boolean;
+  /**
+   * Standalone / idle mode: nothing is playing, so there's no active group to add or
+   * remove from. Every fleet zone is shown as a plain per-zone volume row (volume is
+   * settable anytime — Sonos volume is persistent), the group master moves ALL zones,
+   * and the join/leave toggle semantics are disabled (`onSetSpeakers` is never called).
+   * The playing-mode behaviour is unchanged when this is false.
+   */
+  standalone?: boolean;
 }
 
 export function PlayingOnControl({
   fleet, inScopeIds, onSetSpeakers, onSetVolume, onChanged, canControl,
-  fallbackVolume = 25, compact = false,
+  fallbackVolume = 25, compact = false, standalone = false,
 }: PlayingOnControlProps) {
-  const [expanded, setExpanded] = useState(false);
+  // In standalone/idle mode start expanded so every zone's volume slider is visible.
+  const [expanded, setExpanded] = useState(standalone);
   // Optimistic scope while a toggle is in flight — snaps back to props once the parent refetches.
   const [pending, setPending] = useState<string[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const scope = pending ?? inScopeIds;
+  // Standalone = the whole fleet is the "scope" for group-volume purposes, but no zone is
+  // ever "checked" (there's no active group to reconcile), so toggles are inert.
+  const scope = standalone ? [] : (pending ?? inScopeIds);
   const scopeSet = useMemo(() => new Set(scope), [scope]);
   const inScope = useMemo(() => fleet.filter((s) => scopeSet.has(s.id)), [fleet, scopeSet]);
 
-  // Group master = the average of the in-scope zones' current volumes (best-effort).
-  const vols = inScope.map((s) => (typeof s.volumePct === 'number' ? s.volumePct : 0));
+  // Group master = the average of the current volumes. In standalone it spans the full
+  // fleet; while playing it's the in-scope zones only (best-effort).
+  const volSource = standalone ? fleet : inScope;
+  const vols = volSource.map((s) => (typeof s.volumePct === 'number' ? s.volumePct : 0));
   const groupVol = vols.length ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : fallbackVolume;
 
   const setGroup = (pct: number) => {
-    inScope.forEach((s) => { void Promise.resolve(onSetVolume(s.id, pct)).catch(() => {}); });
+    volSource.forEach((s) => { void Promise.resolve(onSetVolume(s.id, pct)).catch(() => {}); });
     onChanged();
   };
   const setOne = (id: string, pct: number) => {
@@ -102,8 +115,9 @@ export function PlayingOnControl({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap }}>
-      {/* Group master volume */}
-      {inScope.length > 0 && (
+      {/* Group master volume — shown while playing (in-scope zones) or, in standalone
+          mode, whenever there's more than one zone (moves the whole fleet together). */}
+      {(standalone ? fleet.length > 1 : inScope.length > 0) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Icon name="volume-2" size={15} color="var(--text-3)" />
           <div style={{ flex: 1 }}>
@@ -113,11 +127,15 @@ export function PlayingOnControl({
         </div>
       )}
 
-      {/* Full zone list — every fleet zone; in-scope = checked. Tap to add/remove live. */}
+      {/* Zone list. While playing: every fleet zone as a toggle (in-scope = checked; tap
+          to add/remove live). In standalone/idle: a plain per-zone volume row for each
+          zone — no checkbox, no join/leave (volume only, which is always settable). */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
-          <span className="pwr-eyebrow" style={{ color: 'var(--text-3)' }}>Playing on · {inScope.length}/{fleet.length}</span>
-          {canControl && inScope.length > 1 && (
+          <span className="pwr-eyebrow" style={{ color: 'var(--text-3)' }}>
+            {standalone ? `Speakers · ${fleet.length}` : `Playing on · ${inScope.length}/${fleet.length}`}
+          </span>
+          {!standalone && canControl && inScope.length > 1 && (
             <button type="button" onClick={() => setExpanded((v) => !v)}
               style={{ background: 'none', border: 'none', color: 'var(--solar)', fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, padding: 0 }}>
               <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} />
@@ -132,6 +150,23 @@ export function PlayingOnControl({
             {fleet.map((s, i) => {
               const on = scopeSet.has(s.id);
               const busy = busyId === s.id;
+
+              // Standalone / idle: no toggle — each row is just a labelled volume slider.
+              if (standalone) {
+                return (
+                  <div key={s.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 11, padding: '10px 11px',
+                    borderTop: i === 0 ? 'none' : '1px solid var(--border-1)',
+                  }}>
+                    <span style={{ flex: 'none', width: compact ? 92 : 108, minWidth: 0, fontSize: 13, fontWeight: 500, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
+                    <div style={{ flex: 1 }}>
+                      <DebouncedSlider value={typeof s.volumePct === 'number' ? s.volumePct : 0} onCommit={canControl ? (pct) => setOne(s.id, pct) : () => {}} />
+                    </div>
+                    <span className="pwr-mono" style={{ fontSize: 10.5, color: 'var(--text-3)', flex: 'none', width: 30, textAlign: 'right' }}>{typeof s.volumePct === 'number' ? s.volumePct : 0}%</span>
+                  </div>
+                );
+              }
+
               return (
                 <div key={s.id} style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
                   <button
@@ -168,9 +203,14 @@ export function PlayingOnControl({
             })}
           </div>
         )}
-        {canControl && inScope.length <= 1 && (
+        {!standalone && canControl && inScope.length <= 1 && (
           <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 5 }}>
             Removing the last zone stops playback.
+          </div>
+        )}
+        {standalone && canControl && (
+          <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 5 }}>
+            Volume is saved per speaker. Start a station or a playlist to group zones.
           </div>
         )}
       </div>
