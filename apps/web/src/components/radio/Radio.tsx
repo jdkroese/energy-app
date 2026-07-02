@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
 import type {
@@ -9,6 +9,7 @@ import type {
 } from '../../lib/types';
 import { RADIO_FAVORITE_SLOTS } from '../../lib/types';
 import { Card, Icon, Button, Switch, Slider, SegmentedControl, Input, Select } from '../ui';
+import { PlayingOnControl } from '../music/PlayingOnControl';
 
 /* ============================================================================
  * Sonos internet radio — a 10-slot favourites grid + an add-station flow (search
@@ -317,59 +318,19 @@ function speakerScopeLabel(np: RadioNowPlaying, speakers: SonosSpeaker[]): strin
   return `${names.length} speakers`;
 }
 
-/** A volume slider whose writes are coalesced (~250ms) so dragging doesn't flood the API. It
- *  follows the live value only while the user isn't actively dragging. */
-function DebouncedSlider({ value, onCommit }: { value: number; onCommit: (pct: number) => void }) {
-  const [local, setLocal] = useState(value);
-  const dirty = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => { if (!dirty.current) setLocal(value); }, [value]);
-  const change = (v: number) => {
-    dirty.current = true;
-    setLocal(v);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => { dirty.current = false; onCommit(v); }, 250);
-  };
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  return <Slider min={0} max={100} unit="%" value={local} onChange={change} />;
-}
-
-/** A per-speaker volume row: name + debounced slider writing to /api/speakers/:id/volume. */
-function VolumeRow({ label, value, onCommit }: { label: string; value: number; onCommit: (pct: number) => void }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ flex: '0 0 92px', fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      <div style={{ flex: 1 }}><DebouncedSlider value={value} onCommit={onCommit} /></div>
-    </div>
-  );
-}
-
 function NowPlayingBanner({ np, speakers, canControl, onChanged }: {
   np: RadioNowPlaying; speakers: SonosSpeaker[]; canControl: boolean; onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [expanded, setExpanded] = useState(false);
 
-  // The in-scope speakers actually playing (resolved primaries). Whole-house = the full fleet.
-  const inScope = useMemo(() => {
-    if (np.wholeHouse || np.speakerIds.length === 0) return speakers;
+  // The in-scope speaker IDS actually playing. Whole-house = the full fleet.
+  const inScopeIds = useMemo(() => {
+    if (np.wholeHouse || np.speakerIds.length === 0) return speakers.map((s) => s.id);
     const want = new Set(np.speakerIds);
-    return speakers.filter((s) => want.has(s.id));
+    return speakers.filter((s) => want.has(s.id)).map((s) => s.id);
   }, [np, speakers]);
 
   const scopeLabel = speakerScopeLabel(np, speakers);
-  // Group master = the average of the in-scope speakers' current volumes (best-effort).
-  const vols = inScope.map((s) => (typeof s.volumePct === 'number' ? s.volumePct : 0));
-  const groupVol = vols.length ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 25;
-
-  const setOne = (id: string, pct: number) => {
-    void api.speakers.setVolume(id, pct).then(onChanged).catch(() => {});
-  };
-  const setGroup = (pct: number) => {
-    // Apply to every in-scope speaker together.
-    inScope.forEach((s) => { void api.speakers.setVolume(s.id, pct).catch(() => {}); });
-    onChanged();
-  };
   const stop = async () => {
     setBusy(true);
     try { await api.radio.stop(np.wholeHouse ? [] : np.speakerIds); onChanged(); } finally { setBusy(false); }
@@ -388,41 +349,16 @@ function NowPlayingBanner({ np, speakers, canControl, onChanged }: {
         {canControl && <Button size="sm" variant="secondary" loading={busy} iconLeft={<Icon name="square" size={13} />} onClick={() => void stop()}>Stop</Button>}
       </div>
 
-      {canControl && inScope.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 2 }}>
-          {/* Group master — adjusts every in-scope speaker together (debounced). */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Icon name="volume-2" size={15} color="var(--text-3)" />
-            <div style={{ flex: 1 }}>
-              <DebouncedSlider value={groupVol} onCommit={setGroup} />
-            </div>
-          </div>
-          {inScope.length > 1 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setExpanded((v) => !v)}
-                style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--solar)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: 0 }}
-              >
-                <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={13} />
-                {expanded ? 'Hide' : 'Per-speaker'} volume
-              </button>
-              {expanded && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {inScope.map((s) => (
-                    <VolumeRow
-                      key={s.id}
-                      label={s.name}
-                      value={typeof s.volumePct === 'number' ? s.volumePct : 0}
-                      onCommit={(pct) => setOne(s.id, pct)}
-                    />
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      {/* Shared "Playing on" control — group volume, live zone toggles, per-zone volume. */}
+      <PlayingOnControl
+        fleet={speakers}
+        inScopeIds={inScopeIds}
+        canControl={canControl}
+        fallbackVolume={25}
+        onSetSpeakers={async (ids) => { await api.radio.setSpeakers(ids); }}
+        onSetVolume={(id, pct) => api.speakers.setVolume(id, pct)}
+        onChanged={onChanged}
+      />
     </div>
   );
 }

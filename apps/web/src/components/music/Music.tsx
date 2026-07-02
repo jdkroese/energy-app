@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
 import type {
@@ -11,6 +11,7 @@ import type {
   SpotifyNowPlayingResponse,
 } from '../../lib/types';
 import { Card, Icon, Button, Slider, SegmentedControl, Input } from '../ui';
+import { PlayingOnControl } from './PlayingOnControl';
 
 /* ============================================================================
  * Music (Spotify) — Phase 1. Surfaced on the Speakers page as a "Music" section
@@ -74,22 +75,6 @@ function SpeakerChips({ speakers, selected, onToggle }: {
   );
 }
 
-/* ---- debounced volume slider (coalesced writes) -------------------------- */
-function DebouncedSlider({ value, onCommit }: { value: number; onCommit: (pct: number) => void }) {
-  const [local, setLocal] = useState(value);
-  const dirty = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => { if (!dirty.current) setLocal(value); }, [value]);
-  const change = (v: number) => {
-    dirty.current = true;
-    setLocal(v);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => { dirty.current = false; onCommit(v); }, 250);
-  };
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  return <Slider min={0} max={100} unit="%" value={local} onChange={change} />;
-}
-
 /* ============================================================================
  * Now-playing panel — album art, track/artist, progress, transport, speaker
  * chips + group/per-speaker volume. Drives the active Connect device back to a
@@ -99,29 +84,23 @@ function NowPlayingPanel({ np, speakers, canControl, wide, onChanged }: {
   np: SpotifyNowPlaying; speakers: SonosSpeaker[]; canControl: boolean; wide: boolean; onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [expanded, setExpanded] = useState(false);
 
-  // The in-scope speakers = those the active Connect device maps to (its Sonos group).
-  const inScope = useMemo(() => {
+  // The in-scope speaker ids = those the active Connect device maps to (its Sonos group).
+  const inScopeIds = useMemo(() => {
     if (np.sonosIds.length === 0) return [];
     const want = new Set(np.sonosIds);
-    return speakers.filter((s) => want.has(s.id));
+    return speakers.filter((s) => want.has(s.id)).map((s) => s.id);
   }, [np.sonosIds, speakers]);
 
-  const scopeLabel = inScope.length
-    ? (inScope.length <= 2 ? inScope.map((s) => s.name).join(', ') : `${inScope.length} speakers`)
+  const scopeLabel = inScopeIds.length
+    ? (inScopeIds.length <= 2 ? speakers.filter((s) => inScopeIds.includes(s.id)).map((s) => s.name).join(', ') : `${inScopeIds.length} speakers`)
     : (np.deviceName ?? '—');
-
-  const vols = inScope.map((s) => (typeof s.volumePct === 'number' ? s.volumePct : 0));
-  const groupVol = vols.length ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 30;
 
   const call = async (fn: () => Promise<unknown>) => {
     if (!canControl) return;
     setBusy(true);
     try { await fn(); onChanged(); } finally { setBusy(false); }
   };
-  const setOne = (id: string, pct: number) => { void api.speakers.setVolume(id, pct).then(onChanged).catch(() => {}); };
-  const setGroup = (pct: number) => { inScope.forEach((s) => { void api.speakers.setVolume(s.id, pct).catch(() => {}); }); onChanged(); };
 
   const progressPct = np.durationMs > 0 ? Math.min(100, (np.progressMs / np.durationMs) * 100) : 0;
 
@@ -161,33 +140,17 @@ function NowPlayingPanel({ np, speakers, canControl, wide, onChanged }: {
         </div>
       )}
 
-      {/* group + per-speaker volume */}
-      {canControl && inScope.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 2 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Icon name="volume-2" size={15} color="var(--text-3)" />
-            <div style={{ flex: 1 }}><DebouncedSlider value={groupVol} onCommit={setGroup} /></div>
-          </div>
-          {inScope.length > 1 && (
-            <>
-              <button type="button" onClick={() => setExpanded((v) => !v)}
-                style={{ alignSelf: 'flex-start', background: 'none', border: 'none', color: 'var(--solar)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: 0 }}>
-                <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={13} />
-                {expanded ? 'Hide' : 'Per-speaker'} volume
-              </button>
-              {expanded && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {inScope.map((s) => (
-                    <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ flex: '0 0 92px', fontSize: 12, color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-                      <div style={{ flex: 1 }}><DebouncedSlider value={typeof s.volumePct === 'number' ? s.volumePct : 0} onCommit={(pct) => setOne(s.id, pct)} /></div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+      {/* Shared "Playing on" control — group volume, live zone toggles, per-zone volume. */}
+      {inScopeIds.length > 0 && (
+        <PlayingOnControl
+          fleet={speakers}
+          inScopeIds={inScopeIds}
+          canControl={canControl}
+          fallbackVolume={30}
+          onSetSpeakers={async (ids) => { await api.spotify.setSpeakers(ids); }}
+          onSetVolume={(id, pct) => api.speakers.setVolume(id, pct)}
+          onChanged={onChanged}
+        />
       )}
     </div>
   );

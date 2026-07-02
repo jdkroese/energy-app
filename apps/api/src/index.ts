@@ -205,6 +205,7 @@ import {
   getSonosFavorites,
   playRadio,
   stopRadio,
+  setRadioSpeakers,
   nowPlaying as radioNowPlaying,
   listSchedules as listRadioSchedules,
   createSchedule as createRadioSchedule,
@@ -222,6 +223,7 @@ import {
   search as spotifySearch,
   getDevices as getSpotifyDevices,
   play as spotifyPlay,
+  setSpeakers as setSpotifySpeakers,
   transport as spotifyTransport,
   setShuffle as setSpotifyShuffle,
   setRepeat as setSpotifyRepeat,
@@ -1034,6 +1036,11 @@ app.post(
   requireKioskOrAdmin,
   wrap((req) => stopRadio(req.body)),
 );
+app.post(
+  "/api/radio/speakers",
+  requireKioskOrAdmin,
+  wrap((req) => setRadioSpeakers(req.body)),
+);
 app.get(
   "/api/radio/schedules",
   wrap(() => listRadioSchedules()),
@@ -1102,6 +1109,11 @@ app.post(
   "/api/spotify/play",
   requireKioskOrAdmin,
   wrap((req) => spotifyPlay(req.body)),
+);
+app.post(
+  "/api/spotify/speakers",
+  requireKioskOrAdmin,
+  wrap((req) => setSpotifySpeakers(req.body)),
 );
 app.post(
   "/api/spotify/pause",

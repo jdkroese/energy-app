@@ -2,8 +2,14 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
-import type { RadioNowPlayingResponse, SpotifyNowPlayingResponse } from '../../lib/types';
+import type {
+  RadioNowPlayingResponse,
+  SpotifyNowPlayingResponse,
+  SpeakersResponse,
+  SonosSpeaker,
+} from '../../lib/types';
 import { Icon } from '../ui/Icon';
+import { PlayingOnControl } from '../music/PlayingOnControl';
 import { useAuth } from '../../auth/AuthProvider';
 
 /* ============================================================================
@@ -11,16 +17,18 @@ import { useAuth } from '../../auth/AuthProvider';
  * navigation so whatever is playing (Spotify or Sonos radio) is visible + pausable
  * from ANY screen, and one tap opens the full Music view.
  *
- *  - useNowPlaying():  shared 5 s poll of BOTH sources. Spotify wins when both are
- *                      active; radio is the fallback. Returns a normalized shape
- *                      (source · title · isPlaying + a toggle) or null when idle.
- *  - RailMiniPlayer:   mounted above the Rail footer. Expanded = glyph + title +
- *                      play/pause; collapsed = just the source glyph + a "playing"
- *                      dot (title hidden).
- *  - MobileMiniPlayer: a slim bar anchored above the TabBar, clear of the alarm FAB.
+ *  - useNowPlaying():  shared 5 s poll of BOTH sources (+ the Sonos fleet). Spotify
+ *                      wins when both are active; radio is the fallback. Returns a
+ *                      normalized shape (source · title · isPlaying + toggle) PLUS the
+ *                      fleet, the in-scope zone ids, and a live setSpeakers() so the
+ *                      speaker popover can re-group without leaving the screen.
+ *  - RailMiniPlayer:   mounted above the Rail footer. A speaker button opens the shared
+ *                      PlayingOnControl in a floating popover.
+ *  - MobileMiniPlayer: a slim bar above the TabBar (clear of the alarm FAB); the speaker
+ *                      button opens the same control in a bottom sheet.
  *
- * Renders NOTHING when nothing is playing (no empty bar). Pause/resume calls the
- * matching source's endpoint; the body click routes to /music.
+ * Renders NOTHING when nothing is playing. Pause/resume calls the matching source's
+ * endpoint; the body click routes to /music.
  * ==========================================================================*/
 
 const POLL_MS = 5_000;
@@ -35,9 +43,15 @@ interface NowPlaying {
   isPlaying: boolean;
   /** Toggle play/pause on the active source. */
   toggle: () => Promise<void>;
+  /** The full Sonos fleet (all zones) for the speaker popover. */
+  fleet: SonosSpeaker[];
+  /** Zone ids currently in scope (playing). */
+  inScopeIds: string[];
+  /** Live-edit which zones are playing (reconciles the group). */
+  setSpeakers: (ids: string[]) => Promise<void>;
 }
 
-/** Shared now-playing state across both sources. Null = nothing playing. */
+/** Shared now-playing state across both sources (+ the fleet). Null np = nothing playing. */
 export function useNowPlaying(): { np: NowPlaying | null; refetch: () => void } {
   const { data: spotifyData, refetch: refetchSpotify } = usePolling<SpotifyNowPlayingResponse>(
     api.spotify.nowPlaying,
@@ -47,10 +61,16 @@ export function useNowPlaying(): { np: NowPlaying | null; refetch: () => void } 
     api.radio.nowPlaying,
     POLL_MS,
   );
+  const { data: fleetData, refetch: refetchFleet } = usePolling<SpeakersResponse>(
+    api.speakers.list,
+    POLL_MS,
+  );
+  const fleet = fleetData?.speakers ?? [];
 
   const refetch = () => {
     void refetchSpotify();
     void refetchRadio();
+    void refetchFleet();
   };
 
   const spotify = spotifyData?.nowPlaying ?? null;
@@ -58,6 +78,7 @@ export function useNowPlaying(): { np: NowPlaying | null; refetch: () => void } 
 
   // Spotify takes precedence when it has an active track (playing or paused-with-track).
   if (spotify && spotify.track) {
+    const inScopeIds = spotify.sonosIds.filter((id) => fleet.some((s) => s.id === id));
     return {
       np: {
         source: 'spotify',
@@ -67,12 +88,18 @@ export function useNowPlaying(): { np: NowPlaying | null; refetch: () => void } 
           await (spotify.isPlaying ? api.spotify.pause() : api.spotify.resume());
           refetch();
         },
+        fleet,
+        inScopeIds,
+        setSpeakers: async (ids) => { await api.spotify.setSpeakers(ids); refetch(); },
       },
       refetch,
     };
   }
 
   if (radio) {
+    const inScopeIds = radio.wholeHouse || radio.speakerIds.length === 0
+      ? fleet.map((s) => s.id)
+      : radio.speakerIds.filter((id) => fleet.some((s) => s.id === id));
     return {
       np: {
         source: 'radio',
@@ -84,6 +111,9 @@ export function useNowPlaying(): { np: NowPlaying | null; refetch: () => void } 
           await api.radio.stop(radio.speakerIds);
           refetch();
         },
+        fleet,
+        inScopeIds,
+        setSpeakers: async (ids) => { await api.radio.setSpeakers(ids); refetch(); },
       },
       refetch,
     };
@@ -100,13 +130,109 @@ function SourceGlyph({ source, size = 16 }: { source: Source; size?: number }) {
   return <Icon name="radio" size={size} color="var(--solar)" />;
 }
 
+/* ---- Speaker button + floating "Playing on" panel ------------------------- */
+// A small cast/speaker button that opens the shared PlayingOnControl. On desktop it's a
+// floating popover anchored to the mini player; on mobile it's a bottom sheet. Both use the
+// same control so behaviour matches the now-playing panels exactly.
+
+function SpeakerButton({ np, canControl, refetch, variant, size = 30 }: {
+  np: NowPlaying; canControl: boolean; refetch: () => void; variant: 'popover' | 'sheet'; size?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const label = `${np.inScopeIds.length}/${np.fleet.length || '?'} zones`;
+
+  const control = (
+    <PlayingOnControl
+      fleet={np.fleet}
+      inScopeIds={np.inScopeIds}
+      canControl={canControl}
+      compact
+      onSetSpeakers={np.setSpeakers}
+      onSetVolume={(id, pct) => api.speakers.setVolume(id, pct)}
+      onChanged={refetch}
+    />
+  );
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Speakers · ${label}`}
+        title={`Speakers · ${label}`}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        style={{
+          width: size, height: size, flex: 'none', borderRadius: '50%', border: 'none',
+          background: open ? 'var(--solar)' : 'var(--surface-2)', color: open ? 'var(--accent-contrast)' : 'var(--text-2)',
+          cursor: 'pointer', display: 'grid', placeItems: 'center',
+        }}
+      >
+        <Icon name="cast" size={Math.round(size * 0.5)} />
+      </button>
+
+      {open && variant === 'popover' && (
+        <>
+          {/* click-away scrim */}
+          <div onClick={(e) => { e.stopPropagation(); setOpen(false); }}
+            style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, right: 0, zIndex: 71,
+              minWidth: 250, padding: 12, borderRadius: 'var(--radius-lg)',
+              background: 'var(--surface-1)', border: '1px solid var(--border-2)', boxShadow: 'var(--shadow-2)',
+              maxHeight: 360, overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <SourceGlyph source={np.source} size={15} />
+              <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{np.title}</div>
+            </div>
+            {control}
+          </div>
+        </>
+      )}
+
+      {open && variant === 'sheet' && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) setOpen(false); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(4,8,10,0.6)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%', maxHeight: '78vh', overflowY: 'auto',
+              background: 'var(--surface-1)', borderTopLeftRadius: 'var(--radius-lg)', borderTopRightRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-2)', padding: '16px 16px calc(16px + env(safe-area-inset-bottom, 0px))',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <SourceGlyph source={np.source} size={17} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="pwr-eyebrow" style={{ color: 'var(--text-3)', fontSize: 9.5 }}>Playing on</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{np.title}</div>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} aria-label="Close"
+                style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 4 }}>
+                <Icon name="x" size={20} />
+              </button>
+            </div>
+            {control}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 /* ---- Desktop Rail mini player (mounted above the footer controls) --------- */
 
 export function RailMiniPlayer({ expanded }: { expanded: boolean }) {
   const { user } = useAuth();
   const canControl = user?.role === 'admin';
   const navigate = useNavigate();
-  const { np } = useNowPlaying();
+  const { np, refetch } = useNowPlaying();
   const [busy, setBusy] = useState(false);
   if (!np) return null;
 
@@ -167,9 +293,10 @@ export function RailMiniPlayer({ expanded }: { expanded: boolean }) {
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openMusic(); }}
       title={`${np.source === 'spotify' ? 'Spotify' : 'Radio'} · ${np.title}`}
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
+        gap: 8,
         padding: '8px 10px',
         border: '1px solid var(--border-1)',
         background: 'var(--surface-1)',
@@ -184,6 +311,7 @@ export function RailMiniPlayer({ expanded }: { expanded: boolean }) {
           {np.title}
         </div>
       </div>
+      <SpeakerButton np={np} canControl={canControl} refetch={refetch} variant="popover" size={28} />
       {canControl && (
         <button
           type="button"
@@ -218,7 +346,7 @@ export function MobileMiniPlayer() {
   const { user } = useAuth();
   const canControl = user?.role === 'admin';
   const navigate = useNavigate();
-  const { np } = useNowPlaying();
+  const { np, refetch } = useNowPlaying();
   const [busy, setBusy] = useState(false);
   if (!np) return null;
 
@@ -242,8 +370,8 @@ export function MobileMiniPlayer() {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
-        // Keep the play/pause and body clear of the alarm FAB (right: 16, width 56).
+        gap: 8,
+        // Keep the buttons + body clear of the alarm FAB (right: 16, width 56).
         padding: '8px 78px 8px 14px',
         borderTop: '1px solid var(--border-1)',
         background: 'var(--glass-fill, rgba(15,22,25,.9))',
@@ -258,6 +386,7 @@ export function MobileMiniPlayer() {
           {np.title}
         </div>
       </div>
+      <SpeakerButton np={np} canControl={canControl} refetch={refetch} variant="sheet" size={34} />
       {canControl && (
         <button
           type="button"

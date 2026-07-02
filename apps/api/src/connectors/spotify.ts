@@ -462,6 +462,32 @@ export async function playOnSpeakers(req: PlayRequest): Promise<PlayResult> {
   return { playedOn: joined, coordinator, deviceId: device.id };
 }
 
+/**
+ * LIVE-edit which Sonos zones the ACTIVE Spotify playback plays on, without restarting the track.
+ * The active Connect device (a Sonos room) is the coordinator; we reconcile the Sonos GROUP around
+ * it: newly-checked zones join the coordinator (mirror its stream in sync); un-checked zones leave
+ * + stop. The Spotify stream never moves off the coordinator's Connect device, so playback is
+ * uninterrupted. Returns the resolved set now in the group. Throws when nothing is playing / no
+ * active device, or Sonos is unreachable.
+ */
+export async function setSpeakers(targetIds: string[]): Promise<{ coordinator: string; joined: string[] }> {
+  const res = await apiFetch('/me/player');
+  if (res.status === 204) throw new Error('nothing is playing');
+  const state = (await res.json()) as PlayerState;
+  const deviceName = state?.device?.name;
+  if (!deviceName) throw new Error('no active Spotify device');
+
+  const fleet = await sonos.getFleet();
+  const coord = fleet.find((s) => normName(s.name) === normName(deviceName));
+  if (!coord) throw new Error('the active Spotify device is not a known Sonos room');
+
+  // The zones currently mirroring the coordinator's stream (its Sonos group).
+  const current = fleet.filter((s) => s.group === coord.group).map((s) => s.id);
+  // Keep the coordinator anchored while ≥1 zone is chosen (its Connect device runs the stream).
+  const want = targetIds.includes(coord.id) ? targetIds : [coord.id, ...targetIds];
+  return sonos.reconcileGroup(coord.id, current, want);
+}
+
 /** Transport controls — all operate on the CURRENTLY ACTIVE Connect device. */
 export async function pause(): Promise<void> {
   await apiWrite('/me/player/pause', 'PUT');

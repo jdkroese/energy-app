@@ -176,6 +176,26 @@ export async function play(body: unknown): Promise<unknown> {
   return { ts: new Date().toISOString(), ok: true, ...res };
 }
 
+/**
+ * POST /api/spotify/speakers { speakerIds } (admin) — LIVE-edit which Sonos zones the active
+ * Spotify playback runs on, without restarting the track. Reconciles the Sonos group around the
+ * active Connect device (coordinator): added zones join in sync, removed zones leave + stop.
+ * Removing the LAST zone (empty set) pauses playback. Fail-soft → BAD_INPUT on grouping errors.
+ */
+export async function setSpeakers(body: unknown): Promise<unknown> {
+  const b = (body ?? {}) as { speakerIds?: unknown };
+  const targetIds = Array.isArray(b.speakerIds)
+    ? [...new Set(b.speakerIds.filter((x): x is string => typeof x === 'string'))]
+    : [];
+  if (targetIds.length === 0) {
+    // No zones = stop listening — pause the active device.
+    await guard(() => spotify.pause());
+    return { ts: new Date().toISOString(), ok: true, paused: true };
+  }
+  const res = await guard(() => spotify.setSpeakers(targetIds));
+  return { ts: new Date().toISOString(), ok: true, ...res };
+}
+
 /** POST /api/spotify/pause | resume | next | previous (admin). */
 export async function transport(action: 'pause' | 'resume' | 'next' | 'previous'): Promise<unknown> {
   await guard(() => spotify[action]());
