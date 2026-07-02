@@ -93,9 +93,11 @@ jobs:
           # Cloudflare edge cache and see what a real visitor gets. The bundle can
           # take a moment to converge through the tunnel, so retry like the health
           # loop — only a *persistent* mismatch (or no response at all) fails.
+          # Check the canonical host (home.hirobo.nl); energy.hirobo.nl now 301s
+          # here, so -L would work too but the real visitor lands on home.
           SERVED=""
           for i in $(seq 1 15); do
-            RESP="$(curl -fsS --max-time 8 "https://energy.hirobo.nl/?cb=$(date +%s)-$i" 2>/dev/null || true)"
+            RESP="$(curl -fsSL --max-time 8 "https://home.hirobo.nl/?cb=$(date +%s)-$i" 2>/dev/null || true)"
             SERVED="$(printf '%s' "$RESP" | grep -oE "$ASSET_RE" | head -1)"
             if [ "$SERVED" = "$EXPECTED" ]; then
               echo "served bundle matches after $i attempt(s)"
@@ -103,7 +105,7 @@ jobs:
             fi
             sleep 2
           done
-          echo "::error::energy.hirobo.nl is still serving '$SERVED' (expected '$EXPECTED') after retries — stale bundle; dist backup is at $SITE/.deploy-bak"
+          echo "::error::home.hirobo.nl is still serving '$SERVED' (expected '$EXPECTED') after retries — stale bundle; dist backup is at $SITE/.deploy-bak"
           exit 1
 
       - name: Restart API and verify health
