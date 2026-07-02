@@ -57,7 +57,7 @@ export type MeteringDb = {
   close: () => void;
 };
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let initTried = false;
 let disabledReason: string | null = null;
@@ -187,6 +187,38 @@ function migrate(handle: MeteringDb): void {
       combined_soc_max REAL,
       samples          INTEGER NOT NULL,
       src              TEXT
+    );
+
+    -- ---- Per-inverter solar history (spec docs/36, schema v3) --------------
+    -- Same tiered model as energy_* but with an inverter_id dimension (the Sungrow
+    -- dongle IP / SN). Raw 5-min average AC power (kW) + daily/total yield snapshots;
+    -- hourly/daily integrate power → kWh. Retention mirrors energy_*: 5m 90d,
+    -- hourly 3y, daily forever. All ADDITIVE + READ-ONLY; a fault here can never
+    -- touch the armed control loop (same fail-soft handle).
+    CREATE TABLE IF NOT EXISTS inverter_5m (
+      inverter_id   TEXT    NOT NULL,
+      ts            INTEGER NOT NULL,   -- unix seconds, 5-min aligned
+      ac_kw         REAL,               -- 5-min average AC power (kW)
+      daily_kwh     REAL,               -- last-seen daily yield snapshot (kWh)
+      total_kwh     REAL,               -- last-seen lifetime yield snapshot (kWh)
+      samples       INTEGER NOT NULL,
+      PRIMARY KEY (inverter_id, ts)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS inverter_hourly (
+      inverter_id   TEXT    NOT NULL,
+      bucket_ts     INTEGER NOT NULL,   -- hour start (unix seconds)
+      ac_kwh        REAL,               -- integrated production over the hour (kWh)
+      samples       INTEGER NOT NULL,
+      PRIMARY KEY (inverter_id, bucket_ts)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS inverter_daily (
+      inverter_id   TEXT    NOT NULL,
+      day           TEXT    NOT NULL,   -- Madrid YYYY-MM-DD
+      ac_kwh        REAL,               -- production over the day (kWh)
+      samples       INTEGER NOT NULL,
+      PRIMARY KEY (inverter_id, day)
     );
   `);
   handle

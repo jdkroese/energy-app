@@ -35,6 +35,8 @@ import type {
   HistoryResponse,
   IntegrationsConfig,
   IntegrationStatus,
+  InvertersResponse,
+  InvertersHistoryResponse,
   LightLever,
   LightsResponse,
   LightDetailResponse,
@@ -263,6 +265,10 @@ export const api = {
   // reads
   live: () => getJSON<LiveResponse>("/api/live"),
   batteries: () => getJSON<BatteriesResponse>("/api/batteries"),
+  // Solar inverters (Sungrow SG5.0RS ×2; docs/36) — live snapshot + production history.
+  inverters: () => getJSON<InvertersResponse>("/api/inverters"),
+  invertersHistory: (range: string) =>
+    getJSON<InvertersHistoryResponse>(`/api/inverters/history?range=${enc(range)}`),
   history: (range: string, offset = 0) =>
     getJSON<HistoryResponse>(
       `/api/history?range=${enc(range)}&offset=${enc(String(offset))}`,
@@ -814,6 +820,16 @@ export const api = {
       putJSON<ProbeResult & { config: IntegrationsConfig }>(
         "/api/integrations/airzone",
         { host },
+      ),
+
+    // Sungrow solar inverters — the two WiNet-S dongles (docs/36). Test/save a
+    // dongle list ({ ip, name }[]); omit `dongles` on test to probe the current config.
+    testSungrow: (dongles?: { ip: string; name?: string }[]) =>
+      postJSON<ProbeResult>("/api/integrations/sungrow/test", { dongles }),
+    setSungrow: (dongles: { ip: string; name?: string }[]) =>
+      putJSON<ProbeResult & { config: IntegrationsConfig }>(
+        "/api/integrations/sungrow",
+        { dongles },
       ),
 
     // Rain Bird irrigation (LAN-local SIP; host prefilled, password required).

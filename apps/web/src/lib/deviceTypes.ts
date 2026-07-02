@@ -16,7 +16,10 @@
 // in the union so classifyDevice can tag + EXCLUDE them from the climate hub.
 // 'controller' is a wireless scene switch — an INPUT device with NO actuatable load. It
 // gets its own Devices-hub group; its buttons bind to whole-home scenes (no on/off UI).
-export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'blinds' | 'switching' | 'speakers' | 'irrigation' | 'controller';
+// 'solar-inverter' is a MONITOR-only fleet type (Sungrow SG5.0RS ×2, read-only): it has
+// its own dedicated /solar-inverters screen (per-inverter cards) rather than a climate-hub
+// control tab, but it's in the union + registry so it gets a label/hue/icon for wayfinding.
+export type DeviceType = 'cooling' | 'heating' | 'lighting' | 'blinds' | 'switching' | 'speakers' | 'irrigation' | 'controller' | 'solar-inverter';
 
 export interface DeviceTypeMeta {
   type: DeviceType;
@@ -37,6 +40,7 @@ export const DEVICE_TYPES: DeviceTypeMeta[] = [
   { type: 'speakers', label: 'Speakers', hue: 'var(--solar)', icon: 'volume-2', built: true },
   { type: 'switching', label: 'Switching', hue: 'var(--battery)', icon: 'toggle-right', built: false },
   { type: 'controller', label: 'Controllers', hue: 'var(--ev)', icon: 'radio', built: true },
+  { type: 'solar-inverter', label: 'Solar Inverters', hue: 'var(--solar)', icon: 'sun', built: true },
 ];
 
 export const typeMeta = (t: DeviceType): DeviceTypeMeta =>

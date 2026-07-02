@@ -25,8 +25,24 @@ const RENOTIFY_AFTER_MS = 6 * 3600_000;
 // observations before notifying so a single spike past the band doesn't fire an alert.
 // rule-charge-stall is debounced as well: the coordinator commands every 90s and the Sonnen
 // ramps up, so require 2 consecutive ticks to avoid firing during a normal ramp/cloud transient.
-const DEBOUNCE_RULES = new Set(['rule-offline', 'rule-outage', 'rule-voltage', 'rule-charge-stall']);
+// rule-inverter-offline / rule-inverter-stall are debounced too: a WiNet-S dongle can
+// miss a single poll transiently (WiFi), so require several consecutive daylight misses
+// (~5 min) before paging that an inverter is down.
+const DEBOUNCE_RULES = new Set([
+  'rule-offline',
+  'rule-outage',
+  'rule-voltage',
+  'rule-charge-stall',
+  'rule-inverter-offline',
+  'rule-inverter-stall',
+]);
 const DEBOUNCE_MIN_STREAK = 2;
+// Per-rule streak overrides (ticks) where the default 2 (~75s) is too jumpy. The inverter
+// offline/stall rules want ~5 min of consecutive daylight misses before paging.
+const DEBOUNCE_STREAK_OVERRIDE: Record<string, number> = {
+  'rule-inverter-offline': 5,
+  'rule-inverter-stall': 5,
+};
 
 let timer: ReturnType<typeof setInterval> | null = null;
 // Consecutive ticks each debounced alert id has been observed firing.
@@ -116,7 +132,7 @@ async function tick(): Promise<void> {
       if (
         a.rule &&
         DEBOUNCE_RULES.has(a.rule) &&
-        (offlineStreak.get(a.id) ?? 0) < DEBOUNCE_MIN_STREAK
+        (offlineStreak.get(a.id) ?? 0) < (DEBOUNCE_STREAK_OVERRIDE[a.rule] ?? DEBOUNCE_MIN_STREAK)
       ) {
         continue;
       }
@@ -156,6 +172,17 @@ async function tick(): Promise<void> {
           title: 'Sonnen absorbing surplus again',
           body: 'Battery is charging from the solar surplus again',
         });
+      }
+      // Solar-inverter fault/offline/stall recover: the owner (headline requirement:
+      // never miss an outage) wants the "back online / cleared" message too.
+      if (a.rule === 'rule-inverter-fault') {
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} fault cleared`, body: 'The inverter fault/alarm is no longer active' });
+      }
+      if (a.rule === 'rule-inverter-offline') {
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} back online`, body: 'The inverter/dongle is reachable again' });
+      }
+      if (a.rule === 'rule-inverter-stall') {
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is generating again' });
       }
     }
 

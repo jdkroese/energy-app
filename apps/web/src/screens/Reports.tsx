@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_HISTORY } from '../lib/mock';
-import type { HistoryResponse } from '../lib/types';
+import type { HistoryResponse, InvertersHistoryResponse } from '../lib/types';
 import { MAX_BACK, periodLabel } from '../lib/periods';
 import { Card, StatTile, ProgressBar, Badge, SegmentedControl, Eyebrow, Icon, ScreenHeader } from '../components/ui';
 import { BarChart, type BarDatum } from '../components/energy/BarChart';
@@ -81,6 +81,87 @@ export function Reports({ ctx }: { ctx: ShellContext }) {
       <div style={{ padding: '4px 14px 6px' }}>{tabs}</div>
       {tab === 'Energy' ? <EnergyReports ctx={ctx} /> : <div style={{ padding: '8px 14px 22px' }}><Bills ctx={ctx} /></div>}
     </>
+  );
+}
+
+const INVERTER_HUES = ['var(--solar)', 'var(--battery)'];
+
+/**
+ * Per-inverter solar production for the selected range (Sungrow SG5.0RS ×2; docs/36).
+ * Reads the durable per-inverter store; empty-states cleanly before samples accrue.
+ * A compact grouped mini bar chart (one colour per inverter) + a per-inverter total.
+ */
+function InverterHistoryCard({ ctx }: { ctx: ShellContext }) {
+  const { data } = usePolling<InvertersHistoryResponse>(
+    () => api.invertersHistory(ctx.range.toLowerCase()),
+    0,
+    [ctx.range],
+  );
+  const series = data?.series ?? [];
+  const labels = data?.labels ?? [];
+  if (series.length === 0) return null; // nothing recorded yet / store unavailable
+
+  const max = Math.max(1, ...series.flatMap((s) => s.kwh));
+  const stride = Math.max(1, Math.ceil(labels.length / (ctx.desktop ? 16 : 8)));
+  const h = ctx.desktop ? 150 : 110;
+
+  return (
+    <Card
+      title={ctx.desktop ? 'Solar inverters' : undefined}
+      subtitle={ctx.desktop ? 'per-inverter production · kWh' : undefined}
+      icon={ctx.desktop ? <Icon name="sun" /> : undefined}
+      style={ctx.desktop ? undefined : { padding: 16 }}
+      actions={
+        ctx.desktop ? (
+          <div style={{ display: 'flex', gap: 14, fontSize: 12, color: 'var(--text-2)' }}>
+            {series.map((s, i) => (
+              <span key={s.id}>
+                <i style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: INVERTER_HUES[i % INVERTER_HUES.length], marginRight: 5 }} />
+                {s.name} · {s.totalKwh} kWh
+              </span>
+            ))}
+          </div>
+        ) : undefined
+      }
+    >
+      {!ctx.desktop && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 6 }}>
+          <Eyebrow>Solar inverters · kWh</Eyebrow>
+          <div style={{ display: 'flex', gap: 10, fontSize: 11, color: 'var(--text-2)' }}>
+            {series.map((s, i) => (
+              <span key={s.id}>
+                <i style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: INVERTER_HUES[i % INVERTER_HUES.length], marginRight: 4 }} />
+                {s.totalKwh}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: ctx.desktop ? 6 : 3, height: h, marginTop: 4 }}>
+        {labels.map((l, i) => (
+          <div key={i} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 2 }}>
+              {series.map((s, si) => {
+                const v = s.kwh[i] ?? 0;
+                return (
+                  <div
+                    key={s.id}
+                    title={`${s.name}: ${v.toFixed(2)} kWh`}
+                    style={{
+                      width: ctx.desktop ? 8 : 5,
+                      height: `${Math.max(v > 0 ? 2 : 0, (v / max) * 100)}%`,
+                      background: INVERTER_HUES[si % INVERTER_HUES.length],
+                      borderRadius: 2,
+                    }}
+                  />
+                );
+              })}
+            </div>
+            <span style={{ fontSize: 9, color: 'var(--text-3)', whiteSpace: 'nowrap' }}>{i % stride === 0 ? l : ''}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 
@@ -280,6 +361,7 @@ function EnergyReports({ ctx, tabs }: { ctx: ShellContext; tabs?: ReactNode }) {
           {byLoad}
         </div>
         {prodCons}
+        <InverterHistoryCard ctx={ctx} />
       </div>
     );
   }
@@ -301,6 +383,7 @@ function EnergyReports({ ctx, tabs }: { ctx: ShellContext; tabs?: ReactNode }) {
         {gridBand}
         {captured}
         {prodCons}
+        <InverterHistoryCard ctx={ctx} />
         {byLoad}
       </div>
     </>

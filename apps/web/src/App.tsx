@@ -16,6 +16,7 @@ const Reports = lazy(() => import('./screens/Reports').then((m) => ({ default: m
 const Settings = lazy(() => import('./screens/Settings').then((m) => ({ default: m.Settings })));
 const Scenarios = lazy(() => import('./screens/Scenarios').then((m) => ({ default: m.Scenarios })));
 const Batteries = lazy(() => import('./screens/Batteries').then((m) => ({ default: m.Batteries })));
+const SolarInverters = lazy(() => import('./screens/SolarInverters').then((m) => ({ default: m.SolarInverters })));
 const BatteryDetail = lazy(() => import('./screens/BatteryDetail').then((m) => ({ default: m.BatteryDetail })));
 const Devices = lazy(() => import('./screens/Devices').then((m) => ({ default: m.Devices })));
 const DeviceDetail = lazy(() => import('./screens/DeviceDetail').then((m) => ({ default: m.DeviceDetail })));
@@ -69,6 +70,7 @@ function AppRoutes() {
           <Route path="/brain" element={<Navigate to="/automations" replace />} />
           <Route path="/batteries" element={<Batteries ctx={ctx} />} />
           <Route path="/batteries/:id" element={<BatteryDetail ctx={ctx} />} />
+          <Route path="/solar-inverters" element={<SolarInverters ctx={ctx} />} />
           <Route path="/devices" element={<Devices ctx={ctx} />} />
           <Route path="/irrigation" element={<Irrigation ctx={ctx} />} />
           <Route path="/rooms" element={<RoomsManage ctx={ctx} />} />

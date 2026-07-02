@@ -25,6 +25,7 @@ export const NAV_TOP: NavItem[] = [
  *  category-tile overview. Icons/hues mirror the device-type registry. */
 export const NAV_DEVICES: NavItem[] = [
   { to: '/batteries', label: 'Charging', icon: 'battery-charging' },
+  { to: '/solar-inverters', label: 'Solar Inverters', icon: 'sun' },
   { to: '/devices?type=lighting', label: 'Lighting', icon: 'lightbulb' },
   { to: '/devices?type=cooling', label: 'Cooling', icon: 'snowflake' },
   { to: '/devices?type=heating', label: 'Heating', icon: 'flame' },

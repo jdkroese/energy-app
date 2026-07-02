@@ -387,6 +387,9 @@ export interface IntegrationsState {
   /** Tuya Cloud project (datacenter region + Access ID/Secret). Unlocks the
    *  whole linked device fleet — lights first, more categories to come. */
   tuya?: { region?: string; accessId?: string; accessSecret?: string };
+  /** Sungrow solar inverters — the two WiNet-S dongles (one per SG5.0RS), keyed on
+   *  dongle IP. Read-only LAN integration (docs/36); env is the fallback. */
+  sungrow?: { dongles?: { ip: string; name?: string }[] } | null;
   /** Panasonic Comfort Cloud — native WiFi AC modules (CS-Z / CS-XZ series). */
   panasonic?: { username: string; password: string } | null;
   /** Sonos house-alarm. Local UPnP discovery (zero-config on the LAN); `seedIp` is a
@@ -1460,6 +1463,18 @@ export const DEFAULT_RULES: RuleState[] = [
   // The voltage rule's enable-state is owned by voltageMonitor.enabled (its own config),
   // but it appears in the rules list so it surfaces in the feed/labels like the others.
   { id: "rule-voltage", enabled: true },
+  // ---- Solar inverters (Sungrow SG5.0RS ×2; docs/36) ----
+  // A fault/alarm is Active on an inverter (fault log / work-state) — page immediately.
+  { id: "rule-inverter-fault", enabled: true },
+  // A dongle is unreachable in DAYLIGHT (night misses are expected + suppressed).
+  { id: "rule-inverter-offline", enabled: true },
+  // Reachable + Run/Standby but producing ~0 while clear-sky expects output.
+  { id: "rule-inverter-stall", enabled: true },
+  // N grid under/over-voltage trips in the last hour on an inverter (aggregated,
+  // corroborates rule-voltage — voltage trips auto-recover so we don't page each flap).
+  { id: "rule-inverter-grid-quality", enabled: true },
+  // One inverter materially under-producing vs its identical twin (slow degradation).
+  { id: "rule-inverter-imbalance", enabled: true },
 ];
 
 /** Grid-voltage monitor defaults — ENABLED, band 190–240 V, breaker auto-picked. */
