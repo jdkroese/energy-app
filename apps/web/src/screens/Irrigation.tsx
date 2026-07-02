@@ -449,7 +449,9 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
           <WeeklyPlanCard zones={data.zones} wide={wide} />
 
           {/* Irrigation event feed */}
-          <ActivityFeed onViewAll={() => nav("/automations?tab=events")} />
+          <ActivityFeed
+            onViewAll={() => nav("/automations?tab=events&cat=irrigation")}
+          />
         </>
       )}
     </>

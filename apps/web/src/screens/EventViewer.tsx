@@ -5,7 +5,7 @@
 // Follows the Power dark control-room system. Read + ack/resolve only (no control writes).
 
 import { Fragment, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { Icon, SegmentedControl, Input, Button } from '../components/ui';
@@ -205,8 +205,24 @@ function DeviceLink({
 export function EventViewer({ wide }: { wide: boolean }) {
   // Filter state. Default = Actions + Observations, medium+ (locked §10.1).
   const [classFilter, setClassFilter] = useState<ClassFilter>('all');
-  const [severities, setSeverities] = useState<EventSeverity[]>(['medium', 'high', 'critical']);
-  const [categories, setCategories] = useState<EventCategory[]>([]);
+  // Seed the category filter from a `?cat=` deep-link (e.g. Irrigation's "View all" → irrigation
+  // events only). Accepts a comma-separated list; unknown values are ignored. Read once on mount;
+  // chip toggles take over from there.
+  const [searchParams] = useSearchParams();
+  const seededCategories = useMemo<EventCategory[]>(
+    () =>
+      (searchParams.get('cat') ?? '')
+        .split(',')
+        .map((c) => c.trim())
+        .filter((c): c is EventCategory => (ALL_CATEGORIES as string[]).includes(c)),
+    [searchParams],
+  );
+  // A category deep-link wants ALL of that category's events (matching the source page's feed),
+  // so open on every severity; a plain visit keeps the default medium+ noise floor (§10.1).
+  const [severities, setSeverities] = useState<EventSeverity[]>(
+    seededCategories.length ? ['low', 'medium', 'high', 'critical'] : ['medium', 'high', 'critical'],
+  );
+  const [categories, setCategories] = useState<EventCategory[]>(seededCategories);
   const [range, setRange] = useState<RangeKey>('24h');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<EnergyEvent | null>(null);
