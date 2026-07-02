@@ -92,6 +92,25 @@ function absTime(ts: string): string {
     second: '2-digit',
   });
 }
+/** Exact wall-clock time (with seconds) for a row — the date is carried by the date header. */
+function clockTime(ts: string): string {
+  return new Date(ts).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+/** Row timestamp: exact clock time (primary) + relative "ago" (muted). Full date+time on hover. */
+function TimeCell({ ts }: { ts: string }) {
+  return (
+    <span
+      title={absTime(ts)}
+      style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)', flex: 'none', whiteSpace: 'nowrap' }}
+    >
+      {clockTime(ts)} <span style={{ opacity: 0.6 }}>· {relTime(ts)}</span>
+    </span>
+  );
+}
 function dateHeader(ts: string): string {
   const d = new Date(ts);
   const today = new Date();
@@ -664,7 +683,7 @@ function EventGroupRow({
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
             <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-              <span title={absTime(head.ts)} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)', flex: 'none' }}>{relTime(head.ts)}</span>
+              <TimeCell ts={head.ts} />
               <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 5, background: 'var(--surface-3)', color: 'var(--text-2)', display: 'inline-flex', alignItems: 'center', gap: 4, flex: 'none' }}>
                 <Icon name={badge.icon} size={10} /> {badge.label}
               </span>
@@ -709,7 +728,7 @@ function GroupMemberRow({ ev, selected, onSelect }: { ev: EnergyEvent; selected:
     >
       <span style={{ width: 3, flex: 'none', background: sev, opacity: ev.severity === 'low' ? 0.5 : 1 }} />
       <span style={{ display: 'flex', gap: 10, padding: '8px 11px', flex: 1, minWidth: 0, alignItems: 'baseline' }}>
-        <span title={absTime(ev.ts)} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)', flex: 'none' }}>{relTime(ev.ts)}</span>
+        <TimeCell ts={ev.ts} />
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-1)' }}>
             <DeviceLink ev={ev} />
@@ -746,7 +765,7 @@ function EventRow({ ev, count, selected, onSelect }: { ev: EnergyEvent; count: n
         </span>
         <span style={{ flex: 1, minWidth: 0 }}>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <span title={absTime(ev.ts)} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)', flex: 'none' }}>{relTime(ev.ts)}</span>
+            <TimeCell ts={ev.ts} />
             <span style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 5, background: 'var(--surface-3)', color: 'var(--text-2)', display: 'inline-flex', alignItems: 'center', gap: 4, flex: 'none' }}>
               <Icon name={badge.icon} size={10} /> {badge.label}
             </span>
