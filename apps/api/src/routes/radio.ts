@@ -30,7 +30,7 @@ const RADIO_BROWSER_SERVERS = [
   'https://all.api.radio-browser.info',
 ];
 
-const RB_USER_AGENT = 'EnergyApp/1.0 (Sonos radio; +https://energy.hirobo.nl)';
+const RB_USER_AGENT = 'EnergyApp/1.0 (Sonos radio; +https://home.hirobo.nl)';
 
 export interface RadioSearchResult {
   name: string;

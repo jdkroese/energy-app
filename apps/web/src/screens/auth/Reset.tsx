@@ -64,7 +64,7 @@ export function Reset() {
   }
 
   return (
-    <AuthShell title="Choose a new password" subtitle="Set a new password for your Power account.">
+    <AuthShell title="Choose a new password" subtitle="Set a new password for your Home account.">
       <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {error && <AuthError>{error}</AuthError>}
         <Input

@@ -1,4 +1,4 @@
-// Power PWA service worker — minimal, safe for a Vite SPA with hashed assets.
+// Home PWA service worker — minimal, safe for a Vite SPA with hashed assets.
 // Strategy: navigations = network-first (offline.html fallback); static assets =
 // cache-first runtime; /api/ = always network (never cache live energy data).
 const VERSION = 'power-v1';
@@ -58,7 +58,7 @@ self.addEventListener('push', (e) => {
   } catch (_) {
     data = { body: e.data ? e.data.text() : '' };
   }
-  const title = data.title || 'Power';
+  const title = data.title || 'Home';
   const options = {
     body: data.body || '',
     icon: '/icons/icon-192.png',

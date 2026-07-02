@@ -25,7 +25,7 @@ const META: Record<string, { eyebrow: string; title: string }> = {
   '/alerts': { eyebrow: 'Alerts', title: 'Notifications' },
   '/settings': { eyebrow: 'Settings', title: 'System' },
   '/scenarios': { eyebrow: 'Scenarios', title: 'Strategy profiles' },
-  '/automations': { eyebrow: 'Power', title: 'Automations' },
+  '/automations': { eyebrow: 'Home', title: 'Automations' },
 };
 
 const RAIL_KEY = 'power.rail.expanded';
@@ -69,7 +69,7 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
 
   const meta =
     META[location.pathname] ||
-    (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Charging', title: 'Battery detail' } : { eyebrow: 'Power', title: '' });
+    (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Charging', title: 'Battery detail' } : { eyebrow: 'Home', title: '' });
   const ctx: ShellContext = { desktop, range, setRange, settingsTab: activeSettingsTab, setSettingsTab };
 
   // Wall-tablet (kiosk) mode swaps the whole frame — its own nav + routes, so it

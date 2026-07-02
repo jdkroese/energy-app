@@ -212,6 +212,6 @@ export function bootstrapAdmin(): void {
   });
   const raw = createSetupToken(admin, SETUP_TTL_MS);
   console.log(
-    `[auth] SETUP — set the admin password at: https://energy.hirobo.nl/setup?token=${raw}`,
+    `[auth] SETUP — set the admin password at: https://home.hirobo.nl/setup?token=${raw}`,
   );
 }

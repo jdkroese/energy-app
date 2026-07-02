@@ -44,17 +44,17 @@ const note: React.CSSProperties = {
 function meta(platform: InstallPlatform): { title: string; subtitle: string } {
   switch (platform) {
     case 'standalone':
-      return { title: "You're all set", subtitle: 'Power is installed on this device.' };
+      return { title: "You're all set", subtitle: 'Home is installed on this device.' };
     case 'ios-safari':
-      return { title: 'Add to Home Screen', subtitle: 'Install Power on your iPhone for a full-screen app with push notifications.' };
+      return { title: 'Add to Home Screen', subtitle: 'Install Home on your iPhone for a full-screen app with push notifications.' };
     case 'ios-other':
       return { title: 'Open in Safari to install', subtitle: 'On iPhone, Add to Home Screen only works from Safari.' };
     case 'chromium-prompt':
-      return { title: 'Install Power', subtitle: 'Add Power as an app for a full-screen, one-tap experience.' };
+      return { title: 'Install Home', subtitle: 'Add Home as an app for a full-screen, one-tap experience.' };
     case 'chromium-manual':
-      return { title: 'Install Power', subtitle: 'Add Power as an app from your browser menu.' };
+      return { title: 'Install Home', subtitle: 'Add Home as an app from your browser menu.' };
     default:
-      return { title: 'Add to Home Screen', subtitle: 'Install Power for a full-screen app experience.' };
+      return { title: 'Add to Home Screen', subtitle: 'Install Home for a full-screen app experience.' };
   }
 }
 
@@ -68,7 +68,7 @@ function Body({ platform, onClose }: { platform: InstallPlatform; onClose: () =>
           <Icon name="check" size={28} />
         </span>
         <div style={{ fontSize: 14, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          You're running the installed app — launch Power any time from your Home Screen.
+          You're running the installed app — launch Home any time from your Home Screen.
         </div>
         <Button variant="secondary" onClick={onClose}>Done</Button>
       </div>
@@ -85,10 +85,10 @@ function Body({ platform, onClose }: { platform: InstallPlatform; onClose: () =>
           Scroll down and choose <Em>Add to Home Screen</Em>
         </Step>
         <Step n={3} glyph="check">
-          Tap <Em>Add</Em> — Power installs like a native app
+          Tap <Em>Add</Em> — Home installs like a native app
         </Step>
         <div style={note}>
-          Tip: open Power from its new Home Screen icon to get full-screen mode and enable push notifications.
+          Tip: open Home from its new Home Screen icon to get full-screen mode and enable push notifications.
         </div>
       </div>
     );
@@ -98,7 +98,7 @@ function Body({ platform, onClose }: { platform: InstallPlatform; onClose: () =>
     return (
       <div style={wrap}>
         <Step n={1} glyph="compass">
-          Open <Em>energy.hirobo.nl</Em> in <Em>Safari</Em>
+          Open <Em>home.hirobo.nl</Em> in <Em>Safari</Em>
         </Step>
         <Step n={2} glyph="square-arrow-up">
           Tap the <Em>Share</Em> button
@@ -115,7 +115,7 @@ function Body({ platform, onClose }: { platform: InstallPlatform; onClose: () =>
     return (
       <div style={{ ...wrap, gap: 12 }}>
         <div style={{ fontSize: 14, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          Power runs in its own window with no browser chrome, and stays one tap away.
+          Home runs in its own window with no browser chrome, and stays one tap away.
         </div>
         <Button
           variant="primary"
@@ -128,7 +128,7 @@ function Body({ platform, onClose }: { platform: InstallPlatform; onClose: () =>
             if (r !== 'unavailable') onClose();
           }}
         >
-          Install Power
+          Install Home
         </Button>
       </div>
     );
@@ -150,7 +150,7 @@ function Body({ platform, onClose }: { platform: InstallPlatform; onClose: () =>
   );
 }
 
-/** Modal sheet that guides the user to install Power on the current platform. */
+/** Modal sheet that guides the user to install Home on the current platform. */
 export function InstallSheet({ onClose }: { onClose: () => void }) {
   // Detect once on mount so the content can't flip mid-interaction.
   const [platform] = useState<InstallPlatform>(detectInstall);
