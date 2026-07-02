@@ -72,6 +72,10 @@ export interface EnergyEvent {
   summary: string;
   trigger: EventTrigger;
   device?: string;
+  /** Resolved friendly/user-assigned device name (read-path enrichment; not stored). */
+  deviceName?: string;
+  /** Device category/type routing hint (read-path enrichment; not stored). */
+  deviceType?: string;
   entity?: string;
   change?: EventChange;
   ok?: boolean; // actions only: succeeded / rejected

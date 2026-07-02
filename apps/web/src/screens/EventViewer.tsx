@@ -5,6 +5,7 @@
 // Follows the Power dark control-room system. Read + ack/resolve only (no control writes).
 
 import { Fragment, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { Icon, SegmentedControl, Input, Button } from '../components/ui';
@@ -104,6 +105,80 @@ function fmtVal(v: unknown): string {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
+}
+
+/* ---- Device deep-link resolution ---------------------------------------- */
+/** The label shown for a device: friendly name from the server, else the raw id. */
+function deviceLabel(ev: EnergyEvent): string {
+  return ev.deviceName ?? ev.device ?? '';
+}
+
+/**
+ * Map an event's device onto its detail page, matching the app's real routes (App.tsx):
+ *  - batteries (sonnen/tesla)                    → /batteries/<id>
+ *  - irrigation zones (rb-* / type 'irrigation') → /irrigation (no per-zone route)
+ *  - climate (cooling/heating)                   → /devices/<id> (DeviceDetail)
+ *  - scene controllers (type 'controller')       → /devices/controller/<id>
+ *  - switching/generic Tuya                      → /devices/generic/<id>
+ *  - lighting                                    → /devices?type=lighting (filtered list)
+ *  - blinds                                      → /devices?type=blinds (filtered list)
+ * Returns null for events with no real device (arbitrage plan, boot/deploy, grid breaker,
+ * or an id we can't classify) → the caller renders plain text, no link.
+ */
+function deviceHref(ev: EnergyEvent): string | null {
+  const id = ev.device;
+  if (!id) return null;
+  const type = ev.deviceType;
+
+  if (id === 'sonnen' || id === 'tesla' || type === 'battery') return `/batteries/${id}`;
+  if (type === 'irrigation' || id.startsWith('rb-')) return '/irrigation';
+  if (type === 'controller') return `/devices/controller/${id}`;
+  if (type === 'lighting') return '/devices?type=lighting';
+  if (type === 'blinds') return '/devices?type=blinds';
+  if (type === 'switching') return `/devices/generic/${id}`;
+  if (type === 'cooling' || type === 'heating' || type === 'climate') return `/devices/${id}`;
+  // Grid breaker + anything we couldn't classify: no detail page → plain text.
+  return null;
+}
+
+/** Friendly device name; a react-router Link when the device has a detail page, else plain
+ *  text. `onNavigate` lets the mobile sheet close itself on tap. The raw id is exposed via
+ *  the title tooltip so forensic lookups still work. */
+function DeviceLink({
+  ev,
+  onNavigate,
+  style,
+}: {
+  ev: EnergyEvent;
+  onNavigate?: () => void;
+  style?: React.CSSProperties;
+}) {
+  const label = deviceLabel(ev);
+  if (!label) return null;
+  const href = deviceHref(ev);
+  const title = ev.device && ev.device !== label ? ev.device : undefined;
+  if (!href) {
+    return (
+      <span title={title} style={style}>
+        {label}
+      </span>
+    );
+  }
+  return (
+    <Link
+      to={href}
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onNavigate?.();
+      }}
+      style={{ color: 'inherit', textDecoration: 'none', borderBottom: '1px dotted var(--border-2)', ...style }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--solar)')}
+      onMouseLeave={(e) => (e.currentTarget.style.color = style?.color ?? 'inherit')}
+    >
+      {label}
+    </Link>
+  );
 }
 
 /* ========================================================================== */
@@ -279,7 +354,7 @@ export function EventViewer({ wide }: { wide: boolean }) {
       )}
       {selected && (
         <BottomSheet title="Event detail" onClose={() => setSelected(null)}>
-          <EventDetail ev={selected} onClose={() => setSelected(null)} onAck={onAck} onResolve={onResolve} />
+          <EventDetail ev={selected} onClose={() => setSelected(null)} onAck={onAck} onResolve={onResolve} onNavigate={() => setSelected(null)} />
         </BottomSheet>
       )}
     </div>
@@ -487,7 +562,9 @@ function EventRow({ ev, count, selected, onSelect }: { ev: EnergyEvent; count: n
                 {fmtVal(ev.change.from)} → <span style={{ color: 'var(--text-1)' }}>{fmtVal(ev.change.to)}</span>
               </span>
             )}
-            {ev.device && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>· {ev.device}</span>}
+            {ev.device && (
+              <span title={ev.device !== deviceLabel(ev) ? ev.device : undefined} style={{ fontSize: 11, color: 'var(--text-3)' }}>· {deviceLabel(ev)}</span>
+            )}
           </span>
         </span>
       </span>
@@ -502,12 +579,15 @@ function EventDetail({
   onAck,
   onResolve,
   embedded,
+  onNavigate,
 }: {
   ev: EnergyEvent;
   onClose: () => void;
   onAck: (id: string) => void;
   onResolve: (id: string) => void;
   embedded?: boolean;
+  /** Called when a device link is followed — lets the mobile sheet dismiss itself. */
+  onNavigate?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const sev = SEV_COLOR[ev.severity];
@@ -538,7 +618,7 @@ function EventDetail({
       </div>
 
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <MetaGrid ev={ev} />
+        <MetaGrid ev={ev} onNavigate={onNavigate} />
 
         {ev.detail && (
           <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 10, padding: 11 }}>
@@ -599,23 +679,37 @@ function EventDetail({
   );
 }
 
-function MetaGrid({ ev }: { ev: EnergyEvent }) {
-  const rows: [string, string][] = [
-    ['Class', CLASS_BADGE[ev.class].label],
-    ['Category', ev.category],
-    ['Severity', SEV_LABEL[ev.severity]],
-    ['Trigger', `${ev.trigger.source}${ev.trigger.detail ? ` · ${ev.trigger.detail}` : ''}`],
+function MetaGrid({ ev, onNavigate }: { ev: EnergyEvent; onNavigate?: () => void }) {
+  // Text rows plus one custom Device row (friendly name → link + raw-id subline).
+  const rows: { k: string; v: React.ReactNode; cap?: boolean }[] = [
+    { k: 'Class', v: CLASS_BADGE[ev.class].label },
+    { k: 'Category', v: ev.category, cap: true },
+    { k: 'Severity', v: SEV_LABEL[ev.severity] },
+    { k: 'Trigger', v: `${ev.trigger.source}${ev.trigger.detail ? ` · ${ev.trigger.detail}` : ''}` },
   ];
-  if (ev.device) rows.push(['Device', ev.device]);
-  if (ev.entity) rows.push(['Entity', ev.entity]);
-  if (ev.state) rows.push(['State', ev.state]);
-  if (ev.ok !== undefined) rows.push(['Outcome', ev.ok ? 'ok' : 'rejected']);
+  if (ev.device) {
+    const showId = ev.deviceName && ev.deviceName !== ev.device;
+    rows.push({
+      k: 'Device',
+      v: (
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <DeviceLink ev={ev} onNavigate={onNavigate} style={{ fontSize: 12.5, color: 'var(--text-1)' }} />
+          {showId && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-3)' }}>{ev.device}</span>
+          )}
+        </span>
+      ),
+    });
+  }
+  if (ev.entity) rows.push({ k: 'Entity', v: ev.entity });
+  if (ev.state) rows.push({ k: 'State', v: ev.state, cap: true });
+  if (ev.ok !== undefined) rows.push({ k: 'Outcome', v: ev.ok ? 'ok' : 'rejected' });
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 6, columnGap: 12 }}>
-      {rows.map(([k, v]) => (
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 6, columnGap: 12, alignItems: 'baseline' }}>
+      {rows.map(({ k, v, cap }) => (
         <Fragment key={k}>
           <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{k}</span>
-          <span style={{ fontSize: 12.5, color: 'var(--text-1)', textTransform: k === 'Category' || k === 'State' ? 'capitalize' : 'none' }}>{v}</span>
+          <span style={{ fontSize: 12.5, color: 'var(--text-1)', textTransform: cap ? 'capitalize' : 'none' }}>{v}</span>
         </Fragment>
       ))}
     </div>
