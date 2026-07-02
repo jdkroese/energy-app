@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
@@ -13,7 +13,6 @@ import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '.
 import { AutomationRow } from '../components/AutomationRow';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { SchedulesPanel } from './Schedules';
-import { Autopilot, type TabKey as AutopilotTabKey } from './Autopilot';
 import { EventViewer } from './EventViewer';
 import { SystemStatus } from './SystemStatus';
 import { useAuth } from '../auth/AuthProvider';
@@ -355,7 +354,7 @@ function TariffArbitrageCard({ a, live, ctrlArmedAuto, canWrite, onSave, onDelet
         <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>{preview}</div>
         {!ctrlArmedAuto && (
           <div style={{ fontSize: 11, color: 'var(--grid)', marginTop: 6 }}>
-            Acts only when <Link to="/automations?tab=settings" style={{ color: 'var(--battery)' }}>Autopilot</Link> is armed in Auto.
+            Acts only when <Link to="/settings?tab=autopilot" style={{ color: 'var(--battery)' }}>Autopilot</Link> is armed in Auto.
           </div>
         )}
       </div>
@@ -732,8 +731,8 @@ function SoakRuleCard({ rule, live, canWrite, onSave }: {
  * Automations Summary — the section's at-a-glance hub. The forward-looking 24 h
  * plan, forecast KPIs and live "today's moves" now live on the Live dashboard;
  * this tab summarises everything that RUNS the home (Smart Rules · Schedules ·
- * Events · Status · Settings) and links into each. Every tile is a button that
- * jumps to its tab.
+ * Events · Status) and links into each. Every tile is a button that jumps to its
+ * tab — except Battery autopilot, whose panel lives at /settings?tab=autopilot.
  * ==========================================================================*/
 function SummaryChip({ children, tone }: { children: ReactNode; tone?: string }) {
   return (
@@ -765,6 +764,7 @@ function AutomationsSummary({ wide, setTab, ctrl, climateAutomations, arbAutomat
   wide: boolean; setTab: (t: AutoTab) => void; ctrl: ControlStatus | null;
   climateAutomations: Automation[]; arbAutomations: Automation[]; climateStatus: DevicesStatus | null;
 }) {
+  const navigate = useNavigate();
   const { data: schedData } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const schedules = schedData?.schedules ?? [];
   const schedOn = schedules.filter((s) => s.enabled).length;
@@ -807,8 +807,8 @@ function AutomationsSummary({ wide, setTab, ctrl, climateAutomations, arbAutomat
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1fr' : '1fr', gap: 12 }}>
-        {/* Battery autopilot → Settings */}
-        <SummaryTile icon="cpu" tone="var(--solar)" title="Battery autopilot" sub="Sonnen + Tesla authority" state={modeLabel} stateTone={modeTone} onClick={() => setTab('settings')}
+        {/* Battery autopilot → the general Settings screen's Autopilot tab */}
+        <SummaryTile icon="cpu" tone="var(--solar)" title="Battery autopilot" sub="Sonnen + Tesla authority" state={modeLabel} stateTone={modeTone} onClick={() => navigate('/settings?tab=autopilot')}
           chips={armed
             ? <><SummaryChip tone="var(--solar)">commanding live</SummaryChip><SummaryChip>guardrails enforced</SummaryChip></>
             : <><SummaryChip>read-only</SummaryChip><SummaryChip>arm in Settings</SummaryChip></>} />
@@ -849,16 +849,14 @@ function AutomationsSummary({ wide, setTab, ctrl, climateAutomations, arbAutomat
   );
 }
 
-// Merged screen: Autopilot's tabs (Events · Status · Settings) + the Automations
-// tabs (Summary · Schedules · Smart Rules), in the approved strip order below.
-type AutoTab = 'summary' | 'schedules' | 'rules' | 'events' | 'status' | 'settings';
-const AUTO_TABS: readonly AutoTab[] = ['summary', 'schedules', 'rules', 'events', 'status', 'settings'];
-// Tabs hosted by the embedded Autopilot — their keys line up 1:1 with its TabKey.
-// (Summary is now owned by this screen — see AutomationsSummary. Events is now the
-// unified Event Viewer — see EventViewer. The Status tab is the whole-home System
-// Status board — see SystemStatus — which embeds the Autopilot status content verbatim
-// as its battery-control section. So only Settings still routes to embedded Autopilot.)
-const AUTOPILOT_TABS: readonly AutoTab[] = ['settings'];
+// Merged screen: Autopilot's tabs (Events · Status) + the Automations tabs
+// (Summary · Schedules · Smart Rules), in the approved strip order below.
+// (Summary is owned by this screen — see AutomationsSummary. Events is the unified
+// Event Viewer — see EventViewer. Status is the whole-home System Status board — see
+// SystemStatus. Autopilot's Settings panel moved to the general Settings screen at
+// /settings?tab=autopilot; old ?tab=settings deep-links redirect there.)
+type AutoTab = 'summary' | 'schedules' | 'rules' | 'events' | 'status';
+const AUTO_TABS: readonly AutoTab[] = ['summary', 'schedules', 'rules', 'events', 'status'];
 
 export function Automations({ ctx }: { ctx: ShellContext }) {
   const { user } = useAuth();
@@ -883,6 +881,10 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
   const { data: live } = usePolling<LiveResponse>(api.live, 20_000);
   const { data: ctrl, refetch: refetchCtrl } = usePolling<ControlStatus>(api.control.status, 20_000);
   const [busy, setBusy] = useState(false);
+
+  // The Autopilot settings panel moved to the general Settings screen — send old
+  // ?tab=settings deep-links there. `replace` keeps the back button working.
+  if (paramTab === 'settings') return <Navigate to="/settings?tab=autopilot" replace />;
 
   const automations = data?.automations ?? [];
   const arbAutomations = automations.filter(isTariffArbitrage);
@@ -920,7 +922,7 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--battery-wash)', border: '1px solid var(--border-battery)', borderRadius: 'var(--radius-md)', padding: '9px 13px' }}>
         <Icon name="info" size={15} color="var(--battery)" />
         <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
-          The Tesla is kept full for backup (the Sonnen has no backup mode). These rules run in the battery coordinator — <strong style={{ color: 'var(--text-1)' }}>Shadow</strong> only logs intended actions; flip to <strong style={{ color: 'var(--text-1)' }}>Auto</strong> and arm <Link to="/automations?tab=settings" style={{ color: 'var(--battery)' }}>Autopilot</Link> (Auto) to let them act.
+          The Tesla is kept full for backup (the Sonnen has no backup mode). These rules run in the battery coordinator — <strong style={{ color: 'var(--text-1)' }}>Shadow</strong> only logs intended actions; flip to <strong style={{ color: 'var(--text-1)' }}>Auto</strong> and arm <Link to="/settings?tab=autopilot" style={{ color: 'var(--battery)' }}>Autopilot</Link> (Auto) to let them act.
         </span>
       </div>
       {bp
@@ -954,17 +956,16 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  // Six-tab switcher in the approved order: Summary · Schedules · Smart Rules ·
-  // Events · Status · Settings. Selection is persisted in the URL (?tab=…).
-  // Six segments are too many to sit comfortably in one block row at ~360px, so on
-  // mobile we split into two stacked rows of three; desktop keeps the single block.
+  // Five-tab switcher in the approved order: Summary · Schedules · Smart Rules ·
+  // Events · Status. Selection is persisted in the URL (?tab=…). Five segments are
+  // too many to sit comfortably in one block row at ~360px, so on mobile we split
+  // into two stacked rows (3 + 2); desktop keeps the single block.
   const tabOptions: { value: AutoTab; label: string }[] = [
     { value: 'summary', label: 'Summary' },
     { value: 'schedules', label: 'Schedules' },
     { value: 'rules', label: 'Smart Rules' },
     { value: 'events', label: 'Events' },
     { value: 'status', label: 'Status' },
-    { value: 'settings', label: 'Settings' },
   ];
   const tabBar = wide ? (
     <SegmentedControl block options={tabOptions} value={tab} onChange={(v) => setTab(v as AutoTab)} />
@@ -976,8 +977,7 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
   );
 
   // Full-width like every other page — the tab strip, graphs, and every panel use the
-  // whole content area. The embedded Autopilot fills the host (its own 1100 wrapper is
-  // dropped when embedded), and Schedules / Smart Rules fill it too.
+  // whole content area. Schedules / Smart Rules fill it too.
   const panel = tab === 'summary' ? (
     <AutomationsSummary
       wide={wide}
@@ -991,8 +991,6 @@ export function Automations({ ctx }: { ctx: ShellContext }) {
     <EventViewer wide={wide} />
   ) : tab === 'status' ? (
     <SystemStatus ctx={ctx} />
-  ) : AUTOPILOT_TABS.includes(tab) ? (
-    <Autopilot ctx={ctx} embedded tab={tab as AutopilotTabKey} />
   ) : tab === 'schedules' ? (
     <SchedulesPanel ctx={ctx} />
   ) : (

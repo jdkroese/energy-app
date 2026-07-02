@@ -41,7 +41,8 @@ export const NAV_MEDIA: NavItem[] = [
 /** Automation section — below a second divider. */
 export const NAV_AUTOMATION: NavItem[] = [
   // Autopilot folded into Automations (Summary · Schedules · Smart Rules · Events ·
-  // Status · Settings); /brain redirects there. Keeps Autopilot's sparkles icon.
+  // Status); /brain redirects there. Keeps Autopilot's sparkles icon. Its Settings
+  // panel (arm/mode + manual controls) lives on /settings?tab=autopilot.
   { to: '/automations', label: 'Automations', icon: 'sparkles' },
   { to: '/scenarios', label: 'Scenarios', icon: 'sliders-horizontal' },
 ];
@@ -109,10 +110,18 @@ export const MOBILE_MORE_PATHS: string[] = MOBILE_MORE.map((n) => n.to.split('?'
  * Settings sub-tabs — rendered Reports-style in the desktop TopBar (active tab is
  * the title; the tab strip is the TopBar action), and as a SegmentedControl on
  * mobile. Shared by AppShell + the Settings screen so both agree on the set.
- * 'Users' is admin-only.
+ * 'Users' is admin-only. Autopilot (the battery arm/mode + manual-controls panel,
+ * relocated from /automations) leads the strip — it's the home's control authority.
+ * Tabs deep-link as /settings?tab=<lowercase label>, e.g. /settings?tab=autopilot.
  */
-export const SETTINGS_TABS = ['Connections', 'Notifications', 'Security', 'Users', 'System'] as const;
+export const SETTINGS_TABS = ['Autopilot', 'Connections', 'Notifications', 'Security', 'Users', 'System'] as const;
 export type SettingsTabLabel = (typeof SETTINGS_TABS)[number];
 export function settingsTabsFor(isAdmin: boolean): SettingsTabLabel[] {
   return SETTINGS_TABS.filter((t) => t !== 'Users' || isAdmin);
+}
+
+/** Map a ?tab= query value (lowercase, e.g. 'autopilot') to its tab label; null when unknown. */
+export function settingsTabFromParam(param: string | null): SettingsTabLabel | null {
+  if (!param) return null;
+  return SETTINGS_TABS.find((t) => t.toLowerCase() === param.toLowerCase()) ?? null;
 }

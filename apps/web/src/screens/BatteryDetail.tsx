@@ -300,7 +300,7 @@ export function BatteryDetail({ ctx }: { ctx: ShellContext }) {
       {stale && <StaleBanner updatedAt={updatedAt} />}
 
       <HeroCard b={b} />
-      {b.hasBackup && <BackupCard b={b} onAutopilot={() => nav('/automations?tab=settings')} />}
+      {b.hasBackup && <BackupCard b={b} onAutopilot={() => nav('/settings?tab=autopilot')} />}
 
       <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1fr' : '1fr', gap: wide ? 16 : 12 }}>
         <CapacityCard b={b} />
@@ -312,7 +312,7 @@ export function BatteryDetail({ ctx }: { ctx: ShellContext }) {
 
       {/* footer actions */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <Button variant="primary" iconLeft={<Icon name="sliders-horizontal" size={16} />} onClick={() => nav('/automations?tab=settings')}>
+        <Button variant="primary" iconLeft={<Icon name="sliders-horizontal" size={16} />} onClick={() => nav('/settings?tab=autopilot')}>
           Control in Autopilot
         </Button>
         <Button variant="secondary" iconLeft={<Icon name="bell" size={16} />} onClick={() => nav('/alerts')}>
