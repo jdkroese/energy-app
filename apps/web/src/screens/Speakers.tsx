@@ -8,6 +8,7 @@ import { StaleBanner } from './_shared';
 import { useAuth } from '../auth/AuthProvider';
 import type { ShellContext } from '../components/shell/AppShell';
 import { RadioPanel, RadioSchedulesSection } from '../components/radio/Radio';
+import { MusicPanel } from '../components/music/Music';
 
 /* ============================================================================
  * Speakers — the Sonos fleet (local UPnP): per-speaker volume + Test. The house
@@ -233,6 +234,9 @@ export function SpeakersPanel({ ctx }: { ctx: ShellContext }) {
               ))}
             </div>
           )}
+
+          {/* Music (Spotify) — browse your playlists/liked + search + now-playing on chosen speakers. */}
+          <MusicPanel speakers={speakers} canControl={canControl} wide={wide} />
 
           {/* Internet radio — favourites grid + play on chosen speakers + schedules. */}
           <RadioPanel speakers={speakers} canControl={canControl} wide={wide} />

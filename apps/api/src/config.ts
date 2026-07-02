@@ -12,6 +12,10 @@ export const config = {
   env: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.API_PORT ?? 3002),
   host: process.env.API_HOST ?? '127.0.0.1',
+  // Public origin the app is reachable at from the internet — used to build the Spotify
+  // OAuth redirect URI (${publicBaseUrl}/api/spotify/callback). Owner-configurable; defaults
+  // to the production host. (Mirrors the LAN_BASE_URL knob the Sonos media path uses.)
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? 'https://energy.hirobo.nl').trim().replace(/\/+$/, ''),
   auth: {
     // Break-glass only. When AUTH_DEBUG_SECRETS=1 the server logs raw login OTP
     // codes + password-reset links to the journal. OFF by default so secrets

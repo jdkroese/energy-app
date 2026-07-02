@@ -797,6 +797,79 @@ export interface RadioSchedule {
   volumePct: number;
 }
 
+/* ---- Spotify (Music) — Web API + Spotify Connect ---- */
+
+/** Safe client-facing Spotify status — NEVER carries the secret or tokens. */
+export interface SpotifyStatus {
+  ts: string;
+  /** Client id + secret have been entered. */
+  configured: boolean;
+  /** OAuth consent completed (a refresh token exists). */
+  connected: boolean;
+  premium: boolean;
+  displayName: string | null;
+  /** The redirect URI the owner must register in their Spotify app dashboard. */
+  redirectUri: string;
+}
+
+export interface SpotifyBrowseItem {
+  /** The Spotify URI to play (context_uri for playlists, track uri for tracks/liked). */
+  uri: string;
+  name: string;
+  subtitle: string;
+  image: string | null;
+  kind: 'playlist' | 'track' | 'liked';
+}
+
+export interface SpotifyBrowseResponse {
+  ts: string;
+  items: SpotifyBrowseItem[];
+}
+export interface SpotifySearchResponse {
+  ts: string;
+  query: string;
+  items: SpotifyBrowseItem[];
+}
+
+/** A Spotify Connect device mapped (by name) to a Sonos zone. */
+export interface SpotifyConnectDevice {
+  id: string | null;
+  name: string;
+  type: string;
+  isActive: boolean;
+  sonosId: string | null;
+}
+export interface SpotifyDevicesResponse {
+  ts: string;
+  devices: SpotifyConnectDevice[];
+}
+
+export interface SpotifyNowPlaying {
+  isPlaying: boolean;
+  track: string | null;
+  artist: string | null;
+  album: string | null;
+  image: string | null;
+  progressMs: number;
+  durationMs: number;
+  shuffle: boolean;
+  repeat: 'off' | 'context' | 'track';
+  deviceName: string | null;
+  sonosIds: string[];
+}
+export interface SpotifyNowPlayingResponse {
+  ts: string;
+  nowPlaying: SpotifyNowPlaying | null;
+}
+
+export interface SpotifyPlayResponse {
+  ts: string;
+  ok: boolean;
+  playedOn: string[];
+  coordinator: string;
+  deviceId: string;
+}
+
 export interface RadioSchedulesResponse {
   ts: string;
   schedules: RadioSchedule[];

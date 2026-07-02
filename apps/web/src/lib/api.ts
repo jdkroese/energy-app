@@ -60,6 +60,12 @@ import type {
   RadioNowPlayingResponse,
   RadioSchedule,
   RadioSchedulesResponse,
+  SpotifyStatus,
+  SpotifyBrowseResponse,
+  SpotifySearchResponse,
+  SpotifyDevicesResponse,
+  SpotifyNowPlayingResponse,
+  SpotifyPlayResponse,
   LiveResponse,
   ProbeResult,
   LoginResponse,
@@ -638,6 +644,43 @@ export const api = {
       ),
     deleteSchedule: (id: string) =>
       delJSON<{ ok: boolean }>(`/api/radio/schedules/${enc(id)}`),
+  },
+
+  /* ---- Spotify (Music) — Web API + Spotify Connect; playback/creds are admin ---- */
+  spotify: {
+    status: () => getJSON<SpotifyStatus>("/api/spotify/status"),
+    // Credentials are write-only server-side; the response is the safe status.
+    setCredentials: (clientId: string, clientSecret: string) =>
+      putJSON<{ ts: string; status: SpotifyStatus }>(
+        "/api/spotify/credentials",
+        { clientId, clientSecret },
+      ),
+    authUrl: () => getJSON<{ ts: string; url: string }>("/api/spotify/auth-url"),
+    disconnect: () =>
+      postJSON<{ ts: string; ok: boolean }>("/api/spotify/disconnect", {}),
+    playlists: () => getJSON<SpotifyBrowseResponse>("/api/spotify/playlists"),
+    liked: () => getJSON<SpotifyBrowseResponse>("/api/spotify/liked"),
+    search: (q: string) =>
+      getJSON<SpotifySearchResponse>(`/api/spotify/search?q=${enc(q)}`),
+    devices: () => getJSON<SpotifyDevicesResponse>("/api/spotify/devices"),
+    nowPlaying: () =>
+      getJSON<SpotifyNowPlayingResponse>("/api/spotify/now-playing"),
+    play: (body: {
+      contextUri?: string;
+      uris?: string[];
+      speakerIds: string[];
+      volumePct?: number;
+    }) => postJSON<SpotifyPlayResponse>("/api/spotify/play", body),
+    pause: () => postJSON<{ ok: boolean }>("/api/spotify/pause", {}),
+    resume: () => postJSON<{ ok: boolean }>("/api/spotify/resume", {}),
+    next: () => postJSON<{ ok: boolean }>("/api/spotify/next", {}),
+    previous: () => postJSON<{ ok: boolean }>("/api/spotify/previous", {}),
+    setShuffle: (on: boolean) =>
+      putJSON<{ ok: boolean }>("/api/spotify/shuffle", { on }),
+    setRepeat: (mode: "off" | "context" | "track") =>
+      putJSON<{ ok: boolean }>("/api/spotify/repeat", { mode }),
+    seek: (positionMs: number) =>
+      putJSON<{ ok: boolean }>("/api/spotify/seek", { positionMs }),
   },
 
   /* ---- Irrigation (Rain Bird); run/stop/rain-delay are admin + require armed ---- */
