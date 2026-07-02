@@ -66,6 +66,21 @@ export function getArbitrageLog(limit?: number): unknown {
   };
 }
 
+/** The battery decision trace (Phase 0 rule visibility): the per-tick ring, NEWEST FIRST.
+ *  `current` is the latest record (the live stance per actuator); each record carries
+ *  `changed` so the UI can list stance changes without re-diffing. The optional `limit`
+ *  (1..200) trims the returned records; defaults to 100. Any authed user (read-only). */
+export function getDecisions(limit?: number): unknown {
+  const ring = store.get().control.decisionTrace;
+  const n = typeof limit === 'number' && Number.isFinite(limit) ? Math.min(200, Math.max(1, Math.round(limit))) : 100;
+  const newestFirst = ring.slice(-n).reverse();
+  return {
+    ts: new Date().toISOString(),
+    current: ring.length > 0 ? ring[ring.length - 1] : null,
+    decisions: newestFirst,
+  };
+}
+
 /** Update one battery-priority rule (admin). Returns the full control status. */
 export async function setBatteryPriority(
   rule: 'dischargeSonnenFirst' | 'chargeTeslaFirst',

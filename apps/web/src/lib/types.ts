@@ -514,6 +514,50 @@ export type ControlLever = "reserve" | "mode" | "gridCharge";
 export type ControlCommandValue = string | number | boolean;
 
 /* ============================================================================
+ * Battery decision trace (GET /api/control/decisions) — Phase 0 rule visibility.
+ * One compact record per coordinator tick: what each battery actuator was told
+ * and why. Mirrors the API's DecisionRecord.
+ * ==========================================================================*/
+
+export interface DecisionActuator {
+  /** e.g. 'self_consumption' / 'backup' (tesla.mode) or 'soak-export 3200W' (sonnen). */
+  value: string;
+  /** One-line reason — the same string the command/log used. */
+  reason: string;
+}
+
+export interface DecisionRecord {
+  ts: number;
+  /** What ran the tick ('auto' coordinator tick / 'apply-scenario'). */
+  trigger: string;
+  armed: boolean;
+  mode: ControlMode;
+  band: Band;
+  scenario: string;
+  inputs: {
+    gridImportKw: number;
+    gridExportKw: number;
+    /** Which meter the import/export came from (different metering domains). */
+    gridSource: "tesla" | "sonnen" | "none";
+    sonnenSoc: number | null;
+    teslaSoc: number | null;
+  };
+  tesla: { mode: DecisionActuator; reservePct: number };
+  sonnen: DecisionActuator & { branch: string };
+  stoodDown: { rule: string; reason: string }[];
+  /** Actuator stances that changed vs the previous record ('tesla.mode' | 'sonnen'). */
+  changed: string[];
+}
+
+export interface DecisionsResponse {
+  ts: string;
+  /** The latest record — the live stance per actuator (null before the first tick). */
+  current: DecisionRecord | null;
+  /** Recent records, newest first. */
+  decisions: DecisionRecord[];
+}
+
+/* ============================================================================
  * Batteries — per-device detail (GET /api/batteries).
  * Current state is real; day history is a best-effort rolling buffer; health
  * fields are null where the device/API doesn't expose them (UI shows "—").

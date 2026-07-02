@@ -49,6 +49,7 @@ import {
   setBatteryPriority,
   setSoakExport,
   getArbitrageLog,
+  getDecisions,
 } from "./routes/control";
 import { startCoordinator } from "./control/coordinator";
 import { startSolarModelScheduler } from "./solar-model";
@@ -532,6 +533,15 @@ app.get(
     const raw = req.query.limit;
     const limit = typeof raw === "string" ? Number(raw) : undefined;
     return getArbitrageLog(limit);
+  }),
+);
+// Battery decision trace (Phase 0 rule visibility) — read-only, any authed user.
+app.get(
+  "/api/control/decisions",
+  wrap((req) => {
+    const raw = req.query.limit;
+    const limit = typeof raw === "string" ? Number(raw) : undefined;
+    return getDecisions(limit);
   }),
 );
 app.post(

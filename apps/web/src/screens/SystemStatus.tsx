@@ -38,6 +38,7 @@ import {
   LiveDrawBreakdown,
   SubsystemHealthRow,
   GridQualityCard,
+  DecisionsPanel,
   type ConnectorTile,
   type ConnTone,
   type DeviceChip,
@@ -371,6 +372,10 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
           <Autopilot ctx={ctx} embedded tab="status" />
         </div>
       </div>
+
+      {/* 5b — Battery decision trace (Phase 0 rule visibility): current stance per
+          actuator + recent stance changes. */}
+      <DecisionsPanel wide={wide} />
 
       {/* 6 — Grid quality (only when a voltage-capable breaker exists) */}
       {live?.breaker && <GridQualityCard live={live} monitor={settings?.voltageMonitor} />}
