@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import type {
@@ -28,7 +30,7 @@ import {
   type RollupInput,
   type HealthState,
 } from '../lib/health';
-import { Card, StatusDot, Eyebrow, Icon, EmptyState } from '../components/ui';
+import { Card, StatusDot, Eyebrow, Icon, EmptyState, Button, Modal } from '../components/ui';
 import {
   SystemHealthBanner,
   ConnectivityGrid,
@@ -40,6 +42,7 @@ import {
   type ConnTone,
   type DeviceChip,
 } from '../components/status';
+import { deviceHrefFor, connectorHref, humanizeConnectorError } from '../components/status/resolve';
 import { Autopilot } from './Autopilot';
 import type { ShellContext } from '../components/shell/AppShell';
 
@@ -80,8 +83,18 @@ interface SubsystemBlock {
   chips: DeviceChip[];
 }
 
+/** A message the owner can click open for the full, readable story + a resolve link. */
+interface DetailModal {
+  title: string;
+  summary: string;
+  raw?: string;
+  href?: string;
+  hrefLabel?: string;
+}
+
 export function SystemStatus({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
+  const [detail, setDetail] = useState<DetailModal | null>(null);
 
   const { data: live } = usePolling<LiveResponse>(api.live, POLL_MS);
   const { data: settings } = usePolling<SettingsResponse>(api.settings, 60_000);
@@ -214,6 +227,12 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
     if (irrigation.connected && devs.length > 0) subsystems.push({ key: 'irrigation', icon: 'droplet', name: 'Irrigation', rollup, chips });
   }
 
+  // Attach a click-through detail route to every device chip (climate → device
+  // detail, lighting/blinds → filtered list, batteries → battery detail, …).
+  for (const b of subsystems) {
+    for (const c of b.chips) c.href = deviceHrefFor(b.key, c.id);
+  }
+
   /* ---- Page-level rollup ---- */
   const devicesTotal = subsystems.reduce((s, b) => s + b.rollup.total, 0);
   const devicesOnline = subsystems.reduce((s, b) => s + b.rollup.online, 0);
@@ -221,23 +240,46 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
   const activeAlerts = (alertsData?.alerts ?? []).filter(
     (a) => (a.severity === 'danger' || a.severity === 'warning') && a.status !== 'resolved',
   );
-  // First worst issue across subsystems for the banner callout.
-  const allIssues = subsystems.flatMap((b) => b.rollup.issues.map((i) => ({ sub: b.name, ...i })));
-  const worstIssue =
-    allIssues.find((i) => i.state === 'error' || i.state === 'offline')?.reason ??
-    allIssues.find((i) => i.state === 'warning')?.reason ??
+  // Worst issue across subsystems for the banner callout — named + linked so the
+  // owner can jump straight to the offending device (not a bare "Offline").
+  const allIssues = subsystems.flatMap((b) => b.rollup.issues.map((i) => ({ subKey: b.key, sub: b.name, ...i })));
+  const worstItem =
+    allIssues.find((i) => i.state === 'error' || i.state === 'offline') ??
+    allIssues.find((i) => i.state === 'warning') ??
     null;
+  const isFleet = worstItem?.id.startsWith('__');
+  const worstIssue = worstItem
+    ? isFleet
+      ? `${worstItem.sub} · ${humanizeConnectorError(worstItem.reason)}`
+      : `${worstItem.sub} · ${worstItem.name} — ${worstItem.reason}`
+    : null;
+  const worstIssueHref = worstItem
+    ? isFleet
+      ? connectorHref(worstItem.subKey).href
+      : deviceHrefFor(worstItem.subKey, worstItem.id)
+    : null;
 
   /* ---- Connectivity tiles ---- */
   const tiles: ConnectorTile[] = [];
-  // Real probes from settings (Tesla / Sonnen / Weather).
+  // Real probes from settings (Tesla / Sonnen / Weather). Humanize a failing
+  // probe's detail; keep the raw for the click-through popover.
   for (const c of settings?.connections ?? []) {
-    tiles.push({ key: `probe-${c.name}`, name: c.name, icon: c.icon || 'plug', tone: connTone(c.tone, c.status), detail: c.detail });
+    const tone = connTone(c.tone, c.status);
+    const bad = tone === 'danger' || tone === 'offline';
+    tiles.push({
+      key: `probe-${c.name}`,
+      name: c.name,
+      icon: c.icon || 'plug',
+      tone,
+      detail: bad ? humanizeConnectorError(c.detail) : c.detail,
+      raw: bad ? c.detail : undefined,
+    });
   }
-  // Subsystem-derived tiles.
+  // Subsystem-derived tiles. A raw fleet error is humanized for the tile and kept
+  // in `raw` so the popover can show the full message.
   const subTile = (key: string, name: string, icon: string, present: boolean, err: string | null | undefined, online: number, total: number): ConnectorTile => {
     if (!present) return { key, name, icon, tone: 'nosetup', detail: 'Not set up' };
-    if (err) return { key, name, icon, tone: 'danger', detail: err };
+    if (err) return { key, name, icon, tone: 'danger', detail: humanizeConnectorError(err), raw: err };
     return { key, name, icon, tone: online < total ? 'warning' : 'ok', detail: `${online}/${total} online` };
   };
   if (devData) tiles.push(subTile('climate', 'Climate', 'snowflake', devData.connected, devData.fleetError ?? devData.lastError, subsystems.find((s) => s.key === 'climate')?.rollup.online ?? 0, subsystems.find((s) => s.key === 'climate')?.rollup.total ?? 0));
@@ -282,15 +324,25 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
         subsystems={subsystems.length}
         alerts={activeAlerts.length}
         worstIssue={worstIssue}
+        worstIssueHref={worstIssueHref}
       />
 
-      {/* 2 — Connectivity */}
-      {tiles.length > 0 && <ConnectivityGrid tiles={tiles} wide={wide} />}
+      {/* 2 — Connectivity (tiles open a readable detail + resolve link) */}
+      {tiles.length > 0 && (
+        <ConnectivityGrid
+          tiles={tiles}
+          wide={wide}
+          onOpen={(t) => {
+            const r = connectorHref(t.key.replace(/^probe-/, ''));
+            setDetail({ title: t.name, summary: humanizeConnectorError(t.raw ?? t.detail), raw: t.raw, href: r.href, hrefLabel: r.label });
+          }}
+        />
+      )}
 
       {/* 3 — Live load & flow + draw + today totals */}
       {live && (
         <>
-          <LiveLoadStrip live={live} wide={wide} />
+          <LiveLoadStrip live={live} wide={wide} batteries={batteries} inverters={inverters} />
           <LiveDrawBreakdown
             live={live}
             climateDevices={devData?.devices ?? []}
@@ -331,29 +383,77 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {activeAlerts.map((a) => (
-              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
+              <button
+                key={a.id}
+                type="button"
+                className="pwr-press"
+                onClick={() => setDetail({ title: a.title, summary: a.sub || a.title, href: '/automations?tab=events', hrefLabel: 'Open Events' })}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px', textAlign: 'left', width: '100%', cursor: 'pointer', color: 'inherit', font: 'inherit' }}
+              >
                 <Icon name={a.icon || 'alert-triangle'} size={16} color={a.severity === 'danger' ? 'var(--danger)' : 'var(--grid)'} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600 }}>{a.title}</div>
-                  {a.sub && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{a.sub}</div>}
+                  {a.sub && <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.sub}</div>}
                 </div>
                 <StatusDot tone={a.severity === 'danger' ? 'danger' : 'grid'}>
                   <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{a.device}</span>
                 </StatusDot>
-              </div>
+                <Icon name="chevron-right" size={13} color="var(--text-3)" />
+              </button>
             ))}
             {rejected.map((l, i) => (
-              <div key={`rej-${l.ts}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--danger-wash)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
+              <button
+                key={`rej-${l.ts}-${i}`}
+                type="button"
+                className="pwr-press"
+                onClick={() => setDetail({ title: `Rejected · ${l.device} ${l.lever}`, summary: humanizeConnectorError(l.detail || l.reason || ''), raw: l.detail || l.reason, href: '/automations?tab=events', hrefLabel: 'Open Events' })}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--danger-wash)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px', textAlign: 'left', width: '100%', cursor: 'pointer', color: 'inherit', font: 'inherit' }}
+              >
                 <Icon name="x-circle" size={16} color="var(--danger)" />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600 }}>Rejected · {l.device} {l.lever}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{l.detail || l.reason}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{humanizeConnectorError(l.detail || l.reason || '')}</div>
                 </div>
-              </div>
+                <Icon name="chevron-right" size={13} color="var(--text-3)" />
+              </button>
             ))}
           </div>
         )}
       </Card>
+
+      {/* Click-through detail — the full, readable story + a resolve link. */}
+      {detail && (
+        <Modal
+          open
+          onClose={() => setDetail(null)}
+          size="md"
+          tone="battery"
+          icon="info"
+          title={detail.title}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setDetail(null)}>Close</Button>
+              {detail.href && (
+                <Link to={detail.href} onClick={() => setDetail(null)} style={{ textDecoration: 'none' }}>
+                  <Button variant="primary" iconLeft={<Icon name="external-link" size={15} />}>{detail.hrefLabel ?? 'Open'}</Button>
+                </Link>
+              )}
+            </>
+          }
+        >
+          <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 13.5, color: 'var(--text-1)', lineHeight: 1.5 }}>{detail.summary}</div>
+            {detail.raw && detail.raw !== detail.summary && (
+              <div>
+                <div className="pwr-eyebrow" style={{ marginBottom: 5 }}>Technical detail</div>
+                <div className="pwr-mono" style={{ fontSize: 11.5, color: 'var(--text-2)', background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '9px 11px', wordBreak: 'break-word' }}>
+                  {detail.raw}
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

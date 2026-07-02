@@ -1,9 +1,11 @@
-import { Card, StatusDot, Icon } from '../ui';
+import { Link } from 'react-router-dom';
+import { Card, Icon } from '../ui';
 import type { HealthState } from '../../lib/health';
 import { healthTone } from '../../lib/health';
 
 /* System health banner (docs/36 §5.1) — one-line verdict + mono counts +
- * worst-issue callout. Full-width; renders identically on both viewports. */
+ * worst-issue callout that names the offending device and links to it.
+ * Full-width; renders identically on both viewports. */
 
 export interface SystemHealthBannerProps {
   worst: HealthState;
@@ -11,8 +13,11 @@ export interface SystemHealthBannerProps {
   devicesTotal: number;
   subsystems: number;
   alerts: number;
-  /** One-line "worst issue" summary, shown only when worst is not ok. */
+  /** One-line "worst issue" summary (e.g. "Lighting · Kitchen - main is offline"),
+   *  shown only when worst is not ok. */
   worstIssue?: string | null;
+  /** Detail route for the worst issue — makes the callout a click-through. */
+  worstIssueHref?: string | null;
 }
 
 const VERDICT: Record<HealthState, { label: string; icon: string }> = {
@@ -30,6 +35,7 @@ export function SystemHealthBanner({
   subsystems,
   alerts,
   worstIssue,
+  worstIssueHref,
 }: SystemHealthBannerProps) {
   const tone = healthTone(worst);
   const v = VERDICT[worst];
@@ -58,7 +64,7 @@ export function SystemHealthBanner({
       style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        {/* status pill */}
+        {/* status pill — icon + verdict (no redundant dot) */}
         <span
           style={{
             display: 'inline-flex',
@@ -73,9 +79,7 @@ export function SystemHealthBanner({
           }}
         >
           <Icon name={v.icon} size={16} />
-          <StatusDot tone={tone === 'danger' ? 'danger' : tone === 'grid' ? 'grid' : tone === 'solar' ? 'solar' : 'offline'} live>
-            {v.label}
-          </StatusDot>
+          {v.label}
         </span>
         {/* counts */}
         <span
@@ -87,10 +91,22 @@ export function SystemHealthBanner({
         </span>
       </div>
       {worst !== 'ok' && worst !== 'nosetup' && worstIssue && (
-        <div style={{ fontSize: 12.5, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 7 }}>
-          <Icon name="alert-circle" size={14} color={color} />
-          {worstIssue}
-        </div>
+        worstIssueHref ? (
+          <Link
+            to={worstIssueHref}
+            className="pwr-press"
+            style={{ fontSize: 12.5, color: 'var(--text-1)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 7 }}
+          >
+            <Icon name="alert-circle" size={14} color={color} />
+            <span>{worstIssue}</span>
+            <Icon name="chevron-right" size={13} color="var(--text-3)" />
+          </Link>
+        ) : (
+          <div style={{ fontSize: 12.5, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 7 }}>
+            <Icon name="alert-circle" size={14} color={color} />
+            {worstIssue}
+          </div>
+        )
       )}
     </Card>
   );
