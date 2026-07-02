@@ -13,6 +13,11 @@ export interface FlowNode {
   name: string;
   kw: number;
   dir?: FlowDir;
+  /**
+   * Optional per-source breakdown, shown as compact rows in place of `sub`
+   * (used by Solar to split the total across the 2 Sungrow inverters + Tesla).
+   */
+  breakdown?: { label: string; kw: number }[];
 }
 
 export interface FlowData {
@@ -110,6 +115,7 @@ export function EnergyFlow({ flow, size = 'sm' }: Props) {
             <Icon name={ICON[k]} />
           </div>
         );
+        const hasBreakdown = !!n.breakdown && n.breakdown.length > 0;
         const labels = (
           <>
             <span className="pwr2__name">{n.name}</span>
@@ -117,13 +123,26 @@ export function EnergyFlow({ flow, size = 'sm' }: Props) {
               {n.val}
               <small> {n.unit}</small>
             </span>
-            <span className="pwr2__sub">{n.sub}</span>
+            {hasBreakdown ? (
+              <span className="pwr2__brk">
+                {n.breakdown!.map((b, i) => (
+                  <span className="pwr2__brk-row" key={i}>
+                    <span className="pwr2__brk-label">{b.label}</span>
+                    <span className="pwr2__brk-val">{b.kw.toFixed(1)}</span>
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="pwr2__sub">{n.sub}</span>
+            )}
           </>
         );
         return (
           <div
             key={k}
-            className={'pwr2__node' + (on ? ' pwr2__node--active' : '')}
+            className={
+              'pwr2__node' + (on ? ' pwr2__node--active' : '') + (hasBreakdown ? ' pwr2__node--wide' : '')
+            }
             style={{ left: POS[k].x + '%', top: POS[k].y + '%', '--_c': COLOR[k] } as CSSProperties}
           >
             {above ? (

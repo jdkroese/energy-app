@@ -31,7 +31,20 @@ function batterySub(kwh: number, kw: number, dir?: FlowDir): string {
 
 function toFlow(d: LiveResponse): FlowData {
   return {
-    solar: { name: 'Solar', val: fmtKw(d.solar.kw), unit: 'kW', sub: `${d.solar.arrays?.length || 2} arrays`, kw: d.solar.kw },
+    solar: {
+      name: 'Solar',
+      val: fmtKw(d.solar.kw),
+      unit: 'kW',
+      sub: `${d.solar.arrays?.length || 2} arrays`,
+      kw: d.solar.kw,
+      // Show the true per-source split (2× Sungrow + Tesla) when the backend sends
+      // real, named arrays. The night-time A/B proxy (single-letter names) is skipped
+      // so we don't render a meaningless "A 0.0 / B 0.0" when the dongles are asleep.
+      breakdown:
+        d.solar.arrays && d.solar.arrays.length > 0 && d.solar.arrays.every((a) => a.name.length > 1)
+          ? d.solar.arrays.map((a) => ({ label: a.name, kw: a.kw }))
+          : undefined,
+    },
     sonnen: { name: 'Sonnen', val: String(Math.round(d.sonnen.soc)), unit: '%', sub: batterySub(d.sonnen.kwh, d.sonnen.kw, d.sonnen.dir), kw: d.sonnen.kw, dir: d.sonnen.dir },
     tesla: { name: 'Tesla', val: String(Math.round(d.tesla.soc)), unit: '%', sub: batterySub(d.tesla.kwh, d.tesla.kw, d.tesla.dir), kw: d.tesla.kw, dir: d.tesla.dir },
     grid: { name: 'Grid', val: fmtKw(d.grid.kw), unit: 'kW', sub: d.grid.dir === 'exporting' ? 'Export' : d.grid.dir === 'importing' ? 'Import' : 'Idle', kw: d.grid.kw, dir: d.grid.dir },

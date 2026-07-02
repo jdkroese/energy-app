@@ -52,7 +52,14 @@ const nowHourLocal = (() => {
 
 export const MOCK_LIVE: LiveResponse = {
   ts: new Date().toISOString(),
-  solar: { kw: 11.1, arrays: [{ name: 'A', kw: 6.6 }, { name: 'B', kw: 4.5 }] },
+  solar: {
+    kw: 11.1,
+    arrays: [
+      { name: 'Solar Inverter 1', kw: 4.9 },
+      { name: 'Solar Inverter 2', kw: 4.2 },
+      { name: 'Tesla', kw: 2.0 },
+    ],
+  },
   home: { kw: 5.5 },
   grid: { kw: 5.56, dir: 'exporting' },
   sonnen: { soc: 100, kwh: 9.2, kw: 0, dir: 'idle' },
