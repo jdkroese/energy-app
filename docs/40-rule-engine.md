@@ -107,8 +107,13 @@ via the ring.
 
 ### Watchdogs as first-class rules
 
-Same registry, `domain:'watchdog'`, highest priority band, but their claims are *alerts* (and,
-in `auto`, corrective safe-reverts) rather than economic optimizations:
+Same registry, `domain:'watchdog'`, highest priority band (900+). They ALWAYS alert; when set
+to `auto` they also emit a **corrective claim** — but bounded to a **safe revert** (return the
+actuator to its safe vendor default, stand a runaway down, drop a stale manual), never an
+economic optimization (owner-approved Q1, 2026-07-03). The correction routes through the same
+guardrail/execute path as any other claim; because it's the highest band it wins arbitration,
+so a watchdog can override a misbehaving economic rule. Each watchdog is independently
+`off/shadow/auto`, so it's shadow-proven (alert-only) before it's armed to act:
 
 - **expensive-band-import**: P1/P2 import > 0.5 kW sustained while a battery holds usable
   energy above floor+margin and neither discharges (the P2 incident, Phase 0).
@@ -181,13 +186,25 @@ regression suite: replay the #178 runaway day and assert the push-to-grid watchd
 
 Each phase = review-first PR(s), deployable alone, armed-state preserved.
 
-## 6. Open questions (owner)
+## 6. Open questions — RESOLVED (owner, 2026-07-03)
 
-- **Q1 — Watchdog `auto` powers**: may watchdogs take corrective action (e.g. force
-  self_consumption on mode-drift), or alert-only forever? Proposal: alert-only through P2,
-  revisit with evidence.
-- **Q2 — Tesla `autonomous`**: keep any path to vendor-autonomous at all? Proposal: only via
-  active-mode arbitrage explicitly claiming it; never via preset.
-- **Q3 — Manual-override semantics**: an owner action on an actuator creates a priority-700
-  hold — for how long (fixed TTL vs until-released)? Today's per-rule holds vary (2h→8h saga).
-- **Q4 — Rules screen placement**: new top-level nav item vs tab under /automations.
+- **Q1 — Watchdog powers → YES, watchdogs MAY act.** Owner approved corrective authority.
+  Design bound (so "may act" stays safe): watchdog corrections are **safe reverts only** —
+  return an actuator to its safe vendor default (`sonnen`/`tesla` self_consumption), stand a
+  runaway down, or drop a stale manual — **never** an economic optimization (that stays with
+  the economic rules). Watchdogs are the highest priority band (900+); each sits on the same
+  `off | shadow | auto` ladder so it can be shadow-proven before it's armed; every correction
+  is traced + emits a high-severity event. So: alerting always; correcting when that watchdog
+  is set to `auto`. (This upgrades D1's "engine replaces decisions, not actuation" — watchdogs
+  still route through the unchanged guardrail/execute path; they don't bypass safety.)
+- **Q2 — Tesla `autonomous` → per recommendation.** Reachable ONLY when active-mode tariff
+  arbitrage explicitly claims it; never from a scenario/preset. (Phase 0 already enforces this;
+  the engine keeps it as the single `autonomous`-claiming rule.)
+- **Q3 — Manual-override → per recommendation.** One consistent semantic across all actuators:
+  an owner action creates a priority-700 hold that lasts **until released**, with a long safety
+  TTL (default 12–24h, configurable) so a forgotten override can't strand a device forever.
+  Replaces today's inconsistent per-rule holds (the 2h→8h saga).
+- **Q4 — Rules screen → per recommendation.** Lands as a **tab under `/automations`** first
+  (beside the Status/Decisions panel); promote to top-level nav later if it earns the space.
+
+See `docs/45-rule-engine-phase1.md` for the Phase 1 build breakdown these decisions feed.
