@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
 import { usePrefersReducedMotion } from '../../lib/usePrefersReducedMotion';
 
@@ -230,7 +231,14 @@ export function Modal({
 
   const toneStyle = TONE_WASH[tone];
 
-  return (
+  // Portal to document.body: a `position: fixed` backdrop rendered inline is sized
+  // against the nearest TRANSFORMED ancestor, not the viewport — PageTransition's
+  // enter animation used to make every screen such an ancestor, clipping tall
+  // modals (header/footer out of view). Escape/focus-trap/scroll-lock are already
+  // document-level, and the design tokens live on :root, so portaling is safe.
+  // Nested modals portal too; their zLayer ('nested' 1010 > 'overlay' 1000) keeps
+  // the stacking order now that both are siblings on <body>.
+  return createPortal(
     <div
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
@@ -324,6 +332,7 @@ export function Modal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
