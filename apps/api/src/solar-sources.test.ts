@@ -34,7 +34,7 @@ function inv(p: Partial<InverterNormalized>): InverterNormalized {
 }
 
 function cloudDev(p: Partial<CloudDevice>): CloudDevice {
-  return { serial: 'A2160700249', psKey: 'A2160700249_11_0_0', acPowerW: null, dailyKwh: null, deviceState: null, offline: false, pointsPresent: null, ...p };
+  return { serial: 'A2160700249', psKey: 'A2160700249_11_0_0', acPowerW: null, rawAcPower: null, rawAcPowerUnit: null, dailyKwh: null, deviceState: null, offline: false, pointsPresent: null, ...p };
 }
 
 function snap(devices: CloudDevice[]): CloudSnapshot {

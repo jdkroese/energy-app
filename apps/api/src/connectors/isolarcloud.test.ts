@@ -150,13 +150,15 @@ test('signedPost surfaces an HTTP error', async () => {
 
 // ---- parseRealTimeData ------------------------------------------------------
 
-test('parseRealTimeData maps p83033→W, p83022→kWh and flags offline correctly', () => {
+test('parseRealTimeData maps p83002→W (device-level AC power), p83022→kWh and flags offline via dev_status', () => {
   const json = {
     result_code: '1',
     result_data: {
       device_point_list: [
-        { ps_key: 'A2160700249_11_0_0', device_point: { dev_sn: 'A2160700249', p83033: '2500', p83022: '9400', p83025: '1' } },
-        { ps_key: 'B2160700111_11_0_0', device_point: { dev_sn: 'B2160700111', p83033: '0', p83022: '0', p83025: '0' } },
+        // Metadata dev_status "1"/running → online; producing power.
+        { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '1', dev_fault_status: '0', p83002: '2500', p83022: '9400' } },
+        // dev_status "0" (stopped) → offline regardless of power.
+        { ps_key: 'B2160700111_1_0_0', device_point: { dev_sn: 'B2160700111', dev_status: '0', dev_fault_status: '0', p83002: '0', p83022: '0' } },
       ],
     },
   };
@@ -164,12 +166,57 @@ test('parseRealTimeData maps p83033→W, p83022→kWh and flags offline correctl
   assert.equal(devs.length, 2);
   assert.equal(devs[0].serial, 'A2160700249');
   assert.equal(devs[0].acPowerW, 2500);
+  assert.equal(devs[0].rawAcPower, 2500); // raw p83002 surfaced
   assert.equal(devs[0].dailyKwh, 9.4); // 9400 Wh → 9.4 kWh
-  assert.equal(devs[0].offline, false); // producing + running
+  assert.equal(devs[0].offline, false); // dev_status running
   assert.equal(devs[0].pointsPresent, null); // power present → no fallback keys
   assert.equal(devs[1].acPowerW, 0);
-  assert.equal(devs[1].offline, true); // zero power + not running
-  assert.equal(devs[1].pointsPresent, null); // p83033 present (value "0") → real zero, not a miss
+  assert.equal(devs[1].offline, true); // dev_status stopped
+  assert.equal(devs[1].pointsPresent, null); // p83002 present (value "0") → real zero, not a miss
+});
+
+test('parseRealTimeData: dev_fault_status non-zero → offline even when dev_status looks running', () => {
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        { ps_key: 'F1_1_0_0', device_point: { dev_sn: 'F1', dev_status: '1', dev_fault_status: '17', p83002: '1200', p83022: '3000' } },
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].acPowerW, 1200); // still read power
+  assert.equal(devs[0].offline, true); // but faulted → offline
+});
+
+test('parseRealTimeData: falls back to p83025 run-state when dev_status/dev_fault_status absent', () => {
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        { ps_key: 'L1_1_0_0', device_point: { dev_sn: 'L1', p83002: '900', p83022: '2000', p83025: '1' } }, // running
+        { ps_key: 'L2_1_0_0', device_point: { dev_sn: 'L2', p83002: '0', p83022: '0', p83025: '0' } }, // stopped
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].offline, false); // p83025 running + power
+  assert.equal(devs[1].offline, true); // p83025 stopped + no power
+});
+
+test('parseRealTimeData: reads acPowerW from p83033 (plant fallback) when p83002 absent', () => {
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        { ps_key: 'P1_1_0_0', device_point: { dev_sn: 'P1', p83033: '3300', p83022: '4000', dev_status: '1' } },
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].acPowerW, 3300); // fell back to p83033
+  assert.equal(devs[0].rawAcPower, null); // rawAcPower tracks p83002 only (absent here)
+  assert.equal(devs[0].pointsPresent, null); // p83033 present → not a total miss
 });
 
 test('parseRealTimeData tolerates missing points / empty list', () => {
@@ -177,13 +224,36 @@ test('parseRealTimeData tolerates missing points / empty list', () => {
   const devs = parseRealTimeData({ result_data: { device_point_list: [{ ps_key: 'X_1_0_0', device_point: {} }] } });
   assert.equal(devs[0].acPowerW, null);
   assert.equal(devs[0].dailyKwh, null);
-  assert.equal(devs[0].offline, true); // no power + no run-state → treated as offline
-  assert.deepEqual(devs[0].pointsPresent, []); // p83033 key absent → fallback reports (empty) present set
+  assert.equal(devs[0].offline, true); // no power + no run-state/metadata → treated as offline
+  assert.deepEqual(devs[0].pointsPresent, []); // no power key at all → fallback reports (empty) present set
 });
 
-test('parseRealTimeData surfaces the ACTUAL point keys when p83033 is absent (point-id mismatch net)', () => {
-  // device_type 1 may report AC power under a DIFFERENT point id — no p83033. We must
-  // capture whatever keys ARE present so the right ids show up in one Test.
+test('parseRealTimeData: {value, unit} object points are tolerated (reads .value, surfaces unit)', () => {
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        {
+          ps_key: 'U1_1_0_0',
+          device_point: {
+            dev_sn: 'U1',
+            dev_status: '1',
+            p83002: { value: '4.2', unit: 'kW' }, // AC power as an object, in kW
+            p83022: { value: '11', unit: 'kWh' },
+          },
+        },
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].acPowerW, 4.2); // reads .value
+  assert.equal(devs[0].rawAcPower, 4.2);
+  assert.equal(devs[0].rawAcPowerUnit, 'kW'); // unit surfaced for magnitude sanity
+});
+
+test('parseRealTimeData surfaces the ACTUAL point keys when BOTH power points are absent (point-id mismatch net)', () => {
+  // A device may report AC power under a DIFFERENT point id — no p83002 and no p83033. We
+  // must capture whatever keys ARE present so the right ids show up in one Test.
   const json = {
     result_code: '1',
     result_data: {
@@ -194,7 +264,7 @@ test('parseRealTimeData surfaces the ACTUAL point keys when p83033 is absent (po
   };
   const devs = parseRealTimeData(json);
   assert.equal(devs[0].serial, 'C1');
-  assert.equal(devs[0].acPowerW, null); // no p83033
+  assert.equal(devs[0].acPowerW, null); // no p83002 / p83033
   assert.deepEqual(devs[0].pointsPresent, ['dev_sn', 'p83001', 'p83022', 'p83067']); // sorted keys present
 });
 
@@ -296,7 +366,7 @@ test('diagnose: a device_type=1 device (SG string inverter) IS recognized as an 
       result_code: '1',
       result_data: {
         device_point_list: [
-          { ps_key: 'SG1_1_0_0', device_point: { dev_sn: 'SG1', p83033: '4200', p83022: '11000', p83025: '1' } },
+          { ps_key: 'SG1_1_0_0', device_point: { dev_sn: 'SG1', dev_status: '1', p83002: '4200', p83022: '11000' } },
         ],
       },
     },
@@ -305,6 +375,7 @@ test('diagnose: a device_type=1 device (SG string inverter) IS recognized as an 
   assert.equal(r.ok, true);
   assert.match(r.detail, /device_types \[1,7,22\] · 1 inverter ·/);
   assert.match(r.detail, /SG1 4\.20kW/);
+  assert.match(r.detail, /raw p83002=4200/); // raw value surfaced
   assert.equal(r.devices?.length, 1);
   assert.equal(r.devices?.[0].serial, 'SG1');
   assert.equal(r.devices?.[0].acPowerW, 4200);
@@ -362,8 +433,8 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
       result_code: '1',
       result_data: {
         device_point_list: [
-          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', p83033: '2500', p83022: '9400', p83025: '1' } },
-          { ps_key: 'B2160700111_1_0_0', device_point: { dev_sn: 'B2160700111', p83033: '0', p83022: '0', p83025: '0' } },
+          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '1', dev_fault_status: '0', p83002: '2500', p83022: '9400' } },
+          { ps_key: 'B2160700111_1_0_0', device_point: { dev_sn: 'B2160700111', dev_status: '0', dev_fault_status: '0', p83002: '0', p83022: '0' } },
         ],
       },
     },
@@ -372,17 +443,17 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
   assert.equal(r.ok, true);
   assert.match(r.detail, /^login OK · 1 plant \(Javea\) · 3 devices · device_types \[1,14\] · 2 inverters ·/);
   assert.match(r.detail, /A2160700249 2\.50kW/);
-  assert.match(r.detail, /B2160700111 0\.00kW \(offline\)/);
+  assert.match(r.detail, /B2160700111 0\.00kW \[raw p83002=0\] \(offline\)/);
   assert.equal(r.devices?.length, 2);
   assert.equal(r.devices?.[0].serial, 'A2160700249');
   assert.equal(r.devices?.[0].acPowerW, 2500);
   setFetchForTest(fetch);
 });
 
-test('diagnose: inverter found but p83033 missing → detail surfaces the points present', async () => {
+test('diagnose: inverter found but power points missing → detail surfaces the points present', async () => {
   // The device_type filter is right (an inverter is discovered + read) but the point ids
-  // differ for it: AC power arrives as p83067, not p83033. The Test must name the actual
-  // keys present so the right point ids are visible in ONE more Test.
+  // differ for it: AC power arrives as p83067, not p83002/p83033. The Test must name the
+  // actual keys present so the right point ids are visible in ONE more Test.
   resetTokenForTest();
   resetPsKeysCacheForTest();
   mockGateway({
@@ -400,7 +471,7 @@ test('diagnose: inverter found but p83033 missing → detail surfaces the points
   });
   const r = await diagnose(CFG);
   assert.equal(r.ok, true); // a device WAS read — the chain works, only the point ids differ
-  assert.match(r.detail, /SG1: no p83033 — points present: dev_sn,p83001,p83022,p83067/);
+  assert.match(r.detail, /SG1: no p83002\/p83033 — points present: dev_sn,p83001,p83022,p83067/);
   assert.equal(r.devices?.[0].acPowerW, null);
   assert.deepEqual(r.devices?.[0].pointsPresent, ['dev_sn', 'p83001', 'p83022', 'p83067']);
   setFetchForTest(fetch);
@@ -415,7 +486,7 @@ test('diagnose: serialMap set → derives ps_keys without plant discovery, succe
       result_code: '1',
       result_data: {
         device_point_list: [
-          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', p83033: '1200', p83022: '3000', p83025: '1' } },
+          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '1', p83002: '1200', p83022: '3000' } },
         ],
       },
     },
@@ -426,6 +497,7 @@ test('diagnose: serialMap set → derives ps_keys without plant discovery, succe
   assert.equal(r.devices?.length, 1);
   assert.match(r.detail, /^login OK · serialMap · 1 inverter ·/);
   assert.match(r.detail, /A2160700249 1\.20kW/);
+  assert.match(r.detail, /raw p83002=1200/);
   setFetchForTest(fetch);
 });
 

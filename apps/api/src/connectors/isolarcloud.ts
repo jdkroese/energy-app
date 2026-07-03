@@ -19,9 +19,10 @@
 //   • Login: POST /openapi/login { appkey, login_type:"1", user_account, user_password,
 //     api_key_param:{nonce,timestamp} } → result_data.token (cached, re-minted on expiry).
 //   • Data: POST /openapi/getDeviceRealTimeData { appkey, device_type:1, ps_key_list,
-//     point_id_list } → result_data.device_point_list[].device_point.p83033 (AC power W),
-//     p83022 (daily yield Wh). Plant/device discovery: /openapi/getPowerStationList,
-//     /openapi/getDeviceList.
+//     point_id_list } → result_data.device_point_list[].device_point.p83002 (Inverter AC
+//     power W), p83022 (daily yield Wh). Device online/fault state is in the response
+//     METADATA (dev_status / dev_fault_status), NOT a p-point. Plant/device discovery:
+//     /openapi/getPowerStationList, /openapi/getDeviceList.
 //
 // UNVERIFIED against real credentials until the owner's key is issued — the signing +
 // endpoint shapes are covered by unit tests (mock HTTP) but the live handshake is pending.
@@ -39,6 +40,15 @@ export interface CloudDevice {
   psKey: string;
   /** Live AC active power (W), or null when not reported. */
   acPowerW: number | null;
+  /**
+   * The RAW p83002 reading exactly as the cloud returned it (before any W→kW handling),
+   * plus its unit string when the point was an {value, unit} object — surfaced in the Test
+   * so a 1000× unit mismatch (kW vs W) is visible against real production. null when p83002
+   * was absent.
+   */
+  rawAcPower: number | null;
+  /** Unit string reported alongside p83002 (e.g. "W" or "kW"), or null when none/scalar. */
+  rawAcPowerUnit: string | null;
   /** Today's yield (kWh), or null. */
   dailyKwh: number | null;
   /** Device run/fault state label, or null. */
@@ -46,9 +56,10 @@ export interface CloudDevice {
   /** True when the cloud marks the device offline/faulted (outage source of truth). */
   offline: boolean;
   /**
-   * When the expected AC-power point (p83033) is MISSING for this device, the actual
-   * point keys present in its device_point object (sorted), so a wrong point-id set is
-   * visible in the Test detail. null when power WAS reported (normal case).
+   * When the expected AC-power point (p83002) AND the plant-power fallback (p83033) are both
+   * MISSING for this device, the actual point keys present in its device_point object
+   * (sorted), so a wrong point-id set is visible in the Test detail. null when power WAS
+   * reported (normal case).
    */
   pointsPresent: string[] | null;
 }
@@ -73,12 +84,23 @@ const DEVICE_TYPE_INVERTER = ((): number => {
   const n = raw ? Number(raw) : NaN;
   return Number.isFinite(n) && n > 0 ? n : 1;
 })();
-// Point ids we read (jsanchezdelvillar/Sungrow-API): 83033 AC power (W), 83022 daily
-// yield (Wh), 83025 running state. Kept small so we stay well under any point quota.
-const POINT_ACTIVE_POWER = '83033';
+// Point ids we read (GoSungrow/Sungrow-API point map). CRITICAL: p83033 is "Plant Power"
+// — a PLANT-level point, so it is NEVER returned for a DEVICE query (getDeviceRealTimeData);
+// that's why an earlier build saw "no p83033" against real inverters. The correct DEVICE-level
+// point is p83002 = Inverter AC Power. So:
+//   • 83002 = Inverter AC Power (DEVICE-level, W or kW)   ← the intended acPowerW source
+//   • 83022 = Daily yield (kWh/Wh)                        ← dailyKwh
+//   • 83025 = Running state (kept as a harmless extra / metadata fallback)
+//   • 83033 = Plant Power (PLANT-level — WRONG for a device query; still requested + parsed
+//             as a last-resort fallback for acPowerW, but 83002 is the real source)
+// Device online/fault detection comes from the response METADATA (dev_status /
+// dev_fault_status), not a p-point (see parseRealTimeData). Kept small so we stay well
+// under any point quota.
+const POINT_ACTIVE_POWER = '83002'; // Inverter AC Power (device-level)
+const POINT_PLANT_POWER = '83033'; // Plant Power (plant-level — fallback only, usually absent)
 const POINT_DAILY_YIELD = '83022';
 const POINT_RUN_STATE = '83025';
-const POINT_ID_LIST = [POINT_ACTIVE_POWER, POINT_DAILY_YIELD, POINT_RUN_STATE];
+const POINT_ID_LIST = [POINT_ACTIVE_POWER, POINT_DAILY_YIELD, POINT_RUN_STATE, POINT_PLANT_POWER];
 const HTTP_TIMEOUT_MS = 12_000;
 // Cloud is the SLOW/rate-limited backstop — poll every 5 min (config TTL below).
 const CLOUD_TTL_MS = 5 * 60_000;
@@ -261,7 +283,17 @@ async function ensureToken(cfg: IsolarcloudConfig): Promise<string> {
 
 // ---- Parsing (pure) --------------------------------------------------------
 
+/**
+ * Coerce a getDeviceRealTimeData point to a number. A point may arrive as a scalar
+ * (number/string) OR as an object `{ value, unit }` — read `.value` in the object case.
+ * Tolerant of locale strings ("--", blanks, thousands are NOT assumed). Null on anything
+ * unparseable.
+ */
 function toNum(v: unknown): number | null {
+  if (v != null && typeof v === 'object') {
+    // { value, unit } point shape — recurse into value.
+    return toNum((v as Record<string, unknown>).value);
+  }
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string') {
     const t = v.trim();
@@ -272,11 +304,46 @@ function toNum(v: unknown): number | null {
   return null;
 }
 
+/** The unit string of a `{ value, unit }` point, or null for a scalar / no unit. */
+function pointUnit(v: unknown): string | null {
+  if (v != null && typeof v === 'object') {
+    const u = (v as Record<string, unknown>).unit;
+    if (u != null && String(u).trim() !== '') return String(u).trim();
+  }
+  return null;
+}
+
+/**
+ * Truthy iff a string/number looks like a "running / normal / online" device state.
+ * Tolerant of numeric codes, English/Chinese labels, and locale casing.
+ */
+function looksRunning(s: string): boolean {
+  return /(^|[^a-z])(run|running|online|normal|ok)([^a-z]|$)|正常|运行|在线|^1$/i.test(s.trim());
+}
+
+/** Truthy iff a fault-status field indicates an actual fault (non-zero / "fault"/"alarm"). */
+function looksFaulted(s: string): boolean {
+  const t = s.trim();
+  if (t === '' || t === '0' || t === '--') return false;
+  if (/^0+$/.test(t)) return false; // "00", "0.0" style zeros = no fault
+  if (/no\s*fault|normal|正常|无故障/i.test(t)) return false;
+  const n = Number(t);
+  if (Number.isFinite(n)) return n > 0; // any non-zero fault code = faulted
+  return /fault|alarm|error|故障|告警/i.test(t); // textual fault labels
+}
+
 /**
  * Parse a getDeviceRealTimeData response into normalized per-device readings. Pure +
- * side-effect-free (unit-tested). Tolerant to missing points. Power (p83033) is W; daily
- * yield (p83022) is Wh → kWh. A device flagged non-running by p83025 / a missing power
- * point reads offline=true so the dark-alert can trust the cloud as an outage source.
+ * side-effect-free (unit-tested). Tolerant to missing points and to points arriving as a
+ * scalar OR an `{ value, unit }` object. Power is read from p83002 (Inverter AC Power,
+ * DEVICE-level) with p83033 (Plant Power) as a last-resort fallback; daily yield (p83022)
+ * is normalized to kWh.
+ *
+ * OFFLINE/RUNNING detection is derived PRIMARILY from the response METADATA — dev_status
+ * and dev_fault_status ARE present for a device query (unlike a run-state p-point), so a
+ * fault there ⇒ offline and a running dev_status ⇒ online. We fall back to the old
+ * p83025/power heuristic only when neither metadata field is present, so the cloud stays a
+ * trustworthy outage source.
  */
 export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] {
   const data = (json.result_data ?? {}) as { device_point_list?: unknown };
@@ -284,26 +351,56 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
   const out: CloudDevice[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== 'object') continue;
-    const point = ((entry as Record<string, unknown>).device_point ?? {}) as Record<string, unknown>;
-    const serial = String(point.dev_sn ?? point.device_sn ?? (entry as Record<string, unknown>).ps_key ?? '').trim();
-    const psKey = String((entry as Record<string, unknown>).ps_key ?? point.ps_key ?? '').trim();
-    const powerKey = `p${POINT_ACTIVE_POWER}`;
-    const acPowerW = toNum(point[powerKey]);
+    const rec = entry as Record<string, unknown>;
+    const point = (rec.device_point ?? {}) as Record<string, unknown>;
+    // Metadata (dev_status / dev_fault_status / dev_sn …) may sit on the entry OR inside
+    // device_point depending on the endpoint shape — look in both (device_point wins).
+    const meta = (k: string): unknown => (k in point ? point[k] : rec[k]);
+    const serial = String(meta('dev_sn') ?? meta('device_sn') ?? rec.ps_key ?? '').trim();
+    const psKey = String(rec.ps_key ?? point.ps_key ?? '').trim();
+
+    // Power: p83002 (device-level Inverter AC Power) first; p83033 (plant-level) fallback.
+    const p83002 = point[`p${POINT_ACTIVE_POWER}`];
+    const p83033 = point[`p${POINT_PLANT_POWER}`];
+    const rawAcPower = toNum(p83002);
+    const acPowerW = rawAcPower != null ? rawAcPower : toNum(p83033);
+    const rawAcPowerUnit = pointUnit(p83002) ?? pointUnit(p83033);
     const dailyWh = toNum(point[`p${POINT_DAILY_YIELD}`]);
+
+    // Run/fault state — prefer metadata, fall back to the p83025 run-state point.
+    const devStatus = meta('dev_status');
+    const devFault = meta('dev_fault_status');
     const runState = point[`p${POINT_RUN_STATE}`];
-    const stateStr = runState == null ? null : String(runState);
-    // Offline = cloud reports no live power AND (no run-state or a non-running one).
-    const running = stateStr != null && /1|run|online|正常/i.test(stateStr);
-    const offline = (acPowerW == null || acPowerW <= 0) && !running;
-    // Safety net: if the expected AC-power point key is absent for this device, capture the
-    // keys that ARE present so a wrong point-id set (e.g. different ids for device_type 1)
-    // is diagnosable in ONE Test instead of guessing. Only when the key itself is missing —
-    // a present-but-null/"--" reading is a real zero, not a point-id mismatch.
-    const pointsPresent = powerKey in point ? null : Object.keys(point).sort();
+    const statusStr = devStatus == null ? null : String(devStatus);
+    const faultStr = devFault == null ? null : String(devFault);
+    const runStateStr = runState == null ? null : String(runState);
+    // Human-readable state label for the Test: metadata status when present, else run-state.
+    const stateStr = statusStr ?? runStateStr;
+
+    let offline: boolean;
+    if (statusStr != null || faultStr != null) {
+      // Metadata path (authoritative): a real fault ⇒ offline; else honour dev_status.
+      const faulted = faultStr != null && looksFaulted(faultStr);
+      const running = statusStr != null ? looksRunning(statusStr) : true;
+      offline = faulted || !running;
+    } else {
+      // Legacy heuristic (no metadata): no live power AND not running by p83025.
+      const running = runStateStr != null && looksRunning(runStateStr);
+      offline = (acPowerW == null || acPowerW <= 0) && !running;
+    }
+
+    // Safety net: if BOTH the device-level (p83002) and plant-level (p83033) power keys are
+    // absent for this device, capture the keys that ARE present so a wrong point-id set is
+    // diagnosable in ONE Test. Only when both keys are missing — a present-but-null/"--"
+    // reading is a real zero, not a point-id mismatch.
+    const powerKeyPresent = `p${POINT_ACTIVE_POWER}` in point || `p${POINT_PLANT_POWER}` in point;
+    const pointsPresent = powerKeyPresent ? null : Object.keys(point).sort();
     out.push({
       serial,
       psKey,
       acPowerW,
+      rawAcPower,
+      rawAcPowerUnit,
       dailyKwh: dailyWh == null ? null : dailyWh / 1000,
       deviceState: stateStr,
       offline,
@@ -617,14 +714,19 @@ export async function diagnose(
   // raw discovery counts (plants / devices / device_types) so the topology is legible.
   const parts = devices.map((d) => {
     const id = d.serial || d.psKey || '?';
-    // If the expected AC-power point was MISSING, the point ids likely differ for this
-    // device_type — show the keys actually present so the right ids are visible in ONE Test.
+    // If BOTH power points were MISSING, the point ids likely differ for this device_type —
+    // show the keys actually present so the right ids are visible in ONE Test.
     if (d.pointsPresent) {
       const present = d.pointsPresent.length ? d.pointsPresent.join(',') : 'none';
-      return `${id}: no p${POINT_ACTIVE_POWER} — points present: ${present}`;
+      return `${id}: no p${POINT_ACTIVE_POWER}/p${POINT_PLANT_POWER} — points present: ${present}`;
     }
     const kw = d.acPowerW == null ? '—' : `${(d.acPowerW / 1000).toFixed(2)}kW`;
-    return `${id} ${kw}${d.offline ? ' (offline)' : ''}`;
+    // Surface the RAW p83002 value (+ unit if the point was an object) so a 1000× unit
+    // mismatch (kW returned where we assume W) is visible against real production.
+    const raw =
+      d.rawAcPower == null ? '' : ` [raw p${POINT_ACTIVE_POWER}=${d.rawAcPower}${d.rawAcPowerUnit ? d.rawAcPowerUnit : ''}]`;
+    const state = d.deviceState ? ` ${d.deviceState}` : '';
+    return `${id} ${kw}${raw}${d.offline ? ' (offline)' : ''}${state}`;
   });
   const topoLabel = topo.fromSerialMap
     ? 'serialMap'
