@@ -57,6 +57,15 @@ export function appRunRemainingMs(
   return until - now;
 }
 
+/** Zone ids that currently have an in-flight app-initiated run window (remaining > 0). */
+export function appRunActiveZoneIds(now: number = Date.now()): string[] {
+  const ids: string[] = [];
+  for (const id of [...appRunUntilByZone.keys()]) {
+    if (appRunRemainingMs(id, now) > 0) ids.push(id);
+  }
+  return ids;
+}
+
 function logEntry(
   deviceId: string,
   lever: IrrigationLever,

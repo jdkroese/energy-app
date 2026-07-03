@@ -13,6 +13,7 @@ import { resolveRoomId } from "../rooms";
 import {
   issueIrrigation,
   appRunRemainingMs,
+  appRunActiveZoneIds,
   type IrrigationLever,
 } from "../control/irrigation-execute";
 import * as weather from "../connectors/weather";
@@ -130,6 +131,39 @@ export async function getIrrigation(): Promise<unknown> {
     running,
     lastError: error,
   };
+}
+
+/** GET /api/irrigation/active — a LIGHT poll for the global nav indicator: just the zones
+ *  currently watering (physical active OR an in-flight app-initiated run) with time remaining.
+ *  Cheap (getZones is ~10s-cached) and degrades to the app-run windows if the box is unreachable. */
+export async function getIrrigationActive(): Promise<unknown> {
+  const ts = new Date().toISOString();
+  if (!rainbird.isConfigured()) return { ts, connected: false, active: [] };
+  let stations: rainbird.IrrigationZone[] = [];
+  try {
+    stations = await rainbird.getZones();
+  } catch {
+    /* unreachable — still surface app-initiated runs below */
+  }
+  const byId = new Map(stations.map((z) => [z.id, z]));
+  const ids = new Set<string>();
+  for (const z of stations) if (z.active) ids.add(z.id);
+  for (const id of appRunActiveZoneIds()) ids.add(id);
+  const settings = store.get().deviceSettings;
+  const active = [...ids]
+    .map((id) => {
+      const st = byId.get(id);
+      const station = st?.station ?? (Number(id.replace("rb-", "")) || 0);
+      const remMs = appRunRemainingMs(id);
+      return {
+        zoneId: id,
+        name: settings[id]?.name ?? st?.name ?? `Zone ${station}`,
+        station,
+        remainingMin: remMs > 0 ? Math.ceil(remMs / 60_000) : null,
+      };
+    })
+    .sort((a, b) => a.station - b.station);
+  return { ts, connected: true, active };
 }
 
 /** GET /api/irrigation/:id — single zone detail. */
