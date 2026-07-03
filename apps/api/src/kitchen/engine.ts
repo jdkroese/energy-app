@@ -65,6 +65,13 @@ export interface ScoreContext {
 
 const ROTATION_DAYS = 21; // "not cooked within 3 weeks"
 
+/** Mean of the cooked-feedback ratings (each −1 | 0 | +1); 0 when never rated. */
+export function ratingAvg(r: Pick<Recipe, 'ratings'>): number {
+  const vals = Object.values(r.ratings ?? {}).filter((v) => Number.isFinite(v));
+  if (!vals.length) return 0;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
 function textMatchesAny(haystack: string[], needles: string[]): boolean {
   const h = haystack.map((x) => x.toLowerCase());
   return needles.some((n) => {
@@ -137,6 +144,10 @@ export function scoreRecipe(r: Recipe, ctx: ScoreContext): number {
 
   // Variety: avoid the same cuisine two days running.
   if (ctx.prevCuisine && r.cuisine === ctx.prevCuisine) score -= 18;
+
+  // Cooked feedback (P3): 👍/😐/👎 after cooking nudges the score a LITTLE —
+  // ±6 points ≈ ±10% of the usual score band; taste steers, never dictates.
+  score += ratingAvg(r) * 6;
 
   return score;
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
 import { setKioskEnabled } from '../../lib/kiosk';
@@ -8,6 +9,8 @@ import { TabletHome } from '../../screens/tablet/TabletHome';
 import { TabletLights } from '../../screens/tablet/TabletLights';
 import { TabletClimate } from '../../screens/tablet/TabletClimate';
 import { TabletShades } from '../../screens/tablet/TabletShades';
+import { TabletKitchen } from '../../screens/tablet/TabletKitchen';
+import { CookScreen } from '../../screens/kitchen/Cook';
 
 /* ============================================================================
  * TabletShell — the WALL-TABLET (kiosk) frame. A landscape, big-touch, dark
@@ -15,18 +18,23 @@ import { TabletShades } from '../../screens/tablet/TabletShades';
  * with a persistent Panic button, an idle/ambient clock after 90s, and a
  * hidden long-press/3-tap escape hatch back to the normal app. It renders its
  * own routes (tab state), so AppShell mounts it standalone — no children.
+ * One exception: /cook/:recipeId (cooking mode, P3) rides the real router so
+ * the SAME screen serves desktop, mobile and the wall — the shell intercepts
+ * that path and goes full-screen chrome-less (Exit navigates back to '/').
  *
- * The four content screens (Home/Lights/Climate/Shades) self-fetch; this shell
- * only owns chrome: nav, panic, idle overlay, and the exit affordance.
+ * The five content screens (Home/Lights/Climate/Shades/Kitchen) self-fetch;
+ * this shell only owns chrome: nav, panic, idle overlay, and the exit
+ * affordance.
  * ==========================================================================*/
 
-type TabId = 'home' | 'lights' | 'climate' | 'shades';
+type TabId = 'home' | 'lights' | 'climate' | 'shades' | 'kitchen';
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
   { id: 'home', label: 'Home', icon: 'home' },
   { id: 'lights', label: 'Lights', icon: 'lightbulb' },
   { id: 'climate', label: 'Climate', icon: 'thermometer' },
   { id: 'shades', label: 'Shades', icon: 'blinds' },
+  { id: 'kitchen', label: 'Kitchen', icon: 'chef-hat' },
 ];
 
 /** Idle timeout (ms) before the ambient clock fades in. */
@@ -34,6 +42,10 @@ const IDLE_MS = 90_000;
 
 export function TabletShell() {
   const [tab, setTab] = useState<TabId>('home');
+  const location = useLocation();
+  // Cooking mode (P3): the only routed screen inside the kiosk — full-screen,
+  // no tab nav (huge type + its own Exit; the panic path is one Exit away).
+  const cookMatch = location.pathname.match(/^\/cook\/([^/]+)$/);
 
   // ---- House alarm (panic) — same 5s status poll the rest of the app uses ----
   const { data: alarm, refetch: refetchAlarm } = usePolling<AlarmStatus>(api.alarm.status, 5_000);
@@ -117,16 +129,24 @@ export function TabletShell() {
         </div>
       )}
 
-      {/* Scrollable content */}
+      {/* Scrollable content — cooking mode takes over the whole frame (no tab nav). */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', position: 'relative' }}>
-        <ExitAffordance />
-        {tab === 'home' && <TabletHome />}
-        {tab === 'lights' && <TabletLights />}
-        {tab === 'climate' && <TabletClimate />}
-        {tab === 'shades' && <TabletShades />}
+        {cookMatch ? (
+          <CookScreen recipeId={decodeURIComponent(cookMatch[1])} desktop kiosk />
+        ) : (
+          <>
+            <ExitAffordance />
+            {tab === 'home' && <TabletHome />}
+            {tab === 'lights' && <TabletLights />}
+            {tab === 'climate' && <TabletClimate />}
+            {tab === 'shades' && <TabletShades />}
+            {tab === 'kitchen' && <TabletKitchen />}
+          </>
+        )}
       </div>
 
       {/* Fat bottom nav + persistent Panic */}
+      {!cookMatch && (
       <nav
         style={{
           flex: 'none',
@@ -197,8 +217,10 @@ export function TabletShell() {
           <span>{alarmActive ? 'STOP' : 'PANIC'}</span>
         </button>
       </nav>
+      )}
 
-      {idle && <IdleScreen onWake={wake} />}
+      {/* Never dim over an active cooking session — hands are floury, screen stays on. */}
+      {idle && !cookMatch && <IdleScreen onWake={wake} />}
     </div>
   );
 }

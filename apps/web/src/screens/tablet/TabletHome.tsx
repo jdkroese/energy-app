@@ -18,13 +18,17 @@ import { Icon } from '../../components/ui';
 import { EnergyFlow, type FlowData } from '../../components/energy/EnergyFlow';
 import { HomeSceneBuilder } from '../../components/home/HomeSceneBuilder';
 import { BigToggle } from './TabletLights';
+import { OrderStatusCard, QuickAddGrid, TonightCard, WeekStrip, useTonight } from './kitchenWidgets';
 
 /* ============================================================================
  * TabletHome — the wall-tablet landing screen. A glance strip (clock · weather ·
- * tariff · online), four big status tiles + the live EnergyFlow, a row of
- * one-tap whole-home Scenes (admins get a "Manage" button → the scene builder),
- * and a Favorites grid of the handiest quick controls. Everything reuses the
- * existing control APIs; nothing here can arm batteries or change settings.
+ * tariff · online), the TONIGHT section (today's planned dinner + "we're out
+ * of…" quick-add + week strip + order status — Kitchen Hub P3, integrated on
+ * the kiosk home per the owner decision in docs/38 §12), four big status tiles
+ * + the live EnergyFlow, a row of one-tap whole-home Scenes (admins get a
+ * "Manage" button → the scene builder), and a Favorites grid of the handiest
+ * quick controls. Everything reuses the existing control APIs; nothing here
+ * can arm batteries, change settings or touch the Mercadona cart.
  * ==========================================================================*/
 
 const fmtKw = (kw: number) => Math.abs(kw).toFixed(1);
@@ -44,6 +48,7 @@ const bandWord = (b: string) => (b === 'P1' ? 'peak' : b === 'P2' ? 'shoulder' :
 export function TabletHome() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const tonight = useTonight();
   const { data: live } = usePolling<LiveResponse>(api.live, 10_000);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -78,6 +83,18 @@ export function TabletHome() {
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)' }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--solar)' }} /> Online
           </span>
+        </div>
+      </div>
+
+      {/* Tonight (Kitchen Hub P3, v4 mockup frame 5): dinner card + the kitchen quick column */}
+      <div style={{ display: 'flex', gap: 18, alignItems: 'stretch', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1.3 1 340px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <TonightCard t={tonight} />
+        </div>
+        <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <QuickAddGrid />
+          <WeekStrip t={tonight} />
+          <OrderStatusCard />
         </div>
       </div>
 

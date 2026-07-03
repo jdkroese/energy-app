@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { emptyPlan, ingredientKey, normalizeQty, packMath, suggestWeek, weekStartOf } from './engine';
+import { emptyPlan, ingredientKey, normalizeQty, packMath, ratingAvg, scoreRecipe, suggestWeek, weekStartOf } from './engine';
 import { defaultHousehold } from './store';
 import type { Household, Recipe } from './types';
 
@@ -153,4 +153,16 @@ test('unit normalization: kg→g, l→ml, count synonyms', () => {
 
 test('ingredient keys normalize accents + case (mapping memory stability)', () => {
   assert.equal(ingredientKey({ es: 'Judía Verde Plana' }), 'judia verde plana');
+});
+
+test('cooked feedback (P3): 👍 boosts and 👎 penalises the score a little (±6)', () => {
+  assert.equal(ratingAvg({ ratings: {} }), 0);
+  assert.equal(ratingAvg({ ratings: { a: 1, b: -1 } }), 0);
+  assert.equal(ratingAvg({ ratings: { a: 1, b: 1 } }), 1);
+  const ctx = { household: defaultHousehold(), date: WEEK, prevCuisine: null, usedThisWeek: new Set<string>(), now: NOW };
+  const base = scoreRecipe(recipe('plain'), ctx);
+  const loved = scoreRecipe(recipe('loved', { ratings: { '2026-06-01': 1 } }), ctx);
+  const hated = scoreRecipe(recipe('hated', { ratings: { '2026-06-01': -1 } }), ctx);
+  assert.equal(loved - base, 6);
+  assert.equal(base - hated, 6);
 });
