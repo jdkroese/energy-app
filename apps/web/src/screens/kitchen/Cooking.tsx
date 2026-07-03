@@ -132,6 +132,9 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
     try {
       const r = await api.kitchen.suggest(week, day);
       setPlan(r.plan);
+      // Server flags a visible no-op ("Library too small to vary…") — show it
+      // instead of letting Suggest/Swap look broken.
+      setNote(r.note ?? null);
     } catch {
       setNote('Suggest failed — try again');
     } finally {
@@ -676,12 +679,15 @@ function ChipsEditor({
   values,
   tone,
   onChange,
+  presets,
 }: {
   label: string;
   hint: string;
   values: string[];
   tone: 'solar' | 'neutral';
   onChange: (next: string[]) => void;
+  /** Optional preset toggles rendered before the free-text chips (e.g. diet slugs). */
+  presets?: Array<{ value: string; label: string }>;
 }) {
   const [draft, setDraft] = useState('');
   const add = () => {
@@ -689,12 +695,29 @@ function ChipsEditor({
     if (v && !values.includes(v)) onChange([...values, v]);
     setDraft('');
   };
+  const presetValues = new Set((presets ?? []).map((p) => p.value));
   return (
     <div style={{ padding: '10px 0', borderBottom: '1px solid var(--border-1)' }}>
       <div style={{ fontSize: 13.5, fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 11, color: 'var(--text-3)', margin: '2px 0 8px' }}>{hint}</div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-        {values.map((v) => (
+        {(presets ?? []).map((p) => {
+          const active = values.includes(p.value);
+          return (
+            <button
+              key={p.value}
+              type="button"
+              style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}
+              onClick={() => onChange(active ? values.filter((x) => x !== p.value) : [...values, p.value])}
+            >
+              <Badge tone={active ? 'grid' : 'neutral'}>
+                {p.label}
+                {active ? ' ✓' : ''}
+              </Badge>
+            </button>
+          );
+        })}
+        {values.filter((v) => !presetValues.has(v)).map((v) => (
           <button key={v} type="button" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }} onClick={() => onChange(values.filter((x) => x !== v))}>
             <Badge tone={tone}>{v} ✕</Badge>
           </button>
@@ -740,12 +763,13 @@ function PreferencesModal({
     }
   };
   const row: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border-1)' };
+  const restrictions = h.dietRestrictions ?? [];
   return (
     <Modal
       open
       onClose={onClose}
       title="Preferences"
-      subtitle="Household · goals · loves · cuisine weights"
+      subtitle="Household · diet · goals · cuisine weights"
       icon="users"
       size="lg"
       placement={desktop ? 'center' : 'sheet'}
@@ -761,16 +785,38 @@ function PreferencesModal({
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={row}>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>Household</div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Used to scale default servings</div>
+      {/* 18px horizontal inset aligns the body with the Modal header/footer. */}
+      <div style={{ display: 'flex', flexDirection: 'column', padding: '4px 18px 10px' }}>
+        {/* Household first — family size drives every default serving. */}
+        <div style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--home)', padding: '10px 0 6px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Icon name="users" size={12} /> Household
+        </div>
+        <div
+          style={{
+            border: '1px solid var(--border-2)',
+            background: 'var(--surface-2)',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>Family size</div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Who’s at the table — sizes every dinner</div>
+            </div>
+            <span style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 11, color: 'var(--text-3)' }}>
+              <ServingsStepper compact value={h.adults} onChange={(v) => setH({ ...h, adults: v })} /> adults
+              <ServingsStepper compact min={0} value={h.kids} onChange={(v) => setH({ ...h, kids: Math.max(0, v) })} /> kids
+            </span>
           </div>
-          <span style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 11, color: 'var(--text-3)' }}>
-            <ServingsStepper compact value={h.adults} onChange={(v) => setH({ ...h, adults: v })} /> adults
-            <ServingsStepper compact value={h.kids} onChange={(v) => setH({ ...h, kids: Math.max(0, v) })} /> kids
-          </span>
+          <div style={{ fontSize: 11.5, color: 'var(--text-2)', background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '7px 10px' }}>
+            {h.adults} adult{h.adults === 1 ? '' : 's'}
+            {h.kids > 0 ? ` + ${h.kids} kid${h.kids === 1 ? '' : 's'}` : ''} →{' '}
+            <b style={{ color: 'var(--text-1)' }}>default {h.adults + h.kids} serving{h.adults + h.kids === 1 ? '' : 's'} per dinner</b>
+          </div>
         </div>
         <div style={row}>
           <div>
@@ -841,6 +887,22 @@ function PreferencesModal({
           values={h.loves}
           tone="solar"
           onChange={(loves) => setH({ ...h, loves })}
+        />
+        <ChipsEditor
+          label="Diet restrictions"
+          hint="Hard filter — matching recipes are never suggested. Toggle presets or add your own"
+          values={restrictions}
+          tone="neutral"
+          presets={[
+            { value: 'vegetarian', label: 'Vegetarian' },
+            { value: 'vegan', label: 'Vegan' },
+            { value: 'pescatarian', label: 'Pescatarian' },
+            { value: 'no-pork', label: 'No pork' },
+            { value: 'no-beef', label: 'No beef' },
+            { value: 'gluten-free', label: 'Gluten-free' },
+            { value: 'lactose-free', label: 'Lactose-free' },
+          ]}
+          onChange={(dietRestrictions) => setH({ ...h, dietRestrictions })}
         />
         <ChipsEditor
           label="Allergies"
@@ -933,7 +995,7 @@ function ImportModal({ desktop, onClose, onImported }: { desktop: boolean; onClo
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '16px 18px' }}>
         <Input
           label="Recipe URL"
           placeholder="https://…"

@@ -26,6 +26,7 @@ export function defaultHousehold(): Household {
     adults: 2,
     kids: 2,
     allergies: [],
+    dietRestrictions: [],
     dislikes: [],
     loves: [],
     weeknightMaxMin: 30,
@@ -108,6 +109,10 @@ function hydrate(p: unknown): KitchenData {
       adults: typeof hh.adults === 'number' ? Math.max(1, Math.min(12, hh.adults)) : base.household.adults,
       kids: typeof hh.kids === 'number' ? Math.max(0, Math.min(12, hh.kids)) : base.household.kids,
       allergies: Array.isArray(hh.allergies) ? hh.allergies.filter((x): x is string => typeof x === 'string') : [],
+      // Additive (2026-07): older stored households have no dietRestrictions — default [].
+      dietRestrictions: Array.isArray(hh.dietRestrictions)
+        ? hh.dietRestrictions.filter((x): x is string => typeof x === 'string')
+        : [],
       dislikes: Array.isArray(hh.dislikes) ? hh.dislikes.filter((x): x is string => typeof x === 'string') : [],
       loves: Array.isArray(hh.loves) ? hh.loves.filter((x): x is string => typeof x === 'string') : [],
       weeknightMaxMin:

@@ -945,7 +945,7 @@ function ProductPicker({
       placement={desktop ? 'center' : 'sheet'}
       wideViewport={desktop}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 18px' }}>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             value={q}
@@ -1002,7 +1002,7 @@ function HistoryModal({ desktop, onClose }: { desktop: boolean; onClose: () => v
   const history: OrderHistoryEntry[] = data?.history ?? [];
   return (
     <Modal open onClose={onClose} title="Order history" icon="clock" placement={desktop ? 'center' : 'sheet'} wideViewport={desktop}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '16px 18px' }}>
         {history.length === 0 && <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No orders yet — send your first checklist and it lands here.</div>}
         {history.map((h) => (
           <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px', fontSize: 12.5 }}>
@@ -1054,7 +1054,7 @@ function ChecklistModal({ desktop, text, onClose }: { desktop: boolean; text: st
         </>
       }
     >
-      <pre style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap', margin: 0, color: 'var(--text-2)' }}>{text}</pre>
+      <pre style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap', margin: 0, padding: '16px 18px', color: 'var(--text-2)' }}>{text}</pre>
     </Modal>
   );
 }
@@ -1114,7 +1114,7 @@ function ConfirmFillModal({
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.55 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 18px', fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.55 }}>
         <div>
           {dryRun ? (
             <>
@@ -1210,7 +1210,7 @@ function FillResultModal({ desktop, result, onClose }: { desktop: boolean; resul
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 18px' }}>
         {result.skipped.length > 0 && (
           <div style={{ fontSize: 12, color: 'var(--grid)', background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px' }}>
             Skipped (no product picked): {result.skipped.map((s) => s.label).join(', ')}
@@ -1305,7 +1305,7 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '16px 18px' }}>
         {products === null && <LoadingState label="Reading your regulars…" />}
         {products !== null && !available && (
           <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>

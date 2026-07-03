@@ -97,6 +97,8 @@ kitchenRouter.put(
       if (typeof b.adults === 'number') h.adults = Math.max(1, Math.min(12, Math.round(b.adults)));
       if (typeof b.kids === 'number') h.kids = Math.max(0, Math.min(12, Math.round(b.kids)));
       if (Array.isArray(b.allergies)) h.allergies = b.allergies.filter((x): x is string => typeof x === 'string').slice(0, 30);
+      if (Array.isArray(b.dietRestrictions))
+        h.dietRestrictions = b.dietRestrictions.filter((x): x is string => typeof x === 'string').slice(0, 30);
       if (Array.isArray(b.dislikes)) h.dislikes = b.dislikes.filter((x): x is string => typeof x === 'string').slice(0, 30);
       if (Array.isArray(b.loves)) h.loves = b.loves.filter((x): x is string => typeof x === 'string').slice(0, 30);
       if (typeof b.weeknightMaxMin === 'number') h.weeknightMaxMin = Math.max(10, Math.min(180, b.weeknightMaxMin));
@@ -357,6 +359,7 @@ kitchenRouter.post(
       prompt:
         `Ingredients on hand: ${terms.join(', ')}.` +
         (h.allergies.length ? ` NEVER use: ${h.allergies.join(', ')} (allergies).` : '') +
+        (h.dietRestrictions.length ? ` Diet restrictions (hard): ${h.dietRestrictions.join(', ')}.` : '') +
         (h.dislikes.length ? ` Avoid if possible: ${h.dislikes.join(', ')}.` : '') +
         (h.kids > 0 ? ` Cooking for ${h.adults} adults + ${h.kids} kids.` : ''),
       maxTokens: 500,
@@ -468,6 +471,7 @@ kitchenRouter.put(
         day.recipeId = null;
         delete day.skip;
         delete day.pinned;
+        delete day.recentSwapIds;
       }
       if (typeof b.skip === 'boolean') {
         if (b.skip) {
@@ -483,6 +487,7 @@ kitchenRouter.put(
         day.recipeId = b.recipeId;
         day.pinned = true; // a hand-pick is a pin — it survives re-suggest
         delete day.skip;
+        delete day.recentSwapIds; // a manual pick restarts the day's Swap rotation
       }
       if (typeof b.pinned === 'boolean') {
         if (b.pinned) day.pinned = true;
@@ -503,11 +508,19 @@ kitchenRouter.post(
     const b = (req.body ?? {}) as { day?: string };
     planFor(weekStart);
     const d = kitchen.get();
+    const before = d.plans[weekStart].days.map((x) => x.recipeId ?? null).join('|');
     const suggested = suggestWeek(d.plans[weekStart], d.recipes, d.household, new Date(), b.day);
     kitchen.update((k) => {
       k.plans[weekStart] = suggested;
     });
-    return { ts: ts(), plan: suggested };
+    // Tiny library / heavy filters can make a re-suggest a visible no-op — say so
+    // instead of looking broken (docs/39 owner feedback).
+    const changed = suggested.days.map((x) => x.recipeId ?? null).join('|') !== before;
+    return {
+      ts: ts(),
+      plan: suggested,
+      ...(changed ? {} : { note: 'Library too small to vary — import more recipes or relax filters' }),
+    };
   }),
 );
 

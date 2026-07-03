@@ -112,10 +112,13 @@ export function ServingsStepper({
   value,
   onChange,
   compact = false,
+  min = 1,
 }: {
   value: number;
   onChange: (v: number) => void;
   compact?: boolean;
+  /** Lower bound (default 1); pass 0 where zero is meaningful (e.g. kids count). */
+  min?: number;
 }) {
   const btn: CSSProperties = {
     width: compact ? 26 : 32,
@@ -132,7 +135,7 @@ export function ServingsStepper({
   };
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <button type="button" aria-label="Fewer servings" style={btn} onClick={() => onChange(Math.max(1, value - 1))}>
+      <button type="button" aria-label="Fewer servings" style={btn} onClick={() => onChange(Math.max(min, value - 1))}>
         <Icon name="minus" size={13} />
       </button>
       <b style={{ fontFamily: 'var(--font-mono)', fontSize: compact ? 12 : 13, minWidth: 18, textAlign: 'center' }}>{value}</b>
@@ -210,7 +213,7 @@ export function RecipeQuickView({
 
   return (
     <Modal open onClose={onClose} title={recipe.title} size="lg" placement={desktop ? 'center' : 'sheet'} wideViewport={desktop} icon="chef-hat">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '14px 18px 18px' }}>
         <RecipePhoto recipe={recipe} height={desktop ? 180 : 140} radius="var(--radius-md)" />
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {planContext && <Badge tone="grid">{planContext}</Badge>}

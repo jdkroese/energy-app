@@ -6,9 +6,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { emptyPlan, ingredientKey, normalizeQty, packMath, ratingAvg, scoreRecipe, suggestWeek, weekStartOf } from './engine';
-import { defaultHousehold } from './store';
+import { defaultHousehold, get as getKitchenData } from './store';
 import type { Household, Recipe } from './types';
 
 const NOW = new Date(2026, 6, 2, 12, 0); // Thu 2026-07-02
@@ -119,6 +122,130 @@ test('single-slot re-suggest swaps only that day and avoids the current pick', (
     if (first.days[i].date === target) assert.notEqual(out.days[i].recipeId, before[i], 'swap changes the slot');
     else assert.equal(out.days[i].recipeId, before[i], `day ${i} untouched`);
   }
+});
+
+test('swap cycles onward through candidates, then wraps to the first again', () => {
+  // 4 identically-scored recipes → deterministic id-ordered rotation.
+  const lib = [
+    recipe('r-a', { cuisine: 'global' }),
+    recipe('r-b', { cuisine: 'global' }),
+    recipe('r-c', { cuisine: 'global' }),
+    recipe('r-d', { cuisine: 'global' }),
+  ];
+  let plan = emptyPlan(WEEK, 4);
+  plan.days = [plan.days[0]]; // single slot
+  plan.days[0].recipeId = 'r-a';
+  const seen: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    plan = suggestWeek(plan, lib, defaultHousehold(), NOW, plan.days[0].date);
+    seen.push(plan.days[0].recipeId!);
+  }
+  assert.deepEqual(seen.slice(0, 3), ['r-b', 'r-c', 'r-d'], 'three swaps give three distinct new recipes (no A↔B ping-pong)');
+  assert.equal(seen[3], 'r-a', 'once the pool is exhausted the rotation clears and wraps to the first');
+});
+
+test('swap never goes dead: 2-recipe library keeps alternating', () => {
+  const lib = [recipe('only-a', { cuisine: 'global' }), recipe('only-b', { cuisine: 'global' })];
+  let plan = emptyPlan(WEEK, 4);
+  plan.days = [plan.days[0]];
+  plan.days[0].recipeId = 'only-a';
+  const seen: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    plan = suggestWeek(plan, lib, defaultHousehold(), NOW, plan.days[0].date);
+    seen.push(plan.days[0].recipeId!);
+  }
+  assert.deepEqual(seen, ['only-b', 'only-a', 'only-b', 'only-a'], 'always lands on the other recipe');
+});
+
+test('regenerating a fully-planned unpinned week yields a different assignment; pins + skips untouched', () => {
+  const lib = library();
+  const first = suggestWeek(emptyPlan(WEEK, 4), lib, defaultHousehold(), NOW);
+  first.days[1].pinned = true;
+  first.days[6].skip = true;
+  first.days[6].recipeId = null;
+  const before = first.days.map((d) => d.recipeId);
+  const out = suggestWeek(first, lib, defaultHousehold(), NOW);
+  assert.equal(out.days[1].recipeId, before[1], 'pinned day untouched');
+  assert.equal(out.days[1].pinned, true);
+  assert.equal(out.days[6].skip, true, 'skip survives');
+  assert.equal(out.days[6].recipeId, null, 'skipped day stays empty');
+  for (let i = 0; i < out.days.length; i++) {
+    const d = out.days[i];
+    if (d.pinned || d.skip) continue;
+    assert.notEqual(d.recipeId, before[i], `day ${i} visibly re-dealt`);
+    assert.ok(d.recipeId, `day ${i} not left empty (graceful degrade beats empty days)`);
+  }
+});
+
+test('full-week regenerate clears per-day swap memory; manual reuse still avoided softly', () => {
+  const lib = library();
+  const plan = suggestWeek(emptyPlan(WEEK, 4), lib, defaultHousehold(), NOW);
+  plan.days[0].recentSwapIds = ['es-1', 'es-2'];
+  const out = suggestWeek(plan, lib, defaultHousehold(), NOW);
+  assert.equal(out.days[0].recentSwapIds, undefined, 'a full re-deal resets the Swap rotation');
+});
+
+test('diet restrictions are a hard filter — preset slug and free text', () => {
+  const household: Household = { ...defaultHousehold(), dietRestrictions: ['no-pork', 'coriander'] };
+  const lib = [
+    ...library(),
+    recipe('porky', { cuisine: 'global', ingredients: [{ name: 'Pork loin', es: 'lomo de cerdo', qty: 500, unit: 'g' }] }),
+    recipe('herby', { cuisine: 'global', ingredients: [{ name: 'Coriander chicken', es: 'pollo con cilantro', qty: 400, unit: 'g' }] }),
+  ];
+  const out = suggestWeek(emptyPlan(WEEK, 4), lib, household, NOW);
+  assert.ok(!out.days.some((d) => d.recipeId === 'porky'), 'preset slug (no-pork → cerdo/lomo/…) filters hard');
+  assert.ok(!out.days.some((d) => d.recipeId === 'herby'), 'free-text restriction behaves exactly like an allergy');
+});
+
+test('allergies still hard-filter alongside diet restrictions', () => {
+  const household: Household = { ...defaultHousehold(), dietRestrictions: ['no-beef'], allergies: ['gambas'] };
+  const lib = [
+    ...library(),
+    recipe('allergen', { cuisine: 'global', ingredients: [{ name: 'Prawns', es: 'gambas peladas', qty: 500, unit: 'g' }] }),
+    recipe('beefy', { cuisine: 'global', ingredients: [{ name: 'Beef stew', es: 'estofado de ternera', qty: 600, unit: 'g' }] }),
+  ];
+  const out = suggestWeek(emptyPlan(WEEK, 4), lib, household, NOW);
+  assert.ok(!out.days.some((d) => d.recipeId === 'allergen'));
+  assert.ok(!out.days.some((d) => d.recipeId === 'beefy'));
+});
+
+test('old kitchen.json without dietRestrictions / recentSwapIds still loads (store defaults)', () => {
+  // Point the store at a legacy-shaped file BEFORE its lazy first load (this is the
+  // only test that touches the store's persistence, so the module cache is cold).
+  const dir = mkdtempSync(join(tmpdir(), 'kitchen-engine-test-'));
+  const file = join(dir, 'kitchen.json');
+  writeFileSync(
+    file,
+    JSON.stringify({
+      recipes: [],
+      household: {
+        adults: 3,
+        kids: 1,
+        allergies: ['gambas'],
+        dislikes: [],
+        loves: [],
+        weeknightMaxMin: 30,
+        cuisineWeights: { spanish: 80 },
+        goals: { mode: null, kcalPerDinner: null },
+        showNutritionOnCards: true,
+      },
+      plans: {
+        '2026-07-06': { weekStart: '2026-07-06', days: [{ date: '2026-07-06', recipeId: 'x', servings: 4 }] },
+      },
+      seededAt: '2026-01-01T00:00:00.000Z',
+    }),
+    'utf8',
+  );
+  process.env.KITCHEN_FILE = file;
+  const data = getKitchenData();
+  assert.equal(data.household.adults, 3);
+  assert.deepEqual(data.household.dietRestrictions, [], 'legacy household hydrates with an empty dietRestrictions');
+  const day = data.plans['2026-07-06'].days[0];
+  assert.equal(day.recipeId, 'x');
+  assert.equal(day.recentSwapIds, undefined, 'legacy plan days parse without recentSwapIds');
+  // And the hydrated data drives the engine without blowing up.
+  const out = suggestWeek(data.plans['2026-07-06'], [], data.household, NOW, '2026-07-06');
+  assert.equal(out.days.length, 1);
 });
 
 // ---- Pack math (acceptance #3: rice 900 g across 3 recipes → 1× 1 kg) -------------

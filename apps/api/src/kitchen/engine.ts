@@ -84,10 +84,59 @@ function ingredientNames(r: Recipe): string[] {
   return r.ingredients.flatMap((i) => [i.name, i.es]).concat(r.title);
 }
 
-/** Hard filters: allergies (never suggested) + same-recipe-twice-in-a-week. */
+// ---- Diet restrictions (hard filter, like allergies) -----------------------------
+// Preset slugs expand to ES+EN ingredient keyword lists; anything else in
+// household.dietRestrictions is matched verbatim (free text behaves like an
+// allergy term). Substring keyword matching is knowingly imperfect (e.g. "pan"
+// also hits "panceta") — the lists are module-level constants so they're easy
+// to extend when a false hit/miss shows up in practice.
+
+const PORK_KEYWORDS = [
+  'cerdo', 'pork', 'bacon', 'jamón', 'jamon', 'panceta', 'chorizo', 'lomo', 'salchicha',
+  'sausage', 'ham', 'morcilla', 'lardo', 'tocino',
+];
+const BEEF_KEYWORDS = ['ternera', 'beef', 'buey', 'vacuno', 'steak', 'entrecot', 'rabo de toro'];
+const MEAT_KEYWORDS = [
+  ...PORK_KEYWORDS, ...BEEF_KEYWORDS,
+  'carne', 'pollo', 'chicken', 'pavo', 'turkey', 'cordero', 'lamb', 'conejo', 'rabbit', 'pato', 'duck', 'codorniz',
+];
+const FISH_KEYWORDS = [
+  'pescado', 'fish', 'salmón', 'salmon', 'atún', 'atun', 'tuna', 'merluza', 'bacalao', 'cod',
+  'gamba', 'prawn', 'shrimp', 'langostino', 'marisco', 'seafood', 'anchoa', 'anchovy', 'boquerón', 'boqueron',
+  'calamar', 'squid', 'sepia', 'pulpo', 'octopus', 'mejillón', 'mejillon', 'mussel', 'almeja', 'clam',
+  'sardina', 'dorada', 'lubina', 'rape', 'trucha', 'trout',
+];
+const DAIRY_KEYWORDS = [
+  'leche', 'milk', 'nata', 'cream', 'queso', 'cheese', 'mantequilla', 'butter', 'yogur', 'yogurt', 'yoghurt',
+  'lácteo', 'lacteo', 'requesón', 'requeson', 'mascarpone', 'parmesano', 'parmesan', 'mozzarella',
+];
+const EGG_KEYWORDS = ['huevo', 'egg'];
+const GLUTEN_KEYWORDS = [
+  'harina', 'trigo', 'wheat', 'flour', 'pan', 'bread', 'pasta', 'espagueti', 'spaghetti', 'macarrones', 'macaroni',
+  'fideo', 'noodle', 'cuscús', 'cuscus', 'couscous', 'cebada', 'barley', 'centeno', 'rye', 'hojaldre', 'empanada', 'rebozado',
+];
+
+/** Preset diet-restriction slug → ES+EN ingredient keywords it forbids. */
+export const DIET_RESTRICTION_KEYWORDS: Record<string, string[]> = {
+  vegetarian: [...MEAT_KEYWORDS, ...FISH_KEYWORDS],
+  vegan: [...MEAT_KEYWORDS, ...FISH_KEYWORDS, ...DAIRY_KEYWORDS, ...EGG_KEYWORDS, 'miel', 'honey'],
+  pescatarian: MEAT_KEYWORDS,
+  'no-pork': PORK_KEYWORDS,
+  'no-beef': BEEF_KEYWORDS,
+  'gluten-free': GLUTEN_KEYWORDS,
+  'lactose-free': DAIRY_KEYWORDS,
+};
+
+/** Hard filters: allergies + diet restrictions (never suggested) + same-recipe-twice-in-a-week. */
 export function isEligible(r: Recipe, ctx: ScoreContext): boolean {
   if (ctx.usedThisWeek.has(r.id)) return false;
-  if (ctx.household.allergies.length && textMatchesAny(ingredientNames(r), ctx.household.allergies)) return false;
+  const h = ctx.household;
+  const names = ingredientNames(r);
+  if (h.allergies.length && textMatchesAny(names, h.allergies)) return false;
+  for (const restriction of h.dietRestrictions ?? []) {
+    const keywords = DIET_RESTRICTION_KEYWORDS[restriction] ?? [restriction];
+    if (textMatchesAny(names, keywords)) return false;
+  }
   return true;
 }
 
@@ -152,10 +201,25 @@ export function scoreRecipe(r: Recipe, ctx: ScoreContext): number {
   return score;
 }
 
+/** FIFO cap on a day's Swap rotation memory (recentSwapIds). */
+const SWAP_MEMORY_CAP = 12;
+
 /**
  * Fill a week's plan. Pins survive (day.pinned), skips stay skipped, and when
  * `onlyDate` is given only that slot is (re)suggested. Deterministic: stable
  * sort by score, ties broken by id.
+ *
+ * Swap rotation (onlyDate): the day's recentSwapIds (recipes already swapped
+ * away) are excluded alongside the current pick, so repeated Swap cycles onward
+ * through the candidates instead of ping-ponging A↔B; when the exclusions empty
+ * the pool the memory clears and the cycle restarts — never a dead Swap button.
+ *
+ * Full-week regenerate: each unpinned day's current pick — and, softly, every
+ * unpinned pick of the current week — is avoided so "Suggest week" visibly
+ * re-deals; when the library is too small the avoidance degrades gracefully
+ * (reuse allowed rather than leaving days empty). A full re-deal also clears
+ * every day's swap memory. Pure: exclusions come in on the plan, the updated
+ * plan goes out; persistence stays in routes/store.
  */
 export function suggestWeek(
   plan: MealPlan,
@@ -164,11 +228,18 @@ export function suggestWeek(
   now: Date,
   onlyDate?: string,
 ): MealPlan {
-  const days = plan.days.map((d) => ({ ...d }));
+  const days = plan.days.map((d) => ({ ...d, ...(d.recentSwapIds ? { recentSwapIds: [...d.recentSwapIds] } : {}) }));
+  const fullWeek = !onlyDate;
   const usedThisWeek = new Set<string>();
+  // Full-week: the current unpinned assignment, softly avoided in the new deal.
+  const priorPicks = new Set<string>();
   for (const d of days) {
     // Existing pins (and, when re-suggesting a single slot, every other filled day) count as used.
     if (d.recipeId && (d.pinned || (onlyDate && d.date !== onlyDate))) usedThisWeek.add(d.recipeId);
+    if (fullWeek) {
+      if (d.recipeId && !d.pinned && !d.skip) priorPicks.add(d.recipeId);
+      delete d.recentSwapIds; // a full re-deal resets every day's Swap rotation
+    }
   }
 
   let prevCuisine: Cuisine | null = null;
@@ -180,17 +251,42 @@ export function suggestWeek(
       continue;
     }
     const ctx: ScoreContext = { household, date: d.date, prevCuisine, usedThisWeek, now };
-    // When re-suggesting one slot, exclude the current pick so "Swap" really swaps.
-    const excludeId = onlyDate && d.date === onlyDate ? d.recipeId : null;
-    const candidates = recipes
-      .filter((r) => isEligible(r, ctx) && r.id !== excludeId)
-      .map((r) => ({ r, s: scoreRecipe(r, ctx) }))
-      .sort((a, b) => b.s - a.s || a.r.id.localeCompare(b.r.id));
-    const pick = candidates[0];
+    const replacedId = d.recipeId ?? null;
+    const eligible = recipes.filter((r) => isEligible(r, ctx));
+    const best = (pool: Recipe[]): Recipe | undefined =>
+      pool
+        .map((r) => ({ r, s: scoreRecipe(r, ctx) }))
+        .sort((a, b) => b.s - a.s || a.r.id.localeCompare(b.r.id))[0]?.r;
+
+    let pick: Recipe | undefined;
+    if (!fullWeek) {
+      // Single-slot Swap: exclude the current pick AND the rotation memory.
+      let memory = d.recentSwapIds ?? [];
+      let pool = eligible.filter((r) => r.id !== replacedId && !memory.includes(r.id));
+      if (!pool.length) {
+        // Exhausted the rotation — clear the memory and cycle from the top again.
+        memory = [];
+        pool = eligible.filter((r) => r.id !== replacedId);
+      }
+      if (!pool.length) pool = eligible; // single-recipe library: keep the button alive
+      pick = best(pool);
+      if (pick && replacedId) d.recentSwapIds = [...memory, replacedId].slice(-SWAP_MEMORY_CAP);
+      else if (!memory.length) delete d.recentSwapIds;
+    } else {
+      // Full-week re-deal: prefer recipes outside the current assignment, then
+      // merely not this day's own pick, then anything eligible (graceful degrade).
+      const tiers = [
+        eligible.filter((r) => !priorPicks.has(r.id)),
+        eligible.filter((r) => r.id !== replacedId),
+        eligible,
+      ];
+      pick = best(tiers.find((t) => t.length) ?? []);
+    }
+
     if (pick) {
-      d.recipeId = pick.r.id;
-      usedThisWeek.add(pick.r.id);
-      prevCuisine = pick.r.cuisine;
+      d.recipeId = pick.id;
+      usedThisWeek.add(pick.id);
+      prevCuisine = pick.cuisine;
     } else {
       d.recipeId = null;
     }

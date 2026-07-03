@@ -88,6 +88,13 @@ export interface MealPlanDay {
   /** Pinned by hand — survives re-suggest. */
   pinned?: boolean;
   note?: string;
+  /**
+   * Rotation memory for this day's Swap button: recipe ids recently swapped AWAY
+   * (FIFO, capped) so repeated Swap cycles onward through candidates instead of
+   * ping-ponging A↔B. Cleared by a manual pick or a full-week suggest. Additive —
+   * old persisted plans without it parse fine.
+   */
+  recentSwapIds?: string[];
 }
 
 export interface MealPlan {
@@ -175,6 +182,13 @@ export interface Household {
   adults: number;
   kids: number;
   allergies: string[];
+  /**
+   * Diet restrictions — a HARD filter like allergies. Preset slugs ('vegetarian',
+   * 'vegan', 'pescatarian', 'no-pork', 'no-beef', 'gluten-free', 'lactose-free')
+   * expand to ES+EN ingredient keyword lists in the engine; free-text values match
+   * exactly like allergy terms.
+   */
+  dietRestrictions: string[];
   dislikes: string[];
   loves: string[];
   weeknightMaxMin: number;

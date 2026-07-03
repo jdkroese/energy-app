@@ -2180,6 +2180,8 @@ export interface MealPlanDay {
   skip?: boolean;
   pinned?: boolean;
   note?: string;
+  /** Swap rotation memory — recipe ids recently swapped away (server-managed). */
+  recentSwapIds?: string[];
 }
 
 export interface MealPlan {
@@ -2258,6 +2260,8 @@ export interface KitchenHousehold {
   adults: number;
   kids: number;
   allergies: string[];
+  /** Hard filter — preset slugs ('vegetarian', 'no-pork', …) or free text, matched like allergies. */
+  dietRestrictions: string[];
   dislikes: string[];
   loves: string[];
   weeknightMaxMin: number;
@@ -2372,7 +2376,12 @@ export interface RecipeImportResponse {
   prefill?: { title?: string; photo?: string | null; sourceUrl: string };
   detail?: string;
 }
-export interface MealPlanResponse { ts: string; plan: MealPlan }
+export interface MealPlanResponse {
+  ts: string;
+  plan: MealPlan;
+  /** Suggest only: set when a re-suggest changed nothing (library too small to vary). */
+  note?: string;
+}
 export interface PlanAskResponse { ts: string; ok: boolean; reason?: string; candidateIds: string[]; note?: string }
 export interface StaplesResponse { ts: string; staples: StaplesItem[] }
 export interface OrderDraftResponse { ts: string; draft: OrderDraft }
