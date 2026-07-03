@@ -110,6 +110,53 @@ path is under `.data/`, which is already **gitignored** — real keys/ips are **
   comfortably inside even the suspended-then-refreshed free tier. Zigbee/BLE sub-devices (scene switch)
   and cloud scenes remain cloud-controlled by design.
 
+## Research validation & refined plan (2026-07-03)
+
+A deep-research pass (21 sources, 25 adversarially-verified claims, 0 refuted) confirmed this
+local-first direction is the **near-universal** community answer to the Tuya cloud-quota wall,
+and sharpened a few choices:
+
+- **Library choice validated.** [`codetheweb/tuyapi`](https://github.com/codetheweb/tuyapi)
+  (Node, TCP 6668, fully local after setup) is *the* Node-native library — exactly what this
+  spike uses. The Python reference impl [`jasonacox/tinytuya`](https://github.com/jasonacox/tinytuya)
+  supports the full 3.1–3.5 range and ships the best key-harvest **wizard**.
+- **Harvest via the tinytuya wizard (Phase 2 refinement).** Rather than only our hand-rolled
+  cloud harvest, fold in tinytuya's `wizard` — the battle-tested way to pull every `local_key`
+  into a `devices.json` in one cloud pass. Our tuyapi runtime is unchanged; the wizard is purely
+  a one-shot harvest tool. Cross-check: any device tinytuya's 3.5 session negotiation can't reach
+  is worth re-testing against [`make-all/tuya-local`](https://github.com/make-all/tuya-local)
+  (1000+ configs, widest 3.5 coverage) to confirm it's reachable at all.
+- **`local_key` rotates on re-pair — confirmed.** A one-time harvest is effectively permanent
+  *unless* a device is reset/re-paired; then re-harvest that device's key. Matches our design.
+- **Free trial *extension* is the validated bridge.** The community stopgap is NOT paying — it's
+  repeatedly requesting **free trial extensions** (approved in ~1–2 days; multi-month grants
+  reported). We already extended IoT Core to **2027-01-25**, so we have a long runway; another
+  extension is the free lever if we ever need to un-suspend sooner. (Confirmed: paid metered
+  billing is gated behind Enterprise Verification; the visible paid edition is the $25k Flagship.
+  Also: Tuya caps accounts at **2 projects**, and the base-pack block is account-level, so
+  "spin up a fresh project for new quota" is a dead end.)
+- **Offline key extraction — downgraded.** The phone-app routes (rooted-Android SQLite, iOS
+  backup, pairing packet capture) could NOT be corroborated; only cloud-based extractors
+  (e.g. `redphx/tuya-local-key-extractor`) are confirmed. **Plan: harvest via cloud once** after
+  the quota refresh — do not rely on offline extraction.
+- **Parallel track — Zigbee switch off the gateway.** The wxkg 4-button scene switch (never
+  IP-addressable) can move off the Tuya gateway onto **Zigbee2MQTT/ZHA** with a generic
+  coordinator (Sonoff/ConBee), fully de-clouding it. Tracked separately from this connector work.
+- **Firmware reflash — explicit last resort.** `tuya-cloudcutter` + LibreTiny/OpenBeken/ESPHome
+  can convert Beken/Realtek-chip devices to open firmware, but Tuya patched the OTA exploit
+  (Feb 2022) so newer stock is often serial-only, and **breakers must never be reflashed**
+  (bricking risk on a live circuit). Reserve for a single stubborn plug, never the fleet.
+
+### Execution checklist — run at the ~monthly quota refresh (end of July 2026)
+
+1. Confirm the base resource pack shows **In service** (quota reset) at `iot.tuya.com` — refresh
+   is ~the 25th; or request another free trial extension to un-suspend sooner.
+2. Run `ops-tuya-local-probe` (read-only) on the mini → read the fleet reachability report.
+3. If most Wi-Fi devices answer locally: merge this PR (#201), then build Phase 2 (UDP discovery
+   + local-first transport with cloud fallback at `sendCommandsDual`), harvesting keys via the
+   tinytuya wizard into the cached `devices.json`/`tuya-local.json`.
+4. Schedule the Zigbee-switch → Zigbee2MQTT migration as its own small brief.
+
 ## What this PR intentionally does NOT do
 
 - Does **not** touch `sendCommandsDual` or any control/arming logic — the spike is purely additive
