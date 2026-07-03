@@ -299,46 +299,53 @@ export function isConfigured(): boolean {
 }
 
 /**
- * Discover the ps_key_list to query. Prefers the owner's serial→dongle map keys (the
- * ps_key is derived as "<serial>_11_0_0" when only serials are mapped); else walks the
- * plant + device lists. Cached longer than the data poll (topology rarely changes).
+ * Discover the ps_key_list to query — the un-cached body. Prefers the owner's serial→dongle
+ * map keys (the ps_key is derived as "<serial>_11_0_0" when only serials are mapped); else
+ * walks the plant + device lists. Kept cache-free so the manual Test button (diagnose) can
+ * hit the live topology endpoints directly; the hot path wraps this in `cached()` below.
  */
-async function discoverPsKeys(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
-  return cached('isolarcloud.pskeys', 30 * 60_000, async () => {
-    // If the owner mapped serials explicitly, derive the standard inverter ps_key.
-    const mapped = cfg.serialMap ? Object.keys(cfg.serialMap) : [];
-    if (mapped.length > 0) return mapped.map((sn) => `${sn}_${DEVICE_TYPE_INVERTER}_0_0`);
-    // Otherwise discover: plant list → device list per plant → inverter ps_keys.
-    const plants = await signedPost(cfg, '/openapi/getPowerStationList', {
+async function discoverPsKeysUncached(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
+  // If the owner mapped serials explicitly, derive the standard inverter ps_key.
+  const mapped = cfg.serialMap ? Object.keys(cfg.serialMap) : [];
+  if (mapped.length > 0) return mapped.map((sn) => `${sn}_${DEVICE_TYPE_INVERTER}_0_0`);
+  // Otherwise discover: plant list → device list per plant → inverter ps_keys.
+  const plants = await signedPost(cfg, '/openapi/getPowerStationList', {
+    api_key_param: apiKeyParam(),
+    appkey: cfg.appkey,
+    curPage: 1,
+    size: 100,
+  }, token);
+  const pdata = (plants.result_data ?? {}) as { pageList?: unknown };
+  const plantList = Array.isArray(pdata.pageList) ? pdata.pageList : [];
+  const psKeys: string[] = [];
+  for (const p of plantList) {
+    const psId = (p as Record<string, unknown>)?.ps_id;
+    if (psId == null) continue;
+    const devs = await signedPost(cfg, '/openapi/getDeviceList', {
       api_key_param: apiKeyParam(),
       appkey: cfg.appkey,
+      ps_id: psId,
       curPage: 1,
       size: 100,
     }, token);
-    const pdata = (plants.result_data ?? {}) as { pageList?: unknown };
-    const plantList = Array.isArray(pdata.pageList) ? pdata.pageList : [];
-    const psKeys: string[] = [];
-    for (const p of plantList) {
-      const psId = (p as Record<string, unknown>)?.ps_id;
-      if (psId == null) continue;
-      const devs = await signedPost(cfg, '/openapi/getDeviceList', {
-        api_key_param: apiKeyParam(),
-        appkey: cfg.appkey,
-        ps_id: psId,
-        curPage: 1,
-        size: 100,
-      }, token);
-      const ddata = (devs.result_data ?? {}) as { pageList?: unknown };
-      const devList = Array.isArray(ddata.pageList) ? ddata.pageList : [];
-      for (const d of devList) {
-        const rec = d as Record<string, unknown>;
-        if (Number(rec.device_type) !== DEVICE_TYPE_INVERTER) continue;
-        const psKey = String(rec.ps_key ?? '').trim();
-        if (psKey) psKeys.push(psKey);
-      }
+    const ddata = (devs.result_data ?? {}) as { pageList?: unknown };
+    const devList = Array.isArray(ddata.pageList) ? ddata.pageList : [];
+    for (const d of devList) {
+      const rec = d as Record<string, unknown>;
+      if (Number(rec.device_type) !== DEVICE_TYPE_INVERTER) continue;
+      const psKey = String(rec.ps_key ?? '').trim();
+      if (psKey) psKeys.push(psKey);
     }
-    return psKeys;
-  });
+  }
+  return psKeys;
+}
+
+/**
+ * Discover the ps_key_list to query, cached longer than the data poll (topology rarely
+ * changes). Thin cache wrapper around discoverPsKeysUncached (the hot path).
+ */
+async function discoverPsKeys(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
+  return cached('isolarcloud.pskeys', 30 * 60_000, () => discoverPsKeysUncached(cfg, token));
 }
 
 /**
@@ -372,8 +379,9 @@ export function getCloudSnapshot(): Promise<CloudSnapshot | null> {
 }
 
 /**
- * Probe the cloud integration WITHOUT persisting anything — used by the Settings
- * test button. Returns a short human detail. Never throws.
+ * Probe the cloud integration WITHOUT persisting anything — used by the SAVE gate. Only
+ * proves login (a valid credential set can be saved even before the service APIs are
+ * whitelisted). Returns a short human detail. Never throws.
  */
 export async function probe(cfg: IsolarcloudConfig): Promise<{ ok: boolean; detail: string }> {
   try {
@@ -382,4 +390,93 @@ export async function probe(cfg: IsolarcloudConfig): Promise<{ ok: boolean; deta
   } catch (e) {
     return { ok: false, detail: (e as Error).message?.slice(0, 80) || 'unreachable' };
   }
+}
+
+/** Trim a raw error/result message for display in the Test detail (single-line, capped). */
+function trimDetail(msg: string, max = 200): string {
+  const one = msg.replace(/\s+/g, ' ').trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+
+/**
+ * FULL read-chain diagnostic — used by the Settings "Test" button. Unlike probe() (login
+ * only), this runs the ENTIRE data path the hot snapshot uses (login → discover ps_keys →
+ * getDeviceRealTimeData) and reports EXACTLY where it stops, so a permission/whitelist gap
+ * is visible instead of hidden behind a green "login OK". Bypasses the 5-min snapshot cache
+ * (fresh login + un-cached discovery) since it's a manual button. Strictly read-only and
+ * fail-soft: it NEVER throws.
+ */
+export async function diagnose(
+  cfg: IsolarcloudConfig,
+): Promise<{ ok: boolean; detail: string; devices?: CloudDevice[] }> {
+  // 1) Login.
+  let token: string;
+  try {
+    token = await login(cfg);
+    if (!token) return { ok: false, detail: 'login failed — no token returned' };
+  } catch (e) {
+    return { ok: false, detail: `login failed — ${trimDetail((e as Error).message || 'unreachable')}` };
+  }
+
+  // 2) Discover inverter ps_keys (getPowerStationList → getDeviceList), un-cached.
+  let psKeys: string[];
+  try {
+    psKeys = await discoverPsKeysUncached(cfg, token);
+  } catch (e) {
+    tokenState = null;
+    return {
+      ok: false,
+      detail:
+        `login OK, but device discovery failed — ${trimDetail((e as Error).message || 'error')}. ` +
+        'Enable getPowerStationList/getDeviceList in Service API management and set the app to ' +
+        'direct account authorization (OAuth2.0 = No), or authorize the plant.',
+    };
+  }
+  if (psKeys.length === 0) {
+    return {
+      ok: false,
+      detail:
+        'login OK, but no inverters found — enable getPowerStationList/getDeviceList in Service ' +
+        'API management and set the app to direct account authorization (OAuth2.0 = No), or ' +
+        'authorize the plant',
+    };
+  }
+
+  // 3) Read live per-device data.
+  let devices: CloudDevice[];
+  try {
+    const json = await signedPost(cfg, '/openapi/getDeviceRealTimeData', {
+      api_key_param: apiKeyParam(),
+      appkey: cfg.appkey,
+      device_type: DEVICE_TYPE_INVERTER,
+      point_id_list: POINT_ID_LIST,
+      ps_key_list: psKeys,
+    }, token);
+    devices = parseRealTimeData(json);
+  } catch (e) {
+    tokenState = null;
+    return {
+      ok: false,
+      detail: `login + ${psKeys.length} device(s) found, but real-time read failed — ${trimDetail(
+        (e as Error).message || 'error',
+      )}`,
+    };
+  }
+  if (devices.length === 0) {
+    return {
+      ok: false,
+      detail: `login OK, ${psKeys.length} inverter ps_key(s) discovered, but the real-time query returned no device data — check point-id/service permissions`,
+    };
+  }
+
+  // Success — per-device serial + kW + offline flag so real numbers are visible.
+  const parts = devices.map((d) => {
+    const kw = d.acPowerW == null ? '—' : `${(d.acPowerW / 1000).toFixed(2)}kW`;
+    return `${d.serial || d.psKey || '?'} ${kw}${d.offline ? ' (offline)' : ''}`;
+  });
+  return {
+    ok: true,
+    detail: `authenticated · ${devices.length} inverter${devices.length === 1 ? '' : 's'} · ${parts.join(', ')}`,
+    devices,
+  };
 }

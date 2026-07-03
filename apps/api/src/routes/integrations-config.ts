@@ -304,7 +304,12 @@ function requireComplete(c: IsolarcloudConfig): void {
 export async function testIsolarcloud(raw?: unknown): Promise<ProbeResult> {
   const c = isolarcloudCandidate((raw ?? {}) as Record<string, unknown>);
   requireComplete(c);
-  return isolarcloud.probe(c);
+  // Run the FULL read chain (login → discover → real-time), not just login, so the Test
+  // button is truthful about whether the app can actually read a device end-to-end. The
+  // SAVE gate (setIsolarcloud) still uses login-only probe, so valid creds save even
+  // before the service APIs are whitelisted.
+  const { ok, detail } = await isolarcloud.diagnose(c);
+  return { ok, detail };
 }
 
 export async function setIsolarcloud(raw?: unknown): Promise<unknown> {
