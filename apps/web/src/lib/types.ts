@@ -2280,7 +2280,7 @@ export interface OrderSuggestion {
 
 export interface OrderLine {
   id: string;
-  source: 'recipe' | 'staple' | 'manual' | 'tablet';
+  source: 'recipe' | 'staple' | 'manual' | 'tablet' | 'regular';
   recipeIds?: string[];
   productId?: string | null;
   ingredientKey: string;
@@ -2436,8 +2436,9 @@ export interface KitchenRegularHit {
   photo: string | null;
   unitPrice: number | null;
   packSizeDisplay: string | null;
-  alreadyStaple: boolean;
-  /** Mercadona's recommended_quantity for this regular (1..99) — seeds the staple's defaultQty. */
+  /** True when this product is already a line in the current order draft (greyed, not re-addable). */
+  inDraft: boolean;
+  /** Mercadona's recommended_quantity for this regular (1..99) — seeds the added order line's qty. */
   recommendedQty: number;
 }
 
@@ -2478,7 +2479,6 @@ export interface KitchenOrderSyncResponse {
   draft: OrderDraft;
 }
 export interface KitchenRegularsResponse { ts: string; linked: boolean; available: boolean; products: KitchenRegularHit[] }
-export interface KitchenImportRegularsResponse { ts: string; ok: boolean; added: number; staples: StaplesItem[] }
 
 /* ---- Kitchen Hub P3 (docs/42): cooked feedback · what-can-I-make ---- */
 

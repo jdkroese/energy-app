@@ -1,12 +1,13 @@
-// Regression tests for the "seed staples from Mercadona regulars" mapping (imported 0 bug).
+// Tests for the "my regulars" browser mapping (docs/43 — decoupled from staples).
 // The live myregulars endpoint returns WRAPPER rows { product, recommended_quantity, … };
-// the handler must unwrap .product before normalizing and carry the quantity through.
+// mapRegulars must unwrap .product before normalizing, carry the quantity, and flag rows
+// whose product is already on the order draft (`inDraft`).
 // Run: node --import tsx --test src/kitchen/regulars.test.ts
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clampQty, mapRegulars, normalizeImports } from './regulars';
+import { clampQty, mapRegulars } from './regulars';
 
 // A minimal slice of a real myregulars wrapper row.
 function row(id: string, name: string, unitPrice: string, recommended_quantity?: unknown) {
@@ -25,12 +26,25 @@ test('mapRegulars unwraps .product and yields real id/name (the imported-0 fix)'
   assert.equal(out[0].name, 'Leche semidesnatada Asturiana');
   assert.equal(out[0].unitPrice, 10.74);
   assert.equal(out[0].recommendedQty, 4);
-  assert.equal(out[0].alreadyStaple, false);
+  assert.equal(out[0].inDraft, false);
 });
 
-test('mapRegulars marks products already saved as staples', () => {
+test('mapRegulars flags products already on the order draft as inDraft', () => {
   const out = mapRegulars([row('10505', 'Leche', '1.00', 1)], new Set(['10505']));
-  assert.equal(out[0].alreadyStaple, true);
+  assert.equal(out[0].inDraft, true);
+});
+
+test('mapRegulars marks only the draft products inDraft (mixed set)', () => {
+  const rows = [row('a', 'A', '1.00', 1), row('b', 'B', '1.00', 1), row('c', 'C', '1.00', 1)];
+  const out = mapRegulars(rows, new Set(['b']));
+  assert.deepEqual(
+    out.map((p) => [p.id, p.inDraft]),
+    [
+      ['a', false],
+      ['b', true],
+      ['c', false],
+    ],
+  );
 });
 
 test('mapRegulars tolerates a flat product row (no wrapper)', () => {
@@ -76,35 +90,4 @@ test('clampQty: default 1, floor, and 1..99 clamp', () => {
   assert.equal(clampQty(100), 99);
   assert.equal(clampQty('8'), 8);
   assert.equal(clampQty('abc'), 1);
-});
-
-test('normalizeImports carries qty into defaultQty (6 → 6)', () => {
-  const out = normalizeImports([{ productId: 'p1', name: 'Milk', priceEur: 1.2, qty: 6 }]);
-  assert.equal(out.length, 1);
-  assert.equal(out[0].defaultQty, 6);
-  assert.equal(out[0].productId, 'p1');
-  assert.equal(out[0].name, 'Milk');
-  assert.equal(out[0].priceEur, 1.2);
-});
-
-test('normalizeImports defaults defaultQty to 1 when qty is missing', () => {
-  const out = normalizeImports([{ productId: 'p2', name: 'Bread' }]);
-  assert.equal(out[0].defaultQty, 1);
-  assert.equal(out[0].priceEur, null);
-});
-
-test('normalizeImports accepts recommendedQty as the qty alias, and clamps it', () => {
-  const out = normalizeImports([{ productId: 'p3', name: 'Eggs', recommendedQty: 250 }]);
-  assert.equal(out[0].defaultQty, 99);
-});
-
-test('normalizeImports drops rows missing productId or name', () => {
-  const out = normalizeImports([
-    { name: 'no id' },
-    { productId: 'x', name: '   ' },
-    { productId: 'ok', name: 'Yes', qty: 3 },
-  ]);
-  assert.equal(out.length, 1);
-  assert.equal(out[0].productId, 'ok');
-  assert.equal(out[0].defaultQty, 3);
 });

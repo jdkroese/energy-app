@@ -1,6 +1,11 @@
-// "My regulars" staples seeding (docs/41 §4). Pure mapping helpers, extracted from
-// the /staples/regulars + /staples/import-regulars routes so they're unit-testable
-// without mounting Express (pattern: kitchen-coordinator's evaluateNudges).
+// "My regulars" browser mapping (docs/43). Pure mapping helper, extracted from the
+// /staples/regulars route so it's unit-testable without mounting Express (pattern:
+// kitchen-coordinator's evaluateNudges).
+//
+// Regulars are a browse-to-add-to-the-order surface — they no longer seed staples
+// (docs/43 decoupled that; the old /staples/import-regulars path is gone). Rows carry
+// an `inDraft` flag computed from the current order draft so the UI can grey items
+// already in this week's order.
 //
 // The live myregulars endpoint returns WRAPPER rows, not bare products:
 //   { results: [ { product: {id, display_name, price_instructions:{unit_price}, ...},
@@ -19,7 +24,8 @@ export interface RegularProduct {
   photo: string | null;
   unitPrice: number | null;
   packSizeDisplay: string | null;
-  alreadyStaple: boolean;
+  /** True when this product is already a line in the current order draft. */
+  inDraft: boolean;
   recommendedQty: number;
 }
 
@@ -36,8 +42,9 @@ export function clampQty(value: unknown): number {
 /**
  * Map raw myregulars rows → the UI product list. Unwraps row.product (tolerating a
  * flat row), drops rows with no id/name, and threads recommended_quantity through.
+ * `draftProductIds` = productIds already on the current order draft → `inDraft`.
  */
-export function mapRegulars(rows: RegularRow[], existingIds: Set<string>): RegularProduct[] {
+export function mapRegulars(rows: RegularRow[], draftProductIds: Set<string>): RegularProduct[] {
   return rows
     .map((row) => {
       const prod = ((row as { product?: unknown }).product ?? row) as unknown as mercadona.RawProduct;
@@ -52,39 +59,7 @@ export function mapRegulars(rows: RegularRow[], existingIds: Set<string>): Regul
       photo: p.photo,
       unitPrice: p.unitPrice,
       packSizeDisplay: p.packSizeDisplay,
-      alreadyStaple: existingIds.has(p.id),
+      inDraft: draftProductIds.has(p.id),
       recommendedQty: qty,
     }));
-}
-
-/** An incoming product on the import-regulars body. */
-export interface IncomingRegular {
-  productId?: string;
-  name?: string;
-  priceEur?: number | null;
-  qty?: unknown;
-  recommendedQty?: unknown;
-}
-
-export interface NormalizedImport {
-  productId: string;
-  name: string;
-  priceEur: number | null;
-  defaultQty: number;
-}
-
-/** Keep only rows with a productId + name; normalize the qty (qty | recommendedQty → 1..99). */
-export function normalizeImports(products: IncomingRegular[]): NormalizedImport[] {
-  const out: NormalizedImport[] = [];
-  for (const p of products) {
-    if (!p || typeof p.productId !== 'string' || !p.productId) continue;
-    if (typeof p.name !== 'string' || !p.name.trim()) continue;
-    out.push({
-      productId: p.productId,
-      name: String(p.name).trim().slice(0, 80),
-      priceEur: typeof p.priceEur === 'number' ? p.priceEur : null,
-      defaultQty: clampQty(p.qty ?? p.recommendedQty),
-    });
-  }
-  return out;
 }

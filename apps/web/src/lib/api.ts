@@ -139,7 +139,6 @@ import type {
   KitchenSuggestionActionResponse,
   KitchenOrderSyncResponse,
   KitchenRegularsResponse,
-  KitchenImportRegularsResponse,
   CookedRating,
   KitchenCookedResponse,
   WhatCanIMakeResponse,
@@ -827,13 +826,6 @@ export const api = {
       postJSON<KitchenOrderSyncResponse>("/api/kitchen/order/sync-status"),
     regulars: () =>
       getJSON<KitchenRegularsResponse>("/api/kitchen/staples/regulars"),
-    importRegulars: (
-      products: Array<{ productId: string; name: string; priceEur?: number | null; qty?: number }>,
-    ) =>
-      postJSON<KitchenImportRegularsResponse>(
-        "/api/kitchen/staples/import-regulars",
-        { products },
-      ),
     mercadonaAccount: () =>
       getJSON<MercadonaAccountResponse>("/api/kitchen/mercadona/account"),
     linkMercadona: (refreshToken: string, customerId?: string) =>
