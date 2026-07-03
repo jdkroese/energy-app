@@ -22,6 +22,8 @@ import {
   parseRealTimeData,
   setFetchForTest,
   randomAesKey,
+  diagnose,
+  resetTokenForTest,
 } from './isolarcloud';
 import type { IsolarcloudConfig } from '../runtime-config';
 
@@ -172,4 +174,131 @@ test('parseRealTimeData tolerates missing points / empty list', () => {
   assert.equal(devs[0].acPowerW, null);
   assert.equal(devs[0].dailyKwh, null);
   assert.equal(devs[0].offline, true); // no power + no run-state → treated as offline
+});
+
+// ---- diagnose (full read-chain Test button) --------------------------------
+// A path-routing mock: given a map of endpoint→plaintext-response, decrypt each request,
+// answer AES-encrypted with the recovered per-request key (like the real gateway). A
+// response can be a plain object (encrypted) or a { plainError } to simulate a plaintext
+// auth/permission error body.
+
+function mockGateway(byPath: Record<string, unknown>): void {
+  setFetchForTest((async (url: string, init: RequestInit) => {
+    const path = new URL(url).pathname;
+    const xrsk = (init.headers as Record<string, string>)['x-random-secret-key'];
+    const aesKey = unwrapAesKey(xrsk);
+    const resp = byPath[path];
+    if (resp === undefined) return new Response('not found', { status: 404 });
+    const respPlain = JSON.stringify(resp);
+    return new Response(aesEncrypt(respPlain, aesKey), { status: 200 });
+  }) as unknown as typeof fetch);
+}
+
+test('diagnose: login failure → ok:false, "login failed"', async () => {
+  resetTokenForTest();
+  mockGateway({ '/openapi/login': { result_code: 'E00001', result_msg: 'account error' } });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /^login failed —/);
+  assert.match(r.detail, /account error/);
+  assert.equal(r.devices, undefined);
+  setFetchForTest(fetch);
+});
+
+test('diagnose: login OK but zero devices → ok:false, whitelist guidance', async () => {
+  resetTokenForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    // Empty plant list → no ps_keys discovered.
+    '/openapi/getPowerStationList': { result_code: '1', result_data: { pageList: [] } },
+  });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /login OK, but no inverters found/);
+  assert.match(r.detail, /getPowerStationList\/getDeviceList/);
+  assert.match(r.detail, /OAuth2\.0 = No/);
+  assert.equal(r.devices, undefined);
+  setFetchForTest(fetch);
+});
+
+test('diagnose: discovery service error → ok:false surfaces result_msg + guidance', async () => {
+  resetTokenForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    '/openapi/getPowerStationList': { result_code: 'E90001', result_msg: 'no permission for this service' },
+  });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /login OK, but device discovery failed/);
+  assert.match(r.detail, /no permission for this service/);
+  assert.match(r.detail, /Service API management/);
+  setFetchForTest(fetch);
+});
+
+test('diagnose: full success → ok:true, per-device serial + kW, devices returned', async () => {
+  resetTokenForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    '/openapi/getPowerStationList': { result_code: '1', result_data: { pageList: [{ ps_id: 42 }] } },
+    '/openapi/getDeviceList': {
+      result_code: '1',
+      result_data: {
+        pageList: [
+          { device_type: 11, ps_key: 'A2160700249_11_0_0' },
+          { device_type: 11, ps_key: 'B2160700111_11_0_0' },
+          { device_type: 14, ps_key: 'METER_14_0_0' }, // non-inverter, ignored
+        ],
+      },
+    },
+    '/openapi/getDeviceRealTimeData': {
+      result_code: '1',
+      result_data: {
+        device_point_list: [
+          { ps_key: 'A2160700249_11_0_0', device_point: { dev_sn: 'A2160700249', p83033: '2500', p83022: '9400', p83025: '1' } },
+          { ps_key: 'B2160700111_11_0_0', device_point: { dev_sn: 'B2160700111', p83033: '0', p83022: '0', p83025: '0' } },
+        ],
+      },
+    },
+  });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, true);
+  assert.match(r.detail, /^authenticated · 2 inverters ·/);
+  assert.match(r.detail, /A2160700249 2\.50kW/);
+  assert.match(r.detail, /B2160700111 0\.00kW \(offline\)/);
+  assert.equal(r.devices?.length, 2);
+  assert.equal(r.devices?.[0].serial, 'A2160700249');
+  assert.equal(r.devices?.[0].acPowerW, 2500);
+  setFetchForTest(fetch);
+});
+
+test('diagnose: serialMap set → derives ps_keys without plant discovery, success', async () => {
+  resetTokenForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    '/openapi/getDeviceRealTimeData': {
+      result_code: '1',
+      result_data: {
+        device_point_list: [
+          { ps_key: 'A2160700249_11_0_0', device_point: { dev_sn: 'A2160700249', p83033: '1200', p83022: '3000', p83025: '1' } },
+        ],
+      },
+    },
+    // No plant/device endpoints registered — if diagnose called them it would 404/throw.
+  });
+  const r = await diagnose({ ...CFG, serialMap: { A2160700249: '192.168.1.67' } });
+  assert.equal(r.ok, true);
+  assert.equal(r.devices?.length, 1);
+  assert.match(r.detail, /A2160700249 1\.20kW/);
+  setFetchForTest(fetch);
+});
+
+test('diagnose never throws (fail-soft) on a transport error', async () => {
+  resetTokenForTest();
+  setFetchForTest((async () => {
+    throw new Error('ECONNREFUSED');
+  }) as unknown as typeof fetch);
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /login failed —/);
+  setFetchForTest(fetch);
 });
