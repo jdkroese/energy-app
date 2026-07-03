@@ -85,3 +85,55 @@ export function rankRecipesByCoverage(recipes: Recipe[], onHand: string[], limit
   );
   return scored.slice(0, limit);
 }
+
+// ---- AI "answer" (free-form cooking question) — pure validation/clamp -------------------
+// The route (routes/kitchen.ts POST /what-can-i-make/answer) asks Claude a free-form
+// cooking question ("a nice recipe for healthy pizzas with veggie dough"). The LLM's raw
+// JSON is untrusted: it can hallucinate library ids and over-long strings. This helper is
+// the pure boundary — validate libraryIds against the REAL library, clamp idea counts and
+// string lengths — so it can be unit-tested without touching Claude.
+
+export interface AnswerIdea {
+  title: string;
+  note: string;
+}
+
+export interface CleanAnswer {
+  libraryIds: string[];
+  ideas: AnswerIdea[];
+}
+
+/**
+ * Sanitise Claude's answer: keep only libraryIds that exist in `recipes` (dedup, cap 5),
+ * clamp ideas to 4 with trimmed/length-capped title+note. Pure + deterministic.
+ */
+export function cleanAnswer(
+  raw: { libraryIds?: unknown; ideas?: unknown } | null | undefined,
+  recipes: Pick<Recipe, 'id'>[],
+): CleanAnswer {
+  const known = new Set(recipes.map((r) => r.id));
+  const seen = new Set<string>();
+  const libraryIds: string[] = [];
+  if (Array.isArray(raw?.libraryIds)) {
+    for (const v of raw!.libraryIds) {
+      if (typeof v !== 'string') continue;
+      const id = v.trim();
+      if (!id || seen.has(id) || !known.has(id)) continue;
+      seen.add(id);
+      libraryIds.push(id);
+      if (libraryIds.length >= 5) break;
+    }
+  }
+  const ideas: AnswerIdea[] = [];
+  if (Array.isArray(raw?.ideas)) {
+    for (const v of raw!.ideas) {
+      if (!v || typeof v !== 'object') continue;
+      const title = String((v as { title?: unknown }).title ?? '').trim();
+      if (!title) continue;
+      const note = String((v as { note?: unknown }).note ?? '').trim();
+      ideas.push({ title: title.slice(0, 80), note: note.slice(0, 240) });
+      if (ideas.length >= 4) break;
+    }
+  }
+  return { libraryIds, ideas };
+}

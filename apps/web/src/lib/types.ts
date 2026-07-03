@@ -2417,3 +2417,11 @@ export interface WhatCanIMakeIdeasResponse {
   reason?: 'intelligence-off' | 'no-ideas';
   ideas: Array<{ title: string; note: string }>;
 }
+/** AI free-form answer: cited library recipes + fresh off-library ideas (P3, docs/42). */
+export interface WhatCanIMakeAnswerResponse {
+  ts: string;
+  ok: boolean;
+  reason?: 'intelligence-off' | 'no-answer';
+  libraryIds: string[];
+  ideas: Array<{ title: string; note: string }>;
+}

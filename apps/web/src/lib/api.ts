@@ -142,6 +142,7 @@ import type {
   KitchenCookedResponse,
   WhatCanIMakeResponse,
   WhatCanIMakeIdeasResponse,
+  WhatCanIMakeAnswerResponse,
 } from "./types";
 
 /**
@@ -849,6 +850,11 @@ export const api = {
       postJSON<WhatCanIMakeIdeasResponse>("/api/kitchen/what-can-i-make/ideas", {
         ingredients,
       }),
+    whatCanIMakeAnswer: (question: string, onHand?: string[]) =>
+      postJSON<WhatCanIMakeAnswerResponse>(
+        "/api/kitchen/what-can-i-make/answer",
+        { question, ...(onHand && onHand.length ? { onHand } : {}) },
+      ),
   },
 
   /* ---- Irrigation (Rain Bird); run/stop/rain-delay are admin + require armed ---- */

@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { rankRecipesByCoverage, termMatchesIngredient } from './whatcanimake';
+import { cleanAnswer, rankRecipesByCoverage, termMatchesIngredient } from './whatcanimake';
 import type { Recipe, RecipeIngredient } from './types';
 
 function ing(name: string, es: string, pantryStaple = false): RecipeIngredient {
@@ -89,4 +89,46 @@ test('empty/blank input ranks nothing; limit caps the list', () => {
   assert.deepEqual(rankRecipesByCoverage(lib, ['   ']), []);
   assert.equal(rankRecipesByCoverage(lib, ['rice']).length, 8);
   assert.equal(rankRecipesByCoverage(lib, ['rice'], 3).length, 3);
+});
+
+// ---- cleanAnswer (AI free-form answer boundary) --------------------------------------
+
+test('cleanAnswer: keeps only real library ids, dedups, caps at 5', () => {
+  const lib = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => recipe(id, [ing('Rice', 'arroz')]));
+  const out = cleanAnswer({ libraryIds: ['a', 'b', 'b', 'zzz', 'c', 'd', 'e', 'f'], ideas: [] }, lib);
+  // 'b' de-duped, 'zzz' dropped (not in library), capped to 5 real ids in order.
+  assert.deepEqual(out.libraryIds, ['a', 'b', 'c', 'd', 'e']);
+});
+
+test('cleanAnswer: clamps ideas to 4, trims + length-caps title/note, drops title-less', () => {
+  const out = cleanAnswer(
+    {
+      libraryIds: [],
+      ideas: [
+        { title: '  Veggie-dough pizza  ', note: '  Blend cauliflower, bake a base, top light.  ' },
+        { title: 'x'.repeat(200), note: 'y'.repeat(400) },
+        { note: 'no title — dropped' },
+        { title: 'B' },
+        { title: 'C' },
+        { title: 'D' },
+        { title: 'E — over the cap' },
+      ],
+    },
+    [],
+  );
+  assert.equal(out.ideas.length, 4);
+  assert.equal(out.ideas[0].title, 'Veggie-dough pizza');
+  assert.equal(out.ideas[0].note, 'Blend cauliflower, bake a base, top light.');
+  assert.equal(out.ideas[1].title.length, 80);
+  assert.equal(out.ideas[1].note.length, 240);
+  assert.deepEqual(out.ideas.map((i) => i.title.slice(0, 1)), ['V', 'x', 'B', 'C']);
+});
+
+test('cleanAnswer: tolerates null/garbage input → empty arrays', () => {
+  assert.deepEqual(cleanAnswer(null, []), { libraryIds: [], ideas: [] });
+  assert.deepEqual(cleanAnswer({ libraryIds: 'nope', ideas: 42 } as never, []), { libraryIds: [], ideas: [] });
+  // The veggie-pizza case: no library fits, answer lives entirely in ideas.
+  const out = cleanAnswer({ ideas: [{ title: 'Cauliflower-crust pizza', note: 'Rice the cauli, bind with egg, bake.' }] }, []);
+  assert.equal(out.libraryIds.length, 0);
+  assert.equal(out.ideas.length, 1);
 });

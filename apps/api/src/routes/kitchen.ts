@@ -28,7 +28,7 @@ import {
 import { enrichLines } from '../kitchen/enrich';
 import { assertRealFillAllowed, assertUnderSpendCap, buildCartPlan, SpendCapError, UnpricedLinesError, wireLines } from '../kitchen/cart';
 import { applySuggestion, buildSuggestions, isMuted, muteKey } from '../kitchen/suggestions';
-import { rankRecipesByCoverage } from '../kitchen/whatcanimake';
+import { cleanAnswer, rankRecipesByCoverage } from '../kitchen/whatcanimake';
 import { syncOrderStatus } from '../kitchen/order-status';
 import { importRecipeFromUrl } from '../kitchen/import';
 import type {
@@ -367,6 +367,55 @@ kitchenRouter.post(
       .slice(0, 4);
     if (!ideas.length) return { ts: ts(), ok: false, reason: 'no-ideas', ideas: [] };
     return { ts: ts(), ok: true, ideas };
+  }),
+);
+
+// AI question box — a free-form cooking question ("a nice recipe for healthy pizzas with
+// veggie dough"). Same Intelligence gate as /ideas; cites REAL library recipes (validated
+// against the library) AND up to 4 fresh off-library ideas with a one-line how-to. Fails
+// SOFT (ok:false) on off/parse/upstream errors — the deterministic finder still carries.
+kitchenRouter.post(
+  '/what-can-i-make/answer',
+  wrap(async (req) => {
+    const question = String((req.body as { question?: unknown })?.question ?? '').trim();
+    if (!question) throw badInput('body.question required');
+    const onHandRaw = (req.body as { onHand?: unknown })?.onHand;
+    const onHand = Array.isArray(onHandRaw)
+      ? onHandRaw.filter((x): x is string => typeof x === 'string').map((s) => s.trim()).filter(Boolean).slice(0, 20)
+      : [];
+    if (!claude.isFeatureEnabled('cookingSuggestions')) {
+      return { ts: ts(), ok: false, reason: 'intelligence-off', libraryIds: [], ideas: [] };
+    }
+    const d = kitchen.get();
+    const h = d.household;
+    const library = d.recipes
+      .map((r) => `${r.id} | ${r.title} | ${r.cuisine} | ${r.prepMin + r.cookMin} min | ${r.nutrition?.kcal ?? '?'} kcal | ${r.tags.join(',')}`)
+      .join('\n');
+    try {
+      const parsed = await claude.completeJSON<{ libraryIds?: string[]; ideas?: Array<{ title?: string; note?: string }> }>({
+        system:
+          'You answer a free-form home-cooking question for a family. You are given a recipe LIBRARY (one per line: ' +
+          'id | title | cuisine | total min | kcal | tags). Output ONLY JSON: ' +
+          '{"libraryIds": [up to 5 library ids that genuinely fit the question, may be empty], ' +
+          '"ideas": [{"title": "dish name", "note": "one sentence: how to make it, roughly"}] up to 4 FRESH ideas NOT in the library}. ' +
+          'If nothing in the library fits (e.g. an unusual request), return an empty libraryIds and carry the answer in ideas. ' +
+          'Simple, doable home food; assume common pantry staples (oil, salt, flour, rice, pasta, onion, garlic).',
+        prompt:
+          `Library:\n${library || '(empty)'}\n\nQuestion: ${question}` +
+          (onHand.length ? `\nOn hand: ${onHand.join(', ')}.` : '') +
+          (h.allergies.length ? `\nNEVER use: ${h.allergies.join(', ')} (allergies).` : '') +
+          (h.dislikes.length ? `\nAvoid if possible: ${h.dislikes.join(', ')}.` : '') +
+          (h.kids > 0 ? `\nCooking for ${h.adults} adults + ${h.kids} kids — keep it kid-friendly.` : ''),
+        maxTokens: 700,
+      });
+      const clean = cleanAnswer(parsed, d.recipes);
+      if (!clean.libraryIds.length && !clean.ideas.length) {
+        return { ts: ts(), ok: false, reason: 'no-answer', libraryIds: [], ideas: [] };
+      }
+      return { ts: ts(), ok: true, libraryIds: clean.libraryIds, ideas: clean.ideas };
+    } catch {
+      return { ts: ts(), ok: false, reason: 'no-answer', libraryIds: [], ideas: [] }; // fail soft
+    }
   }),
 );
 

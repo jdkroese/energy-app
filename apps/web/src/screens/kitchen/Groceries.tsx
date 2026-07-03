@@ -52,6 +52,46 @@ function LineCheckbox({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   );
 }
 
+// 1-click remove (owner ask) — distinct from the include/exclude checkbox. Muted by
+// default, danger tint on hover/focus, ≥44px touch target, stops row-click propagation.
+function TrashButton({ label, onDelete, disabled }: { label: string; onDelete: () => void; disabled?: boolean }) {
+  const [hot, setHot] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label={`Remove ${label}`}
+      title={`Remove ${label}`}
+      disabled={disabled}
+      onMouseEnter={() => setHot(true)}
+      onMouseLeave={() => setHot(false)}
+      onFocus={() => setHot(true)}
+      onBlur={() => setHot(false)}
+      onClick={(e) => {
+        e.stopPropagation();
+        onDelete();
+      }}
+      style={{
+        width: 44,
+        height: 44,
+        minWidth: 44,
+        borderRadius: 8,
+        border: 'none',
+        background: hot ? 'var(--danger-wash)' : 'transparent',
+        color: hot ? 'var(--danger)' : 'var(--text-3)',
+        display: 'grid',
+        placeItems: 'center',
+        cursor: disabled ? 'default' : 'pointer',
+        flex: 'none',
+        padding: 0,
+        opacity: disabled ? 0.4 : 1,
+        transition: 'background .12s, color .12s',
+      }}
+    >
+      <Icon name="trash-2" size={15} />
+    </button>
+  );
+}
+
 function submitByLabel(draft: OrderDraft): string | null {
   if (!draft.submitBy) return null;
   const d = new Date(draft.submitBy);
@@ -62,6 +102,8 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
   const [tab, setTab] = useState('Recipes');
   const [note, setNote] = useState<string | null>(null);
+  // Single-level undo for the last 1-click delete (restores the draft line + any staple def).
+  const [undo, setUndo] = useState<{ label: string; run: () => Promise<void> } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [picker, setPicker] = useState<OrderLine | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -160,6 +202,60 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
     void saveLines(draft.lines.map((l) => (l.id === line.id ? { ...l, qty: Math.max(1, qty) } : l)));
   };
 
+  // 1-click delete (owner ask): remove a line from the list immediately. For STAPLE lines
+  // also drop the underlying staple definition — otherwise it reappears on the next
+  // "Add week to Groceries" rebuild. Offers a single-level Undo that restores both.
+  const deleteLine = async (line: OrderLine) => {
+    if (!draft) return;
+    const removedStaple =
+      line.source === 'staple' ? staples.find((s) => `staple:${s.id}` === line.ingredientKey) ?? null : null;
+    const nextLines = draft.lines.filter((l) => l.id !== line.id);
+    const nextStaples = removedStaple ? staples.filter((s) => s.id !== removedStaple.id) : null;
+
+    setBusy('lines');
+    try {
+      if (nextStaples) {
+        await api.kitchen.setStaples(nextStaples);
+        await refetchStaples();
+      }
+      await api.kitchen.setOrderDraft({ lines: nextLines });
+      await refetchDraft();
+      setUndo({
+        label: line.label,
+        run: async () => {
+          // Restore the staple definition first (so the rebuilt line can resolve it), then
+          // the draft lines exactly as they were before the delete.
+          if (removedStaple) {
+            await api.kitchen.setStaples([...staples]);
+            await refetchStaples();
+          }
+          await api.kitchen.setOrderDraft({ lines: draft.lines });
+          await refetchDraft();
+        },
+      });
+      setNote(`Removed ${line.label}`);
+    } catch {
+      setNote('Could not remove that item — try again');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runUndo = async () => {
+    if (!undo) return;
+    const u = undo;
+    setUndo(null);
+    setNote(null);
+    setBusy('lines');
+    try {
+      await u.run();
+    } catch {
+      setNote('Undo failed — refresh and try again');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const sendChecklist = async () => {
     setBusy('checklist');
     try {
@@ -248,6 +344,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
             </span>
             <small style={{ display: 'block', fontSize: 10.5, color: 'var(--text-2)' }}>one-time · remembered for every future order</small>
           </span>
+          <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
           <Icon name="chevron-right" size={15} color="var(--battery)" />
         </div>
       );
@@ -285,6 +382,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           {line.pantry && <small style={{ display: 'block', fontSize: 10.5, color: 'var(--text-3)' }}>Pantry staple — pre-unchecked</small>}
         </span>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', flex: 'none' }}>{fmtEur(line.priceEur)}</span>
+        <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
       </div>
     );
   }
@@ -319,6 +417,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
         </span>
         {staple && <span style={{ fontSize: 10, color: 'var(--text-3)', flex: 'none', width: 26 }}>{staple.cadence === 'weekly' ? 'wk' : staple.cadence === 'biweekly' ? '2wk' : 'mo'}</span>}
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', flex: 'none' }}>{fmtEur(line.priceEur)}</span>
+        <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
       </div>
     );
   }
@@ -642,8 +741,40 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
   );
 
   const noteBanner = note && (
-    <div style={{ fontSize: 12, color: 'var(--grid)', background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }} onClick={() => setNote(null)}>
-      {note}
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        fontSize: 12,
+        color: 'var(--grid)',
+        background: 'var(--grid-wash)',
+        borderRadius: 'var(--radius-md)',
+        padding: '8px 12px',
+      }}
+    >
+      <span style={{ flex: 1, cursor: 'pointer' }} onClick={() => { setNote(null); setUndo(null); }}>
+        {note}
+      </span>
+      {undo && (
+        <button
+          type="button"
+          onClick={() => void runUndo()}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--grid)',
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontSize: 12,
+            padding: '2px 4px',
+            minHeight: 32,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Undo
+        </button>
+      )}
     </div>
   );
 
