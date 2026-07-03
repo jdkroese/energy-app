@@ -9,6 +9,7 @@ import { issue, type IssueValue } from '../control/execute';
 import { applyActiveScenario, revertToSafe } from '../control/coordinator';
 import { takeSnapshot } from '../control/snapshot';
 import type { Lever } from '../control/guardrails';
+import { getShadowReport } from '../control/engine/shadow-compare';
 import { logEvent } from '../events';
 
 function badInput(msg: string): Error & { code: string } {
@@ -79,6 +80,16 @@ export function getDecisions(limit?: number): unknown {
     current: ring.length > 0 ? ring[ring.length - 1] : null,
     decisions: newestFirst,
   };
+}
+
+/** Rule-engine shadow-compare report (Phase 1a): recent engine-vs-legacy divergences +
+ *  per-actuator divergence counts + the seen-class set. The engine runs in SHADOW (issues
+ *  nothing); this surfaces where its would-issue intents disagreed with what the legacy
+ *  coordinator actually did, for P1b triage. The optional `limit` (1..200) trims the returned
+ *  divergences; defaults to 50. Any authed user (read-only). */
+export function getEngineShadow(limit?: number): unknown {
+  const n = typeof limit === 'number' && Number.isFinite(limit) ? limit : 50;
+  return getShadowReport(n);
 }
 
 /** Update one battery-priority rule (admin). Returns the full control status. */

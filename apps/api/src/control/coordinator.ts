@@ -14,6 +14,8 @@ import { checkSonnenWatts } from './guardrails';
 import { takeSnapshot, type RichSnapshot } from './snapshot';
 import { planBatteryPriority, type PriorityPlan } from './battery-priority';
 import * as trace from './decision-trace';
+import { runEngineShadow } from './engine';
+import type { LegacyIssued } from './engine/shadow-compare';
 import { planArbitrage, arbitrageSpreadEur, type ArbitragePlan } from './arbitrage';
 import { appendArbitrageEvent, accrueArbitrageCharge } from './arbitrage-log';
 import { config } from '../config';
@@ -194,6 +196,12 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   // fail-soft (wrapped inside decision-trace.ts) so it can never break the tick.
   trace.beginDecision(snap, reason);
 
+  // Non-invasive tap for the rule-engine shadow-compare (Phase 1a): we record what THIS legacy
+  // tick actually issues per actuator, in parallel with the trace, then hand it to the shadow
+  // engine AFTER the legacy logic. This changes NO execute/guardrail behaviour — it only reads
+  // the values the legacy path already computes. Populated at each commit point below.
+  const legacyIssued: LegacyIssued = {};
+
   // Battery-priority plan (Sonnen-first discharge / Tesla-first charge). It only
   // ever RAISES the Tesla reserve (to hold it) or idles the Sonnen — and only in
   // 'auto' authority; 'shadow' rules just log what they would have done.
@@ -226,6 +234,7 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
     );
   }
   await issue('tesla', 'mode', teslaMode, `${reason}: ${teslaDecision.reason}`, snap);
+  legacyIssued.teslaMode = teslaMode;
   if (wantHold && dp.authority === 'shadow') {
     logShadow('tesla', 'mode', `discharge-priority (shadow): ${dp.reason}`, 'would set Tesla → backup (hold for Sonnen-first)');
   }
@@ -235,6 +244,7 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   // mode above + the Sonnen load-following primary mechanism do the holding now.
   await issue('tesla', 'reserve', baseReserve, `${reason}: scenario reserve floor`, snap);
   trace.recordTeslaReserve(baseReserve);
+  legacyIssued.teslaReservePct = baseReserve;
 
   const enableGridCharge = scenario.gridCharge && band === 'P3';
   await issue(
@@ -244,13 +254,24 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
     `${reason}: grid-charge=${enableGridCharge} (band ${band}), export pv_only`,
     snap,
   );
+  legacyIssued.teslaGridCharge = enableGridCharge;
 
   // ---- Sonnen (fast valve) ----
-  await coordinateSonnen(snap, reason, plan);
+  await coordinateSonnen(snap, reason, plan, legacyIssued);
 
   // Seal the tick's decision record (persists the ring; emits an event ONLY on a
   // stance change). Fail-soft — commit can never throw into the tick.
   trace.commitDecision();
+
+  // ---- Rule engine (SHADOW) — Phase 1a ----
+  // Run the new engine over the SAME snapshot AFTER the legacy logic, wrapped so any throw is
+  // swallowed. It issues NOTHING; it only diffs its would-issue intents vs `legacyIssued` and
+  // records divergences. This is what makes it safe to deploy while unproven.
+  try {
+    await runEngineShadow(snap, legacyIssued);
+  } catch (e) {
+    console.error('[control] engine shadow failed (ignored):', (e as Error).message);
+  }
 }
 
 // ---- Force-charge-to-soak-export (hysteresis deadband) ----------------------
@@ -428,7 +449,11 @@ function emitArbEvent(
 // One coordinator tick is 90s — the energy bought/would-buy this tick (kWh) at a given W.
 const TICK_HOURS = TICK_MS / 3_600_000;
 
-async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: string): Promise<boolean> {
+async function coordinateArbitrageValleyCharge(
+  snap: RichSnapshot,
+  reason: string,
+  legacyIssued?: LegacyIssued,
+): Promise<boolean> {
   const automation = store
     .get()
     .automations.find((a) => a.type === 'tariff_arbitrage' && a.enabled);
@@ -585,6 +610,7 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
       });
       emitArbEvent('revert', snap, params, plan, soc, { action: { mode: '2', chargeW: 0 } });
       trace.recordSonnen('arbitrage', 'revert → self-consumption', `end arbitrage grid-charge (${why})`);
+      if (legacyIssued) legacyIssued.sonnenMode = '2';
       return true;
     }
     // Enabled but not charging — log the stand-down (state-transition gated). Advisory never
@@ -634,10 +660,19 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   });
   accrueArbitrageCharge('active', chargedKwhTick, spreadEur, now);
   trace.recordSonnen('arbitrage', `manual charge ${watt.value}W`, `valley grid-charge (${targetReason}, band ${snap.band})`);
+  if (legacyIssued) {
+    legacyIssued.sonnenMode = '1';
+    legacyIssued.sonnenChargeW = watt.value;
+  }
   return true;
 }
 
-async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: PriorityPlan): Promise<void> {
+async function coordinateSonnen(
+  snap: RichSnapshot,
+  reason: string,
+  plan: PriorityPlan,
+  legacyIssued?: LegacyIssued,
+): Promise<void> {
   const s = snap.sonnen;
   if (!s) {
     trace.recordSonnen('offline', '—', 'Sonnen offline — nothing to command');
@@ -648,6 +683,7 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
   if (s.gridFeedInW < -50 && s.soc >= 95 && s.dir === 'charging') {
     await issue('sonnen', 'mode', '2', `${reason}: stop grid-charging a full battery (SoC ${s.soc}%)`, snap);
     trace.recordSonnen('stuck-full-guard', 'self-consumption', `stop grid-charging a full battery (SoC ${s.soc}%)`);
+    if (legacyIssued) legacyIssued.sonnenMode = '2';
     return;
   }
 
@@ -681,6 +717,7 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
             priority: true,
           });
           trace.recordSonnen('soak-export', 'revert → self-consumption', 'soak disabled — end force-charge');
+          if (legacyIssued) legacyIssued.sonnenMode = '2';
           return;
         }
         trace.recordStandDown('soak-export', 'disabled');
@@ -694,6 +731,7 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
             priority: true,
           });
           trace.recordSonnen('soak-export', 'revert → self-consumption', `end soak-export (${why})`);
+          if (legacyIssued) legacyIssued.sonnenMode = '2';
           return;
         }
         // ENGAGE / CONTINUE (hysteresis): headroom (SoC < ceiling) AND export over the threshold
@@ -706,6 +744,10 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
           await issue('sonnen', 'mode', '1', `${reason}: soak-export — absorb surplus before it spills to grid`, snap);
           await issue('sonnen', 'charge', watt.value, `${reason}: soak-export ${watt.value}W (export ${Math.round(exportW)}W, SoC ${socPct}%)`, snap);
           trace.recordSonnen('soak-export', `manual charge ${watt.value}W`, `absorb surplus before it spills (export ${Math.round(exportW)}W, SoC ${socPct}%)`);
+          if (legacyIssued) {
+            legacyIssued.sonnenMode = '1';
+            legacyIssued.sonnenChargeW = watt.value;
+          }
           return;
         }
         // Below startW and not already charging (or at the ceiling): fall through.
@@ -716,7 +758,7 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
       //     above always wins). Pre-buys cheap valley grid up to the forecast pre-peak target,
       //     and reverts any lingering arbitrage manual charge to self-consumption when it
       //     should stop. Takes Sonnen authority (returns true) when it acts.
-      if (await coordinateArbitrageValleyCharge(snap, reason)) return;
+      if (await coordinateArbitrageValleyCharge(snap, reason, legacyIssued)) return;
     }
   }
 
@@ -727,6 +769,10 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
       await issue('sonnen', 'mode', '1', `${reason}: charge-priority — ${cp.reason}`, snap);
       await issue('sonnen', 'charge', 0, `${reason}: charge-priority idle (Tesla charges first)`, snap);
       trace.recordSonnen('charge-priority', 'manual idle 0W', cp.reason);
+      if (legacyIssued) {
+        legacyIssued.sonnenMode = '1';
+        legacyIssued.sonnenChargeW = 0;
+      }
       return;
     }
     logShadow('sonnen', 'mode', `charge-priority (shadow): ${cp.reason}`, 'would idle Sonnen (manual 0 W) so Tesla charges first');
@@ -766,6 +812,10 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
         await issue('sonnen', 'mode', '1', `${reason}: discharge-priority — Sonnen covers house so Tesla holds`, snap);
         await issue('sonnen', 'discharge', targetW, `${reason}: discharge-priority ${targetW}W (${meta}) — Sonnen first`, snap);
         trace.recordSonnen('discharge-priority', `manual discharge ${targetW}W`, `covers the house residual (${meta}) — Sonnen first`);
+        if (legacyIssued) {
+          legacyIssued.sonnenMode = '1';
+          legacyIssued.sonnenDischargeW = targetW;
+        }
         return;
       }
       // Negligible residual: don't force; fall through to self-consumption.
@@ -783,12 +833,14 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
   if (s.mode === 'manual' && s.dir === 'discharging') {
     await issue('sonnen', 'mode', '2', `${reason}: end discharge-priority — back to self-consumption`, snap, { priority: true });
     trace.recordSonnen('discharge-revert', 'revert → self-consumption', 'end discharge-priority — back to self-consumption');
+    if (legacyIssued) legacyIssued.sonnenMode = '2';
     return;
   }
 
   // Keep Sonnen in self-consumption — it discharges to cover the house load.
   await issue('sonnen', 'mode', '2', `${reason}: self-consumption (cover the house)`, snap);
   trace.recordSonnen('self-consumption', 'self-consumption', 'cover the house load');
+  if (legacyIssued) legacyIssued.sonnenMode = '2';
 }
 
 /**
