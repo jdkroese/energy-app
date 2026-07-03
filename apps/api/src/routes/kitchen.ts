@@ -39,6 +39,7 @@ import {
 } from '../kitchen/generate';
 import { syncOrderStatus } from '../kitchen/order-status';
 import { importRecipeFromUrl } from '../kitchen/import';
+import { mapRegulars, normalizeImports, type IncomingRegular } from '../kitchen/regulars';
 import type {
   Cuisine,
   Household,
@@ -1195,18 +1196,10 @@ kitchenRouter.get(
     if (!cfg.account) return { ts: ts(), linked: false, available: false, products: [] };
     const raw = await mercadonaAuth.getMyRegulars();
     if (raw === null) return { ts: ts(), linked: true, available: false, products: [] };
-    const existing = new Set(kitchen.get().staples.map((s) => s.productId).filter(Boolean));
-    const products = raw
-      .map((r) => mercadona.normalizeProduct(r as unknown as mercadona.RawProduct))
-      .filter((p) => p.id && p.name)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        photo: p.photo,
-        unitPrice: p.unitPrice,
-        packSizeDisplay: p.packSizeDisplay,
-        alreadyStaple: existing.has(p.id),
-      }));
+    const existing = new Set(kitchen.get().staples.map((s) => s.productId).filter(Boolean) as string[]);
+    // myregulars returns WRAPPER rows { product, recommended_quantity, … } — unwrap
+    // .product before normalizing (see kitchen/regulars.ts) and carry the quantity.
+    const products = mapRegulars(raw, existing);
     return { ts: ts(), linked: true, available: true, products };
   }),
 );
@@ -1216,23 +1209,21 @@ kitchenRouter.post(
   wrap((req) => {
     const b = (req.body ?? {}) as { products?: unknown };
     if (!Array.isArray(b.products) || !b.products.length) throw badInput('body.products array required');
-    const incoming = (b.products as Array<Partial<{ productId: string; name: string; priceEur: number | null }>>).filter(
-      (p) => p && typeof p.productId === 'string' && p.productId && typeof p.name === 'string' && p.name.trim(),
-    );
+    const incoming = normalizeImports(b.products as IncomingRegular[]);
     if (!incoming.length) throw badInput('no valid products in body.products');
     const added = kitchen.update((d) => {
-      const have = new Set(d.staples.map((s) => s.productId).filter(Boolean));
+      const have = new Set(d.staples.map((s) => s.productId).filter(Boolean) as string[]);
       let n = 0;
       for (const p of incoming) {
-        if (have.has(p.productId!)) continue;
+        if (have.has(p.productId)) continue;
         d.staples.push({
           id: kitchen.newId('staple'),
-          productId: p.productId!,
-          name: String(p.name).trim().slice(0, 80),
-          defaultQty: 1,
+          productId: p.productId,
+          name: p.name,
+          defaultQty: p.defaultQty,
           cadence: 'weekly',
           lastOrderedAt: null,
-          priceEur: typeof p.priceEur === 'number' ? p.priceEur : null,
+          priceEur: p.priceEur,
         });
         n++;
       }
