@@ -50,6 +50,7 @@ import {
   setSoakExport,
   getArbitrageLog,
   getDecisions,
+  getEngineShadow,
 } from "./routes/control";
 import { startCoordinator } from "./control/coordinator";
 import { startSolarModelScheduler } from "./solar-model";
@@ -555,6 +556,17 @@ app.get(
     const raw = req.query.limit;
     const limit = typeof raw === "string" ? Number(raw) : undefined;
     return getDecisions(limit);
+  }),
+);
+// Rule-engine shadow-compare (Phase 1a) — read-only, any authed user. The engine runs in
+// SHADOW (issues nothing); this returns where its would-issue intents diverged from what the
+// legacy coordinator actually did.
+app.get(
+  "/api/control/engine/shadow",
+  wrap((req) => {
+    const raw = req.query.limit;
+    const limit = typeof raw === "string" ? Number(raw) : undefined;
+    return getEngineShadow(limit);
   }),
 );
 app.post(

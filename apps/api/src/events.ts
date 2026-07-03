@@ -48,6 +48,7 @@ export type TriggerSource =
   | 'guardrail'
   | 'health-probe'
   | 'coordinator'
+  | 'engine-shadow'
   | 'boot'
   | 'deploy';
 

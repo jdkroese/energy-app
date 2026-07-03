@@ -335,6 +335,14 @@ export interface ControlState {
   /** Per-tick battery decision trace — in-state ring buffer (last ~200 ticks). Written
    *  fail-soft by control/decision-trace.ts; read by GET /api/control/decisions. */
   decisionTrace: DecisionRecord[];
+  /** Rule-engine shadow-compare divergences — in-state ring (last ~200). The new engine
+   *  (control/engine/*) runs in shadow and issues nothing; this records where its would-issue
+   *  intents disagreed with what the legacy coordinator actually did. Written fail-soft by
+   *  control/engine/shadow-compare.ts; read by GET /api/control/engine/shadow. */
+  engineShadowDivergences?: ShadowDivergence[];
+  /** Divergence CLASSES already seen (so a NEW class emits ONE Event-Viewer event on first
+   *  appearance, never per tick). Persisted so a restart doesn't re-announce known classes. */
+  engineShadowSeenClasses?: string[];
   /** One-time migration flag: when the Sonnen-first discharge actuation changed (load-following
    *  + Tesla backup hold, replacing the reserve-raise hold), the rule is forced back to SHADOW
    *  once so the new actuation re-validates before going live. Set true after that runs; the
@@ -858,6 +866,35 @@ export interface DecisionRecord {
 
 /** Max in-state decision records kept (~200 ticks ≈ 5h at 90s). */
 export const DECISION_TRACE_RING_MAX = 200;
+
+// ---- Rule-engine shadow-compare (Phase 1a) ---------------------------------
+// The new rule engine (control/engine/*) runs in SHADOW beside the legacy coordinator and
+// issues NOTHING. Each battery tick, control/engine/shadow-compare.ts diffs the engine's
+// "would-issue" intents against what the legacy coordinator actually issued, and records the
+// DIVERGENCES here (agreements are not stored — only where the two disagree, which is the P1b
+// signal). A small in-state ring (survives a restart like arbitrageLog); written FAIL-SOFT so
+// it can never throw into the control loop. Read by GET /api/control/engine/shadow.
+
+/** One actuator's engine-vs-legacy disagreement in a single tick. */
+export interface ShadowDivergence {
+  ts: number;
+  band: Band;
+  /** The actuator that differed ('sonnen.stance' | 'tesla.mode' | 'tesla.reserve' | 'tesla.gridCharge'). */
+  actuator: string;
+  /** A coarse CLASS label for the disagreement, so a NEW class of divergence can be detected
+   *  (event emitted only on first appearance, never per tick). E.g. 'sonnen.stance:1-vs-2',
+   *  'tesla.mode:backup-vs-self_consumption', 'sonnen.stance:chargeW'. */
+  divergenceClass: string;
+  /** What the engine would have issued (compact string). */
+  engine: string;
+  /** What the legacy coordinator actually issued this tick (compact string). */
+  legacy: string;
+  /** The engine's winning-claim reason (why the engine wanted its value). */
+  engineReason: string;
+}
+
+/** Max in-state shadow-divergence records kept (~200 divergences). */
+export const SHADOW_DIVERGENCE_RING_MAX = 200;
 
 /** Cumulative headline stats over the arbitrage history (survives restart via state.json).
  *  Advisory (modelled) and active (realized) are tracked apart so the UI labels them. */
@@ -1845,6 +1882,8 @@ export function defaultControl(): ControlState {
     arbitrageLog: [],
     arbitrageStats: defaultArbitrageStats(),
     decisionTrace: [],
+    engineShadowDivergences: [],
+    engineShadowSeenClasses: [],
     dischargeV2Shadowed: false,
   };
 }
@@ -3319,6 +3358,12 @@ function hydrateControl(
     decisionTrace: Array.isArray(p.decisionTrace)
       ? p.decisionTrace.slice(-DECISION_TRACE_RING_MAX)
       : base.decisionTrace,
+    engineShadowDivergences: Array.isArray(p.engineShadowDivergences)
+      ? p.engineShadowDivergences.slice(-SHADOW_DIVERGENCE_RING_MAX)
+      : base.engineShadowDivergences,
+    engineShadowSeenClasses: Array.isArray(p.engineShadowSeenClasses)
+      ? p.engineShadowSeenClasses.filter((c): c is string => typeof c === "string")
+      : base.engineShadowSeenClasses,
     dischargeV2Shadowed:
       typeof p.dischargeV2Shadowed === "boolean"
         ? p.dischargeV2Shadowed
