@@ -1493,6 +1493,8 @@ export interface IrrigationPlanResponse {
   connected: boolean;
   mode: IrrigationMode;
   liveAllowed: boolean;
+  /** False while onboard-program suppression is paused (verifying Home-App watering). */
+  suppressingOnboard: boolean;
   armed: boolean;
   devicesMode: ControlMode;
   globalRainSkipMm: number;

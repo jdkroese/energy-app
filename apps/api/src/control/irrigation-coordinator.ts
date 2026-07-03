@@ -10,6 +10,11 @@
 //   • If the app/mini/LAN/deploy FAILS, the rain-delay lapses within ≤1 day and the
 //     controller's onboard program RESUMES on its own. Fail-safe — the garden never dries out.
 //
+// ⚠ SUPPRESSION IS CURRENTLY PAUSED (SUPPRESS_ONBOARD_PROGRAM=false, 2026-07-02, owner): while we
+//   verify that Home-App firing actually opens valves, the coordinator does NOT hold the rain-delay
+//   and CLEARS any it holds, so the onboard program keeps watering; it also does not fire its own
+//   scheduled plan. Manual Water-now still works. Re-enable the flag once watering is verified.
+//
 // PRODUCTION: the live actuation path runs ONLY when irrigation.mode === 'live' AND the Devices
 // layer is armed (the same arm/admin gate as the other coordinators — enforced again inside
 // issueIrrigation). When mode is 'live' but not actuating (disarmed / box unreachable) it still
@@ -67,6 +72,22 @@ const APP_RUN_CLAIM_MS = 2 * TICK_MS;
 /** The rolling rain-delay (days) we hold on the controller to SUPPRESS its onboard program
  *  while we're healthy. 1 day = the shortest fail-safe lapse; refreshed every tick. */
 export const SUPPRESSION_DELAY_DAYS = 1;
+
+/**
+ * MASTER SWITCH for onboard-program suppression. Set FALSE (2026-07-02, owner request) while we
+ * verify that Home-App firing actually opens valves. While false the coordinator holds NO
+ * suppression rain-delay and actively CLEARS any it previously set, so the Rain Bird's own weekly
+ * program keeps watering the garden. It also does NOT fire the app's own scheduled plan (the
+ * onboard program owns the schedule — no double-watering); manual Water-now still works for
+ * verification. Flip back to TRUE once Home-App watering is confirmed end-to-end.
+ */
+export const SUPPRESS_ONBOARD_PROGRAM = false;
+
+/** Whether the coordinator is currently suppressing the onboard program and running its own plan
+ *  (true) vs. deferring to the controller's own schedule (false). Surfaced to the UI. */
+export function isSuppressingOnboard(): boolean {
+  return SUPPRESS_ONBOARD_PROGRAM;
+}
 
 /** How often we re-mirror the controller's baseline program (drift detection). ~daily. */
 const BASELINE_MIRROR_MS = 24 * 60 * 60 * 1000;
@@ -221,6 +242,33 @@ async function refreshSuppression(currentDelayDays: number): Promise<void> {
     r.ok,
     r.ok ? `rain-delay → ${SUPPRESSION_DELAY_DAYS}d` : r.detail,
   );
+}
+
+/** Clear any suppression rain-delay WE hold (exactly our SUPPRESSION_DELAY_DAYS) so the
+ *  controller's onboard program resumes immediately. Used while suppression is paused. A direct
+ *  connector write, NOT the arm-gated path: un-suppressing only ENABLES the controller's own
+ *  program (it opens no valve of ours), so it must work even when the Devices layer is disarmed.
+ *  A LONGER owner-set rain delay (> our value) is left untouched. */
+async function releaseSuppressionIfHeld(currentDelayDays: number): Promise<void> {
+  if (currentDelayDays <= 0 || currentDelayDays > SUPPRESSION_DELAY_DAYS) return;
+  try {
+    await rainbird.setRainDelay(0);
+    log(
+      "rb-controller",
+      "suppress",
+      false,
+      true,
+      "released onboard program (rain-delay → 0)",
+    );
+  } catch (e) {
+    log(
+      "rb-controller",
+      "suppress",
+      false,
+      false,
+      `release failed: ${(e as Error).message}`,
+    );
+  }
 }
 
 /** Read-back confirmation after firing a zone: the station should show active within a couple
@@ -480,6 +528,15 @@ async function tick(): Promise<void> {
 
     const irr = store.get().irrigation;
     if (irr.mode === "off") {
+      // Even when off, don't leave the onboard program suppressed by a delay we set — clear it so
+      // the Rain Bird's own schedule runs (matters while suppression is paused, docs decision).
+      if (!SUPPRESS_ONBOARD_PROGRAM && rainbird.isConfigured()) {
+        try {
+          await releaseSuppressionIfHeld(await rainbird.getRainDelay());
+        } catch {
+          /* best-effort; retries next tick */
+        }
+      }
       last = now;
       return;
     }
@@ -526,22 +583,31 @@ async function tick(): Promise<void> {
     const live = liveAllowed(store.get()) && reachable && wf !== null;
 
     // ---- SUPPRESSION: hold the rolling rain-delay so the onboard program stays suppressed. ----
-    if (live) {
-      await refreshSuppression(rainDelayDays);
-    } else if (irr.mode === "live" && !reachable) {
-      // Wanted to be live but the box didn't answer — alert so the owner knows suppression lapsed.
-      log(
-        "rb-controller",
-        "alert",
-        false,
-        false,
-        "live but controller unreachable — suppression not refreshed",
-      );
+    if (SUPPRESS_ONBOARD_PROGRAM) {
+      if (live) {
+        await refreshSuppression(rainDelayDays);
+      } else if (irr.mode === "live" && !reachable) {
+        // Wanted to be live but the box didn't answer — alert so the owner knows suppression lapsed.
+        log(
+          "rb-controller",
+          "alert",
+          false,
+          false,
+          "live but controller unreachable — suppression not refreshed",
+        );
+      }
+    } else if (reachable) {
+      // Suppression PAUSED (verifying Home-App watering): never hold the delay; clear any we still
+      // hold so the controller's onboard program keeps watering.
+      await releaseSuppressionIfHeld(rainDelayDays);
     }
 
-    // ---- FIRE due zones (edge-triggered at each watering time's start minute). ----
+    // ---- FIRE due zones (edge-triggered at each watering time's start minute) — ONLY while
+    //      suppression is ON. When paused, the controller's onboard program owns the schedule, so
+    //      firing here would double-water. Manual Water-now (the route path) is unaffected. ----
     const zonesById = store.get().irrigation.zones;
     for (const zone of Object.values(zonesById)) {
+      if (!SUPPRESS_ONBOARD_PROGRAM) break;
       if (zone.managedBy !== "app") continue;
       const due = dueWateringTimes(zone, last, now);
       if (due.length === 0) continue;

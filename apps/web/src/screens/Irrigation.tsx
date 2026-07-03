@@ -218,6 +218,46 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
 
       {data && data.connected && (
         <>
+          {/* Suppression paused — the app is deferring to the Rain Bird's own schedule while we
+              verify Home-App watering. Unmissable so the current behaviour is never a mystery. */}
+          {!data.suppressingOnboard && (
+            <Card
+              padded
+              style={{
+                border: "1px solid var(--warn, var(--solar))",
+                background: "var(--surface-2)",
+              }}
+            >
+              <div
+                style={{ display: "flex", gap: 10, alignItems: "flex-start" }}
+              >
+                <span style={{ color: "var(--warn, var(--solar))", flex: "none", marginTop: 1 }}>
+                  <Icon name="shield-alert" size={18} />
+                </span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    Running on the Rain Bird's own schedule
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--text-2)",
+                      marginTop: 3,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    While we verify that the Home App can actually open the
+                    valves, the app is <strong>not</strong> suppressing the
+                    controller's built-in program or firing its own schedule —
+                    so the garden keeps getting watered by the Rain Bird itself.
+                    Use <strong>Water now</strong> on a zone to test app control;
+                    once it's confirmed we'll re-enable the smart plan.
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
+
           {/* Live "watering now" banner — shown whenever ANY zone is running (scheduled
               or a manual Water-now). The single, unmissable in-progress indicator. */}
           {activeZones.length > 0 && (
@@ -274,6 +314,7 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
             liveAllowed={data.liveAllowed}
             armed={data.armed}
             devicesMode={data.devicesMode}
+            suppressingOnboard={data.suppressingOnboard}
             isAdmin={isAdmin}
             busy={busy === "mode-live" || busy === "mode-off"}
             onChange={(m) => void changeMode(m)}
@@ -457,6 +498,7 @@ function ModeToggle({
   liveAllowed,
   armed,
   devicesMode,
+  suppressingOnboard,
   isAdmin,
   busy,
   onChange,
@@ -465,17 +507,20 @@ function ModeToggle({
   liveAllowed: boolean;
   armed: boolean;
   devicesMode: string;
+  suppressingOnboard: boolean;
   isAdmin: boolean;
   busy: boolean;
   onChange: (mode: IrrigationMode) => void;
 }) {
   const live = mode === "live";
   const caption = live
-    ? liveAllowed
-      ? "Home App runs the weather-trimmed plan."
-      : armed
-        ? "Home App selected."
-        : `Arm the Devices layer to actuate (mode ${devicesMode}).`
+    ? !suppressingOnboard
+      ? "Verifying — the Rain Bird's schedule runs; the app isn't suppressing it yet."
+      : liveAllowed
+        ? "Home App runs the weather-trimmed plan."
+        : armed
+          ? "Home App selected."
+          : `Arm the Devices layer to actuate (mode ${devicesMode}).`
     : "The Rain Bird controller's own weekly program runs.";
   return (
     <Card padded>

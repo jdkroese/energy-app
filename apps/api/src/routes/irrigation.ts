@@ -23,6 +23,7 @@ import {
   liveAllowed,
   getDailyOutlookCached,
   nextRunSkipDecision,
+  isSuppressingOnboard,
 } from "../control/irrigation-coordinator";
 import {
   rollupDayWeather,
@@ -591,6 +592,8 @@ export async function getIrrigationPlan(): Promise<unknown> {
     connected,
     mode: irr.mode,
     liveAllowed: liveAllowed(s),
+    /** False while onboard-program suppression is paused (verifying Home-App watering). */
+    suppressingOnboard: isSuppressingOnboard(),
     armed: s.devices.armed,
     devicesMode: s.devices.mode,
     globalRainSkipMm: irr.globalRainSkipMm,
