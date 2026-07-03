@@ -479,7 +479,10 @@ kitchenRouter.post(
       const parsed = await claude.completeJSON<{ recipes?: unknown }>({
         system: GENERATE_SYSTEM,
         prompt: buildGeneratePrompt({ question, ingredients, count, household }),
-        maxTokens: 2600,
+        // A COMPLETE recipe (ingredients + steps + nutrition) runs ~900–1100 tokens, so a
+        // flat 2600 truncated the JSON at the default count of 3 → unparseable → soft
+        // 'no-recipes'. Scale with count (+ headroom) so 2–4 recipes always fit.
+        maxTokens: Math.min(8000, 1200 * count + 800),
       });
       const recipes = sanitizeGeneratedBatch(parsed, household).slice(0, count);
       if (!recipes.length) return { ts: ts(), ok: false, reason: 'no-recipes', recipes: [] as GeneratedRecipe[] };
