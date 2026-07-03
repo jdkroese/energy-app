@@ -1366,6 +1366,21 @@ export interface IrrigationPlanZone {
   } | null;
 }
 
+/** A zone currently watering (from GET /api/irrigation/active — the light nav poll). */
+export interface IrrigationActiveZone {
+  zoneId: string;
+  name: string;
+  station: number;
+  /** Minutes left in the app-initiated run, or null (e.g. an external/keypad run). */
+  remainingMin: number | null;
+}
+
+export interface IrrigationActiveResponse {
+  ts: string;
+  connected: boolean;
+  active: IrrigationActiveZone[];
+}
+
 /** One day of the multi-day forecast outlook (from /api/irrigation/plan). */
 export interface IrrigationDailyOutlook {
   date: string; // "YYYY-MM-DD"

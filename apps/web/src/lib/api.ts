@@ -101,6 +101,7 @@ import type {
   IrrigationLever,
   RainbirdIntegrationStatus,
   IrrigationPlanResponse,
+  IrrigationActiveResponse,
   IrrigationMode,
   IrrigationZonePatch,
   EnergyEvent,
@@ -871,6 +872,10 @@ export const api = {
       id: string,
       patch: { roomId?: string | null; name?: string },
     ) => putJSON<{ ts: string }>(`/api/irrigation/${enc(id)}/settings`, patch),
+
+    // Light poll for the global nav "watering now" indicator (zones + time remaining).
+    active: () =>
+      getJSON<IrrigationActiveResponse>("/api/irrigation/active"),
 
     // ---- Phase 2 smart-watering plan (mode + zone config + photos are admin) ----
     plan: () => getJSON<IrrigationPlanResponse>("/api/irrigation/plan"),

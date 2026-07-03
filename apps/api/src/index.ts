@@ -150,6 +150,7 @@ import {
   testRainbird,
   setRainbird,
   disconnectRainbird,
+  getIrrigationActive,
   getIrrigationPlan,
   setIrrigationMode,
   setIrrigationGlobal,
@@ -1275,6 +1276,10 @@ app.get(
 
 // ---- Phase 2 smart-watering plan (literal sub-paths FIRST so the bare :id never eats them) ----
 // Reads any-authed; plan writes (mode, global rules, zone config, photos) are admin-gated.
+app.get(
+  "/api/irrigation/active",
+  wrap(() => getIrrigationActive()),
+);
 app.get(
   "/api/irrigation/plan",
   wrap(() => getIrrigationPlan()),

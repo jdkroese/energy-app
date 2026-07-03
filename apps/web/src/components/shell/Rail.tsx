@@ -5,6 +5,7 @@ import { Eyebrow } from '../ui/Eyebrow';
 import { RAIL_SECTIONS, NAV_SETTINGS, navMatches, type NavItem } from './nav';
 import { RailAlarmButton } from './NavAlarm';
 import { RailMiniPlayer } from './NavMiniPlayer';
+import { RailWatering } from './NavIrrigation';
 import { useAuth } from '../../auth/AuthProvider';
 
 type Props = {
@@ -96,6 +97,8 @@ export function Rail({ expanded, onToggle }: Props) {
       </nav>
 
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Watering-now indicator — an active irrigation zone + time remaining; idle → null. */}
+        <RailWatering expanded={expanded} />
         {/* Global now-playing mini player — sits above the footer controls, shows
             whatever's playing (Spotify/radio); renders nothing when idle. */}
         <RailMiniPlayer expanded={expanded} />
