@@ -1276,7 +1276,9 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
     setBusy(true);
     try {
       const chosen = products.filter((p) => selected.has(p.id) && !p.alreadyStaple);
-      await api.kitchen.importRegulars(chosen.map((p) => ({ productId: p.id, name: p.name, priceEur: p.unitPrice })));
+      await api.kitchen.importRegulars(
+        chosen.map((p) => ({ productId: p.id, name: p.name, priceEur: p.unitPrice, qty: p.recommendedQty })),
+      );
       onImported();
     } catch {
       setBusy(false);
@@ -1326,7 +1328,12 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
               </span>
             )}
             <span style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ fontSize: 12.5, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              <span style={{ fontSize: 12.5, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {p.name}
+                {p.recommendedQty > 1 && (
+                  <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}> · ×{p.recommendedQty}</span>
+                )}
+              </span>
               <small style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
                 {p.packSizeDisplay ?? ''}
                 {p.alreadyStaple ? ' · already a staple' : ''}

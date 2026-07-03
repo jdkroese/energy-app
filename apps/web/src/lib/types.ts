@@ -2437,6 +2437,8 @@ export interface KitchenRegularHit {
   unitPrice: number | null;
   packSizeDisplay: string | null;
   alreadyStaple: boolean;
+  /** Mercadona's recommended_quantity for this regular (1..99) — seeds the staple's defaultQty. */
+  recommendedQty: number;
 }
 
 export interface RecipesResponse { ts: string; recipes: Recipe[] }

@@ -828,7 +828,7 @@ export const api = {
     regulars: () =>
       getJSON<KitchenRegularsResponse>("/api/kitchen/staples/regulars"),
     importRegulars: (
-      products: Array<{ productId: string; name: string; priceEur?: number | null }>,
+      products: Array<{ productId: string; name: string; priceEur?: number | null; qty?: number }>,
     ) =>
       postJSON<KitchenImportRegularsResponse>(
         "/api/kitchen/staples/import-regulars",
