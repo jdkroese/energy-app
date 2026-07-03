@@ -37,12 +37,13 @@ export interface TonightData {
   recipe: Recipe | null;
   servingsSplit: string | null;
   refetchPlan: () => void;
+  refetchRecipes: () => void;
   setTonight: (recipeId: string) => Promise<void>;
 }
 
 /** Plan + recipes + household for the kiosk "Tonight" surfaces (one week, today). */
 export function useTonight(): TonightData {
-  const { data: recipesResp } = usePolling(api.kitchen.recipes, 60_000);
+  const { data: recipesResp, refetch: refetchRecipes } = usePolling(api.kitchen.recipes, 60_000);
   const { data: householdResp } = usePolling(api.kitchen.household, 0);
   const [plan, setPlan] = useState<MealPlan | null>(null);
   const week = currentWeekStart();
@@ -72,7 +73,7 @@ export function useTonight(): TonightData {
     load();
   };
 
-  return { recipes, plan, today, day, recipe, servingsSplit, refetchPlan: load, setTonight };
+  return { recipes, plan, today, day, recipe, servingsSplit, refetchPlan: load, refetchRecipes, setTonight };
 }
 
 /* ---- Tonight card (mockup frame 5, left column) ------------------------------------ */

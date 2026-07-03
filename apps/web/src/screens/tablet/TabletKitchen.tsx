@@ -16,8 +16,9 @@ export function TabletKitchen() {
   const navigate = useNavigate();
   const t = useTonight();
   const { data: intelResp } = usePolling(api.kitchen.intelligence, 0);
+  // Kiosk discovery rides the recipe-generation feature (docs/43); keep/read-only here.
   const aiOn = Boolean(
-    intelResp?.intelligence.enabled && intelResp.intelligence.configured && intelResp.intelligence.features.cookingSuggestions,
+    intelResp?.intelligence.enabled && intelResp.intelligence.configured && intelResp.intelligence.features.recipeGeneration,
   );
 
   const scale = t.recipe && t.day ? t.day.servings / t.recipe.servingsBase : 1;
@@ -71,8 +72,20 @@ export function TabletKitchen() {
         </div>
       </div>
 
-      {/* Off-plan cooking: on-hand ingredients → coverage-ranked library (+ AI ideas). */}
-      <WhatCanIMake recipes={t.recipes} aiOn={aiOn} wide kiosk onOpenRecipe={(r) => navigate(`/cook/${r.id}`)} />
+      {/* Off-plan cooking: find or invent a recipe. Keep-only on the wall (no cart). */}
+      <WhatCanIMake
+        recipes={t.recipes}
+        aiOn={aiOn}
+        wide
+        kiosk
+        onOpenRecipe={(r) => navigate(`/cook/${r.id}`)}
+        onSaveCandidate={async (candidate) => {
+          const { id: _id, createdAt: _c, updatedAt: _u, ...body } = candidate;
+          const r = await api.kitchen.createRecipe(body);
+          t.refetchRecipes();
+          return r.recipe;
+        }}
+      />
     </div>
   );
 }

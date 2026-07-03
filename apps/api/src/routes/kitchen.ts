@@ -29,6 +29,14 @@ import { enrichLines } from '../kitchen/enrich';
 import { assertRealFillAllowed, assertUnderSpendCap, buildCartPlan, SpendCapError, UnpricedLinesError, wireLines } from '../kitchen/cart';
 import { applySuggestion, buildSuggestions, isMuted, muteKey } from '../kitchen/suggestions';
 import { cleanAnswer, rankRecipesByCoverage } from '../kitchen/whatcanimake';
+import {
+  buildGeneratePrompt,
+  clampCount,
+  GENERATE_SYSTEM,
+  householdSignature,
+  sanitizeGeneratedBatch,
+  type GeneratedRecipe,
+} from '../kitchen/generate';
 import { syncOrderStatus } from '../kitchen/order-status';
 import { importRecipeFromUrl } from '../kitchen/import';
 import type {
@@ -180,7 +188,7 @@ function sanitizeRecipe(body: Partial<Recipe>, existing?: Recipe): Omit<Recipe, 
   return {
     title,
     photo: typeof body.photo === 'string' ? body.photo : existing?.photo ?? null,
-    source: body.source === 'url' || body.source === 'seed' ? body.source : existing?.source ?? 'manual',
+    source: body.source === 'url' || body.source === 'seed' || body.source === 'ai' ? body.source : existing?.source ?? 'manual',
     ...(typeof body.sourceUrl === 'string' ? { sourceUrl: body.sourceUrl } : existing?.sourceUrl ? { sourceUrl: existing.sourceUrl } : {}),
     servingsBase:
       typeof body.servingsBase === 'number' && body.servingsBase > 0
@@ -418,6 +426,80 @@ kitchenRouter.post(
       return { ts: ts(), ok: true, libraryIds: clean.libraryIds, ideas: clean.ideas };
     } catch {
       return { ts: ts(), ok: false, reason: 'no-answer', libraryIds: [], ideas: [] }; // fail soft
+    }
+  }),
+);
+
+// ---- AI recipe generation — the discovery front door (docs/43) --------------------------
+// POST /recipes/generate → a few COMPLETE, structured candidate recipes that already fit
+// the household. Gated on the recipeGeneration feature; fails SOFT to the deterministic
+// finder (which the UI always renders alongside). NOTHING is persisted here — candidates
+// come back with temporary gen_<n> ids; the owner saves the ones they like via POST
+// /recipes (source:'ai' now allowed). Belt-and-braces: any candidate still naming an
+// allergen / diet-restriction ingredient is dropped in sanitizeGeneratedBatch.
+
+// Tiny in-process cache: re-asking the same thing (same household) doesn't re-bill Claude.
+// Process-local (single-instance household app) and cleared on restart — see docs/43.
+const genCache = new Map<string, { at: number; recipes: GeneratedRecipe[] }>();
+const GEN_CACHE_TTL_MS = 10 * 60_000;
+const GEN_CACHE_MAX = 40;
+
+kitchenRouter.post(
+  '/recipes/generate',
+  wrap(async (req) => {
+    const b = (req.body ?? {}) as { question?: unknown; ingredients?: unknown; count?: unknown };
+    const question = typeof b.question === 'string' ? b.question.trim() : '';
+    const ingredients = Array.isArray(b.ingredients)
+      ? b.ingredients
+          .filter((x): x is string => typeof x === 'string')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .slice(0, 20)
+      : [];
+    if (!question && !ingredients.length) throw badInput('body.question or body.ingredients required');
+    const count = clampCount(b.count);
+
+    if (!claude.isFeatureEnabled('recipeGeneration')) {
+      return { ts: ts(), ok: false, reason: 'intelligence-off', recipes: [] as GeneratedRecipe[] };
+    }
+
+    const household = kitchen.get().household;
+    const cacheKey = [
+      question.toLowerCase(),
+      [...ingredients].map((s) => s.toLowerCase()).sort().join(','),
+      String(count),
+      householdSignature(household),
+    ].join('||');
+    const cached = genCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < GEN_CACHE_TTL_MS) {
+      return { ts: ts(), ok: true, cached: true, recipes: cached.recipes };
+    }
+
+    try {
+      const parsed = await claude.completeJSON<{ recipes?: unknown }>({
+        system: GENERATE_SYSTEM,
+        prompt: buildGeneratePrompt({ question, ingredients, count, household }),
+        maxTokens: 2600,
+      });
+      const recipes = sanitizeGeneratedBatch(parsed, household).slice(0, count);
+      if (!recipes.length) return { ts: ts(), ok: false, reason: 'no-recipes', recipes: [] as GeneratedRecipe[] };
+      genCache.set(cacheKey, { at: Date.now(), recipes });
+      if (genCache.size > GEN_CACHE_MAX) {
+        // Drop the oldest entry (Map preserves insertion order).
+        const oldest = genCache.keys().next().value;
+        if (oldest !== undefined) genCache.delete(oldest);
+      }
+      logEvent({
+        class: 'system',
+        category: 'kitchen',
+        severity: 'low',
+        summary: `AI recipes generated — ${recipes.length} candidate${recipes.length === 1 ? '' : 's'}`,
+        trigger: { source: 'user', detail: question || ingredients.join(', ') },
+        data: { count: recipes.length, hasQuestion: Boolean(question), ingredients: ingredients.length },
+      });
+      return { ts: ts(), ok: true, recipes };
+    } catch {
+      return { ts: ts(), ok: false, reason: 'no-recipes', recipes: [] as GeneratedRecipe[] }; // fail soft
     }
   }),
 );
@@ -1276,7 +1358,7 @@ kitchenRouter.put(
       if (typeof b.enabled === 'boolean') i.enabled = b.enabled;
       if (typeof b.apiKey === 'string') i.apiKey = b.apiKey.trim() || null;
       if (b.features && typeof b.features === 'object') {
-        for (const f of ['importParsing', 'cookingSuggestions', 'plannerRequestBox', 'weeklyPlanAssist'] as const) {
+        for (const f of ['importParsing', 'cookingSuggestions', 'plannerRequestBox', 'weeklyPlanAssist', 'recipeGeneration'] as const) {
           if (typeof b.features[f] === 'boolean') i.features[f] = b.features[f];
         }
       }

@@ -144,6 +144,7 @@ import type {
   WhatCanIMakeResponse,
   WhatCanIMakeIdeasResponse,
   WhatCanIMakeAnswerResponse,
+  GenerateRecipesResponse,
 } from "./types";
 
 /**
@@ -866,6 +867,13 @@ export const api = {
         "/api/kitchen/what-can-i-make/answer",
         { question, ...(onHand && onHand.length ? { onHand } : {}) },
       ),
+    /* -- docs/43: AI-generated candidate recipes (the discovery front door) -- */
+    generateRecipes: (opts: { question?: string; ingredients?: string[]; count?: number }) =>
+      postJSON<GenerateRecipesResponse>("/api/kitchen/recipes/generate", {
+        ...(opts.question ? { question: opts.question } : {}),
+        ...(opts.ingredients && opts.ingredients.length ? { ingredients: opts.ingredients } : {}),
+        ...(opts.count ? { count: opts.count } : {}),
+      }),
   },
 
   /* ---- Irrigation (Rain Bird); run/stop/rain-delay are admin + require armed ---- */

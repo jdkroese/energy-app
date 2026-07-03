@@ -21,7 +21,12 @@ const TIMEOUT_MS = 30_000;
 const EUR_PER_MTOK_IN = 2.8;
 const EUR_PER_MTOK_OUT = 14;
 
-export type IntelligenceFeature = 'importParsing' | 'cookingSuggestions' | 'plannerRequestBox' | 'weeklyPlanAssist';
+export type IntelligenceFeature =
+  | 'importParsing'
+  | 'cookingSuggestions'
+  | 'plannerRequestBox'
+  | 'weeklyPlanAssist'
+  | 'recipeGeneration';
 
 function apiKey(): string | null {
   return process.env.ANTHROPIC_API_KEY || store.get().kitchen.intelligence.apiKey || null;

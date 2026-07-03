@@ -1,20 +1,24 @@
-// "What can I make with…" (P3, docs/42 §3 + docs/38 Loop C) — three ways in:
-//   1. A DETERMINISTIC coverage ranking of the library from a few on-hand ingredients
-//      ("7 of 9 on hand"; pantry staples always count) — the always-works default, no AI.
-//   2. A tap-to-add ingredient PALETTE (sourced from the library's own ingredients, most-
-//      frequent first, blended with a curated Spanish-kitchen fallback) so you don't have
-//      to type — chips toggle on/off. Inline on desktop; behind a disclosure on mobile.
-//   3. An AI QUESTION box (Intelligence-gated) for free-form asks ("a nice recipe for
-//      healthy pizzas with veggie dough") → cited library recipes + fresh off-library
-//      ideas. Fails SOFT to a hint when Intelligence is off.
-// Shared by the Cooking screen (desktop + mobile) and the kiosk kitchen tab (kiosk prop) —
-// never tablet-only (standing rule).
+// "Find or invent a recipe" (docs/43, evolving docs/42 §3) — the DISCOVERY front door.
+// Three ways in, deterministic path always free/offline:
+//   1. A tap-to-add ingredient PALETTE (from the library's own ingredients, most-frequent
+//      first, blended with a curated Spanish-kitchen fallback) + free-text chips.
+//   2. Two actions on the ingredient set: "Search cookbook" (DETERMINISTIC coverage rank —
+//      no AI, always works) and "Invent recipes" (AI GENERATES complete candidate recipes
+//      from those ingredients).
+//   3. A QUESTION box (the primary "ask for a couple of nice recipes" entry) → AI generates
+//      candidates from the question (+ any selected ingredients).
+// Results render in TWO clearly-labelled groups of consistent recipe cards: "From your
+// cookbook" (deterministic matches → open the existing quick-view) and "Fresh ideas — tap
+// to keep" (AI candidates → a candidate quick-view with Save / Add to week / Cook now; a
+// candidate is marked "not saved yet" until saved). AI actions fail SOFT to a hint when
+// Intelligence is off. Shared by the Cooking screen (desktop + mobile) and the kiosk tab
+// (kiosk prop) — never tablet-only (standing rule); kiosk keeps generation as keep-only.
 
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Badge, Button, Icon } from '../../components/ui';
 import { api } from '../../lib/api';
 import type { Recipe, WhatCanIMakeResult } from '../../lib/types';
-import { RecipePhoto } from './shared';
+import { RecipePhoto, RecipeQuickView } from './shared';
 import { buildPalette, normalizeIngredientText, SECTION_ORDER, type PaletteSection } from './ingredientPalette';
 
 export function WhatCanIMake({
@@ -23,56 +27,70 @@ export function WhatCanIMake({
   wide,
   kiosk = false,
   onOpenRecipe,
+  showNutrition = true,
+  onSaveCandidate,
+  onSaveAndPlan,
+  onSaveAndCook,
 }: {
   recipes: Recipe[];
-  /** Intelligence master + cooking-suggestions feature both on. */
+  /** Intelligence master + recipe-generation feature both on (drives Invent/ask). */
   aiOn: boolean;
   wide: boolean;
   kiosk?: boolean;
   onOpenRecipe: (r: Recipe) => void;
+  showNutrition?: boolean;
+  /** Save an AI candidate into the library → returns the saved recipe (refetches upstream). */
+  onSaveCandidate?: (r: Recipe) => Promise<Recipe>;
+  /** Save + plan into the first open day of the current week (Cooking only). */
+  onSaveAndPlan?: (r: Recipe) => Promise<void>;
+  /** Save + open cooking mode (Cooking only; kiosk navigates via onOpenRecipe). */
+  onSaveAndCook?: (r: Recipe) => Promise<void>;
 }) {
   const [chips, setChips] = useState<string[]>([]);
   const [draft, setDraft] = useState('');
   const [results, setResults] = useState<WhatCanIMakeResult[] | null>(null);
-  const [ideas, setIdeas] = useState<Array<{ title: string; note: string }> | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'rank' | 'ideas' | 'answer' | null>(null);
-  // Palette collapses behind a disclosure on mobile so it doesn't dominate; open on desktop.
+  const [busy, setBusy] = useState<'rank' | 'invent' | 'ask' | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(wide);
-  // AI question box (Feature 1b).
   const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState<{ libraryIds: string[]; ideas: Array<{ title: string; note: string }> } | null>(null);
-  const [answerNote, setAnswerNote] = useState<string | null>(null);
+
+  // AI candidates (unsaved). `savedIds` maps a candidate id → its saved library id so a
+  // re-open shows the saved recipe / hides the "not saved yet" marker.
+  const [candidates, setCandidates] = useState<Recipe[] | null>(null);
+  const [candidateNote, setCandidateNote] = useState<string | null>(null);
+  const [savedIds, setSavedIds] = useState<Record<string, string>>({});
+  const [openCandidate, setOpenCandidate] = useState<Recipe | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   const byId = useMemo(() => new Map(recipes.map((r) => [r.id, r])), [recipes]);
   const palette = useMemo(() => buildPalette(recipes), [recipes]);
-  // Normalised keys of the current chips → drives palette selected state.
   const chipKeys = useMemo(() => new Set(chips.map((c) => normalizeIngredientText(c))), [chips]);
 
-  const addChip = () => {
-    const v = draft.trim().toLowerCase();
-    if (v && !chips.includes(v)) setChips([...chips, v]);
-    setDraft('');
+  const collectTerms = (): string[] => {
+    const pending = draft.trim().toLowerCase();
+    if (pending && !chips.includes(pending)) {
+      const next = [...chips, pending];
+      setChips(next);
+      setDraft('');
+      return next;
+    }
+    return chips;
   };
 
   const togglePalette = (label: string) => {
     const key = normalizeIngredientText(label);
-    if (chipKeys.has(key)) {
-      setChips(chips.filter((c) => normalizeIngredientText(c) !== key));
-    } else {
-      setChips([...chips, label.toLowerCase()]);
-    }
+    if (chipKeys.has(key)) setChips(chips.filter((c) => normalizeIngredientText(c) !== key));
+    else setChips([...chips, label.toLowerCase()]);
   };
 
-  const search = async (terms: string[]) => {
+  const searchCookbook = async (terms: string[]) => {
     if (!terms.length) return;
     setBusy('rank');
     setNote(null);
-    setIdeas(null);
     try {
       const r = await api.kitchen.whatCanIMake(terms);
       setResults(r.results);
-      if (!r.results.length) setNote('No library matches — try “More ideas”, the question box, or fewer ingredients.');
+      if (!r.results.length) setNote('No cookbook matches — try “Invent recipes”, the question box, or fewer ingredients.');
     } catch {
       setNote('Search failed — try again');
     } finally {
@@ -80,40 +98,49 @@ export function WhatCanIMake({
     }
   };
 
-  const moreIdeas = async () => {
-    if (!chips.length) return;
-    setBusy('ideas');
-    setNote(null);
+  const generate = async (which: 'invent' | 'ask') => {
+    const q = which === 'ask' ? question.trim() : '';
+    const terms = which === 'invent' ? collectTerms() : chips;
+    if (which === 'ask' && !q) return;
+    if (which === 'invent' && !terms.length) return;
+    setBusy(which);
+    setCandidateNote(null);
+    setCandidates(null);
     try {
-      const r = await api.kitchen.whatCanIMakeIdeas(chips);
-      if (r.ok && r.ideas.length) setIdeas(r.ideas);
-      else setNote(r.reason === 'intelligence-off' ? 'Intelligence is off — showing the library ranking only.' : 'No extra ideas this time.');
+      const r = await api.kitchen.generateRecipes({
+        ...(q ? { question: q } : {}),
+        ...(terms.length ? { ingredients: terms } : {}),
+      });
+      if (r.ok && r.recipes.length) {
+        setCandidates(r.recipes);
+        setSavedIds({});
+      } else if (r.reason === 'intelligence-off') {
+        setCandidateNote('Enable Intelligence in Settings ▸ Intelligence to invent fresh recipes. Cookbook search still works.');
+      } else {
+        setCandidateNote('No fresh ideas this time — try rephrasing, or search the cookbook above.');
+      }
     } catch {
-      setNote('Ideas unavailable — the library ranking above still stands.'); // fail soft
+      setCandidateNote('Recipe generation is unavailable right now — the cookbook search still works.'); // fail soft
     } finally {
       setBusy(null);
     }
   };
 
-  const askQuestion = async () => {
-    const q = question.trim();
-    if (!q) return;
-    setBusy('answer');
-    setAnswerNote(null);
-    setAnswer(null);
+  // Save a candidate; keep the quick-view open on the SAVED recipe so the follow-on
+  // actions (Add to week / Cook now) act on a real library id.
+  const saveCandidate = async (cand: Recipe): Promise<Recipe | null> => {
+    if (!onSaveCandidate) return null;
+    if (savedIds[cand.id]) return byId.get(savedIds[cand.id]) ?? null;
+    setSavingId(cand.id);
     try {
-      const r = await api.kitchen.whatCanIMakeAnswer(q, chips);
-      if (r.ok && (r.libraryIds.length || r.ideas.length)) {
-        setAnswer({ libraryIds: r.libraryIds, ideas: r.ideas });
-      } else if (r.reason === 'intelligence-off') {
-        setAnswerNote('Enable Intelligence in Settings ▸ Intelligence to ask free-form recipe questions.');
-      } else {
-        setAnswerNote('No answer this time — try rephrasing, or use the ingredient search above.');
-      }
+      const saved = await onSaveCandidate(cand);
+      setSavedIds((m) => ({ ...m, [cand.id]: saved.id }));
+      return saved;
     } catch {
-      setAnswerNote('The question box is unavailable right now — the ingredient search above still works.'); // fail soft
+      setCandidateNote('Could not save that recipe — try again.');
+      return null;
     } finally {
-      setBusy(null);
+      setSavingId(null);
     }
   };
 
@@ -157,16 +184,84 @@ export function WhatCanIMake({
     minHeight: kiosk ? 40 : undefined,
   };
 
+  const hasIngredients = chips.length > 0 || draft.trim().length > 0;
+
+  // A consistent recipe card used by both result groups + candidates.
+  const recipeCard = (r: Recipe, opts: { onClick: () => void; right?: ReactNode; subtitle?: string }) => (
+    <button
+      key={r.id}
+      type="button"
+      onClick={opts.onClick}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        padding: 8,
+        minHeight: kiosk ? 64 : 56,
+        border: '1px solid var(--border-1)',
+        borderRadius: 'var(--radius-lg)',
+        background: 'var(--surface-1)',
+        color: 'var(--text-1)',
+        textAlign: 'left',
+        cursor: 'pointer',
+        width: '100%',
+      }}
+    >
+      <RecipePhoto recipe={r} height={kiosk ? 48 : 42} radius="var(--radius-md)" style={{ width: kiosk ? 48 : 42 }} />
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: kiosk ? 14.5 : 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {r.title}
+        </span>
+        <span style={{ display: 'block', fontSize: kiosk ? 12 : 11, color: 'var(--text-3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {opts.subtitle ?? `${r.prepMin + r.cookMin} min`}
+        </span>
+      </span>
+      {opts.right}
+    </button>
+  );
+
+  const sectionHeading = (icon: string, color: string, label: string) => (
+    <span style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <Icon name={icon} size={12} color={color} /> {label}
+    </span>
+  );
+
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Icon name="refrigerator" size={16} color="var(--battery)" />
+        <Icon name="wand-sparkles" size={16} color="var(--battery)" />
         <h2 style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--text-3)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-          What can I make with…
+          Find or invent a recipe
         </h2>
       </div>
 
-      {/* On-hand input: chips + free text. */}
+      {/* Question box — the primary "ask for a couple of nice recipes" entry. */}
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && aiOn) {
+              e.preventDefault();
+              void generate('ask');
+            }
+          }}
+          placeholder="Ask for a few recipe ideas — e.g. healthy pizzas with veggie dough"
+          style={{ ...inputStyle, flex: 1, minWidth: 200, borderRadius: 'var(--radius-md)' }}
+        />
+        <Button
+          size={kiosk ? 'md' : 'sm'}
+          variant="primary"
+          loading={busy === 'ask'}
+          disabled={!aiOn || !question.trim()}
+          iconLeft={<Icon name="sparkles" size={13} />}
+          onClick={() => void generate('ask')}
+        >
+          Invent recipes
+        </Button>
+      </div>
+
+      {/* On-hand input: chips + free text + the palette. */}
       <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' }}>
         {chips.map((c) => (
           <button key={c} type="button" style={chipStyle} onClick={() => setChips(chips.filter((x) => x !== c))}>
@@ -179,39 +274,37 @@ export function WhatCanIMake({
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              addChip();
+              const v = draft.trim().toLowerCase();
+              if (v && !chips.includes(v)) setChips([...chips, v]);
+              setDraft('');
             }
           }}
-          onBlur={addChip}
-          placeholder={chips.length ? '＋ add' : 'chicken thighs, courgette, rice…'}
-          style={{ ...inputStyle, width: chips.length ? 110 : 220 }}
+          placeholder={chips.length ? '＋ add' : 'or list what’s on hand — chicken, courgette, rice…'}
+          style={{ ...inputStyle, width: chips.length ? 110 : 260 }}
         />
         <Button
           size={kiosk ? 'md' : 'sm'}
           variant="secondary"
           loading={busy === 'rank'}
-          disabled={!chips.length && !draft.trim()}
-          iconLeft={<Icon name="search" size={13} />}
-          onClick={() => {
-            const pending = draft.trim().toLowerCase();
-            const terms = pending && !chips.includes(pending) ? [...chips, pending] : chips;
-            if (pending) {
-              setChips(terms);
-              setDraft('');
-            }
-            void search(terms);
-          }}
+          disabled={!hasIngredients}
+          iconLeft={<Icon name="book-open" size={13} />}
+          onClick={() => void searchCookbook(collectTerms())}
         >
-          Find recipes
+          Search cookbook
         </Button>
-        {aiOn && results && (
-          <Button size={kiosk ? 'md' : 'sm'} variant="ghost" loading={busy === 'ideas'} iconLeft={<Icon name="sparkles" size={13} />} onClick={() => void moreIdeas()}>
-            More ideas
-          </Button>
-        )}
+        <Button
+          size={kiosk ? 'md' : 'sm'}
+          variant="ghost"
+          loading={busy === 'invent'}
+          disabled={!aiOn || !hasIngredients}
+          iconLeft={<Icon name="sparkles" size={13} />}
+          onClick={() => void generate('invent')}
+        >
+          Invent from these
+        </Button>
       </div>
 
-      {/* Tap-to-add ingredient palette (Feature 1a). Inline on desktop; disclosure on mobile. */}
+      {/* Tap-to-add ingredient palette. Inline on desktop; disclosure on mobile. */}
       {palette.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {!wide && (
@@ -247,18 +340,9 @@ export function WhatCanIMake({
                   <span style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>{section}</span>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {items.map((it) => {
-                      // Selected state keys off the LABEL (what togglePalette adds as a
-                      // chip), not it.key — a library item is keyed by its Spanish name
-                      // ("cebolla") while the chip carries the English label ("onion").
                       const selected = chipKeys.has(normalizeIngredientText(it.label));
                       return (
-                        <button
-                          key={it.key}
-                          type="button"
-                          aria-pressed={selected}
-                          style={paletteChip(selected)}
-                          onClick={() => togglePalette(it.label)}
-                        >
+                        <button key={it.key} type="button" aria-pressed={selected} style={paletteChip(selected)} onClick={() => togglePalette(it.label)}>
                           {selected && <Icon name="check" size={11} />}
                           {it.label}
                         </button>
@@ -271,162 +355,167 @@ export function WhatCanIMake({
         </div>
       )}
 
+      {!aiOn && (
+        <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+          Enable Intelligence in Settings ▸ Intelligence to invent recipes. The cookbook search works without it.
+        </span>
+      )}
       {note && <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{note}</div>}
+      {candidateNote && <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{candidateNote}</div>}
 
-      {/* Deterministic coverage ranking. */}
+      {/* From your cookbook — deterministic coverage ranking. */}
       {results && results.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {sectionHeading('book-open', 'var(--battery)', 'From your cookbook')}
           {results.map((res) => {
             const r = byId.get(res.recipeId);
             if (!r) return null;
-            return (
-              <button
-                key={res.recipeId}
-                type="button"
-                onClick={() => onOpenRecipe(r)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 11,
-                  padding: 8,
-                  minHeight: kiosk ? 64 : 56,
-                  border: '1px solid var(--border-1)',
-                  borderRadius: 'var(--radius-lg)',
-                  background: 'var(--surface-1)',
-                  color: 'var(--text-1)',
-                  textAlign: 'left',
-                  cursor: 'pointer',
-                }}
-              >
-                <RecipePhoto recipe={r} height={kiosk ? 48 : 42} radius="var(--radius-md)" style={{ width: kiosk ? 48 : 42 }} />
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: kiosk ? 14.5 : 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.title}
-                  </span>
-                  <span style={{ display: 'block', fontSize: kiosk ? 12 : 11, color: 'var(--text-3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.prepMin + r.cookMin} min
-                    {res.missing.length > 0 ? ` · missing: ${res.missing.slice(0, 3).join(', ')}${res.missing.length > 3 ? '…' : ''}` : ' · everything on hand'}
-                  </span>
-                </span>
+            const subtitle =
+              `${r.prepMin + r.cookMin} min` +
+              (res.missing.length > 0 ? ` · missing: ${res.missing.slice(0, 3).join(', ')}${res.missing.length > 3 ? '…' : ''}` : ' · everything on hand');
+            return recipeCard(r, {
+              onClick: () => onOpenRecipe(r),
+              subtitle,
+              right: (
                 <Badge tone={res.have === res.total ? 'solar' : 'neutral'}>
                   {res.have} of {res.total} on hand
                 </Badge>
-              </button>
-            );
+              ),
+            });
           })}
         </div>
       )}
 
-      {/* Claude free-form ideas (from "More ideas", Intelligence-gated, fail-soft). */}
-      {ideas && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderLeft: '2px solid var(--solar-dim, var(--solar))', paddingLeft: 12 }}>
-          <span style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--solar)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Icon name="sparkles" size={12} /> More ideas
+      {/* Fresh ideas — tap to keep (AI candidates). */}
+      {candidates && candidates.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {sectionHeading('sparkles', 'var(--solar)', 'Fresh ideas — tap to keep')}
+          {candidates.map((cand) => {
+            const savedId = savedIds[cand.id];
+            const saved = savedId ? byId.get(savedId) ?? cand : cand;
+            return recipeCard(cand, {
+              onClick: () => setOpenCandidate(saved),
+              subtitle: `${cand.prepMin + cand.cookMin} min · ${cand.ingredients.length} ingredients`,
+              right: savedId ? (
+                <Badge tone="solar">
+                  <Icon name="check" size={12} /> Saved
+                </Badge>
+              ) : (
+                <Badge tone="neutral">Not saved yet</Badge>
+              ),
+            });
+          })}
+          <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+            Fresh from AI — open one to see the full recipe, then keep it in your cookbook.
           </span>
-          {ideas.map((idea, i) => (
-            <div key={i} style={{ fontSize: wide ? 13 : 12.5 }}>
-              <b style={{ fontWeight: 600 }}>{idea.title}</b>
-              {idea.note && <span style={{ color: 'var(--text-2)' }}> — {idea.note}</span>}
-            </div>
-          ))}
-          <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>Off-library ideas — cook freestyle, or import a recipe URL to keep one.</span>
         </div>
       )}
 
-      {/* AI question box (Feature 1b) — the headline free-form ask. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2, paddingTop: 10, borderTop: '1px solid var(--border-1)' }}>
-        <span style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <Icon name="wand-sparkles" size={12} color="var(--battery)" /> Ask for a recipe idea
-        </span>
-        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' }}>
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && aiOn) {
-                e.preventDefault();
-                void askQuestion();
-              }
-            }}
-            placeholder="e.g. healthy pizzas with veggie dough"
-            style={{ ...inputStyle, flex: 1, minWidth: 200, borderRadius: 'var(--radius-md)' }}
-          />
-          <Button
-            size={kiosk ? 'md' : 'sm'}
-            variant="secondary"
-            loading={busy === 'answer'}
-            disabled={!aiOn || !question.trim()}
-            iconLeft={<Icon name="sparkles" size={13} />}
-            onClick={() => void askQuestion()}
-          >
-            Ask
-          </Button>
-        </div>
-        {!aiOn && (
-          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-            Enable Intelligence in Settings ▸ Intelligence to ask free-form recipe questions.
-          </span>
-        )}
-        {answerNote && <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{answerNote}</span>}
-        {answer && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {answer.libraryIds.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <span style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <Icon name="book-open" size={12} color="var(--battery)" /> From your library
-                </span>
-                {answer.libraryIds.map((id) => {
-                  const r = byId.get(id);
-                  if (!r) return null;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => onOpenRecipe(r)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 11,
-                        padding: 8,
-                        minHeight: kiosk ? 64 : 56,
-                        border: '1px solid var(--border-1)',
-                        borderRadius: 'var(--radius-lg)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-1)',
-                        textAlign: 'left',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <RecipePhoto recipe={r} height={kiosk ? 48 : 42} radius="var(--radius-md)" style={{ width: kiosk ? 48 : 42 }} />
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: 'block', fontSize: kiosk ? 14.5 : 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {r.title}
-                        </span>
-                        <span style={{ display: 'block', fontSize: kiosk ? 12 : 11, color: 'var(--text-3)', marginTop: 2 }}>{r.prepMin + r.cookMin} min</span>
-                      </span>
-                      <Icon name="chevron-right" size={16} color="var(--text-3)" />
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {answer.ideas.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderLeft: '2px solid var(--solar-dim, var(--solar))', paddingLeft: 12 }}>
-                <span style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--solar)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <Icon name="lightbulb" size={12} /> Fresh ideas
-                </span>
-                {answer.ideas.map((idea, i) => (
-                  <div key={i} style={{ fontSize: wide ? 13 : 12.5 }}>
-                    <b style={{ fontWeight: 600 }}>{idea.title}</b>
-                    {idea.note && <span style={{ color: 'var(--text-2)' }}> — {idea.note}</span>}
-                  </div>
-                ))}
-                <span style={{ fontSize: 10.5, color: 'var(--text-3)' }}>Off-library — cook freestyle, or import a recipe URL to keep one.</span>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      {/* Candidate quick-view: full recipe + Save / Add to week / Cook now. */}
+      {openCandidate && (
+        <CandidateQuickView
+          candidate={openCandidate}
+          desktop={wide}
+          showNutrition={showNutrition}
+          savedId={savedIds[openCandidate.id]}
+          saving={savingId === openCandidate.id}
+          kiosk={kiosk}
+          canPlan={Boolean(onSaveAndPlan)}
+          canCook={Boolean(onSaveAndCook) || kiosk}
+          onClose={() => setOpenCandidate(null)}
+          onSave={async () => {
+            const saved = await saveCandidate(openCandidate);
+            if (saved) setOpenCandidate(saved);
+          }}
+          onAddToWeek={async () => {
+            const saved = (await saveCandidate(openCandidate)) ?? (savedIds[openCandidate.id] ? byId.get(savedIds[openCandidate.id]) : null);
+            if (saved && onSaveAndPlan) {
+              await onSaveAndPlan(saved);
+              setOpenCandidate(null);
+            }
+          }}
+          onCookNow={async () => {
+            const saved = (await saveCandidate(openCandidate)) ?? (savedIds[openCandidate.id] ? byId.get(savedIds[openCandidate.id]) : null);
+            if (!saved) return;
+            if (onSaveAndCook) await onSaveAndCook(saved);
+            else onOpenRecipe(saved); // kiosk: navigate to cook
+            setOpenCandidate(null);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+// The AI-candidate quick-view: the full generated recipe with keep-first actions. Reuses
+// the shared RecipeQuickView; wires Save / Add to this week / Cook now onto it.
+function CandidateQuickView({
+  candidate,
+  desktop,
+  showNutrition,
+  savedId,
+  saving,
+  kiosk,
+  canPlan,
+  canCook,
+  onClose,
+  onSave,
+  onAddToWeek,
+  onCookNow,
+}: {
+  candidate: Recipe;
+  desktop: boolean;
+  showNutrition: boolean;
+  savedId?: string;
+  saving: boolean;
+  kiosk: boolean;
+  canPlan: boolean;
+  canCook: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  onAddToWeek: () => void;
+  onCookNow: () => void;
+}) {
+  const isSaved = Boolean(savedId);
+  return (
+    <RecipeQuickView
+      recipe={candidate}
+      desktop={desktop}
+      servings={candidate.servingsBase}
+      showNutrition={showNutrition}
+      onClose={onClose}
+      statusBadge={
+        isSaved ? (
+          <Badge tone="solar">
+            <Icon name="check" size={12} /> In your cookbook
+          </Badge>
+        ) : (
+          <Badge tone="neutral">
+            <Icon name="sparkles" size={12} /> AI idea · not saved yet
+          </Badge>
+        )
+      }
+      actionsLabel={isSaved ? 'In your cookbook' : 'Keep this recipe'}
+      onPlan={undefined}
+      extraActions={
+        <>
+          {!isSaved && (
+            <Button variant="primary" style={{ flex: 1.2 }} loading={saving} iconLeft={<Icon name="bookmark-plus" size={15} />} onClick={onSave}>
+              Save to cookbook
+            </Button>
+          )}
+          {canPlan && (
+            <Button variant="secondary" style={{ flex: 1 }} loading={saving} iconLeft={<Icon name="calendar-plus" size={15} />} onClick={onAddToWeek}>
+              Add to this week
+            </Button>
+          )}
+          {canCook && (
+            <Button variant={kiosk ? 'primary' : 'secondary'} style={{ flex: 1 }} loading={saving} iconLeft={<Icon name="play" size={15} />} onClick={onCookNow}>
+              Cook now
+            </Button>
+          )}
+        </>
+      }
+    />
   );
 }

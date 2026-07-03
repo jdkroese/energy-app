@@ -54,7 +54,12 @@ export function clientIngredientKey(es: string): string {
     .replace(/[̀-ͯ]/g, '');
 }
 
-// ---- Recipe photo (fallback tile when the image is missing) ------------------------
+// ---- Recipe photo (illustrated cuisine-tinted card when the image is missing) ----------
+// AI-generated and photo-less recipes render a DESIGNED card (docs/43): a cuisine-tinted
+// diagonal gradient + a soft utensil glyph + the dish's initials — so a recipe without a
+// photo looks intentional, not like a broken image. Consistent at every size it's used
+// (42/48/56/72/96/140/180). recipe.photo is honoured when present (a future image provider
+// drops URLs straight in). Design-system tokens only.
 
 const CUISINE_WASH: Record<KitchenCuisine, string> = {
   spanish: 'var(--solar-wash)',
@@ -63,6 +68,26 @@ const CUISINE_WASH: Record<KitchenCuisine, string> = {
   italian: 'var(--home-wash)',
   global: 'var(--surface-3)',
 };
+
+/** Per-cuisine accent token + a representative lucide glyph for the illustrated card. */
+const CUISINE_ART: Record<KitchenCuisine, { accent: string; glyph: string }> = {
+  spanish: { accent: 'var(--solar)', glyph: 'flame' },
+  dutch: { accent: 'var(--grid)', glyph: 'wheat' },
+  japanese: { accent: 'var(--battery)', glyph: 'fish' },
+  italian: { accent: 'var(--home)', glyph: 'wheat' },
+  global: { accent: 'var(--text-2)', glyph: 'utensils' },
+};
+
+/** Up to two initials from the dish title (first letters of the first two words). */
+function recipeInitials(title: string): string {
+  const words = title
+    .trim()
+    .split(/\s+/)
+    .filter((w) => /[a-z0-9]/i.test(w));
+  if (!words.length) return '·';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
 
 export function RecipePhoto({
   recipe,
@@ -87,9 +112,46 @@ export function RecipePhoto({
     ...style,
   };
   if (!recipe.photo || failed) {
+    const art = CUISINE_ART[recipe.cuisine] ?? CUISINE_ART.global;
+    // Scale the glyph + initials to the tile so the same component reads well at 42px and
+    // at 180px. Numeric heights get exact sizing; a non-numeric height (rare) falls back.
+    const h = typeof height === 'number' ? height : 96;
+    const small = h < 60;
+    const glyphSize = Math.round(Math.max(16, Math.min(40, h * 0.34)));
+    const initialsSize = Math.round(Math.max(11, Math.min(28, h * 0.24)));
     return (
-      <div style={base} aria-hidden="true">
-        <Icon name="chef-hat" size={22} color="var(--text-3)" />
+      <div
+        style={{
+          ...base,
+          position: 'relative',
+          // Diagonal cuisine-tinted gradient over the surface — designed, not flat.
+          backgroundImage: `linear-gradient(135deg, ${CUISINE_WASH[recipe.cuisine] ?? 'var(--surface-3)'} 0%, var(--surface-2) 78%)`,
+        }}
+        aria-hidden="true"
+        title={recipe.title}
+      >
+        {/* Soft oversized glyph, offset to the corner as a watermark. */}
+        <Icon
+          name={art.glyph}
+          size={Math.round(h * 0.72)}
+          color={art.accent}
+          style={{ position: 'absolute', right: small ? -6 : -8, bottom: small ? -8 : -10, opacity: 0.14 }}
+        />
+        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: small ? 0 : 4 }}>
+          {!small && <Icon name={art.glyph} size={glyphSize} color={art.accent} style={{ opacity: 0.9 }} />}
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: initialsSize,
+              fontWeight: 700,
+              letterSpacing: '0.04em',
+              color: small ? art.accent : 'var(--text-2)',
+              lineHeight: 1,
+            }}
+          >
+            {recipeInitials(recipe.title)}
+          </span>
+        </div>
       </div>
     );
   }
@@ -184,11 +246,17 @@ export function RecipeQuickView({
   onPlan,
   onSendToGroceries,
   extraActions,
+  statusBadge,
+  actionsLabel,
 }: {
   recipe: Recipe;
   desktop: boolean;
   /** e.g. "Planned · Mon 6" when opened from a day card. */
   planContext?: string;
+  /** Extra badge in the header row — e.g. "Not saved yet" for an AI candidate (docs/43). */
+  statusBadge?: ReactNode;
+  /** Optional heading above the action row (e.g. "Keep this recipe" for a candidate). */
+  actionsLabel?: string;
   servings: number;
   onServings?: (v: number) => void;
   /** Current order-draft lines — used to show mapped product + price per ingredient. */
@@ -217,6 +285,7 @@ export function RecipeQuickView({
         <RecipePhoto recipe={recipe} height={desktop ? 180 : 140} radius="var(--radius-md)" />
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {planContext && <Badge tone="grid">{planContext}</Badge>}
+          {statusBadge}
           <Badge tone="neutral">
             <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{recipe.prepMin + recipe.cookMin} min</b>
           </Badge>
@@ -317,6 +386,11 @@ export function RecipeQuickView({
           })}
         </div>
 
+        {actionsLabel && (
+          <div style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: -4 }}>
+            {actionsLabel}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {onPlan && (
             <Button variant="primary" style={{ flex: 1.2 }} iconLeft={<Icon name="calendar-plus" size={15} />} onClick={onPlan}>

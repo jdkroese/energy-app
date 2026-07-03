@@ -2180,7 +2180,7 @@ export interface Recipe {
   id: string;
   title: string;
   photo?: string | null;
-  source: 'seed' | 'url' | 'manual';
+  source: 'seed' | 'url' | 'manual' | 'ai';
   sourceUrl?: string;
   servingsBase: number;
   prepMin: number;
@@ -2321,6 +2321,8 @@ export interface KitchenIntelligence {
     cookingSuggestions: boolean;
     plannerRequestBox: boolean;
     weeklyPlanAssist: boolean;
+    /** AI generates complete structured candidate recipes → saved into the library (docs/43). */
+    recipeGeneration: boolean;
   };
   usage: { month: string; inputTokens: number; outputTokens: number; eur: number };
   keyMasked: string | null;
@@ -2459,4 +2461,17 @@ export interface WhatCanIMakeAnswerResponse {
   reason?: 'intelligence-off' | 'no-answer';
   libraryIds: string[];
   ideas: Array<{ title: string; note: string }>;
+}
+
+/**
+ * AI-generated candidate recipes (docs/43): COMPLETE structured recipes (source:'ai',
+ * temporary gen_<n> ids, unsaved) the owner saves into the library via createRecipe. Fails
+ * soft to ok:false / empty recipes when Intelligence is off or generation fails.
+ */
+export interface GenerateRecipesResponse {
+  ts: string;
+  ok: boolean;
+  reason?: 'intelligence-off' | 'no-recipes';
+  cached?: boolean;
+  recipes: Recipe[];
 }

@@ -37,7 +37,7 @@ export interface Recipe {
   title: string;
   /** Photo URL — seed photos live under /recipes/, imports keep the og:image URL. */
   photo?: string | null;
-  source: 'seed' | 'url' | 'manual';
+  source: 'seed' | 'url' | 'manual' | 'ai';
   sourceUrl?: string;
   servingsBase: number;
   prepMin: number;
