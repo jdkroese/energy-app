@@ -190,6 +190,8 @@ import {
   getSpeakers,
   setSpeakerVolume,
   testSpeaker,
+  stopSpeakersRoute,
+  setPlayingSpeakersRoute,
   postAlarmTrigger,
   postAlarmStop,
   getAlarmStatusRoute,
@@ -959,6 +961,18 @@ app.post(
   "/api/speakers/:id/test",
   requireAdmin,
   wrap((req) => testSpeaker(String(req.params.id), req)),
+);
+// Stop / live-retarget whatever is currently playing on Sonos (incl. playback started
+// outside the app). Kiosk-or-admin, matching per-speaker volume.
+app.post(
+  "/api/speakers/stop",
+  requireKioskOrAdmin,
+  wrap((req) => stopSpeakersRoute(req.body)),
+);
+app.post(
+  "/api/speakers/playing",
+  requireKioskOrAdmin,
+  wrap((req) => setPlayingSpeakersRoute(req.body)),
 );
 
 app.get(

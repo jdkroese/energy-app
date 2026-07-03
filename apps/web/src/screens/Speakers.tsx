@@ -10,7 +10,7 @@ import type { ShellContext } from '../components/shell/AppShell';
 import { RadioPanel, RadioSchedulesSection } from '../components/radio/Radio';
 import { MusicPanel } from '../components/music/Music';
 import { PlayingOnControl } from '../components/music/PlayingOnControl';
-import { useNowPlaying } from '../components/shell/NavMiniPlayer';
+import { useNowPlaying, sourceLabel } from '../components/shell/NavMiniPlayer';
 
 /* ============================================================================
  * Speakers — the Sonos fleet (local UPnP): per-speaker volume + Test. The house
@@ -352,9 +352,7 @@ function SpeakersSection({ fleet, canControl, wide }: {
   // screen's fleet so the section still lists every zone.
   const activeFleet = np?.fleet.length ? np.fleet : fleet;
 
-  const label = np
-    ? (np.source === 'spotify' ? 'Spotify' : 'Radio')
-    : 'Idle';
+  const label = np ? sourceLabel(np.source) : 'Idle';
 
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

@@ -638,6 +638,157 @@ export async function stopSpeakers(speakerIds?: string[]): Promise<void> {
   lastFleetAt = 0;
 }
 
+// ---- Live playback state (what's actually playing on Sonos) -----------------
+// The Music/Radio surfaces only know about playback THIS app started (the radio store /
+// the Spotify Web API). Anything started elsewhere — the Sonos app, AirPlay, TV, line-in,
+// a Sonos favourite — is invisible to them, so it can't be shown or stopped. getPlaybackState()
+// reads the REAL transport state off each group coordinator so any current playback is
+// surfaced (mini-player + Speakers section) and stoppable. Cached briefly so the 5s
+// now-playing poll doesn't hammer the UPnP transport.
+
+export interface SonosPlayback {
+  /** At least one group is actively PLAYING (or transitioning into play). */
+  isPlaying: boolean;
+  /** Best-effort current-track / source label of the primary playing group. */
+  title: string | null;
+  /** Best-effort source name derived from the transport URI (TV, Line-in, Spotify, Radio…). */
+  source: string | null;
+  /** The primary playing group's coordinator id (anchors live re-grouping). */
+  coordinator: string | null;
+  /** Visible member ids that are currently playing (union across playing groups). */
+  speakerIds: string[];
+}
+
+const PLAYBACK_TTL_MS = 4_000;
+let lastPlayback: SonosPlayback | null = null;
+let lastPlaybackAt = 0;
+
+/** Pull a friendly title from a GetPositionInfo TrackMetaData (parsed Track object or raw DIDL). */
+function titleFromMeta(meta: unknown): string | null {
+  if (!meta) return null;
+  if (typeof meta === 'object') {
+    const t = meta as { Title?: unknown; Artist?: unknown };
+    const title = typeof t.Title === 'string' ? t.Title.trim() : '';
+    const artist = typeof t.Artist === 'string' ? t.Artist.trim() : '';
+    if (title && artist) return `${title} · ${artist}`;
+    return title || artist || null;
+  }
+  if (typeof meta === 'string') {
+    const m = decodeEntities(meta).match(/<dc:title>([^<]*)<\/dc:title>/i);
+    const title = m?.[1]?.trim();
+    return title || null;
+  }
+  return null;
+}
+
+/** Best-effort human source name from a Sonos transport URI. */
+function sourceFromUri(uri: string): string | null {
+  const u = (uri || '').toLowerCase();
+  if (!u) return null;
+  if (u.startsWith('x-sonos-htastream:')) return 'TV';
+  if (u.startsWith('x-rincon-stream:') || u.startsWith('x-sonos-vli:')) return 'Line-in';
+  if (u.startsWith('x-sonosapi-radio:') || u.includes('airplay')) return 'AirPlay';
+  if (u.includes('spotify')) return 'Spotify';
+  if (u.startsWith('x-rincon-mp3radio:') || u.startsWith('x-sonosapi-stream:')) return 'Radio';
+  if (u.includes('soundcloud')) return 'SoundCloud';
+  if (u.includes('tidal')) return 'Tidal';
+  return null;
+}
+
+/**
+ * Read the live transport state across all group coordinators and summarise the ACTIVE
+ * playback (or null when nothing is playing). Cached ~4s (soft-fails to the last snapshot on a
+ * transient read error) so the shared now-playing poll stays cheap. Only PLAYING/TRANSITIONING
+ * groups count as "playing" (a paused/stopped group is treated as idle).
+ */
+export async function getPlaybackState(force = false): Promise<SonosPlayback | null> {
+  if (!isConfigured()) return null;
+  if (!force && Date.now() - lastPlaybackAt < PLAYBACK_TTL_MS) return lastPlayback;
+  const m = await getManager();
+  if (!m) return lastPlayback;
+  try {
+    if (invisibleUuids.size === 0) invisibleUuids = await readInvisibleUuids(m);
+    const coords = groupCoordinators(m);
+    const groups: { coord: SonosDevice; members: string[]; title: string | null; source: string | null }[] = [];
+    await Promise.all(
+      coords.map(async (c) => {
+        try {
+          const info = await c.AVTransportService.GetTransportInfo({ InstanceID: 0 });
+          const state = info.CurrentTransportState;
+          if (state !== 'PLAYING' && state !== 'TRANSITIONING') return;
+          // Visible members of this coordinator's group (drop stereo-pair satellites).
+          const members = m.Devices.filter((d) => {
+            let cu: string;
+            try {
+              cu = d.Coordinator?.Uuid ?? d.Uuid;
+            } catch {
+              cu = d.Uuid;
+            }
+            return cu === c.Uuid && !invisibleUuids.has(d.Uuid);
+          }).map((d) => d.Uuid);
+          let title: string | null = null;
+          let source: string | null = null;
+          try {
+            const pos = await c.AVTransportService.GetPositionInfo({ InstanceID: 0 });
+            title = titleFromMeta(pos.TrackMetaData);
+            source = sourceFromUri(String(pos.TrackURI ?? ''));
+          } catch {
+            /* keep title/source null */
+          }
+          groups.push({ coord: c, members, title, source });
+        } catch {
+          /* this coordinator didn't answer — the others still report */
+        }
+      }),
+    );
+    if (groups.length === 0) {
+      lastPlayback = null;
+      lastPlaybackAt = Date.now();
+      return null;
+    }
+    // Primary = the playing group with the most speakers (the "main" zone in a mixed system).
+    groups.sort((a, b) => b.members.length - a.members.length);
+    const primary = groups[0];
+    const speakerIds = [...new Set(groups.flatMap((g) => g.members))];
+    lastPlayback = {
+      isPlaying: true,
+      title: primary.title,
+      source: primary.source,
+      coordinator: primary.coord.Uuid,
+      speakerIds,
+    };
+    lastPlaybackAt = Date.now();
+    return lastPlayback;
+  } catch {
+    return lastPlayback; // keep the last good snapshot on a transient read failure
+  }
+}
+
+/**
+ * Reconcile an already-playing NATIVE Sonos session (one not started via the app's radio/Spotify
+ * paths) to `targetIds`, live — the "Playing on" checkboxes call this. Reads the current playback
+ * to find the coordinator + in-scope zones, then adds/removes zones (JoinGroup / leave+stop). An
+ * empty target stops everything. Returns the resolved coordinator + joined ids. Throws when nothing
+ * is playing or Sonos is unreachable.
+ */
+export async function setPlayingSpeakers(
+  targetIds: string[],
+): Promise<{ coordinator: string; joined: string[]; stopped?: boolean }> {
+  const pb = await getPlaybackState(true);
+  if (!pb || !pb.coordinator) throw new Error('nothing is playing');
+  if (targetIds.length === 0) {
+    await stopSpeakers();
+    lastPlaybackAt = 0;
+    return { coordinator: pb.coordinator, joined: [], stopped: true };
+  }
+  const coordinator = pb.coordinator;
+  // Always keep the coordinator in-scope (its stream anchors the group).
+  const withCoord = targetIds.includes(coordinator) ? targetIds : [coordinator, ...targetIds];
+  const res = await reconcileGroup(coordinator, pb.speakerIds, withCoord);
+  lastPlaybackAt = 0;
+  return res;
+}
+
 /** A Sonos system radio favourite (from GetFavorites / GetFavoriteRadioStations). */
 export interface SonosFavorite {
   title: string;
