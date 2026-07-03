@@ -381,9 +381,17 @@ function printHarvestSummary(cache) {
   console.log(`\nHarvest summary: ${all.length} devices, ${ready} have ip+localKey (ready for a local probe).`);
 }
 
-// Opt-in, single-device, benign write test. Guarded hard: id must match a device
-// we harvested AND must not look like a breaker/curtain (avoid moving hardware) —
-// we only toggle a simple boolean switch DP if one is present, then restore it.
+// Categories that are SAFE to toggle in a write test: lights + fans only. Toggling
+// these just blinks a light / cycles a fan. Everything else — breakers (tdq), sockets
+// (cz/pc/wkcz, cut power to a load), curtains (cl/clkg, move hardware), plain wall
+// switches (kg) — is EXCLUDED. Keyed on raw Tuya category codes (see CATEGORY_LABELS
+// in apps/api/src/connectors/tuya.ts).
+const BENIGN_WRITE_CATS = new Set(['dj', 'dd', 'dc', 'fwd', 'xdd', 'fsd', 'tgq', 'tgkg', 'tyndj', 'fs']);
+
+// Opt-in, single-device, benign write test. Guarded hard: id must match a harvested,
+// locally-reachable device whose category is on the lights/fans ALLOWLIST (an allowlist
+// fails safe — an unknown/empty category is refused, never toggled). We then flip one
+// boolean switch DP and restore it.
 async function runWriteTest(TuyAPI, cache, results) {
   const dev = cache.devices[WRITE_TEST_ID];
   console.log(`\n--- WRITE TEST (${WRITE_TEST_ID}) ---`);
@@ -392,8 +400,9 @@ async function runWriteTest(TuyAPI, cache, results) {
   const probe = results.find((x) => x.dev.id === WRITE_TEST_ID);
   if (!probe || !probe.r.reachable) return console.log('  aborted: device was not locally reachable.');
   const cat = (dev.category || '').toLowerCase();
-  if (/(cl|curtain|cz.*breaker|breaker|dlq|wk|kg.*gate)/.test(cat)) {
-    return console.log(`  aborted: category '${dev.category}' is not benign for a blind toggle test.`);
+  const benign = BENIGN_WRITE_CATS.has(cat) || /(light|lamp|bulb|dimmer|\bfan\b)/.test(cat);
+  if (!benign) {
+    return console.log(`  aborted: category '${dev.category || 'unknown'}' is not on the lights/fans write allowlist — refusing to actuate. Read-only stands.`);
   }
 
   const version = probe.r.version;
