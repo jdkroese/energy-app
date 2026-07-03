@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { assertRealFillAllowed, assertUnderSpendCap, buildCartPlan, lineQuantity, SpendCapError, UnpricedLinesError, wireLines } from './cart';
+import { assertRealFillAllowed, assertUnderSpendCap, buildCartPlan, lineQuantity, SpendCapError, wireLines } from './cart';
 import type { OrderLine } from './types';
 
 function line(overrides: Partial<OrderLine>): OrderLine {
@@ -67,9 +67,12 @@ test('lineQuantity: packsNeeded > count qty > 1-unit fallback', () => {
   assert.equal(lineQuantity(line({ qty: 0, unit: 'to taste' })), 1);
 });
 
-test('unpriced lines are counted (the cap cannot see them)', () => {
-  const plan = buildCartPlan([line({ productId: 'p1', priceEur: null })]);
-  assert.equal(plan.unpricedCount, 1);
+test('an unpriced (obsolete) mapped line is SKIPPED, not sent, and not summed', () => {
+  const plan = buildCartPlan([line({ label: 'Café en grano', productId: 'p1', priceEur: null })]);
+  assert.deepEqual(wireLines(plan), []); // never reaches the wire payload
+  assert.equal(plan.items.length, 0);
+  assert.deepEqual(plan.skipped, [{ label: 'Café en grano', reason: 'unpriced' }]);
+  assert.equal(plan.unpricedCount, 1); // still counted (informational)
   assert.equal(plan.estimatedCount, 0);
   assert.equal(plan.totalEur, 0);
 });
@@ -79,15 +82,17 @@ test('unpriced lines are counted (the cap cannot see them)', () => {
 // re-check is unavailable. buildCartPlan must count those as estimated (NOT unpriced),
 // flag the item, and fold their price into a REAL totalEur (not the 0-sum no-op).
 
-test('estimated lines feed a REAL total and count as estimated, not unpriced', () => {
+test('estimated lines feed a REAL total; the unpriced line is skipped, not summed', () => {
   const plan = buildCartPlan([
     line({ id: 'a', productId: 'p1', priceEur: 12.5, priceEst: true }),
     line({ id: 'b', productId: 'p2', priceEur: 3.0 }), // live-confirmed
-    line({ id: 'c', productId: 'p3', priceEur: null }), // truly unpriced
+    line({ id: 'c', label: 'Fresón', productId: 'p3', priceEur: null }), // obsolete → skipped
   ]);
   assert.equal(plan.totalEur, 15.5); // 12.50 (estimate) + 3.00 — a REAL total, not 0
   assert.equal(plan.estimatedCount, 1);
-  assert.equal(plan.unpricedCount, 1); // only the never-priced line
+  assert.equal(plan.unpricedCount, 1); // the never-priced line, now skipped
+  assert.deepEqual(plan.skipped, [{ label: 'Fresón', reason: 'unpriced' }]);
+  assert.equal(plan.items.length, 2); // only the two priced products ship
   const est = plan.items.find((it) => it.product_id === 'p1');
   assert.equal(est?.estimated, true);
   const live = plan.items.find((it) => it.product_id === 'p2');
@@ -136,36 +141,38 @@ test('a fill at exactly the cap passes; the default cap is 150', () => {
   assert.doesNotThrow(() => assertUnderSpendCap(plan, 150));
 });
 
-// ---- Unpriced-lines refusal (PR #191 review finding #2) -------------------------------------
-// When Mercadona is unreachable, enrich degrades every price to null → the known
-// total is 0 → the cap alone would wave an effectively uncapped fill through. A REAL
-// fill must therefore refuse when ANY item is unpriced. The route runs this check
-// BEFORE mercadonaAuth is touched, so a refusal performs no network write.
+// ---- Unpriced (obsolete) lines are SKIPPED, not refused --------------------------------------
+// Genuinely unavailable/obsolete regulars carry no catalog price (priceEur == null) even
+// when Mercadona is reachable. Rather than hard-refusing the whole fill (which let a
+// handful of dead items block everything), buildCartPlan SKIPS them out of the wire
+// payload and totalEur; the real-fill pre-flight now only enforces the spend cap on the
+// REAL, priced total. The user resolves the skipped items (swap/remove) in Groceries.
 
-test('a real fill with unpriced items is REFUSED even though the cap sees 0 €', () => {
-  // The catalog-down state: mapped lines, all prices degraded to null.
+test('a real fill with only unpriced items sends nothing but does NOT refuse', () => {
   const plan = buildCartPlan([
-    line({ id: 'a', productId: 'p1', priceEur: null }),
-    line({ id: 'b', productId: 'p2', priceEur: null }),
-    line({ id: 'c', productId: 'p3', priceEur: null }),
+    line({ id: 'a', label: 'Agua con gas Cortes', productId: 'p1', priceEur: null }),
+    line({ id: 'b', label: 'Ginebra', productId: 'p2', priceEur: null }),
+    line({ id: 'c', label: 'Café en grano', productId: 'p3', priceEur: null }),
   ]);
-  assert.equal(plan.totalEur, 0); // the cap alone is blind here…
-  assert.doesNotThrow(() => assertUnderSpendCap(plan, 150)); // …and would pass!
-  assert.throws(() => assertRealFillAllowed(plan, 150), UnpricedLinesError);
-  try {
-    assertRealFillAllowed(plan, 150);
-  } catch (e) {
-    assert.match((e as Error).message, /3 items have no live price/);
-    assert.match((e as Error).message, /send as checklist/);
-  }
+  assert.equal(plan.items.length, 0); // nothing ships
+  assert.equal(plan.totalEur, 0);
+  assert.equal(plan.unpricedCount, 3);
+  assert.deepEqual(
+    plan.skipped.map((s) => s.reason),
+    ['unpriced', 'unpriced', 'unpriced'],
+  );
+  assert.doesNotThrow(() => assertRealFillAllowed(plan, 150)); // no longer blocks
 });
 
-test('one unpriced item among priced ones still refuses a real fill', () => {
+test('one unpriced item among priced ones is skipped; the rest fill', () => {
   const plan = buildCartPlan([
     line({ id: 'a', productId: 'p1', priceEur: 12.5 }),
-    line({ id: 'b', productId: 'p2', priceEur: null }),
+    line({ id: 'b', label: 'Ginebra', productId: 'p2', priceEur: null }),
   ]);
-  assert.throws(() => assertRealFillAllowed(plan, 150), UnpricedLinesError);
+  assert.deepEqual(wireLines(plan), [{ product_id: 'p1', quantity: 1 }]);
+  assert.deepEqual(plan.skipped, [{ label: 'Ginebra', reason: 'unpriced' }]);
+  assert.equal(plan.totalEur, 12.5);
+  assert.doesNotThrow(() => assertRealFillAllowed(plan, 150));
 });
 
 test('a fully-priced under-cap plan passes the real-fill pre-flight', () => {
@@ -173,7 +180,7 @@ test('a fully-priced under-cap plan passes the real-fill pre-flight', () => {
   assert.doesNotThrow(() => assertRealFillAllowed(plan, 150));
 });
 
-test('the cap still wins first: over-cap AND unpriced reports the cap error', () => {
+test('the cap still refuses an over-cap priced total (unpriced items skipped)', () => {
   const plan = buildCartPlan([
     line({ id: 'a', productId: 'p1', priceEur: 200.0 }),
     line({ id: 'b', productId: 'p2', priceEur: null }),

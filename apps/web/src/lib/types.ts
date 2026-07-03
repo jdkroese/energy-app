@@ -2451,7 +2451,8 @@ export interface FillCartResponse {
   added?: number;
   cartLines?: number;
   items: CartPlanItem[];
-  skipped: Array<{ label: string; reason: string }>;
+  /** Checked lines that didn't ship: 'unmapped' (no product) or 'unpriced' (obsolete/no price). */
+  skipped: Array<{ label: string; reason: 'unmapped' | 'unpriced' | string }>;
   totalEur: number;
   unpricedCount: number;
   /** Items priced from a last-known estimate (Mercadona flaky) — included in totalEur. */
