@@ -3,10 +3,19 @@
 //  - Always a realistic browser User-Agent (Akamai bot manager) + ?lang=es&wh=<warehouse>.
 //  - Warehouse resolved ONCE via PUT /api/postal-codes/actions/change-pc/ → x-customer-wh
 //    header (03730 → alc1). Cached in state.json (kitchen.mercadona); NEVER hardcoded.
-//  - Search: Algolia index products_prod_{wh}_es with PUBLIC app-id/key scraped from the
-//    tienda JS bundle; keys rotate → re-scrape + retry once on 401/403/404. Mercadona is
-//    mid-migration off Algolia, so search sits behind searchProducts() with a
-//    category-walk fallback — a dead Algolia degrades, never breaks.
+//  - Search: 3-tier chain behind searchProducts(), each hop falling through on null OR
+//    0 hits, null only when ALL tiers fail (→ "prices unavailable"):
+//    1. PRIMARY — Mercadona's in-house search
+//       GET https://tornillos.mercadona.es/search?q=<query>&wh=<wh>&lang=es (anonymous,
+//       no auth/keys, same browser-UA/Akamai posture). Returns an Algolia-compatible body
+//       { hits: RawProduct[], nbHits, ... } — each hit is a full RawProduct normalizeProduct
+//       already consumes. Full coverage incl. fresh produce/bakery/fish.
+//    2. category-walk fallback (walk the category tree, substring-match names).
+//    3. LAST-DITCH — Algolia index products_prod_{wh}_es with PUBLIC app-id/key scraped
+//       from the tienda JS bundle (keys rotate → re-scrape + retry once on 4xx). Partial,
+//       typo-prone coverage AFTER Mercadona's in-house migration (0 hits for gambas/pepino;
+//       ajo→estropajo), so no longer primary — but Algolia works from ANY IP (not behind
+//       Akamai), so it's the only search that still answers if the mini is Akamai-challenged.
 //  - All reads cached ≥30 min (their own Cache-Control is 1800s). Low concurrency
 //    (max 2 in flight), 1 retry max, 8s timeout.
 //  - EVERYTHING degrades gracefully: if Mercadona is unreachable the app still fully
@@ -104,6 +113,11 @@ function markReachable(): void {
 /** Test-only reset. */
 export function clearUnreachableForTests(): void {
   unreachableUntil = 0;
+}
+
+/** Test-only: drop the response cache so successive tests don't reuse a cached search. */
+export function clearCacheForTests(): void {
+  cache.clear();
 }
 
 let inFlight = 0;
@@ -293,7 +307,44 @@ export async function getProduct(productId: string): Promise<MercadonaProduct | 
   return raw ? normalizeProduct(raw) : null;
 }
 
-// ---- Search (Algolia, behind an interface, with category-walk fallback) ------------
+// ---- Search (Mercadona in-house "tornillos", with category-walk fallback) ----------
+
+const SEARCH_BASE = 'https://tornillos.mercadona.es';
+
+/** Map a raw tornillos/search response body to normalized products. Pure — unit-tested. */
+export function mapHits(json: { hits?: RawProduct[] } | null | undefined): MercadonaProduct[] {
+  return (json?.hits ?? []).map(normalizeProduct);
+}
+
+/**
+ * Mercadona's in-house search (replaces the retired Algolia index — see header).
+ * GET https://tornillos.mercadona.es/search?q=<query>&wh=<wh>&lang=es → Algolia-shaped
+ * { hits: RawProduct[], ... }. Reuses the shared gate/timeout/UA + unreachability
+ * negative-cache posture. Returns the mapped products on 200, or `null` on a non-OK
+ * status / network error so searchProducts() can fall back and the graceful-degradation
+ * contract holds.
+ */
+async function tornillosSearch(query: string, wh: string): Promise<MercadonaProduct[] | null> {
+  if (isUnreachable()) return null; // negative cache — fail fast, callers degrade
+  const url = `${SEARCH_BASE}/search?q=${encodeURIComponent(query)}&wh=${encodeURIComponent(wh)}&lang=es`;
+  try {
+    const res = await gate(() => (isUnreachable() ? null : fetchWithTimeout(url)));
+    if (res === null) return null;
+    markReachable();
+    if (!res.ok) return null;
+    const json = (await res.json()) as { hits?: RawProduct[] };
+    return mapHits(json);
+  } catch (e) {
+    markUnreachable(`search ${query}: ${(e as Error).message}`);
+    console.error('[mercadona] tornillos search failed:', (e as Error).message);
+    return null;
+  }
+}
+
+// ---- Algolia (tier 3, last-ditch): any-IP fallback if the mini gets Akamai-challenged --
+// No longer primary (its index under-covers fresh produce after Mercadona's in-house
+// migration), but it's the only search path NOT behind Akamai, so keep it + the key
+// scrape intact as a final safety net. extractAlgolia is also covered by a unit test.
 
 // Last-known-good public keys (baked into Mercadona's JS bundle; they ROTATE — used
 // only until the first scrape, and re-scraped automatically on any 4xx).
@@ -424,8 +475,12 @@ async function categoryWalkSearch(query: string): Promise<MercadonaProduct[] | n
 }
 
 /**
- * THE search interface (docs/39): Algolia first, category-walk fallback, 30-min cache.
- * Returns null when Mercadona is fully unreachable — callers render "prices unavailable".
+ * THE search interface (docs/39): a 3-tier chain — tornillos (in-house, PRIMARY,
+ * full coverage) → category-walk → Algolia (last-ditch, any-IP safety net). 30-min cache.
+ * Each hop falls through when its tier yields null (unreachable/error) OR an EMPTY result
+ * (0 hits), so a genuine 0-hit tornillos/category result still tries the next tier — this
+ * is what fixes the old empty-array-doesn't-fall-back bug. Returns null only when ALL
+ * tiers fail (fully unreachable) — callers render "prices unavailable".
  */
 export async function searchProducts(query: string): Promise<MercadonaProduct[] | null> {
   const q = query.trim();
@@ -435,8 +490,10 @@ export async function searchProducts(query: string): Promise<MercadonaProduct[] 
   const cacheKey = `search:${wh}:${q.toLowerCase()}`;
   const hit = cacheGet<MercadonaProduct[]>(cacheKey);
   if (hit) return hit;
-  const viaAlgolia = await algoliaSearch(q, wh);
-  const results = viaAlgolia ?? (await categoryWalkSearch(q));
+  // Fall through on null (dead) OR empty (0 hits); keep the first non-empty result.
+  let results = await tornillosSearch(q, wh);
+  if (!results?.length) results = (await categoryWalkSearch(q)) ?? results;
+  if (!results?.length) results = (await algoliaSearch(q, wh)) ?? results;
   if (results) cacheSet(cacheKey, results);
   return results;
 }
