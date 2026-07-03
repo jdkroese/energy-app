@@ -8,7 +8,7 @@
 // (docs/39) — the status probe, Intelligence settings and account link/unlink/
 // guardrail settings are admin-gated.
 
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { requireAdmin } from '../auth/middleware';
 import * as mercadona from '../connectors/mercadona';
 import * as mercadonaAuth from '../connectors/mercadona-auth';
@@ -28,6 +28,7 @@ import {
 import { enrichLines } from '../kitchen/enrich';
 import { assertRealFillAllowed, assertUnderSpendCap, buildCartPlan, SpendCapError, UnpricedLinesError, wireLines } from '../kitchen/cart';
 import { applySuggestion, buildSuggestions, isMuted, muteKey } from '../kitchen/suggestions';
+import { rankRecipesByCoverage } from '../kitchen/whatcanimake';
 import { syncOrderStatus } from '../kitchen/order-status';
 import { importRecipeFromUrl } from '../kitchen/import';
 import type {
@@ -61,6 +62,20 @@ const wrap =
   };
 
 const ts = () => new Date().toISOString();
+
+/**
+ * Kiosk authority (P3, docs/32/38): the wall tablet may quick-add, log "cooked!" and run
+ * timers, but must NEVER reach money-adjacent surfaces. The mounted router runs behind
+ * the global requireAuth (a kiosk session passes), so the cart fill gets this explicit
+ * block; account link/unlink + guardrail/Intelligence settings are requireAdmin already.
+ */
+function blockKiosk(req: Request, res: Response, next: NextFunction): void {
+  if (req.user?.role === 'kiosk') {
+    res.status(403).json({ error: 'not available on the wall tablet' });
+    return;
+  }
+  next();
+}
 
 export const kitchenRouter = Router();
 
@@ -265,6 +280,93 @@ kitchenRouter.delete(
       d.recipes = d.recipes.filter((r) => r.id !== id);
     });
     return { ts: ts(), ok: true };
+  }),
+);
+
+// Cooked! (P3, docs/38 Loop C): one tap at the end of cooking mode logs lastCookedAt
+// (feeds the 3-week rotation) + an optional 👍/😐/👎 rating that nudges the suggestion
+// engine (engine.ratingAvg). Kiosk-allowed by design — any household member may cook.
+kitchenRouter.post(
+  '/recipes/:id/cooked',
+  wrap((req) => {
+    const id = String(req.params.id);
+    const raw = String((req.body as { rating?: unknown })?.rating ?? '');
+    const rating = raw === 'up' || raw === 'meh' || raw === 'down' ? raw : null;
+    const value = rating === 'up' ? 1 : rating === 'down' ? -1 : rating === 'meh' ? 0 : null;
+    const now = ts();
+    const updated = kitchen.update((d) => {
+      const r = d.recipes.find((x) => x.id === id);
+      if (!r) return null;
+      r.lastCookedAt = now;
+      if (value != null) r.ratings = { ...(r.ratings ?? {}), [now]: value };
+      r.updatedAt = now;
+      return r;
+    });
+    if (!updated) throw badInput(`recipe ${id} not found`);
+    logEvent({
+      class: 'action',
+      category: 'kitchen',
+      severity: 'low',
+      summary: `Cooked: ${updated.title}${rating ? ` — rated ${rating === 'up' ? '👍' : rating === 'meh' ? '😐' : '👎'}` : ''}`,
+      trigger: { source: 'user' },
+      ok: true,
+      data: { recipeId: id, rating },
+    });
+    return { ts: now, recipe: updated };
+  }),
+);
+
+// ---- "What can I make with…" (P3, docs/38 Loop C) ---------------------------------------
+
+function onHandParam(req: Request): string[] {
+  const raw = (req.body as { ingredients?: unknown })?.ingredients;
+  if (!Array.isArray(raw)) throw badInput('body.ingredients array required');
+  const terms = raw
+    .filter((x): x is string => typeof x === 'string')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  if (!terms.length) throw badInput('body.ingredients array required');
+  return terms;
+}
+
+// Deterministic coverage ranking — no LLM (kitchen/whatcanimake.ts, unit-tested).
+kitchenRouter.post(
+  '/what-can-i-make',
+  wrap((req) => {
+    const terms = onHandParam(req);
+    return { ts: ts(), results: rankRecipesByCoverage(kitchen.get().recipes, terms) };
+  }),
+);
+
+// "More ideas" — free-form Claude suggestions behind the Intelligence master switch +
+// the cooking-suggestions feature toggle; fails SOFT (ok:false) to the deterministic list.
+kitchenRouter.post(
+  '/what-can-i-make/ideas',
+  wrap(async (req) => {
+    const terms = onHandParam(req);
+    if (!claude.isFeatureEnabled('cookingSuggestions')) {
+      return { ts: ts(), ok: false, reason: 'intelligence-off', ideas: [] };
+    }
+    const h = kitchen.get().household;
+    const parsed = await claude.completeJSON<{ ideas?: Array<{ title?: string; note?: string }> }>({
+      system:
+        'You suggest quick family dinner ideas from ingredients on hand. Output ONLY JSON: ' +
+        '{"ideas": [{"title": "dish name", "note": "one short sentence: how, roughly, and what pantry basics it assumes"}]} ' +
+        'with up to 4 ideas. Simple weeknight food; assume common pantry staples (oil, salt, rice, pasta, onion, garlic).',
+      prompt:
+        `Ingredients on hand: ${terms.join(', ')}.` +
+        (h.allergies.length ? ` NEVER use: ${h.allergies.join(', ')} (allergies).` : '') +
+        (h.dislikes.length ? ` Avoid if possible: ${h.dislikes.join(', ')}.` : '') +
+        (h.kids > 0 ? ` Cooking for ${h.adults} adults + ${h.kids} kids.` : ''),
+      maxTokens: 500,
+    });
+    const ideas = (parsed?.ideas ?? [])
+      .filter((i) => i && typeof i.title === 'string' && i.title.trim())
+      .map((i) => ({ title: String(i.title).trim().slice(0, 80), note: typeof i.note === 'string' ? i.note.slice(0, 200) : '' }))
+      .slice(0, 4);
+    if (!ideas.length) return { ts: ts(), ok: false, reason: 'no-ideas', ideas: [] };
+    return { ts: ts(), ok: true, ideas };
   }),
 );
 
@@ -791,6 +893,7 @@ kitchenRouter.post(
 
 kitchenRouter.post(
   '/order/fill-cart',
+  blockKiosk,
   wrap(async () => {
     const cfg = store.get().kitchen.mercadona;
     const d = kitchen.get();

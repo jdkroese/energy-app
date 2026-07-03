@@ -2396,3 +2396,24 @@ export interface KitchenOrderSyncResponse {
 }
 export interface KitchenRegularsResponse { ts: string; linked: boolean; available: boolean; products: KitchenRegularHit[] }
 export interface KitchenImportRegularsResponse { ts: string; ok: boolean; added: number; staples: StaplesItem[] }
+
+/* ---- Kitchen Hub P3 (docs/42): cooked feedback · what-can-I-make ---- */
+
+export type CookedRating = 'up' | 'meh' | 'down';
+export interface KitchenCookedResponse { ts: string; recipe: Recipe }
+
+/** Deterministic ingredient-coverage hit ("7 of 9 on hand"). */
+export interface WhatCanIMakeResult {
+  recipeId: string;
+  have: number;
+  total: number;
+  matchedFresh: number;
+  missing: string[];
+}
+export interface WhatCanIMakeResponse { ts: string; results: WhatCanIMakeResult[] }
+export interface WhatCanIMakeIdeasResponse {
+  ts: string;
+  ok: boolean;
+  reason?: 'intelligence-off' | 'no-ideas';
+  ideas: Array<{ title: string; note: string }>;
+}

@@ -32,6 +32,8 @@ const AlarmScreen = lazy(() => import('./screens/Speakers').then((m) => ({ defau
 // Kitchen Hub (docs/38 + docs/39) — Cooking (planner + library) & Groceries (order builder).
 const Cooking = lazy(() => import('./screens/kitchen/Cooking').then((m) => ({ default: m.Cooking })));
 const Groceries = lazy(() => import('./screens/kitchen/Groceries').then((m) => ({ default: m.Groceries })));
+// Cooking mode (P3, docs/42) — the 3-phase guided cook; also mounted by the kiosk TabletShell.
+const Cook = lazy(() => import('./screens/kitchen/Cook').then((m) => ({ default: m.Cook })));
 const MusicScreen = lazy(() => import('./screens/Speakers').then((m) => ({ default: m.MusicScreen })));
 // AlarmActiveBanner renders on every authed page but shares a module with the
 // Radio/Speakers panels (~1k lines). Lazy-load it with a null fallback so it
@@ -90,6 +92,7 @@ function AppRoutes() {
           {/* Kitchen Hub — the weekly food loop (plan → order → cook). */}
           <Route path="/cooking" element={<Cooking ctx={ctx} />} />
           <Route path="/groceries" element={<Groceries ctx={ctx} />} />
+          <Route path="/cook/:recipeId" element={<Cook ctx={ctx} />} />
           {/* House-alarm panic page — a big trigger/STOP button for a phone shortcut. */}
           <Route path="/alarm" element={<AlarmScreen ctx={ctx} />} />
           {/* a signed-in user hitting an auth path goes home */}

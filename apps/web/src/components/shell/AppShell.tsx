@@ -83,7 +83,11 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
 
   const meta =
     META[location.pathname] ||
-    (location.pathname.startsWith('/batteries/') ? { eyebrow: 'Energy', title: 'Battery detail' } : { eyebrow: 'Home', title: '' });
+    (location.pathname.startsWith('/batteries/')
+      ? { eyebrow: 'Energy', title: 'Battery detail' }
+      : location.pathname.startsWith('/cook/')
+        ? { eyebrow: 'Kitchen', title: 'Cooking mode' }
+        : { eyebrow: 'Home', title: '' });
   const ctx: ShellContext = { desktop, range, setRange, settingsTab: activeSettingsTab, setSettingsTab };
 
   // Wall-tablet (kiosk) mode swaps the whole frame — its own nav + routes, so it

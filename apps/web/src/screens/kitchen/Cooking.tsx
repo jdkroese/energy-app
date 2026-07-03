@@ -13,6 +13,7 @@ import { usePolling } from '../../lib/usePolling';
 import type { KitchenCuisine, KitchenHousehold, MealPlan, MealPlanDay, Recipe } from '../../lib/types';
 import { MobileHeader } from '../_shared';
 import { CUISINE_LABEL, MetaChips, RecipePhoto, RecipeQuickView, ServingsStepper, dayLabel, weekLabel } from './shared';
+import { WhatCanIMake } from './WhatCanIMake';
 
 // ---- Week helpers (client mirrors of the server's engine) ---------------------------
 
@@ -45,6 +46,14 @@ function submitCountdown(submitBy: string | undefined): string | null {
 function servingsLabel(servings: number, hh: KitchenHousehold | null): string {
   if (hh && servings === hh.adults + hh.kids) return hh.kids > 0 ? `${hh.adults}+${hh.kids}` : String(hh.adults);
   return String(servings);
+}
+
+/** True when this recipe was cooked ON that calendar day (P3 ✓ state on day cards). */
+function cookedOn(recipe: Recipe | null | undefined, date: string): boolean {
+  if (!recipe?.lastCookedAt) return false;
+  const d = new Date(recipe.lastCookedAt);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` === date;
 }
 
 type Filter = 'all' | KitchenCuisine | 'quick' | 'kids' | 'goal';
@@ -91,6 +100,10 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
   const reminders = remindersResp?.reminders ?? null;
   const aiOn = Boolean(
     intelResp?.intelligence.enabled && intelResp.intelligence.configured && intelResp.intelligence.features.plannerRequestBox,
+  );
+  // "More ideas" in what-can-I-make rides its own feature toggle (docs/42 §3).
+  const aiCookOn = Boolean(
+    intelResp?.intelligence.enabled && intelResp.intelligence.configured && intelResp.intelligence.features.cookingSuggestions,
   );
   const byId = useMemo(() => new Map(recipes.map((r) => [r.id, r])), [recipes]);
 
@@ -383,7 +396,14 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
         )}
         <div style={{ padding: '10px 12px 12px', display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-3)' }}>
-            <span>{dayLabel(day.date)}</span>
+            <span>
+              {dayLabel(day.date)}
+              {cookedOn(recipe, day.date) && (
+                <span style={{ color: 'var(--solar)', marginLeft: 6 }}>
+                  <Icon name="check" size={11} /> cooked
+                </span>
+              )}
+            </span>
             {recipe && (
               <button
                 type="button"
@@ -471,6 +491,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
               {dayLabel(day.date)}
               {recipe && ` · ${recipe.prepMin + recipe.cookMin} min`}
               {recipe && showNutrition && recipe.nutrition && ` · ${recipe.nutrition.kcal} kcal`}
+              {cookedOn(recipe, day.date) && <span style={{ color: 'var(--solar)' }}> · ✓ cooked</span>}
             </span>
             {recipe && (recipe.kidScore ?? 0) >= 0.85 ? (
               <span style={{ color: 'var(--grid)' }}>Kids ❤</span>
@@ -527,6 +548,16 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
           onSendToGroceries={() => {
             void addWeekToGroceries();
           }}
+          extraActions={
+            <Button
+              variant="secondary"
+              style={{ flex: 1 }}
+              iconLeft={<Icon name="play" size={15} />}
+              onClick={() => navigate(`/cook/${quickView.recipe.id}${quickView.day ? `?date=${quickView.day.date}` : ''}`)}
+            >
+              Cook now
+            </Button>
+          }
         />
       )}
       {prefsOpen && household && (
@@ -586,6 +617,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
         </div>
         <div style={{ marginTop: 10 }}>{filterChips}</div>
         {shelf}
+        <WhatCanIMake recipes={recipes} aiOn={aiCookOn} wide onOpenRecipe={(r) => setQuickView({ recipe: r })} />
         {overlays}
       </div>
     );
@@ -624,6 +656,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
         ))}
         <div style={{ marginTop: 4 }}>{filterChips}</div>
         {shelf}
+        <WhatCanIMake recipes={recipes} aiOn={aiCookOn} wide={false} onOpenRecipe={(r) => setQuickView({ recipe: r })} />
       </div>
       <div style={{ position: 'sticky', bottom: 0, padding: '10px 14px calc(12px + env(safe-area-inset-bottom))', background: 'linear-gradient(transparent, var(--bg-0) 40%)' }}>
         <Button variant="primary" size="lg" block loading={busy === 'to-groceries'} iconRight={<Icon name="chevron-right" size={16} />} onClick={() => void addWeekToGroceries()}>

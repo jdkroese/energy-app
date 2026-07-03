@@ -138,6 +138,10 @@ import type {
   KitchenOrderSyncResponse,
   KitchenRegularsResponse,
   KitchenImportRegularsResponse,
+  CookedRating,
+  KitchenCookedResponse,
+  WhatCanIMakeResponse,
+  WhatCanIMakeIdeasResponse,
 } from "./types";
 
 /**
@@ -831,6 +835,20 @@ export const api = {
       apiKey?: string;
       features?: Partial<KitchenIntelligence["features"]>;
     }) => putJSON<KitchenIntelligenceResponse>("/api/kitchen/intelligence", patch),
+    /* -- P3 (docs/42): cooked feedback · what-can-I-make -- */
+    cooked: (id: string, rating?: CookedRating) =>
+      postJSON<KitchenCookedResponse>(
+        `/api/kitchen/recipes/${enc(id)}/cooked`,
+        rating ? { rating } : {},
+      ),
+    whatCanIMake: (ingredients: string[]) =>
+      postJSON<WhatCanIMakeResponse>("/api/kitchen/what-can-i-make", {
+        ingredients,
+      }),
+    whatCanIMakeIdeas: (ingredients: string[]) =>
+      postJSON<WhatCanIMakeIdeasResponse>("/api/kitchen/what-can-i-make/ideas", {
+        ingredients,
+      }),
   },
 
   /* ---- Irrigation (Rain Bird); run/stop/rain-delay are admin + require armed ---- */
