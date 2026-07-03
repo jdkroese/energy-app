@@ -18,7 +18,7 @@
 //     same key. `x-access-key` carries the access key; `sys_code:901` is required.
 //   • Login: POST /openapi/login { appkey, login_type:"1", user_account, user_password,
 //     api_key_param:{nonce,timestamp} } → result_data.token (cached, re-minted on expiry).
-//   • Data: POST /openapi/getDeviceRealTimeData { appkey, device_type:11, ps_key_list,
+//   • Data: POST /openapi/getDeviceRealTimeData { appkey, device_type:1, ps_key_list,
 //     point_id_list } → result_data.device_point_list[].device_point.p83033 (AC power W),
 //     p83022 (daily yield Wh). Plant/device discovery: /openapi/getPowerStationList,
 //     /openapi/getDeviceList.
@@ -45,6 +45,12 @@ export interface CloudDevice {
   deviceState: string | null;
   /** True when the cloud marks the device offline/faulted (outage source of truth). */
   offline: boolean;
+  /**
+   * When the expected AC-power point (p83033) is MISSING for this device, the actual
+   * point keys present in its device_point object (sorted), so a wrong point-id set is
+   * visible in the Test detail. null when power WAS reported (normal case).
+   */
+  pointsPresent: string[] | null;
 }
 
 export interface CloudSnapshot {
@@ -57,7 +63,16 @@ export interface CloudSnapshot {
 
 const SYS_CODE = '901';
 const LOGIN_TYPE = '1';
-const DEVICE_TYPE_INVERTER = 11;
+// Sungrow device_type for the units we monitor. 1 = string/PV inverter (SG series, e.g.
+// the owner's 2× SG5.0RS); 11 = hybrid/storage inverter (SH series). The owner's Test
+// confirmed the plant's devices report device_type 1 (seen list [1,7,22]) — 11 matched
+// nothing. Overridable via ISOLARCLOUD_DEVICE_TYPE so we can retune without a deploy if a
+// future unit reports differently; defaults to 1.
+const DEVICE_TYPE_INVERTER = ((): number => {
+  const raw = process.env.ISOLARCLOUD_DEVICE_TYPE?.trim();
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 1;
+})();
 // Point ids we read (jsanchezdelvillar/Sungrow-API): 83033 AC power (W), 83022 daily
 // yield (Wh), 83025 running state. Kept small so we stay well under any point quota.
 const POINT_ACTIVE_POWER = '83033';
@@ -272,13 +287,19 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
     const point = ((entry as Record<string, unknown>).device_point ?? {}) as Record<string, unknown>;
     const serial = String(point.dev_sn ?? point.device_sn ?? (entry as Record<string, unknown>).ps_key ?? '').trim();
     const psKey = String((entry as Record<string, unknown>).ps_key ?? point.ps_key ?? '').trim();
-    const acPowerW = toNum(point[`p${POINT_ACTIVE_POWER}`]);
+    const powerKey = `p${POINT_ACTIVE_POWER}`;
+    const acPowerW = toNum(point[powerKey]);
     const dailyWh = toNum(point[`p${POINT_DAILY_YIELD}`]);
     const runState = point[`p${POINT_RUN_STATE}`];
     const stateStr = runState == null ? null : String(runState);
     // Offline = cloud reports no live power AND (no run-state or a non-running one).
     const running = stateStr != null && /1|run|online|正常/i.test(stateStr);
     const offline = (acPowerW == null || acPowerW <= 0) && !running;
+    // Safety net: if the expected AC-power point key is absent for this device, capture the
+    // keys that ARE present so a wrong point-id set (e.g. different ids for device_type 1)
+    // is diagnosable in ONE Test instead of guessing. Only when the key itself is missing —
+    // a present-but-null/"--" reading is a real zero, not a point-id mismatch.
+    const pointsPresent = powerKey in point ? null : Object.keys(point).sort();
     out.push({
       serial,
       psKey,
@@ -286,6 +307,7 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
       dailyKwh: dailyWh == null ? null : dailyWh / 1000,
       deviceState: stateStr,
       offline,
+      pointsPresent,
     });
   }
   return out;
@@ -594,8 +616,15 @@ export async function diagnose(
   // Success — per-device serial + kW + offline flag so real numbers are visible, plus the
   // raw discovery counts (plants / devices / device_types) so the topology is legible.
   const parts = devices.map((d) => {
+    const id = d.serial || d.psKey || '?';
+    // If the expected AC-power point was MISSING, the point ids likely differ for this
+    // device_type — show the keys actually present so the right ids are visible in ONE Test.
+    if (d.pointsPresent) {
+      const present = d.pointsPresent.length ? d.pointsPresent.join(',') : 'none';
+      return `${id}: no p${POINT_ACTIVE_POWER} — points present: ${present}`;
+    }
     const kw = d.acPowerW == null ? '—' : `${(d.acPowerW / 1000).toFixed(2)}kW`;
-    return `${d.serial || d.psKey || '?'} ${kw}${d.offline ? ' (offline)' : ''}`;
+    return `${id} ${kw}${d.offline ? ' (offline)' : ''}`;
   });
   const topoLabel = topo.fromSerialMap
     ? 'serialMap'

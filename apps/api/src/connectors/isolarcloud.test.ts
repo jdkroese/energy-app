@@ -166,16 +166,36 @@ test('parseRealTimeData maps p83033→W, p83022→kWh and flags offline correctl
   assert.equal(devs[0].acPowerW, 2500);
   assert.equal(devs[0].dailyKwh, 9.4); // 9400 Wh → 9.4 kWh
   assert.equal(devs[0].offline, false); // producing + running
+  assert.equal(devs[0].pointsPresent, null); // power present → no fallback keys
   assert.equal(devs[1].acPowerW, 0);
   assert.equal(devs[1].offline, true); // zero power + not running
+  assert.equal(devs[1].pointsPresent, null); // p83033 present (value "0") → real zero, not a miss
 });
 
 test('parseRealTimeData tolerates missing points / empty list', () => {
   assert.deepEqual(parseRealTimeData({ result_data: {} }), []);
-  const devs = parseRealTimeData({ result_data: { device_point_list: [{ ps_key: 'X_11_0_0', device_point: {} }] } });
+  const devs = parseRealTimeData({ result_data: { device_point_list: [{ ps_key: 'X_1_0_0', device_point: {} }] } });
   assert.equal(devs[0].acPowerW, null);
   assert.equal(devs[0].dailyKwh, null);
   assert.equal(devs[0].offline, true); // no power + no run-state → treated as offline
+  assert.deepEqual(devs[0].pointsPresent, []); // p83033 key absent → fallback reports (empty) present set
+});
+
+test('parseRealTimeData surfaces the ACTUAL point keys when p83033 is absent (point-id mismatch net)', () => {
+  // device_type 1 may report AC power under a DIFFERENT point id — no p83033. We must
+  // capture whatever keys ARE present so the right ids show up in one Test.
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        { ps_key: 'C1_1_0_0', device_point: { dev_sn: 'C1', p83067: '3100', p83022: '5000', p83001: '2' } },
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].serial, 'C1');
+  assert.equal(devs[0].acPowerW, null); // no p83033
+  assert.deepEqual(devs[0].pointsPresent, ['dev_sn', 'p83001', 'p83022', 'p83067']); // sorted keys present
 });
 
 // ---- diagnose (full read-chain Test button) --------------------------------
@@ -235,8 +255,10 @@ test('diagnose: 1 plant + devices but none are inverters → device_type filter 
     '/openapi/getDeviceList': {
       result_code: '1',
       result_data: {
+        // device_types 7 + 22 (meter/logger etc.) — none is the inverter type (1), so we
+        // still land in the "0 inverters" branch and surface the filter-adjust guidance.
         pageList: [
-          { device_type: 1, ps_key: 'X_1_0_0' },
+          { device_type: 7, ps_key: 'X_7_0_0' },
           { device_type: 22, ps_key: 'Y_22_0_0' },
         ],
       },
@@ -245,10 +267,49 @@ test('diagnose: 1 plant + devices but none are inverters → device_type filter 
   const r = await diagnose(CFG);
   assert.equal(r.ok, false);
   assert.match(r.detail, /login OK · 1 plant \(Javea\) · 2 devices but 0 are inverters/);
-  assert.match(r.detail, /device_types seen: \[1,22\]/);
+  assert.match(r.detail, /device_types seen: \[7,22\]/);
   assert.match(r.detail, /device_type filter may need adjusting/);
+  assert.match(r.detail, /expected 1/); // constant now 1 (SG string inverter), not 11
   assert.equal(r.devices, undefined);
   setFetchForTest(fetch);
+});
+
+test('diagnose: a device_type=1 device (SG string inverter) IS recognized as an inverter', async () => {
+  // The real fix: the owner's SG5.0RS units report device_type 1 (seen list [1,7,22]).
+  // With DEVICE_TYPE_INVERTER=1 the type-1 device must now be picked up and read.
+  resetTokenForTest();
+  resetPsKeysCacheForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    '/openapi/getPowerStationList': { result_code: '1', result_data: { pageList: [{ ps_id: 7, ps_name: 'Javea' }] } },
+    '/openapi/getDeviceList': {
+      result_code: '1',
+      result_data: {
+        pageList: [
+          { device_type: 1, ps_key: 'SG1_1_0_0' }, // string inverter — now matched
+          { device_type: 7, ps_key: 'MTR_7_0_0' }, // meter — ignored
+          { device_type: 22, ps_key: 'LOG_22_0_0' }, // logger — ignored
+        ],
+      },
+    },
+    '/openapi/getDeviceRealTimeData': {
+      result_code: '1',
+      result_data: {
+        device_point_list: [
+          { ps_key: 'SG1_1_0_0', device_point: { dev_sn: 'SG1', p83033: '4200', p83022: '11000', p83025: '1' } },
+        ],
+      },
+    },
+  });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, true);
+  assert.match(r.detail, /device_types \[1,7,22\] · 1 inverter ·/);
+  assert.match(r.detail, /SG1 4\.20kW/);
+  assert.equal(r.devices?.length, 1);
+  assert.equal(r.devices?.[0].serial, 'SG1');
+  assert.equal(r.devices?.[0].acPowerW, 4200);
+  setFetchForTest(fetch);
+  resetPsKeysCacheForTest();
 });
 
 test('diagnose: 1 plant but 0 devices → getDeviceList-empty guidance', async () => {
@@ -291,8 +352,8 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
       result_code: '1',
       result_data: {
         pageList: [
-          { device_type: 11, ps_key: 'A2160700249_11_0_0' },
-          { device_type: 11, ps_key: 'B2160700111_11_0_0' },
+          { device_type: 1, ps_key: 'A2160700249_1_0_0' },
+          { device_type: 1, ps_key: 'B2160700111_1_0_0' },
           { device_type: 14, ps_key: 'METER_14_0_0' }, // non-inverter, ignored
         ],
       },
@@ -301,21 +362,49 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
       result_code: '1',
       result_data: {
         device_point_list: [
-          { ps_key: 'A2160700249_11_0_0', device_point: { dev_sn: 'A2160700249', p83033: '2500', p83022: '9400', p83025: '1' } },
-          { ps_key: 'B2160700111_11_0_0', device_point: { dev_sn: 'B2160700111', p83033: '0', p83022: '0', p83025: '0' } },
+          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', p83033: '2500', p83022: '9400', p83025: '1' } },
+          { ps_key: 'B2160700111_1_0_0', device_point: { dev_sn: 'B2160700111', p83033: '0', p83022: '0', p83025: '0' } },
         ],
       },
     },
   });
   const r = await diagnose(CFG);
   assert.equal(r.ok, true);
-  assert.match(r.detail, /^login OK · 1 plant \(Javea\) · 3 devices · device_types \[11,14\] · 2 inverters ·/);
+  assert.match(r.detail, /^login OK · 1 plant \(Javea\) · 3 devices · device_types \[1,14\] · 2 inverters ·/);
   assert.match(r.detail, /A2160700249 2\.50kW/);
   assert.match(r.detail, /B2160700111 0\.00kW \(offline\)/);
   assert.equal(r.devices?.length, 2);
   assert.equal(r.devices?.[0].serial, 'A2160700249');
   assert.equal(r.devices?.[0].acPowerW, 2500);
   setFetchForTest(fetch);
+});
+
+test('diagnose: inverter found but p83033 missing → detail surfaces the points present', async () => {
+  // The device_type filter is right (an inverter is discovered + read) but the point ids
+  // differ for it: AC power arrives as p83067, not p83033. The Test must name the actual
+  // keys present so the right point ids are visible in ONE more Test.
+  resetTokenForTest();
+  resetPsKeysCacheForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    '/openapi/getPowerStationList': { result_code: '1', result_data: { pageList: [{ ps_id: 7, ps_name: 'Javea' }] } },
+    '/openapi/getDeviceList': { result_code: '1', result_data: { pageList: [{ device_type: 1, ps_key: 'SG1_1_0_0' }] } },
+    '/openapi/getDeviceRealTimeData': {
+      result_code: '1',
+      result_data: {
+        device_point_list: [
+          { ps_key: 'SG1_1_0_0', device_point: { dev_sn: 'SG1', p83067: '4200', p83022: '11000', p83001: '2' } },
+        ],
+      },
+    },
+  });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, true); // a device WAS read — the chain works, only the point ids differ
+  assert.match(r.detail, /SG1: no p83033 — points present: dev_sn,p83001,p83022,p83067/);
+  assert.equal(r.devices?.[0].acPowerW, null);
+  assert.deepEqual(r.devices?.[0].pointsPresent, ['dev_sn', 'p83001', 'p83022', 'p83067']);
+  setFetchForTest(fetch);
+  resetPsKeysCacheForTest();
 });
 
 test('diagnose: serialMap set → derives ps_keys without plant discovery, success', async () => {
@@ -326,7 +415,7 @@ test('diagnose: serialMap set → derives ps_keys without plant discovery, succe
       result_code: '1',
       result_data: {
         device_point_list: [
-          { ps_key: 'A2160700249_11_0_0', device_point: { dev_sn: 'A2160700249', p83033: '1200', p83022: '3000', p83025: '1' } },
+          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', p83033: '1200', p83022: '3000', p83025: '1' } },
         ],
       },
     },
@@ -372,14 +461,14 @@ test('discoverPsKeys caches a NON-empty discovery — no re-probe on the next ca
       plantCalls += 1;
       return { result_code: '1', result_data: { pageList: [{ ps_id: 7 }] } };
     }),
-    '/openapi/getDeviceList': { result_code: '1', result_data: { pageList: [{ device_type: 11, ps_key: 'A_11_0_0' }] } },
+    '/openapi/getDeviceList': { result_code: '1', result_data: { pageList: [{ device_type: 1, ps_key: 'A_1_0_0' }] } },
   });
 
   const first = await discoverPsKeys(CFG, 'TKN');
-  assert.deepEqual(first, ['A_11_0_0']);
+  assert.deepEqual(first, ['A_1_0_0']);
   const callsAfterFirst = plantCalls;
   const second = await discoverPsKeys(CFG, 'TKN');
-  assert.deepEqual(second, ['A_11_0_0']);
+  assert.deepEqual(second, ['A_1_0_0']);
   assert.equal(plantCalls, callsAfterFirst, 'non-empty discovery should be served from cache');
   setFetchForTest(fetch);
   resetPsKeysCacheForTest();
