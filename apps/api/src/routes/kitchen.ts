@@ -1092,6 +1092,7 @@ kitchenRouter.post(
         skipped: plan.skipped,
         totalEur: plan.totalEur,
         unpricedCount: plan.unpricedCount,
+        estimatedCount: plan.estimatedCount,
         capEur: cfg.spendCapEur,
       };
     }
@@ -1155,6 +1156,7 @@ kitchenRouter.post(
       skipped: plan.skipped,
       totalEur: plan.totalEur,
       unpricedCount: plan.unpricedCount,
+      estimatedCount: plan.estimatedCount,
       capEur: cfg.spendCapEur,
       cartUrl: 'https://tienda.mercadona.es',
     };

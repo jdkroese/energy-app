@@ -140,6 +140,9 @@ export interface OrderLine {
   /** The "newly needed" checkbox — unchecked lines are not ordered. */
   checked: boolean;
   priceEur?: number | null;
+  /** True when priceEur is a PRESERVED last-known estimate (live re-check unavailable),
+   *  not a live-confirmed price. The spend cap still judges the real total off it. */
+  priceEst?: boolean;
   /** Pantry staple heuristics pre-uncheck these. */
   pantry?: boolean;
   /** Mixed units were aggregated across recipes — the qty needs a human look (P2). */

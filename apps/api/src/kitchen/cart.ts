@@ -10,6 +10,8 @@ export interface CartPlanItem {
   /** UI/audit context — NOT part of the wire payload. */
   label: string;
   priceEur: number | null;
+  /** priceEur is a preserved last-known ESTIMATE (live re-check unavailable), not live-confirmed. */
+  estimated?: boolean;
 }
 
 export interface CartPlan {
@@ -17,10 +19,12 @@ export interface CartPlan {
   items: CartPlanItem[];
   /** Checked lines that can't ship (no product mapped yet). */
   skipped: Array<{ label: string; reason: 'unmapped' }>;
-  /** Sum of the KNOWN line prices (the spend cap judges this). */
+  /** Sum of the KNOWN + ESTIMATED line prices (the spend cap judges this REAL total). */
   totalEur: number;
-  /** Items whose price is unknown right now (Mercadona unreachable) — the cap can't see them. */
+  /** Items with NO price at all (never priced) — the cap truly can't see them. */
   unpricedCount: number;
+  /** Items priced from a last-known estimate (Mercadona flaky) — counted in totalEur. */
+  estimatedCount: number;
 }
 
 /** How many units of the mapped product one line needs. */
@@ -40,18 +44,21 @@ export function buildCartPlan(lines: OrderLine[]): CartPlan {
   const byProduct = new Map<string, CartPlanItem>();
   const skipped: CartPlan['skipped'] = [];
   let unpricedCount = 0;
+  let estimatedCount = 0;
   for (const line of lines) {
     if (!line.checked) continue;
     if (!line.productId) {
       skipped.push({ label: line.label, reason: 'unmapped' });
       continue;
     }
+    if (line.priceEur == null) unpricedCount++;
+    else if (line.priceEst) estimatedCount++;
     const qty = lineQuantity(line);
     const prev = byProduct.get(line.productId);
     if (prev) {
       prev.quantity += qty;
       if (line.priceEur != null) prev.priceEur = (prev.priceEur ?? 0) + line.priceEur;
-      else unpricedCount++;
+      if (line.priceEst) prev.estimated = true; // any estimated contributor flags the item
       if (!prev.label.includes(line.label)) prev.label = `${prev.label} + ${line.label}`;
     } else {
       byProduct.set(line.productId, {
@@ -59,13 +66,13 @@ export function buildCartPlan(lines: OrderLine[]): CartPlan {
         quantity: qty,
         label: line.label,
         priceEur: line.priceEur ?? null,
+        ...(line.priceEst ? { estimated: true } : {}),
       });
-      if (line.priceEur == null) unpricedCount++;
     }
   }
   const items = [...byProduct.values()];
   const totalEur = Math.round(items.reduce((s, it) => s + (it.priceEur ?? 0), 0) * 100) / 100;
-  return { items, skipped, totalEur, unpricedCount };
+  return { items, skipped, totalEur, unpricedCount, estimatedCount };
 }
 
 /** The exact wire payload lines (strips UI context off the plan items). */
@@ -99,12 +106,15 @@ export function assertUnderSpendCap(plan: CartPlan, capEur: number): void {
 }
 
 /**
- * Pre-flight for a REAL (non-dry-run) cart fill. The cap alone is a NO-OP when the
- * catalog is unreachable — enrich degrades every price to null, the known total sums
- * to 0 and an effectively uncapped write would sail through (PR #191 review finding
- * #2). So a real fill additionally requires EVERY item to be priced. Dry-run stays
- * allowed with unpriced items — it sends nothing, and the payload preview is exactly
- * how you would debug this state.
+ * Pre-flight for a REAL (non-dry-run) cart fill. Two guards:
+ *   1. the spend cap (assertUnderSpendCap) — now MEANINGFUL: enrich preserves each
+ *      line's last-known price as an ESTIMATE when the live re-check is unavailable,
+ *      so totalEur is a REAL total, not the 0-sum no-op the old degrade-to-null path
+ *      produced (PR #191 review finding #2 — resolved). An estimated-but-under-cap
+ *      fill therefore PASSES; over-cap → SpendCapError as always.
+ *   2. never-priced items (unpricedCount) — a line that has NEVER had a price still
+ *      truly refuses, because the cap genuinely can't see it. Dry-run stays allowed
+ *      with unpriced items — it sends nothing, and the preview is how you debug this.
  */
 export function assertRealFillAllowed(plan: CartPlan, capEur: number): void {
   assertUnderSpendCap(plan, capEur);

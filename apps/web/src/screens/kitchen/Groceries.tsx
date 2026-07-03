@@ -382,9 +382,22 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           )}
           {line.pantry && <small style={{ display: 'block', fontSize: 10.5, color: 'var(--text-3)' }}>Pantry staple — pre-unchecked</small>}
         </span>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', flex: 'none' }}>{fmtEur(line.priceEur)}</span>
+        <LinePrice line={line} />
         <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
       </div>
+    );
+  }
+
+  // Price cell for a line — shows a muted "est." marker when the price is a preserved
+  // last-known estimate (live re-check unavailable) rather than live-confirmed.
+  function LinePrice({ line }: { line: OrderLine }) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 3, flex: 'none' }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{fmtEur(line.priceEur)}</span>
+        {line.priceEst && line.priceEur != null && (
+          <span style={{ fontSize: 10, color: 'var(--text-3)' }} title="Priced from last-known — Mercadona was flaky">est.</span>
+        )}
+      </span>
     );
   }
 
@@ -417,7 +430,39 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           </button>
         </span>
         {staple && <span style={{ fontSize: 10, color: 'var(--text-3)', flex: 'none', width: 26 }}>{staple.cadence === 'weekly' ? 'wk' : staple.cadence === 'biweekly' ? '2wk' : 'mo'}</span>}
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)', flex: 'none' }}>{fmtEur(line.priceEur)}</span>
+        <LinePrice line={line} />
+        <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
+      </div>
+    );
+  }
+
+  // Editable regulars row — mirrors StapleRow (checkbox · qty −/+ stepper · price ·
+  // trash) WITHOUT the staple cadence tag. Keeps regulars adjustable in place.
+  function RegularRow({ line, last }: { line: OrderLine; last?: boolean }) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 9,
+          padding: '8px 2px',
+          borderBottom: last ? 'none' : '1px solid var(--border-1)',
+          opacity: line.checked ? 1 : 0.55,
+          minHeight: 46,
+        }}
+      >
+        <LineCheckbox on={line.checked} onToggle={() => toggleLine(line)} />
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12.5 }}>{line.label}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <button type="button" aria-label="Less" style={{ ...stepBtn }} onClick={() => setQty(line, line.qty - 1)}>
+            <Icon name="minus" size={12} />
+          </button>
+          <b style={{ fontFamily: 'var(--font-mono)', fontSize: 12, minWidth: 14, textAlign: 'center' }}>{line.qty}</b>
+          <button type="button" aria-label="More" style={{ ...stepBtn }} onClick={() => setQty(line, line.qty + 1)}>
+            <Icon name="plus" size={12} />
+          </button>
+        </span>
+        <LinePrice line={line} />
         <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
       </div>
     );
@@ -523,7 +568,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           <>
             <div style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)', padding: '10px 0 2px' }}>From your regulars</div>
             {regularLines.map((l, i) => (
-              <IngredientRow key={l.id} line={l} last={i === regularLines.length - 1} />
+              <RegularRow key={l.id} line={l} last={i === regularLines.length - 1} />
             ))}
           </>
         )}
@@ -576,7 +621,12 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
         })}
         <div style={{ borderTop: '1px solid var(--border-1)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 9 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>Total (incl. IVA)</span>
+            <span style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              Total (incl. IVA)
+              {draft.lines.some((l) => l.checked && l.priceEst && l.priceEur != null) && (
+                <span style={{ color: 'var(--text-3)' }}> · incl. estimates</span>
+              )}
+            </span>
             <b style={{ fontFamily: 'var(--font-mono)', fontSize: 22 }}>{fmtEur(draft.totalEur)}</b>
           </div>
           <div style={{ height: 5, borderRadius: 999, background: 'var(--surface-3)', overflow: 'hidden' }}>
@@ -1096,6 +1146,10 @@ function ConfirmFillModal({
   // (the spend cap can't judge what it can't see); dry-run stays available.
   const unpricedFillable = draft.lines.filter((l) => l.checked && l.productId && l.priceEur == null).length;
   const blockedUnpriced = !dryRun && unpricedFillable > 0;
+  // Non-blocking: lines whose price is a preserved last-known estimate (Mercadona was
+  // flaky). These keep a price, so the cap still judges a real total — the fill is
+  // allowed; we just say the cap was judged on the estimate.
+  const estimatedFillable = draft.lines.filter((l) => l.checked && l.productId && l.priceEst && l.priceEur != null).length;
   return (
     <Modal
       open
@@ -1156,6 +1210,15 @@ function ConfirmFillModal({
             {unpricedFillable} item{unpricedFillable > 1 ? 's have' : ' has'} no live price (Mercadona unreachable), so the
             spend cap can’t judge this fill — the server refuses real fills until prices are back. Try again later, or send
             as checklist.
+          </div>
+        )}
+        {estimatedFillable > 0 && (
+          <div style={{ background: 'var(--surface-3)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--text-2)', fontSize: 12, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <Icon name="info" size={14} color="var(--text-3)" />
+            <span>
+              {estimatedFillable} item{estimatedFillable > 1 ? 's are' : ' is'} priced from last-known (Mercadona flaky) — the
+              spend cap is judged on the estimate.
+            </span>
           </div>
         )}
         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
@@ -1231,12 +1294,20 @@ function FillResultModal({ desktop, result, onClose }: { desktop: boolean; resul
             spend cap judged the known total only.
           </div>
         )}
+        {result.estimatedCount > 0 && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+            {result.estimatedCount} item{result.estimatedCount > 1 ? 's were' : ' was'} priced from last-known estimates.
+          </div>
+        )}
         <div style={{ border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '4px 12px 8px' }}>
           {result.items.map((it, i) => (
             <div key={it.product_id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: i < result.items.length - 1 ? '1px solid var(--border-1)' : 'none', fontSize: 12.5 }}>
               <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-3)', flex: 'none', width: 26, textAlign: 'right' }}>{it.quantity}×</span>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)', flex: 'none' }}>{fmtEur(it.priceEur)}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 3, flex: 'none' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-2)' }}>{fmtEur(it.priceEur)}</span>
+                {it.estimated && it.priceEur != null && <span style={{ fontSize: 10, color: 'var(--text-3)' }}>est.</span>}
+              </span>
             </div>
           ))}
         </div>
