@@ -332,6 +332,9 @@ export interface ControlState {
   arbitrageLog: ArbitrageEvent[];
   /** Cumulative tariff-arbitrage headline stats (advisory vs active). */
   arbitrageStats: ArbitrageStats;
+  /** Per-tick battery decision trace — in-state ring buffer (last ~200 ticks). Written
+   *  fail-soft by control/decision-trace.ts; read by GET /api/control/decisions. */
+  decisionTrace: DecisionRecord[];
   /** One-time migration flag: when the Sonnen-first discharge actuation changed (load-following
    *  + Tesla backup hold, replacing the reserve-raise hold), the rule is forced back to SHADOW
    *  once so the new actuation re-validates before going live. Set true after that runs; the
@@ -794,6 +797,53 @@ export interface ArbitrageEvent {
   /** MODELLED €saved this tick = chargedKwhTick × spreadEur. */
   estSavedEurTick: number;
 }
+
+// ---- Battery decision trace (Phase 0 rule visibility) -----------------------
+// One compact record per coordinator tick: what each battery actuator was told and WHY
+// (reusing the same reason strings the commands/logs carry). Kept as a small in-state
+// ring (survives a restart like arbitrageLog); the writer is control/decision-trace.ts
+// and it is FAIL-SOFT — it can never throw into the control loop.
+
+/** The winning stance for one actuator + the one-line why. */
+export interface DecisionActuator {
+  /** e.g. 'self_consumption' / 'backup' (tesla.mode) or 'soak-export 3200W' (sonnen). */
+  value: string;
+  /** One-line reason — the same string the command/log used. */
+  reason: string;
+}
+
+export interface DecisionRecord {
+  ts: number;
+  /** What ran the tick ('auto' coordinator tick / 'apply-scenario'). */
+  trigger: string;
+  armed: boolean;
+  mode: ControlMode;
+  band: Band;
+  /** Active scenario id. */
+  scenario: string;
+  /** Key live inputs the decision saw. `gridSource` names the meter the snapshot's
+   *  import/export figures came from (Tesla-gateway-first, Sonnen fallback) — the two
+   *  live in DIFFERENT metering domains, so later domain-reconciliation work (docs/40
+   *  D5) can audit which domain a past decision reasoned in. */
+  inputs: {
+    gridImportKw: number;
+    gridExportKw: number;
+    gridSource: "tesla" | "sonnen" | "none";
+    sonnenSoc: number | null;
+    teslaSoc: number | null;
+  };
+  tesla: { mode: DecisionActuator; reservePct: number };
+  /** Which coordinateSonnen branch won (stuck-full-guard / soak-export / arbitrage /
+   *  charge-priority / discharge-priority / self-consumption / …) + the action + why. */
+  sonnen: DecisionActuator & { branch: string };
+  /** Rules that stood down this tick, with their reasons. */
+  stoodDown: { rule: string; reason: string }[];
+  /** Actuator stances that changed vs the previous record ('tesla.mode' | 'sonnen'). */
+  changed: string[];
+}
+
+/** Max in-state decision records kept (~200 ticks ≈ 5h at 90s). */
+export const DECISION_TRACE_RING_MAX = 200;
 
 /** Cumulative headline stats over the arbitrage history (survives restart via state.json).
  *  Advisory (modelled) and active (realized) are tracked apart so the UI labels them. */
@@ -1775,6 +1825,7 @@ export function defaultControl(): ControlState {
     soakExport: defaultSoakExport(),
     arbitrageLog: [],
     arbitrageStats: defaultArbitrageStats(),
+    decisionTrace: [],
     dischargeV2Shadowed: false,
   };
 }
@@ -3240,6 +3291,9 @@ function hydrateControl(
       p.arbitrageStats,
       base.arbitrageStats,
     ),
+    decisionTrace: Array.isArray(p.decisionTrace)
+      ? p.decisionTrace.slice(-DECISION_TRACE_RING_MAX)
+      : base.decisionTrace,
     dischargeV2Shadowed:
       typeof p.dischargeV2Shadowed === "boolean"
         ? p.dischargeV2Shadowed

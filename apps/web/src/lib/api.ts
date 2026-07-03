@@ -27,6 +27,7 @@ import type {
   ControlMode,
   ControlStatus,
   CreateUserResponse,
+  DecisionsResponse,
   DeviceDetailResponse,
   DevicesResponse,
   DevicesStatus,
@@ -387,6 +388,11 @@ export const api = {
   /* ---- Autopilot / live battery control (arm/command/apply are admin) ---- */
   control: {
     status: () => getJSON<ControlStatus>("/api/control/status"),
+    // Battery decision trace (Phase 0 rule visibility) — read-only, newest first.
+    decisions: (limit?: number) =>
+      getJSON<DecisionsResponse>(
+        `/api/control/decisions${limit ? `?limit=${limit}` : ""}`,
+      ),
     arm: (armed: boolean, mode: ControlMode) =>
       postJSON<ControlStatus>("/api/control/arm", { armed, mode }),
     command: (

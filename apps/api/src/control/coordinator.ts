@@ -13,6 +13,7 @@ import { issue, _resetRateLimits } from './execute';
 import { checkSonnenWatts } from './guardrails';
 import { takeSnapshot, type RichSnapshot } from './snapshot';
 import { planBatteryPriority, type PriorityPlan } from './battery-priority';
+import * as trace from './decision-trace';
 import { planArbitrage, arbitrageSpreadEur, type ArbitragePlan } from './arbitrage';
 import { appendArbitrageEvent, accrueArbitrageCharge } from './arbitrage-log';
 import { config } from '../config';
@@ -128,10 +129,46 @@ export function _resetArbitrageCache(): void {
   arbWeatherCache = null;
 }
 
-/** Does this scenario lean toward savings/arbitrage (→ Tesla 'autonomous')? */
-function favoursArbitrage(scenario: store.ScenarioDef): boolean {
-  const w = scenario.weights;
-  return w.save >= 0.5 || scenario.gridCharge;
+/**
+ * Is the tariff-arbitrage automation enabled AND in 'active' execution mode? Read the
+ * same way coordinateArbitrageValleyCharge reads its params (a persisted rule missing
+ * executionMode counts as 'advisory' — never active). This is the ONLY condition that
+ * warrants handing the Tesla to its vendor optimizer ('autonomous'): the old
+ * favoursArbitrage(scenario) heuristic pinned the Tesla to autonomous for ANY scenario
+ * with gridCharge (max-savings / storm-ready), surrendering the discharge decision to
+ * Tesla's own optimizer — which happily idled at 100% through P1/P2 while the house
+ * imported expensive grid (observed 2026-07-02 evening: 3.7 kW P2 import, Tesla full).
+ */
+function tariffArbitrageActiveMode(): boolean {
+  const automation = store
+    .get()
+    .automations.find((a) => a.type === 'tariff_arbitrage' && a.enabled);
+  if (!automation || automation.type !== 'tariff_arbitrage') return false;
+  return (automation.params as TariffArbitrageParams).executionMode === 'active';
+}
+
+/**
+ * PURE Tesla-mode decision (unit-tested — coordinator-tesla-mode.test.ts):
+ *  • 'autonomous'       ONLY while active-mode tariff arbitrage runs (the one rule that
+ *                       genuinely wants the vendor optimizer's buy/hold freedom);
+ *  • 'backup'           when the discharge-priority hold wants it in 'auto' authority
+ *                       (Sonnen covers the house; the Tesla refuses to discharge and holds);
+ *  • 'self_consumption' otherwise — the Tesla discharges for the house. Scenario weights /
+ *                       gridCharge no longer select 'autonomous' (deliberate change; the
+ *                       scenario's gridCharge still gates the P3 grid-charge enable below).
+ */
+export function decideTeslaMode(
+  arbitrageActive: boolean,
+  wantHold: boolean,
+  holdAuthority: store.BatteryPriorityAuthority,
+): { mode: 'autonomous' | 'backup' | 'self_consumption'; reason: string } {
+  if (arbitrageActive) {
+    return { mode: 'autonomous', reason: 'tariff-arbitrage active mode — vendor optimizer manages the Tesla' };
+  }
+  if (wantHold && holdAuthority === 'auto') {
+    return { mode: 'backup', reason: 'discharge-priority hold (Tesla backup-only, Sonnen discharges first)' };
+  }
+  return { mode: 'self_consumption', reason: 'self-consumption — Tesla discharges for the house' };
 }
 
 /** Append a SHADOW decision to the control log (intended action, no write). */
@@ -153,6 +190,10 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   const scenario = snap.scenario;
   const band = snap.band;
 
+  // Decision trace (Phase 0 visibility): open a per-tick record. Every trace.* call is
+  // fail-soft (wrapped inside decision-trace.ts) so it can never break the tick.
+  trace.beginDecision(snap, reason);
+
   // Battery-priority plan (Sonnen-first discharge / Tesla-first charge). It only
   // ever RAISES the Tesla reserve (to hold it) or idles the Sonnen — and only in
   // 'auto' authority; 'shadow' rules just log what they would have done.
@@ -161,26 +202,30 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
 
   // ---- Tesla (policy layer) ----
   // Discharge-priority HOLD intent: when the rule wants the Sonnen to discharge first
-  // (and we're not in an arbitrage scenario), put the Tesla in `backup` mode so it
+  // (and active-mode arbitrage isn't running), put the Tesla in `backup` mode so it
   // refuses to discharge for the house. The Sonnen load-following branch in
   // coordinateSonnen() then covers the whole house draw, so the Tesla idles and holds
   // its charge. The mode is re-issued EVERY tick, so it auto-reverts to self_consumption
   // the moment the hold releases (Sonnen depleted / throughput cap / surplus / offline).
   const dp = plan.discharge;
-  const wantHold = dp.active && dp.holdTesla && !favoursArbitrage(scenario);
+  const arbActive = tariffArbitrageActiveMode();
+  const wantHold = dp.active && dp.holdTesla && !arbActive;
 
-  const teslaMode = favoursArbitrage(scenario)
-    ? 'autonomous'
-    : wantHold && dp.authority === 'auto'
-      ? 'backup'
-      : 'self_consumption';
-  await issue(
-    'tesla',
-    'mode',
-    teslaMode,
-    `${reason}: ${teslaMode === 'backup' ? 'discharge-priority hold (Tesla backup-only, Sonnen discharges first)' : `scenario favours ${teslaMode}`}`,
-    snap,
-  );
+  const teslaDecision = decideTeslaMode(arbActive, wantHold, dp.authority);
+  const teslaMode = teslaDecision.mode;
+  trace.recordTesla(teslaMode, teslaDecision.reason);
+  if (teslaMode !== 'backup') {
+    // Why the discharge-priority hold did NOT put the Tesla in backup this tick.
+    trace.recordStandDown(
+      'discharge-priority',
+      arbActive && dp.active && dp.holdTesla
+        ? 'active-mode arbitrage runs — hold stands down'
+        : dp.active && dp.holdTesla && dp.authority === 'shadow'
+          ? `shadow: ${dp.reason}`
+          : dp.reason,
+    );
+  }
+  await issue('tesla', 'mode', teslaMode, `${reason}: ${teslaDecision.reason}`, snap);
   if (wantHold && dp.authority === 'shadow') {
     logShadow('tesla', 'mode', `discharge-priority (shadow): ${dp.reason}`, 'would set Tesla → backup (hold for Sonnen-first)');
   }
@@ -189,6 +234,7 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
   // Tesla (the Tesla often ignored that write and the cap was only 80%) — the `backup`
   // mode above + the Sonnen load-following primary mechanism do the holding now.
   await issue('tesla', 'reserve', baseReserve, `${reason}: scenario reserve floor`, snap);
+  trace.recordTeslaReserve(baseReserve);
 
   const enableGridCharge = scenario.gridCharge && band === 'P3';
   await issue(
@@ -201,6 +247,10 @@ export async function applyActiveScenario(snap: RichSnapshot, reason: string): P
 
   // ---- Sonnen (fast valve) ----
   await coordinateSonnen(snap, reason, plan);
+
+  // Seal the tick's decision record (persists the ring; emits an event ONLY on a
+  // stance change). Fail-soft — commit can never throw into the tick.
+  trace.commitDecision();
 }
 
 // ---- Force-charge-to-soak-export (hysteresis deadband) ----------------------
@@ -383,7 +433,10 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
     .get()
     .automations.find((a) => a.type === 'tariff_arbitrage' && a.enabled);
   // Disabled / absent → never act. (Type-narrow to the battery param shape.)
-  if (!automation || automation.type !== 'tariff_arbitrage') return false;
+  if (!automation || automation.type !== 'tariff_arbitrage') {
+    trace.recordStandDown('tariff-arbitrage', 'disabled');
+    return false;
+  }
   // Default any fields a pre-refinement persisted rule (PR #59) may lack, so the new gates read
   // sane values even before the rule is next saved (sanitize fills them on save). Defaults match
   // defaultTariffArbitrageParams(); a missing field never silently flips a gate on.
@@ -399,7 +452,10 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
   const advisory = params.executionMode !== 'active';
 
   const s = snap.sonnen;
-  if (!s) return false; // Sonnen offline — nothing to do
+  if (!s) {
+    trace.recordStandDown('tariff-arbitrage', 'Sonnen offline');
+    return false; // Sonnen offline — nothing to do
+  }
   // In ADVISORY we never issued a charge, so the Sonnen is never "our" arbitrage manual; treat
   // it as not-ours so we neither revert (nothing to revert) nor claim authority.
   const inManual = !advisory && s.mode === 'manual';
@@ -528,11 +584,13 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
         priority: true,
       });
       emitArbEvent('revert', snap, params, plan, soc, { action: { mode: '2', chargeW: 0 } });
+      trace.recordSonnen('arbitrage', 'revert → self-consumption', `end arbitrage grid-charge (${why})`);
       return true;
     }
     // Enabled but not charging — log the stand-down (state-transition gated). Advisory never
     // had authority; active simply isn't charging this tick. Either way no battery command.
     emitArbEvent('standdown', snap, params, plan, soc);
+    trace.recordStandDown('tariff-arbitrage', why);
     return false;
   }
 
@@ -554,6 +612,7 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
       chargedKwhTick,
     });
     accrueArbitrageCharge('advisory', chargedKwhTick, spreadEur, now);
+    trace.recordStandDown('tariff-arbitrage', `advisory — would grid-charge ${watt.value}W (${targetReason})`);
     return false;
   }
 
@@ -574,16 +633,21 @@ async function coordinateArbitrageValleyCharge(snap: RichSnapshot, reason: strin
     chargedKwhTick,
   });
   accrueArbitrageCharge('active', chargedKwhTick, spreadEur, now);
+  trace.recordSonnen('arbitrage', `manual charge ${watt.value}W`, `valley grid-charge (${targetReason}, band ${snap.band})`);
   return true;
 }
 
 async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: PriorityPlan): Promise<void> {
   const s = snap.sonnen;
-  if (!s) return; // offline — nothing to do
+  if (!s) {
+    trace.recordSonnen('offline', '—', 'Sonnen offline — nothing to command');
+    return; // offline — nothing to do
+  }
 
   // Core bug fix: battery charging from the grid while essentially full.
   if (s.gridFeedInW < -50 && s.soc >= 95 && s.dir === 'charging') {
     await issue('sonnen', 'mode', '2', `${reason}: stop grid-charging a full battery (SoC ${s.soc}%)`, snap);
+    trace.recordSonnen('stuck-full-guard', 'self-consumption', `stop grid-charging a full battery (SoC ${s.soc}%)`);
     return;
   }
 
@@ -616,8 +680,10 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
           await issue('sonnen', 'mode', '2', `${reason}: soak disabled — end force-charge, back to self-consumption`, snap, {
             priority: true,
           });
+          trace.recordSonnen('soak-export', 'revert → self-consumption', 'soak disabled — end force-charge');
           return;
         }
+        trace.recordStandDown('soak-export', 'disabled');
       } else {
         // REVERT (safety-critical): export collapsed OR battery (near-)full → hand control back
         // to self-consumption. A stale manual charge during a surplus collapse would IMPORT, so
@@ -627,6 +693,7 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
           await issue('sonnen', 'mode', '2', `${reason}: end soak-export (${why}) — back to self-consumption`, snap, {
             priority: true,
           });
+          trace.recordSonnen('soak-export', 'revert → self-consumption', `end soak-export (${why})`);
           return;
         }
         // ENGAGE / CONTINUE (hysteresis): headroom (SoC < ceiling) AND export over the threshold
@@ -638,9 +705,11 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
           const watt = checkSonnenWatts(Math.min(exportW, store.get().control.guardrails.sonnenMaxW), 'charge', snap);
           await issue('sonnen', 'mode', '1', `${reason}: soak-export — absorb surplus before it spills to grid`, snap);
           await issue('sonnen', 'charge', watt.value, `${reason}: soak-export ${watt.value}W (export ${Math.round(exportW)}W, SoC ${socPct}%)`, snap);
+          trace.recordSonnen('soak-export', `manual charge ${watt.value}W`, `absorb surplus before it spills (export ${Math.round(exportW)}W, SoC ${socPct}%)`);
           return;
         }
         // Below startW and not already charging (or at the ceiling): fall through.
+        trace.recordStandDown('soak-export', `export ${Math.round(exportW)}W ≤ start ${engageThreshold}W or SoC ≥ ceiling`);
       }
     } else {
       // (B) VALLEY GRID-CHARGE — tariff arbitrage. Runs ONLY when NOT exporting (free solar
@@ -657,9 +726,13 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
       // Manual mode + 0 W setpoint = Sonnen idle, so the Tesla absorbs the surplus.
       await issue('sonnen', 'mode', '1', `${reason}: charge-priority — ${cp.reason}`, snap);
       await issue('sonnen', 'charge', 0, `${reason}: charge-priority idle (Tesla charges first)`, snap);
+      trace.recordSonnen('charge-priority', 'manual idle 0W', cp.reason);
       return;
     }
     logShadow('sonnen', 'mode', `charge-priority (shadow): ${cp.reason}`, 'would idle Sonnen (manual 0 W) so Tesla charges first');
+    trace.recordStandDown('charge-priority', `shadow: ${cp.reason}`);
+  } else {
+    trace.recordStandDown('charge-priority', cp.reason);
   }
 
   // ---- Discharge-priority (Sonnen-first) load-following ----------------------
@@ -692,6 +765,7 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
         // so it can't over-discharge into the grid.
         await issue('sonnen', 'mode', '1', `${reason}: discharge-priority — Sonnen covers house so Tesla holds`, snap);
         await issue('sonnen', 'discharge', targetW, `${reason}: discharge-priority ${targetW}W (${meta}) — Sonnen first`, snap);
+        trace.recordSonnen('discharge-priority', `manual discharge ${targetW}W`, `covers the house residual (${meta}) — Sonnen first`);
         return;
       }
       // Negligible residual: don't force; fall through to self-consumption.
@@ -708,11 +782,13 @@ async function coordinateSonnen(snap: RichSnapshot, reason: string, plan: Priori
   // which return early in the export/valley regime above).
   if (s.mode === 'manual' && s.dir === 'discharging') {
     await issue('sonnen', 'mode', '2', `${reason}: end discharge-priority — back to self-consumption`, snap, { priority: true });
+    trace.recordSonnen('discharge-revert', 'revert → self-consumption', 'end discharge-priority — back to self-consumption');
     return;
   }
 
   // Keep Sonnen in self-consumption — it discharges to cover the house load.
   await issue('sonnen', 'mode', '2', `${reason}: self-consumption (cover the house)`, snap);
+  trace.recordSonnen('self-consumption', 'self-consumption', 'cover the house load');
 }
 
 /**

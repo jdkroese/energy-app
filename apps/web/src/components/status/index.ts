@@ -7,3 +7,4 @@ export { LiveDrawBreakdown } from './LiveDrawBreakdown';
 export { SubsystemHealthRow } from './SubsystemHealthRow';
 export type { DeviceChip, SubsystemRowProps } from './SubsystemHealthRow';
 export { GridQualityCard } from './GridQualityCard';
+export { DecisionsPanel } from './DecisionsPanel';
