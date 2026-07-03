@@ -22,7 +22,10 @@ import * as tuya from '../connectors/tuya';
 import { applyHomeScene, applyHomeSceneOff } from '../routes/home-scenes';
 import { applyScene as applyLightScene } from '../routes/lights';
 
-const TICK_MS = 3_000;
+// 5s (was 3s): the log-poll is the app's single biggest Tuya API consumer (each tick is
+// one call per enabled controller, 24/7 ≈ 17k calls/day at 5s) and it helped exhaust the
+// IoT Core trial quota on 2026-07-03. Worst-case button→scene latency rises ~2s.
+const TICK_MS = 5_000;
 /** Cap on how far back the first log read reaches (ms) — we seed the watermark to now,
  *  but the API requires start<end; this is just the read window for the very first tick. */
 const LOG_LOOKBACK_MS = 60_000;
