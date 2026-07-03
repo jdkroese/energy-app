@@ -17,11 +17,16 @@ export interface CartPlanItem {
 export interface CartPlan {
   /** What goes to Mercadona (flattened, batched — docs/38 §3). */
   items: CartPlanItem[];
-  /** Checked lines that can't ship (no product mapped yet). */
-  skipped: Array<{ label: string; reason: 'unmapped' }>;
+  /**
+   * Checked lines that can't ship: 'unmapped' (no product mapped yet) or 'unpriced'
+   * (mapped but the product carries NO price — a genuinely unavailable/obsolete item,
+   * e.g. "Producto no disponible"). Unpriced lines are skipped, NOT sent — the fill is
+   * still allowed; the user resolves them (swap/remove) in Groceries.
+   */
+  skipped: Array<{ label: string; reason: 'unmapped' | 'unpriced' }>;
   /** Sum of the KNOWN + ESTIMATED line prices (the spend cap judges this REAL total). */
   totalEur: number;
-  /** Items with NO price at all (never priced) — the cap truly can't see them. */
+  /** Informational count of checked+mapped lines skipped for having no price (= 'unpriced' skips). */
   unpricedCount: number;
   /** Items priced from a last-known estimate (Mercadona flaky) — counted in totalEur. */
   estimatedCount: number;
@@ -51,13 +56,19 @@ export function buildCartPlan(lines: OrderLine[]): CartPlan {
       skipped.push({ label: line.label, reason: 'unmapped' });
       continue;
     }
-    if (line.priceEur == null) unpricedCount++;
-    else if (line.priceEst) estimatedCount++;
+    // Mapped but no price at all = genuinely unavailable/obsolete (no catalog price).
+    // Skip it (never goes to the wire payload), report it, and let the user resolve it.
+    if (line.priceEur == null) {
+      unpricedCount++;
+      skipped.push({ label: line.label, reason: 'unpriced' });
+      continue;
+    }
+    if (line.priceEst) estimatedCount++;
     const qty = lineQuantity(line);
     const prev = byProduct.get(line.productId);
     if (prev) {
       prev.quantity += qty;
-      if (line.priceEur != null) prev.priceEur = (prev.priceEur ?? 0) + line.priceEur;
+      prev.priceEur = (prev.priceEur ?? 0) + line.priceEur; // line.priceEur is non-null here (unpriced skipped above)
       if (line.priceEst) prev.estimated = true; // any estimated contributor flags the item
       if (!prev.label.includes(line.label)) prev.label = `${prev.label} + ${line.label}`;
     } else {
@@ -65,7 +76,7 @@ export function buildCartPlan(lines: OrderLine[]): CartPlan {
         product_id: line.productId,
         quantity: qty,
         label: line.label,
-        priceEur: line.priceEur ?? null,
+        priceEur: line.priceEur,
         ...(line.priceEst ? { estimated: true } : {}),
       });
     }
@@ -90,33 +101,24 @@ export class SpendCapError extends Error {
   }
 }
 
-export class UnpricedLinesError extends Error {
-  constructor(count: number) {
-    super(
-      `refused: ${count} item${count === 1 ? ' has' : 's have'} no live price, so the spend cap can't judge this fill — ` +
-        'try again when Mercadona is reachable, or send as checklist instead',
-    );
-    this.name = 'UnpricedLinesError';
-  }
-}
-
 /** Server-side spend cap (docs/41 §2): refuse any fill whose known total exceeds the cap. */
 export function assertUnderSpendCap(plan: CartPlan, capEur: number): void {
   if (plan.totalEur > capEur) throw new SpendCapError(plan.totalEur, capEur);
 }
 
 /**
- * Pre-flight for a REAL (non-dry-run) cart fill. Two guards:
- *   1. the spend cap (assertUnderSpendCap) — now MEANINGFUL: enrich preserves each
- *      line's last-known price as an ESTIMATE when the live re-check is unavailable,
- *      so totalEur is a REAL total, not the 0-sum no-op the old degrade-to-null path
- *      produced (PR #191 review finding #2 — resolved). An estimated-but-under-cap
- *      fill therefore PASSES; over-cap → SpendCapError as always.
- *   2. never-priced items (unpricedCount) — a line that has NEVER had a price still
- *      truly refuses, because the cap genuinely can't see it. Dry-run stays allowed
- *      with unpriced items — it sends nothing, and the preview is how you debug this.
+ * Pre-flight for a REAL (non-dry-run) cart fill. The single guard is the spend cap:
+ *   - enrich preserves each line's last-known price as an ESTIMATE when the live re-check
+ *     is unavailable, so totalEur is a REAL total, not the 0-sum no-op the old
+ *     degrade-to-null path produced (PR #191 review finding #2 — resolved). An
+ *     estimated-but-under-cap fill PASSES; over-cap → SpendCapError as always.
+ *
+ * Unpriced (mapped-but-no-price) lines no longer block: buildCartPlan SKIPS them out of
+ * the wire payload (skipped, reason 'unpriced') and never sums them into totalEur, so a
+ * handful of genuinely obsolete items can't hold up the whole fill. They come back in the
+ * response for the UI to list; the user resolves them (swap/remove) in Groceries. The cap
+ * still judges the REAL, priced total that actually ships.
  */
 export function assertRealFillAllowed(plan: CartPlan, capEur: number): void {
   assertUnderSpendCap(plan, capEur);
-  if (plan.unpricedCount > 0) throw new UnpricedLinesError(plan.unpricedCount);
 }

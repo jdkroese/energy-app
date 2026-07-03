@@ -26,7 +26,7 @@ import {
   weekStartOf,
 } from '../kitchen/engine';
 import { enrichLines } from '../kitchen/enrich';
-import { assertRealFillAllowed, assertUnderSpendCap, buildCartPlan, SpendCapError, UnpricedLinesError, wireLines } from '../kitchen/cart';
+import { assertRealFillAllowed, assertUnderSpendCap, buildCartPlan, SpendCapError, wireLines } from '../kitchen/cart';
 import { applySuggestion, buildSuggestions, isMuted, muteKey } from '../kitchen/suggestions';
 import { cleanAnswer, rankRecipesByCoverage } from '../kitchen/whatcanimake';
 import {
@@ -1097,25 +1097,15 @@ kitchenRouter.post(
       };
     }
 
-    // REAL fill: every item must be priced, or the spend cap is a no-op — enrich
-    // degrades prices to null when Mercadona is unreachable, the known total sums to
-    // 0 and an effectively uncapped write would pass (PR #191 review finding #2).
-    // Hard refuse BEFORE any network write; dry-run above stays available.
+    // REAL fill pre-flight: only the spend cap can refuse here (it's meaningful now —
+    // enrich preserves last-known prices as estimates, so totalEur is a REAL total, not
+    // the old 0-sum no-op). Unpriced (mapped-but-no-price) lines are genuinely
+    // unavailable/obsolete items: buildCartPlan already SKIPPED them out of the payload
+    // (skipped, reason 'unpriced'), so they can't hold up the fill — they come back in
+    // the response for the user to resolve. The cap still judges the priced total.
     try {
       assertRealFillAllowed(plan, cfg.spendCapEur);
     } catch (e) {
-      if (e instanceof UnpricedLinesError) {
-        logEvent({
-          class: 'action',
-          category: 'kitchen',
-          severity: 'medium',
-          summary: `Cart fill REFUSED — ${plan.unpricedCount} unpriced item(s), the spend cap can't judge the total`,
-          trigger: { source: 'user' },
-          ok: false,
-          data: { unpricedCount: plan.unpricedCount, knownTotalEur: plan.totalEur, capEur: cfg.spendCapEur },
-        });
-        throw badInput(e.message);
-      }
       if (e instanceof SpendCapError) throw badInput(e.message); // belt+braces — already refused above
       throw e;
     }

@@ -26,6 +26,7 @@ import type {
   StaplesItem,
 } from '../../lib/types';
 import { MobileHeader } from '../_shared';
+import { isUnavailable, swapLineUnits } from './orderLines';
 import { clientIngredientKey, fmtEur, fmtQty } from './shared';
 
 const DELIVERY_MIN_EUR = 50; // Mercadona home-delivery minimum
@@ -106,6 +107,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
   const [undo, setUndo] = useState<{ label: string; run: () => Promise<void> } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [picker, setPicker] = useState<OrderLine | null>(null);
+  const [swap, setSwap] = useState<OrderLine | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [checklist, setChecklist] = useState<string | null>(null);
   const [confirmFill, setConfirmFill] = useState(false);
@@ -187,6 +189,47 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
       await refetchDraft();
     } catch {
       setNote('Save failed — try again');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Swap an unavailable/obsolete line for a live product (owner ask). Updates THAT line
+  // directly — price from the chosen product's unit price × its lineQuantity (count items
+  // use the unit price straight, mirroring how regulars are priced) — persists the draft,
+  // AND remembers the pick for future orders via pickProduct. Then clears the estimate flag.
+  const swapLine = async (line: OrderLine, product: KitchenProductHit) => {
+    if (!draft) return;
+    setBusy('lines');
+    try {
+      const priceEur =
+        product.unitPrice != null ? Math.round(product.unitPrice * swapLineUnits(line) * 100) / 100 : null;
+      const nextLines = draft.lines.map((l) =>
+        l.id === line.id
+          ? {
+              ...l,
+              productId: product.id,
+              label: product.name || l.label,
+              priceEur,
+              priceEst: false,
+              needsMapping: false,
+            }
+          : l,
+      );
+      await api.kitchen.setOrderDraft({ lines: nextLines });
+      // Remember this choice for every future order (best-effort — the draft is already saved).
+      if (line.ingredientKey) {
+        try {
+          await api.kitchen.pickProduct(line.ingredientKey, product.id);
+        } catch {
+          /* mapping memory is a nice-to-have; the line itself is already swapped */
+        }
+      }
+      await refetchDraft();
+      setSwap(null);
+      setNote(`Swapped in ${product.name || 'a product'} ✓`);
+    } catch {
+      setNote('Swap failed — try again');
     } finally {
       setBusy(null);
     }
@@ -300,8 +343,11 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
   const autoSuggestions = draft.suggestions.filter((s) => s.auto);
   const openSuggestions = draft.suggestions.filter((s) => !s.auto && s.state === 'open');
   const minMet = draft.totalEur >= DELIVERY_MIN_EUR;
-  const fillableCount = draft.lines.filter((l) => l.checked && l.productId).length;
+  // A line that's checked+mapped+priced (or estimated) actually ships. Unavailable lines
+  // are mapped but priceless → they're skipped, so they don't count as fillable.
+  const fillableCount = draft.lines.filter((l) => l.checked && l.productId && !isUnavailable(l)).length;
   const unmappedChecked = draft.lines.filter((l) => l.checked && !l.productId).length;
+  const unavailableChecked = draft.lines.filter((l) => isUnavailable(l)).length;
   const filled = draft.status === 'filled';
   const submitted = draft.status === 'submitted';
 
@@ -383,14 +429,27 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           {line.pantry && <small style={{ display: 'block', fontSize: 10.5, color: 'var(--text-3)' }}>Pantry staple — pre-unchecked</small>}
         </span>
         <LinePrice line={line} />
+        <SwapButton line={line} />
         <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
       </div>
     );
   }
 
-  // Price cell for a line — shows a muted "est." marker when the price is a preserved
-  // last-known estimate (live re-check unavailable) rather than live-confirmed.
+  // Price cell for a line. Shows a muted "est." marker for a preserved last-known
+  // estimate; for a genuinely unavailable/obsolete line (mapped, no price, not an
+  // estimate) it swaps the price for an "unavailable" tag — those are SKIPPED from the
+  // fill and resolved via the adjacent Swap button.
   function LinePrice({ line }: { line: OrderLine }) {
+    if (isUnavailable(line)) {
+      return (
+        <span
+          style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--solar)', flex: 'none', whiteSpace: 'nowrap' }}
+          title="No price in Mercadona’s catalogue — this item looks unavailable. Swap it for an available product, or remove it."
+        >
+          unavailable
+        </span>
+      );
+    }
     return (
       <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 3, flex: 'none' }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-2)' }}>{fmtEur(line.priceEur)}</span>
@@ -398,6 +457,39 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           <span style={{ fontSize: 10, color: 'var(--text-3)' }} title="Priced from last-known — Mercadona was flaky">est.</span>
         )}
       </span>
+    );
+  }
+
+  // Ghost icon-button to swap an unavailable line for an available product (owner ask).
+  // Only rendered when the line is unavailable; ≥40px touch target, stops row propagation.
+  function SwapButton({ line }: { line: OrderLine }) {
+    if (!isUnavailable(line)) return null;
+    return (
+      <button
+        type="button"
+        aria-label="Swap for an available product"
+        title="Swap for an available product"
+        onClick={(e) => {
+          e.stopPropagation();
+          setSwap(line);
+        }}
+        style={{
+          width: 40,
+          height: 40,
+          minWidth: 40,
+          borderRadius: 8,
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--battery)',
+          display: 'grid',
+          placeItems: 'center',
+          cursor: 'pointer',
+          flex: 'none',
+          padding: 0,
+        }}
+      >
+        <Icon name="search" size={15} />
+      </button>
     );
   }
 
@@ -431,6 +523,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
         </span>
         {staple && <span style={{ fontSize: 10, color: 'var(--text-3)', flex: 'none', width: 26 }}>{staple.cadence === 'weekly' ? 'wk' : staple.cadence === 'biweekly' ? '2wk' : 'mo'}</span>}
         <LinePrice line={line} />
+        <SwapButton line={line} />
         <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
       </div>
     );
@@ -463,6 +556,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           </button>
         </span>
         <LinePrice line={line} />
+        <SwapButton line={line} />
         <TrashButton label={line.label} disabled={busy === 'lines'} onDelete={() => void deleteLine(line)} />
       </div>
     );
@@ -764,6 +858,15 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           }}
         />
       )}
+      {swap && (
+        <SwapModal
+          desktop={wide}
+          line={swap}
+          busy={busy === 'lines'}
+          onClose={() => setSwap(null)}
+          onPick={(p) => void swapLine(swap, p)}
+        />
+      )}
       {historyOpen && <HistoryModal desktop={wide} onClose={() => setHistoryOpen(false)} />}
       {checklist != null && <ChecklistModal desktop={wide} text={checklist} onClose={() => setChecklist(null)} />}
       {confirmFill && (
@@ -773,6 +876,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           account={account}
           fillableCount={fillableCount}
           unmappedChecked={unmappedChecked}
+          unavailableChecked={unavailableChecked}
           busy={busy === 'fill'}
           onConfirm={() => void runFillCart()}
           onClose={() => setConfirmFill(false)}
@@ -1054,6 +1158,120 @@ function ProductPicker({
   );
 }
 
+// ---- Swap an unavailable line for a live product (obsolete-item resolver) --------------------
+// Reuses the Mercadona product search. Unlike ProductPicker (which writes the ProductMap
+// via pickProduct), this hands the chosen product back to the parent, which updates THAT
+// line directly (price + label + productId) and persists it — then remembers the choice
+// for future orders. Works in both desktop (center) and mobile (sheet) placements.
+
+function SwapModal({
+  desktop,
+  line,
+  busy,
+  onClose,
+  onPick,
+}: {
+  desktop: boolean;
+  line: OrderLine;
+  busy: boolean;
+  onClose: () => void;
+  onPick: (product: KitchenProductHit) => void;
+}) {
+  const [q, setQ] = useState(line.label);
+  const [results, setResults] = useState<KitchenProductHit[] | null>(null);
+  const [available, setAvailable] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [picking, setPicking] = useState<string | null>(null);
+
+  const search = useCallback(async (term: string) => {
+    setSearching(true);
+    try {
+      const r = await api.kitchen.searchProducts(term.trim());
+      setResults(r.products);
+      setAvailable(r.available);
+    } catch {
+      setResults([]);
+      setAvailable(false);
+    } finally {
+      setSearching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void search(line.label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Swap for an available product"
+      subtitle={`“${line.label}” looks unavailable — pick a replacement (remembered for next time)`}
+      icon="search"
+      tone="battery"
+      size="lg"
+      placement={desktop ? 'center' : 'sheet'}
+      wideViewport={desktop}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 18px' }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void search(q);
+            }}
+            placeholder="Search Mercadona…"
+            style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '9px 12px', fontSize: 13, color: 'var(--text-1)', outline: 'none' }}
+          />
+          <Button variant="secondary" loading={searching} onClick={() => void search(q)}>
+            Search
+          </Button>
+        </div>
+        {!available && (
+          <div style={{ fontSize: 12, color: 'var(--text-2)', background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '9px 12px' }}>
+            Mercadona is unreachable right now — try again in a moment.
+          </div>
+        )}
+        {results?.map((p) => (
+          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px' }}>
+            {p.photo ? (
+              <img src={p.photo} alt="" style={{ width: 42, height: 42, borderRadius: 8, objectFit: 'cover', flex: 'none' }} />
+            ) : (
+              <span style={{ width: 42, height: 42, borderRadius: 8, background: 'var(--surface-3)', display: 'grid', placeItems: 'center', flex: 'none' }}>
+                <Icon name="package" size={16} color="var(--text-3)" />
+              </span>
+            )}
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 12.5, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              <small style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                {p.packSizeDisplay ?? ''}
+                {p.referencePrice ? ` · ${p.referencePrice}` : ''}
+              </small>
+            </span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, flex: 'none' }}>{fmtEur(p.unitPrice)}</span>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={busy && picking === p.id}
+              onClick={() => {
+                setPicking(p.id);
+                onPick(p);
+              }}
+            >
+              Swap in
+            </Button>
+          </div>
+        ))}
+        {results && results.length === 0 && available && (
+          <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '8px 0' }}>No matches — try a simpler Spanish name (e.g. “agua con gas”).</div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ---- Order history --------------------------------------------------------------------------
 
 function HistoryModal({ desktop, onClose }: { desktop: boolean; onClose: () => void }) {
@@ -1126,6 +1344,7 @@ function ConfirmFillModal({
   account,
   fillableCount,
   unmappedChecked,
+  unavailableChecked,
   busy,
   onConfirm,
   onClose,
@@ -1135,6 +1354,7 @@ function ConfirmFillModal({
   account: MercadonaAccountStatus | null;
   fillableCount: number;
   unmappedChecked: number;
+  unavailableChecked: number;
   busy: boolean;
   onConfirm: () => void;
   onClose: () => void;
@@ -1142,10 +1362,6 @@ function ConfirmFillModal({
   const dryRun = !account?.linked || Boolean(account?.dryRun);
   const cap = account?.spendCapEur ?? 150;
   const overCap = draft.totalEur > cap;
-  // Mirror of the server rule: a REAL fill refuses when any item has no live price
-  // (the spend cap can't judge what it can't see); dry-run stays available.
-  const unpricedFillable = draft.lines.filter((l) => l.checked && l.productId && l.priceEur == null).length;
-  const blockedUnpriced = !dryRun && unpricedFillable > 0;
   // Non-blocking: lines whose price is a preserved last-known estimate (Mercadona was
   // flaky). These keep a price, so the cap still judges a real total — the fill is
   // allowed; we just say the cap was judged on the estimate.
@@ -1168,7 +1384,7 @@ function ConfirmFillModal({
           <Button
             variant="primary"
             loading={busy}
-            disabled={(overCap || blockedUnpriced) && !dryRun}
+            disabled={overCap && !dryRun}
             onClick={onConfirm}
             iconLeft={<Icon name={dryRun ? 'flask-conical' : 'shopping-basket'} size={14} />}
           >
@@ -1205,11 +1421,13 @@ function ConfirmFillModal({
             Connections ▸ Mercadona or uncheck some lines.
           </div>
         )}
-        {blockedUnpriced && (
-          <div style={{ background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--grid)', fontSize: 12 }}>
-            {unpricedFillable} item{unpricedFillable > 1 ? 's have' : ' has'} no live price (Mercadona unreachable), so the
-            spend cap can’t judge this fill — the server refuses real fills until prices are back. Try again later, or send
-            as checklist.
+        {unavailableChecked > 0 && (
+          <div style={{ background: 'var(--surface-3)', borderRadius: 'var(--radius-md)', padding: '8px 11px', color: 'var(--text-2)', fontSize: 12, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <Icon name="info" size={14} color="var(--solar)" />
+            <span>
+              {unavailableChecked} unavailable item{unavailableChecked > 1 ? 's' : ''} will be skipped (not added to your
+              cart) — swap or remove {unavailableChecked > 1 ? 'them' : 'it'} in the list to include {unavailableChecked > 1 ? 'them' : 'it'}.
+            </span>
           </div>
         )}
         {estimatedFillable > 0 && (
@@ -1283,15 +1501,20 @@ function FillResultModal({ desktop, result, onClose }: { desktop: boolean; resul
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 18px' }}>
-        {result.skipped.length > 0 && (
+        {result.skipped.some((s) => s.reason === 'unpriced') && (
+          <div style={{ fontSize: 12, color: 'var(--solar)', background: 'var(--solar-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px' }}>
+            Skipped (no price — looks unavailable): {result.skipped.filter((s) => s.reason === 'unpriced').map((s) => s.label).join(', ')}. Swap or remove them to include them next time.
+          </div>
+        )}
+        {result.skipped.some((s) => s.reason !== 'unpriced') && (
           <div style={{ fontSize: 12, color: 'var(--grid)', background: 'var(--grid-wash)', borderRadius: 'var(--radius-md)', padding: '8px 11px' }}>
-            Skipped (no product picked): {result.skipped.map((s) => s.label).join(', ')}
+            Skipped (no product picked): {result.skipped.filter((s) => s.reason !== 'unpriced').map((s) => s.label).join(', ')}
           </div>
         )}
         {result.unpricedCount > 0 && (
           <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-            {result.unpricedCount} item{result.unpricedCount > 1 ? 's' : ''} had no live price (Mercadona unreachable) — the
-            spend cap judged the known total only.
+            {result.unpricedCount} item{result.unpricedCount > 1 ? 's had' : ' had'} no price and {result.unpricedCount > 1 ? 'were' : 'was'} skipped — the spend
+            cap judged only the priced items that shipped.
           </div>
         )}
         {result.estimatedCount > 0 && (
