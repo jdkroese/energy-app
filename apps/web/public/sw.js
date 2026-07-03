@@ -1,7 +1,7 @@
 // Home PWA service worker — minimal, safe for a Vite SPA with hashed assets.
 // Strategy: navigations = network-first (offline.html fallback); static assets =
 // cache-first runtime; /api/ = always network (never cache live energy data).
-const VERSION = 'power-v1';
+const VERSION = 'power-v2';
 const PRECACHE = `${VERSION}-precache`;
 const RUNTIME = `${VERSION}-runtime`;
 const PRECACHE_URLS = ['/offline.html', '/manifest.webmanifest',

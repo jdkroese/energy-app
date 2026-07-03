@@ -10,7 +10,7 @@
 //
 // Responsive (CLAUDE.md web+mobile rule): branches on ctx.desktop. "Power" design system.
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
@@ -1439,7 +1439,6 @@ function ZoneEditor({
   );
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   // ≈L per minute for this zone (effective flow). Used for the live estimate in the stepper.
   const lpm = zone.flowLpm;
@@ -1527,29 +1526,57 @@ function ZoneEditor({
           </span>
         )}
         {isAdmin && (
-          <>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadPhoto(f);
-                e.currentTarget.value = "";
+          <div style={{ position: "absolute", bottom: 8, right: 8 }}>
+            {/* A real <label> wrapping a full-size transparent file input, so the TAP lands on
+                the input itself. The installed iOS PWA (standalone / WKWebView) blocks a
+                programmatic input.click() proxied from a button — which is why photo upload
+                worked in the browser but did nothing in the app. This native path works in both. */}
+            <label
+              style={{
+                position: "relative",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                height: 30,
+                padding: "0 12px",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-1)",
+                background: "var(--surface-2)",
+                color: "var(--text-1)",
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: uploading ? "default" : "pointer",
+                opacity: uploading ? 0.6 : 1,
+                WebkitTapHighlightColor: "transparent",
               }}
-            />
-            <div style={{ position: "absolute", bottom: 8, right: 8 }}>
-              <Button
-                size="sm"
-                variant="secondary"
-                loading={uploading}
-                onClick={() => fileRef.current?.click()}
-              >
-                {zone.photoUrl ? "Change photo" : "Add photo"}
-              </Button>
-            </div>
-          </>
+            >
+              <Icon name="camera" size={14} />
+              {uploading
+                ? "Uploading…"
+                : zone.photoUrl
+                  ? "Change photo"
+                  : "Add photo"}
+              <input
+                type="file"
+                accept="image/*"
+                disabled={uploading}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadPhoto(f);
+                  e.currentTarget.value = "";
+                }}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  opacity: 0,
+                  cursor: uploading ? "default" : "pointer",
+                }}
+              />
+            </label>
+          </div>
         )}
       </div>
 
