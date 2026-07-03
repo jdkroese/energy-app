@@ -631,6 +631,16 @@ export const api = {
         `/api/speakers/${enc(id)}/test`,
         {},
       ),
+    // Stop whatever is playing on Sonos (any source), or the named speakers.
+    stop: (speakerIds: string[] = []) =>
+      postJSON<{ ts: string; ok: boolean }>("/api/speakers/stop", { speakerIds }),
+    // Live-edit which zones a currently-playing native Sonos session runs on
+    // (reconciles the group; empty set stops everything).
+    setPlaying: (speakerIds: string[]) =>
+      postJSON<{ ts: string; ok: boolean; joined?: string[]; coordinator?: string; stopped?: boolean }>(
+        "/api/speakers/playing",
+        { speakerIds },
+      ),
   },
   alarm: {
     status: () => getJSON<AlarmStatus>("/api/alarm/status"),

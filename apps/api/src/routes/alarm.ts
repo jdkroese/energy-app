@@ -16,10 +16,13 @@ function badInput(msg: string): never {
 
 // ---- Speakers (fleet + per-speaker control) --------------------------------
 
-/** GET /api/speakers — the discovered Sonos fleet + a small context strip. */
+/** GET /api/speakers — the discovered Sonos fleet + a small context strip + live playback. */
 export async function getSpeakers(): Promise<unknown> {
   const info = await sonos.getInfo();
   const speakers = await sonos.getFleet();
+  // Live transport state so playback started ANYWHERE (Sonos app, TV, AirPlay, a favourite)
+  // is visible + stoppable, not just app-started radio/Spotify. Best-effort — never blocks the fleet.
+  const playback = await sonos.getPlaybackState().catch(() => null);
   return {
     ts: new Date().toISOString(),
     enabled: info.enabled,
@@ -27,8 +30,35 @@ export async function getSpeakers(): Promise<unknown> {
     discoveredCount: info.discoveredCount,
     lastError: info.lastError,
     speakers,
+    playback,
     context: { deviceCount: speakers.length },
   };
+}
+
+/** POST /api/speakers/stop { speakerIds? } — stop the chosen speakers, or all when none named (admin/kiosk). */
+export async function stopSpeakersRoute(body: unknown): Promise<unknown> {
+  const b = (body ?? {}) as { speakerIds?: unknown };
+  const speakerIds = Array.isArray(b.speakerIds)
+    ? b.speakerIds.filter((x): x is string => typeof x === 'string')
+    : [];
+  await sonos.stopSpeakers(speakerIds.length ? speakerIds : undefined);
+  return { ts: new Date().toISOString(), ok: true };
+}
+
+/**
+ * POST /api/speakers/playing { speakerIds } — LIVE-edit which zones a currently-playing NATIVE
+ * Sonos session runs on (the "Playing on" checkboxes). Newly-checked zones join in sync; unchecked
+ * ones leave + stop; an empty set stops everything. Admin/kiosk-gated at the route.
+ */
+export async function setPlayingSpeakersRoute(body: unknown): Promise<unknown> {
+  const b = (body ?? {}) as { speakerIds?: unknown };
+  const targetIds = Array.isArray(b.speakerIds)
+    ? [...new Set(b.speakerIds.filter((x): x is string => typeof x === 'string'))]
+    : [];
+  const res = await sonos
+    .setPlayingSpeakers(targetIds)
+    .catch((e) => badInput(`could not update speakers: ${(e as Error).message}`));
+  return { ts: new Date().toISOString(), ok: true, ...res };
 }
 
 /** POST /api/speakers/:id/volume { pct } — set one speaker's volume (admin). */

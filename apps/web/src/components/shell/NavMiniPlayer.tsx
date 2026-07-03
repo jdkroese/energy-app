@@ -33,7 +33,14 @@ import { useAuth } from '../../auth/AuthProvider';
 
 const POLL_MS = 5_000;
 
-type Source = 'spotify' | 'radio';
+type Source = 'spotify' | 'radio' | 'sonos';
+
+/** Friendly label for a now-playing source (used in tooltips + the Speakers section). */
+export function sourceLabel(source: Source): string {
+  if (source === 'spotify') return 'Spotify';
+  if (source === 'radio') return 'Radio';
+  return 'Sonos';
+}
 
 interface NowPlaying {
   source: Source;
@@ -119,6 +126,30 @@ export function useNowPlaying(): { np: NowPlaying | null; refetch: () => void } 
     };
   }
 
+  // Fallback: native Sonos playback the app didn't start (Sonos app, TV, AirPlay, a favourite).
+  // Read straight off the live transport state so it's still visible + stoppable here. Comes last
+  // so app-started Spotify/radio (which carry richer metadata) always take precedence.
+  const sonosPb = fleetData?.playback ?? null;
+  if (sonosPb && sonosPb.isPlaying) {
+    const inScopeIds = sonosPb.speakerIds.filter((id) => fleet.some((s) => s.id === id));
+    return {
+      np: {
+        source: 'sonos',
+        title: sonosPb.title || sonosPb.source || 'Playing on Sonos',
+        isPlaying: true,
+        toggle: async () => {
+          // No app-side session to pause — stop the speakers it's playing on (pause == stop).
+          await api.speakers.stop();
+          refetch();
+        },
+        fleet,
+        inScopeIds,
+        setSpeakers: async (ids) => { await api.speakers.setPlaying(ids); refetch(); },
+      },
+      refetch,
+    };
+  }
+
   return { np: null, refetch };
 }
 
@@ -126,6 +157,9 @@ export function useNowPlaying(): { np: NowPlaying | null; refetch: () => void } 
 function SourceGlyph({ source, size = 16 }: { source: Source; size?: number }) {
   if (source === 'spotify') {
     return <Icon name="music" size={size} color="#1DB954" />;
+  }
+  if (source === 'sonos') {
+    return <Icon name="cast" size={size} color="var(--solar)" />;
   }
   return <Icon name="radio" size={size} color="var(--solar)" />;
 }
@@ -254,7 +288,7 @@ export function RailMiniPlayer({ expanded }: { expanded: boolean }) {
       <button
         type="button"
         onClick={openMusic}
-        title={`${np.source === 'spotify' ? 'Spotify' : 'Radio'} · ${np.title}`}
+        title={`${sourceLabel(np.source)} · ${np.title}`}
         aria-label={`Now playing: ${np.title}. Open Music.`}
         style={{
           position: 'relative',

@@ -679,6 +679,15 @@ export interface SonosSpeaker {
   online: boolean;
 }
 
+/** Live Sonos transport state — what's actually playing across the fleet (any source). */
+export interface SonosPlayback {
+  isPlaying: boolean;
+  title: string | null;
+  source: string | null;
+  coordinator: string | null;
+  speakerIds: string[];
+}
+
 export interface SpeakersResponse {
   ts: string;
   enabled: boolean;
@@ -686,6 +695,8 @@ export interface SpeakersResponse {
   discoveredCount: number;
   lastError: string | null;
   speakers: SonosSpeaker[];
+  /** Present when at least one group is playing; null/absent when idle. */
+  playback?: SonosPlayback | null;
   context: { deviceCount: number };
 }
 
