@@ -70,7 +70,53 @@ test('lineQuantity: packsNeeded > count qty > 1-unit fallback', () => {
 test('unpriced lines are counted (the cap cannot see them)', () => {
   const plan = buildCartPlan([line({ productId: 'p1', priceEur: null })]);
   assert.equal(plan.unpricedCount, 1);
+  assert.equal(plan.estimatedCount, 0);
   assert.equal(plan.totalEur, 0);
+});
+
+// ---- Last-known-price estimates (flaky-Mercadona) --------------------------------------
+// enrich preserves a line's last-known price as an ESTIMATE (priceEst) when the live
+// re-check is unavailable. buildCartPlan must count those as estimated (NOT unpriced),
+// flag the item, and fold their price into a REAL totalEur (not the 0-sum no-op).
+
+test('estimated lines feed a REAL total and count as estimated, not unpriced', () => {
+  const plan = buildCartPlan([
+    line({ id: 'a', productId: 'p1', priceEur: 12.5, priceEst: true }),
+    line({ id: 'b', productId: 'p2', priceEur: 3.0 }), // live-confirmed
+    line({ id: 'c', productId: 'p3', priceEur: null }), // truly unpriced
+  ]);
+  assert.equal(plan.totalEur, 15.5); // 12.50 (estimate) + 3.00 — a REAL total, not 0
+  assert.equal(plan.estimatedCount, 1);
+  assert.equal(plan.unpricedCount, 1); // only the never-priced line
+  const est = plan.items.find((it) => it.product_id === 'p1');
+  assert.equal(est?.estimated, true);
+  const live = plan.items.find((it) => it.product_id === 'p2');
+  assert.equal(live?.estimated, undefined);
+});
+
+test('an estimated contributor flags a merged item', () => {
+  const plan = buildCartPlan([
+    line({ id: 'a', productId: 'p1', qty: 2, priceEur: 2, priceEst: true }),
+    line({ id: 'b', source: 'manual', productId: 'p1', qty: 1, priceEur: 1 }),
+  ]);
+  assert.equal(plan.items[0].estimated, true);
+  assert.equal(plan.totalEur, 3);
+  assert.equal(plan.estimatedCount, 1);
+});
+
+test('an estimated-but-under-cap real fill PASSES (the cap judged a real total)', () => {
+  const plan = buildCartPlan([
+    line({ id: 'a', productId: 'p1', priceEur: 40.0, priceEst: true }),
+    line({ id: 'b', productId: 'p2', priceEur: 10.0 }),
+  ]);
+  assert.equal(plan.totalEur, 50.0);
+  assert.equal(plan.unpricedCount, 0);
+  assert.doesNotThrow(() => assertRealFillAllowed(plan, 150));
+});
+
+test('an estimated total OVER the cap is refused with the cap error', () => {
+  const plan = buildCartPlan([line({ productId: 'p1', priceEur: 200.0, priceEst: true })]);
+  assert.throws(() => assertRealFillAllowed(plan, 150), SpendCapError);
 });
 
 // ---- Spend cap ---------------------------------------------------------------------------

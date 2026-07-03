@@ -2315,6 +2315,9 @@ export interface OrderLine {
   needsMapping?: boolean;
   checked: boolean;
   priceEur?: number | null;
+  /** True when priceEur is a preserved last-known estimate (live re-check unavailable),
+   *  not live-confirmed — the UI shows a muted "est." marker. */
+  priceEst?: boolean;
   pantry?: boolean;
   /** Mixed units were aggregated across recipes — the qty needs a human check (P2). */
   incomparable?: boolean;
@@ -2435,6 +2438,8 @@ export interface CartPlanItem {
   quantity: number;
   label: string;
   priceEur: number | null;
+  /** priceEur is a preserved last-known estimate, not live-confirmed. */
+  estimated?: boolean;
 }
 
 export interface FillCartResponse {
@@ -2449,6 +2454,8 @@ export interface FillCartResponse {
   skipped: Array<{ label: string; reason: string }>;
   totalEur: number;
   unpricedCount: number;
+  /** Items priced from a last-known estimate (Mercadona flaky) — included in totalEur. */
+  estimatedCount: number;
   capEur: number;
   cartUrl?: string;
 }

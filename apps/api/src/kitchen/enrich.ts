@@ -38,12 +38,27 @@ async function enrichOne(
     const pack = product?.packSize
       ? { qty: product.packSize.qty, unit: product.packSize.unit, display: product.packSizeDisplay ?? `${product.packSize.qty} ${product.packSize.unit}` }
       : map?.packSize ?? null;
+    // Price rule (docs: last-known-price estimate) — a live re-check can degrade to
+    // null the moment Mercadona is unreachable (the connector's 5-min negative cache
+    // nulls everything after one failure). Don't let that wipe a recently-known price:
+    //   unitPrice != null → recompute fresh, mark LIVE-confirmed (priceEst = false)
+    //   unitPrice == null → KEEP any existing line.priceEur as an ESTIMATE (priceEst =
+    //     true) so the spend cap judges a REAL total; only null it when never priced.
+    const known = (fresh: number) => {
+      line.priceEur = fresh;
+      line.priceEst = false;
+    };
+    const degrade = () => {
+      if (line.priceEur != null) line.priceEst = true; // keep last-known as an estimate
+      else line.priceEur = null; // never had a price → truly unpriced
+    };
     if (line.source === 'recipe') {
       const math = packMath(line.qty, line.unit, line.recipeIds?.length ?? 1, pack);
       if (math) {
         line.packsNeeded = math.packsNeeded;
         line.coverageNote = math.coverageNote;
-        line.priceEur = unitPrice != null ? Math.round(unitPrice * math.packsNeeded * 100) / 100 : null;
+        if (unitPrice != null) known(Math.round(unitPrice * math.packsNeeded * 100) / 100);
+        else degrade();
         if ((line.recipeIds?.length ?? 0) > 1) {
           return {
             id: `auto-${line.id}`,
@@ -57,14 +72,17 @@ async function enrichOne(
         // Units incomparable (or pack size unknown) → assume one unit of the product.
         delete line.packsNeeded;
         delete line.coverageNote;
-        line.priceEur = unitPrice;
+        if (unitPrice != null) known(unitPrice);
+        else degrade();
       }
     } else {
-      line.priceEur = unitPrice != null ? Math.round(unitPrice * Math.max(1, line.qty) * 100) / 100 : null;
+      if (unitPrice != null) known(Math.round(unitPrice * Math.max(1, line.qty) * 100) / 100);
+      else degrade();
     }
   } else if (line.source === 'recipe' || line.source === 'manual' || line.source === 'tablet') {
     line.needsMapping = true;
     line.priceEur = null;
+    line.priceEst = false;
   }
   return null;
 }
