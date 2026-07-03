@@ -11,6 +11,7 @@ import * as store from './store';
 import { emitAlertActive, emitAlertCleared, emitClearedForMissing } from './alert-events';
 import { runEventMonitors } from './monitors';
 import { pruneEventRing } from './events';
+import { expectMeaningfulProductionNow } from './solar-daylight';
 
 const INTERVAL_MS = 60_000;
 // Re-notify only if an alert recurs after it has been gone for this long.
@@ -53,8 +54,42 @@ let timer: ReturnType<typeof setInterval> | null = null;
 // Consecutive ticks each debounced alert id has been observed firing.
 const offlineStreak = new Map<string, number>();
 // Alerts we've notified that should send a one-time "back to normal" message once
-// they stop firing. Opted into per-rule (currently rule-voltage only). Keyed by id.
-const recoveryWatch = new Map<string, { device: string; title: string; body: string }>();
+// they stop firing. Opted into per-rule (rule-voltage, rule-charge-stall, and the
+// solar-inverter fault/dark/offline/stall rules). Keyed by id.
+//
+// `daylightGated`: the daylight-gated inverter rules (dark/offline/stall) stop firing at
+// DUSK because their daylight gate closed — not because the inverter recovered. Sending
+// "outage cleared" then is a FALSE all-clear that pages every evening during a
+// multi-day outage. For these we only announce recovery on an ACTUAL daytime read: if
+// the read stops firing while it's NOT a daylight/expected-production window we HOLD the
+// watch (no message) and re-check next tick; still dark next dawn → it re-alerts, truly
+// recovered → the healthy daytime read sends the cleared message. (docs/44; FIX 1.)
+interface RecoveryInfo {
+  device: string;
+  title: string;
+  body: string;
+  daylightGated?: boolean;
+}
+const recoveryWatch = new Map<string, RecoveryInfo>();
+
+// The rules whose recovery ("cleared") message must be suppressed at night/dusk because
+// their alert stops firing when the daylight gate closes, not on a real recovery.
+const DAYLIGHT_GATED_RECOVERY_RULES = new Set([
+  'rule-inverter-dark',
+  'rule-inverter-offline',
+  'rule-inverter-stall',
+]);
+
+/**
+ * Should a daylight-gated recovery be HELD (not announced) this tick? True only for a
+ * daylight-gated watch when production is NOT currently expected (night/dusk) — i.e. the
+ * alert likely stopped firing because the gate closed, so "cleared" would be a false
+ * all-clear. A genuine daytime recovery (daylight === true) is never held. Pure so it's
+ * unit-testable directly.
+ */
+export function shouldHoldRecovery(info: Pick<RecoveryInfo, 'daylightGated'>, daylight: boolean): boolean {
+  return info.daylightGated === true && !daylight;
+}
 
 // Fan a single alert (breach or recovery) out over the enabled channels.
 async function fanOut(
@@ -107,8 +142,21 @@ async function tick(): Promise<void> {
     // one-time "back to normal" message. Run BEFORE the early return so a lone
     // recovery on an otherwise-quiet tick still goes out.
     const firingIds = new Set(firing.map((a) => a.id));
+    // Daylight/expected-production is computed lazily and ONCE per tick — only if a
+    // daylight-gated inverter watch actually stopped firing (avoids the forecast call on
+    // the common quiet tick). Fail-soft: on any error treat it as NOT daylight so we hold
+    // (never announce a false clear), rather than paging a bogus "cleared".
+    let daylight: boolean | null = null;
     for (const [id, info] of [...recoveryWatch]) {
       if (firingIds.has(id)) continue;
+      // For the daylight-gated inverter rules, an alert that stops firing at dusk did NOT
+      // recover — its gate closed. Hold the watch (send nothing) until an actual daytime
+      // read clears it. Still dark next dawn → it re-alerts; truly recovered → the healthy
+      // daytime read (daylight === true) sends the cleared message below.
+      if (info.daylightGated) {
+        if (daylight === null) daylight = await expectMeaningfulProductionNow().catch(() => false);
+        if (shouldHoldRecovery(info, daylight)) continue; // keep watching; re-check next tick
+      }
       recoveryWatch.delete(id);
       // Clear the dedupe stamp so a fresh excursion notifies immediately, even
       // within the 6h renotify window.
@@ -183,14 +231,19 @@ async function tick(): Promise<void> {
       if (a.rule === 'rule-inverter-fault') {
         recoveryWatch.set(a.id, { device: a.device, title: `${a.device} fault cleared`, body: 'The inverter fault/alarm is no longer active' });
       }
+      // The dark/offline/stall rules are DAYLIGHT-GATED: their alert stops firing at dusk
+      // (gate closed), not on a real recovery. Mark the recovery watch so we only announce
+      // "cleared" on an actual daytime read — never a false all-clear every evening during
+      // a multi-day outage (FIX 1). rule-inverter-fault is NOT gated (a fault can clear any
+      // time, including at night) so it stays a plain watch above.
       if (a.rule === 'rule-inverter-dark') {
-        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is reachable and generating again — the outage cleared' });
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is reachable and generating again — the outage cleared', daylightGated: true });
       }
       if (a.rule === 'rule-inverter-offline') {
-        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} back online`, body: 'The inverter/dongle is reachable again' });
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} back online`, body: 'The inverter/dongle is reachable again', daylightGated: true });
       }
       if (a.rule === 'rule-inverter-stall') {
-        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is generating again' });
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is generating again', daylightGated: true });
       }
     }
 

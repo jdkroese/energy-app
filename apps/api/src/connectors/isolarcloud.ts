@@ -108,12 +108,32 @@ export function aesDecrypt(hex: string, key: string): string {
 }
 
 /**
- * RSA-encrypt the AES key with the account's OpenAPI public key (X.509 DER, base64url),
- * PKCS1 v1.5 padding, → base64url. This becomes the `x-random-secret-key` header.
+ * Build a crypto public key from the owner-pasted Settings field, accepting BOTH forms:
+ *   • a bare base64 X.509/SPKI DER body (what the OpenAPI docs give), or
+ *   • a full PEM block with `-----BEGIN PUBLIC KEY-----` armor (what a user often pastes).
+ * The field is free text, so we detect PEM armor and hand the PEM straight to
+ * createPublicKey (which parses armor + line wrapping natively); otherwise we base64-decode
+ * the bare body as DER/SPKI. Pure; throws only on a genuinely unparseable key (the caller
+ * is fail-soft). Exported for unit testing.
  */
-export function rsaEncryptKey(aesKey: string, rsaPublicKeyBase64: string): string {
-  const der = Buffer.from(rsaPublicKeyBase64.trim(), 'base64');
-  const keyObj = crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
+export function publicKeyFromField(rsaPublicKey: string): crypto.KeyObject {
+  const trimmed = rsaPublicKey.trim();
+  if (/-----BEGIN[\w ]*PUBLIC KEY-----/.test(trimmed)) {
+    // Full PEM armor present — let Node parse it directly (handles CRLF/soft-wraps).
+    return crypto.createPublicKey({ key: trimmed, format: 'pem' });
+  }
+  // Bare base64 DER body (strip any stray whitespace/newlines before decoding).
+  const der = Buffer.from(trimmed.replace(/\s+/g, ''), 'base64');
+  return crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
+}
+
+/**
+ * RSA-encrypt the AES key with the account's OpenAPI public key (bare base64 X.509 DER
+ * OR full PEM), PKCS1 v1.5 padding, → base64url. This becomes the `x-random-secret-key`
+ * header.
+ */
+export function rsaEncryptKey(aesKey: string, rsaPublicKey: string): string {
+  const keyObj = publicKeyFromField(rsaPublicKey);
   const enc = crypto.publicEncrypt(
     { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
     Buffer.from(aesKey, 'utf8'),

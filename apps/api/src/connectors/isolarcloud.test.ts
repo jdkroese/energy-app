@@ -16,6 +16,7 @@ import {
   aesEncrypt,
   aesDecrypt,
   rsaEncryptKey,
+  publicKeyFromField,
   buildSignedRequest,
   signedPost,
   parseRealTimeData,
@@ -61,6 +62,32 @@ test('rsaEncryptKey produces a value the matching private key can recover', () =
   const key = randomAesKey();
   const wrapped = rsaEncryptKey(key, pubDerB64);
   assert.equal(unwrapAesKey(wrapped), key);
+});
+
+// ---- FIX 4: RSA key field accepts BOTH bare base64 DER and full PEM armor ----
+
+const pubPem = publicKey.export({ type: 'spki', format: 'pem' }).toString(); // -----BEGIN PUBLIC KEY-----
+
+test('publicKeyFromField accepts a bare base64 SPKI-DER body', () => {
+  const ko = publicKeyFromField(pubDerB64);
+  assert.equal(ko.type, 'public');
+});
+
+test('publicKeyFromField accepts a full PEM block (----BEGIN PUBLIC KEY----- armor)', () => {
+  const ko = publicKeyFromField(pubPem);
+  assert.equal(ko.type, 'public');
+});
+
+test('rsaEncryptKey works with a full PEM-armored key (owner paste) — wraps recoverably', () => {
+  const key = randomAesKey();
+  const wrapped = rsaEncryptKey(key, pubPem);
+  assert.equal(unwrapAesKey(wrapped), key);
+});
+
+test('publicKeyFromField tolerates surrounding whitespace/newlines on the bare body', () => {
+  const messy = `  ${pubDerB64.slice(0, 40)}\n${pubDerB64.slice(40)}  \n`;
+  const ko = publicKeyFromField(messy);
+  assert.equal(ko.type, 'public');
 });
 
 // ---- buildSignedRequest headers + body -------------------------------------
