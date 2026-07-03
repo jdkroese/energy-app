@@ -2216,6 +2216,7 @@ function IntelligenceCard() {
       </div>
       {featureRow('importParsing', 'Recipe import parsing', 'URL → structured recipe + nutrition estimate when JSON-LD is missing')}
       {featureRow('cookingSuggestions', 'Cooking suggestions', '“What can I make with…” free-form ideas (arrives with cooking mode)')}
+      {featureRow('recipeGeneration', 'Recipe generation', 'Invent a few complete recipes from a question or ingredients — save the ones you like')}
       {featureRow('plannerRequestBox', 'Planner request box', '“Ask for anything” on the week planner')}
       {featureRow('weeklyPlanAssist', 'Weekly-plan assist', 'Blends with the rotation + preference engine')}
       <div style={{ ...row, padding: '11px 16px', borderTop: '1px solid var(--border-1)' }}>

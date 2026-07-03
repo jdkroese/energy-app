@@ -1486,6 +1486,8 @@ export interface KitchenIntelligenceConfig {
     cookingSuggestions: boolean;
     plannerRequestBox: boolean;
     weeklyPlanAssist: boolean;
+    /** AI generates COMPLETE structured candidate recipes → saved into the library (docs/43). */
+    recipeGeneration: boolean;
   };
   /** Local usage counter — tokens priced locally, reset per calendar month. */
   usage: { month: string; inputTokens: number; outputTokens: number; eur: number };
@@ -1514,6 +1516,9 @@ export function defaultKitchen(): KitchenSettings {
         cookingSuggestions: true,
         plannerRequestBox: true,
         weeklyPlanAssist: false,
+        // Default on so the flagship works the moment the master switch is enabled
+        // (master is off on prod today, so nothing generates until the owner opts in).
+        recipeGeneration: true,
       },
       usage: { month: "", inputTokens: 0, outputTokens: 0, eur: 0 },
     },
@@ -1576,6 +1581,10 @@ function hydrateKitchen(p: unknown): KitchenSettings {
           typeof f.weeklyPlanAssist === "boolean"
             ? f.weeklyPlanAssist
             : base.intelligence.features.weeklyPlanAssist,
+        recipeGeneration:
+          typeof f.recipeGeneration === "boolean"
+            ? f.recipeGeneration
+            : base.intelligence.features.recipeGeneration,
       },
       usage: {
         month: typeof u.month === "string" ? u.month : "",

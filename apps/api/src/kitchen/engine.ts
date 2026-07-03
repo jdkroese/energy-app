@@ -127,6 +127,31 @@ export const DIET_RESTRICTION_KEYWORDS: Record<string, string[]> = {
   'lactose-free': DAIRY_KEYWORDS,
 };
 
+/**
+ * The exhaustive keyword list a household forbids: every allergy term verbatim plus each
+ * diet restriction expanded via DIET_RESTRICTION_KEYWORDS (free-text restrictions match
+ * verbatim). Used both to compose the "never use" instruction for the recipe generator
+ * and as the belt-and-braces post-generation hard filter (D8, docs/43).
+ */
+export function forbiddenKeywords(h: Pick<Household, 'allergies' | 'dietRestrictions'>): string[] {
+  const out: string[] = [...(h.allergies ?? [])];
+  for (const restriction of h.dietRestrictions ?? []) {
+    out.push(...(DIET_RESTRICTION_KEYWORDS[restriction] ?? [restriction]));
+  }
+  return out;
+}
+
+/** True when a recipe uses any allergy / diet-restriction ingredient (a HARD reject). */
+export function recipeHasForbidden(r: Pick<Recipe, 'title' | 'ingredients'>, h: Pick<Household, 'allergies' | 'dietRestrictions'>): boolean {
+  const forbidden = forbiddenKeywords(h);
+  if (!forbidden.length) return false;
+  const names = r.ingredients.flatMap((i) => [i.name, i.es]).concat(r.title);
+  return textMatchesAny(names, forbidden);
+}
+
+/** Expose the token matcher for reuse (allergen/diet post-filters). */
+export { textMatchesAny };
+
 /** Hard filters: allergies + diet restrictions (never suggested) + same-recipe-twice-in-a-week. */
 export function isEligible(r: Recipe, ctx: ScoreContext): boolean {
   if (ctx.usedThisWeek.has(r.id)) return false;

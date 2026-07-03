@@ -101,9 +101,9 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
   const aiOn = Boolean(
     intelResp?.intelligence.enabled && intelResp.intelligence.configured && intelResp.intelligence.features.plannerRequestBox,
   );
-  // "More ideas" in what-can-I-make rides its own feature toggle (docs/42 §3).
-  const aiCookOn = Boolean(
-    intelResp?.intelligence.enabled && intelResp.intelligence.configured && intelResp.intelligence.features.cookingSuggestions,
+  // The discovery hub's Invent/ask actions ride the recipe-generation feature (docs/43).
+  const aiGenOn = Boolean(
+    intelResp?.intelligence.enabled && intelResp.intelligence.configured && intelResp.intelligence.features.recipeGeneration,
   );
   const byId = useMemo(() => new Map(recipes.map((r) => [r.id, r])), [recipes]);
 
@@ -174,6 +174,23 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
     if (!target) return;
     await patchDay({ date: target.date, recipeId: recipe.id });
     setQuickView(null);
+  };
+
+  // Discovery hub (docs/43): save an AI candidate INTO the library, then optionally plan it
+  // into the week or open cooking mode. createRecipe accepts source:'ai' now; refetch so the
+  // new recipe shows in the shelf + resolves in WhatCanIMake's byId map.
+  const saveCandidate = async (candidate: Recipe): Promise<Recipe> => {
+    const { id: _id, createdAt: _c, updatedAt: _u, ...body } = candidate;
+    const r = await api.kitchen.createRecipe(body);
+    void refetchRecipes();
+    return r.recipe;
+  };
+  const saveAndPlan = async (recipe: Recipe) => {
+    const target = plan?.days.find((d) => !d.skip && !d.recipeId) ?? plan?.days.find((d) => !d.skip);
+    if (target) await patchDay({ date: target.date, recipeId: recipe.id });
+  };
+  const saveAndCook = async (recipe: Recipe) => {
+    navigate(`/cook/${recipe.id}`);
   };
 
   const filteredShelf = recipes.filter((r) => {
@@ -618,9 +635,26 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
             <DayCardWide key={d.date} day={d} />
           ))}
         </div>
-        <div style={{ marginTop: 10 }}>{filterChips}</div>
+        {/* Discovery is a first-class section between the planner and the library shelf (docs/43). */}
+        <div style={{ marginTop: 6, padding: '16px 18px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-1)', background: 'var(--surface-1)' }}>
+          <WhatCanIMake
+            recipes={recipes}
+            aiOn={aiGenOn}
+            wide
+            showNutrition={showNutrition}
+            onOpenRecipe={(r) => setQuickView({ recipe: r })}
+            onSaveCandidate={saveCandidate}
+            onSaveAndPlan={saveAndPlan}
+            onSaveAndCook={saveAndCook}
+          />
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 10 }}>
+            Your cookbook
+          </div>
+          {filterChips}
+        </div>
         {shelf}
-        <WhatCanIMake recipes={recipes} aiOn={aiCookOn} wide onOpenRecipe={(r) => setQuickView({ recipe: r })} />
         {overlays}
       </div>
     );
@@ -657,9 +691,26 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
         {plan.days.map((d) => (
           <DayRowMobile key={d.date} day={d} />
         ))}
-        <div style={{ marginTop: 4 }}>{filterChips}</div>
+        {/* Discovery section — prominent, between the planner and the cookbook shelf (docs/43). */}
+        <div style={{ marginTop: 4, padding: '13px 13px 15px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-1)', background: 'var(--surface-1)' }}>
+          <WhatCanIMake
+            recipes={recipes}
+            aiOn={aiGenOn}
+            wide={false}
+            showNutrition={showNutrition}
+            onOpenRecipe={(r) => setQuickView({ recipe: r })}
+            onSaveCandidate={saveCandidate}
+            onSaveAndPlan={saveAndPlan}
+            onSaveAndCook={saveAndCook}
+          />
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>
+            Your cookbook
+          </div>
+          {filterChips}
+        </div>
         {shelf}
-        <WhatCanIMake recipes={recipes} aiOn={aiCookOn} wide={false} onOpenRecipe={(r) => setQuickView({ recipe: r })} />
       </div>
       <div style={{ position: 'sticky', bottom: 0, padding: '10px 14px calc(12px + env(safe-area-inset-bottom))', background: 'linear-gradient(transparent, var(--bg-0) 40%)' }}>
         <Button variant="primary" size="lg" block loading={busy === 'to-groceries'} iconRight={<Icon name="chevron-right" size={16} />} onClick={() => void addWeekToGroceries()}>
