@@ -41,25 +41,28 @@ type Layout = { hub: Pt; pos: Record<NodeKey, Pt>; srcY: number };
 // the anchor), so every line starts/ends exactly at the middle of a box.
 // Two layouts per breakpoint: `compact` (no source row) and `src` (inverter
 // sources across the top, everything else pushed down; uses the full height).
+// NB the left column stacks TWO battery nodes (each ring + a 3-line label), so
+// the side row sits well above the bottom row — verified for node-vs-node gaps,
+// not just canvas clipping (the SoC ring + % line made the old spacing collide).
 const L_SM_COMPACT: Layout = {
   hub: { x: 50, y: 52 },
   srcY: 0,
-  pos: { solar: { x: 50, y: 26 }, sonnen: { x: 16, y: 40 }, tesla: { x: 16, y: 74 }, grid: { x: 84, y: 40 }, home: { x: 50, y: 74 } },
+  pos: { solar: { x: 50, y: 26 }, sonnen: { x: 16, y: 37 }, tesla: { x: 16, y: 74 }, grid: { x: 84, y: 37 }, home: { x: 50, y: 74 } },
 };
 const L_SM_SRC: Layout = {
   hub: { x: 50, y: 58 },
   srcY: 12,
-  pos: { solar: { x: 50, y: 33 }, sonnen: { x: 16, y: 54 }, tesla: { x: 16, y: 81 }, grid: { x: 84, y: 54 }, home: { x: 50, y: 81 } },
+  pos: { solar: { x: 50, y: 33 }, sonnen: { x: 16, y: 49 }, tesla: { x: 16, y: 81 }, grid: { x: 84, y: 49 }, home: { x: 50, y: 81 } },
 };
 const L_LG_COMPACT: Layout = {
   hub: { x: 50, y: 52 },
   srcY: 0,
-  pos: { solar: { x: 50, y: 25 }, sonnen: { x: 14, y: 40 }, tesla: { x: 14, y: 75 }, grid: { x: 86, y: 40 }, home: { x: 50, y: 75 } },
+  pos: { solar: { x: 50, y: 25 }, sonnen: { x: 14, y: 37 }, tesla: { x: 14, y: 75 }, grid: { x: 86, y: 37 }, home: { x: 50, y: 75 } },
 };
 const L_LG_SRC: Layout = {
   hub: { x: 50, y: 58 },
   srcY: 13,
-  pos: { solar: { x: 50, y: 34 }, sonnen: { x: 14, y: 54 }, tesla: { x: 14, y: 80 }, grid: { x: 86, y: 54 }, home: { x: 50, y: 80 } },
+  pos: { solar: { x: 50, y: 34 }, sonnen: { x: 14, y: 49 }, tesla: { x: 14, y: 80 }, grid: { x: 86, y: 49 }, home: { x: 50, y: 80 } },
 };
 
 const COLOR: Record<NodeKey, string> = {

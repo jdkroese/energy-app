@@ -264,7 +264,7 @@ const CSS = `
 @keyframes pwr2ring{ 0%{transform:scale(.85);opacity:.7;} 70%{transform:scale(1.5);opacity:0;} 100%{opacity:0;} }
 /* desktop: fill the card's full height */
 .pwr2--lg{ aspect-ratio:auto; height:100%; min-height:320px; }
-.pwr2--lg.pwr2--src{ min-height:420px; }
+.pwr2--lg.pwr2--src{ min-height:440px; }
 .pwr2--lg .pwr2__chip{ width:52px; height:52px; border-radius:16px; }
 .pwr2--lg .pwr2__chip svg{ width:22px; height:22px; }
 .pwr2--lg .pwr2__lbl{ width:110px; gap:3px; }
