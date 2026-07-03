@@ -1,4 +1,4 @@
-# 41 — Rule Engine Phase 1: engine core (shadow) build breakdown
+# 45 — Rule Engine Phase 1: engine core (shadow) build breakdown
 
 Feeds off [docs/40-rule-engine.md](40-rule-engine.md) (architecture + resolved decisions
 Q1–Q4). Phase 0 shipped the visibility layer (decision trace, expensive-band watchdog,

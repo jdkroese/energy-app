@@ -207,4 +207,4 @@ Each phase = review-first PR(s), deployable alone, armed-state preserved.
 - **Q4 — Rules screen → per recommendation.** Lands as a **tab under `/automations`** first
   (beside the Status/Decisions panel); promote to top-level nav later if it earns the space.
 
-See `docs/41-rule-engine-phase1.md` for the Phase 1 build breakdown these decisions feed.
+See `docs/45-rule-engine-phase1.md` for the Phase 1 build breakdown these decisions feed.
