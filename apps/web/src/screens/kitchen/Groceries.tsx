@@ -1332,6 +1332,21 @@ function RegularsModal({
 
   const addable = products?.filter((p) => selected.has(p.id) && !p.inDraft).length ?? 0;
 
+  // Select-all master toggle — acts on the currently-visible, still-addable rows
+  // (respects the search filter; items already in the order are excluded).
+  const selectable = filtered.filter((p) => !p.inDraft);
+  const allSelected = selectable.length > 0 && selectable.every((p) => selected.has(p.id));
+  const toggleAll = () =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      const everyOn = selectable.every((p) => next.has(p.id));
+      for (const p of selectable) {
+        if (everyOn) next.delete(p.id);
+        else next.add(p.id);
+      }
+      return next;
+    });
+
   return (
     <Modal
       open
@@ -1372,6 +1387,15 @@ function RegularsModal({
               color: 'var(--text-1)',
             }}
           />
+        )}
+        {products !== null && available && selectable.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 10px 2px' }}>
+            <LineCheckbox on={allSelected} onToggle={toggleAll} />
+            <span onClick={toggleAll} style={{ fontSize: 12.5, color: 'var(--text-2)', cursor: 'pointer', userSelect: 'none' }}>
+              {allSelected ? 'Clear all' : `Select all${query.trim() ? ' matching' : ''}`}
+              <span style={{ color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}> · {selectable.length}</span>
+            </span>
+          </div>
         )}
         {products === null && <LoadingState label="Reading your regulars…" />}
         {products !== null && !available && (
