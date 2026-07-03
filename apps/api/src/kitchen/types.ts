@@ -124,7 +124,7 @@ export interface OrderSuggestion {
 
 export interface OrderLine {
   id: string;
-  source: 'recipe' | 'staple' | 'manual' | 'tablet';
+  source: 'recipe' | 'staple' | 'manual' | 'tablet' | 'regular';
   /** Recipes contributing to this (deduped) line. */
   recipeIds?: string[];
   productId?: string | null;

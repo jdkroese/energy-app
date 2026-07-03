@@ -26,7 +26,7 @@ import type {
   StaplesItem,
 } from '../../lib/types';
 import { MobileHeader } from '../_shared';
-import { fmtEur, fmtQty } from './shared';
+import { clientIngredientKey, fmtEur, fmtQty } from './shared';
 
 const DELIVERY_MIN_EUR = 50; // Mercadona home-delivery minimum
 
@@ -295,6 +295,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
   const recipeLines = draft.lines.filter((l) => l.source === 'recipe');
   const stapleLines = draft.lines.filter((l) => l.source === 'staple');
   const manualLines = draft.lines.filter((l) => l.source === 'manual' || l.source === 'tablet');
+  const regularLines = draft.lines.filter((l) => l.source === 'regular');
   const checkedCount = draft.lines.filter((l) => l.checked).length;
   const autoSuggestions = draft.suggestions.filter((s) => s.auto);
   const openSuggestions = draft.suggestions.filter((s) => !s.auto && s.state === 'open');
@@ -518,6 +519,14 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
             ))}
           </>
         )}
+        {regularLines.length > 0 && (
+          <>
+            <div style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--text-3)', padding: '10px 0 2px' }}>From your regulars</div>
+            {regularLines.map((l, i) => (
+              <IngredientRow key={l.id} line={l} last={i === regularLines.length - 1} />
+            ))}
+          </>
+        )}
       </div>
     </Card>
   );
@@ -538,18 +547,6 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           </div>
         )}
         <AddStaple onAdd={(name) => void addStaple(name)} />
-        {accountLinked && (
-          <Button
-            size="sm"
-            variant="secondary"
-            block
-            style={{ marginTop: 8 }}
-            iconLeft={<Icon name="sparkles" size={13} />}
-            onClick={() => setRegularsOpen(true)}
-          >
-            Seed staples from your Mercadona regulars
-          </Button>
-        )}
       </div>
     </Card>
   );
@@ -561,6 +558,7 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           [
             ['Recipe items', recipeLines, 'var(--grid)'],
             ['Staples', stapleLines, 'var(--solar)'],
+            ['From your regulars', regularLines, 'var(--battery)'],
             ['Added by hand', manualLines, 'var(--home)'],
           ] as Array<[string, OrderLine[], string]>
         ).map(([label, lines, color]) => {
@@ -692,6 +690,11 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
         <span style={{ width: 7, height: 7, borderRadius: 999, background: linked ? 'var(--solar)' : 'var(--text-3)', display: 'inline-block' }} />
         Mercadona · {linked ? 'linked' : 'prices unavailable'}
       </Badge>
+      {accountLinked && (
+        <Button size="sm" variant="ghost" iconLeft={<Icon name="sparkles" size={13} />} onClick={() => setRegularsOpen(true)}>
+          {wide ? 'Add from your regulars' : 'Regulars'}
+        </Button>
+      )}
       <Button size="sm" variant="ghost" iconLeft={<Icon name="clock" size={13} />} onClick={() => setHistoryOpen(true)}>
         {wide ? 'Order history' : 'History'}
       </Button>
@@ -729,11 +732,12 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
       {regularsOpen && (
         <RegularsModal
           desktop={wide}
+          draft={draft}
           onClose={() => setRegularsOpen(false)}
-          onImported={() => {
+          onAdded={(n) => {
             setRegularsOpen(false);
-            void refetchStaples();
-            setNote('Staples added from your regulars ✓');
+            void refetchDraft();
+            setNote(`Added ${n} item${n === 1 ? '' : 's'} from your regulars ✓`);
           }}
         />
       )}
@@ -806,6 +810,11 @@ export function Groceries({ ctx }: { ctx: ShellContext }) {
           value={tab.startsWith('Recipes') ? `Recipes · ${recipeLines.length}` : tab.startsWith('Staples') ? `Staples · ${stapleLines.length}` : `Basket · ${checkedCount}`}
           onChange={(v: string) => setTab(v.split(' ·')[0])}
         />
+        {accountLinked && (
+          <Button size="sm" variant="ghost" block iconLeft={<Icon name="sparkles" size={13} />} onClick={() => setRegularsOpen(true)}>
+            Add from your regulars
+          </Button>
+        )}
         {tab.startsWith('Recipes') && (
           <>
             {suggestionsCard}
@@ -1241,12 +1250,27 @@ function FillResultModal({ desktop, result, onClose }: { desktop: boolean; resul
   );
 }
 
-// ---- P2: "seed staples from your regulars" (myregulars import) --------------------------------
+// ---- Regulars browser (docs/43 — browse-and-add-to-order, decoupled from staples) --------------
+// Mercadona "my regulars" is the whole 131-item repeat-purchase history. It is NOT the
+// weekly-staples list (that mistake dumped all 131 into staples). Here it's a search-and-add
+// surface: tap items → append them as order-draft lines (source:'regular'). Nothing is
+// pre-selected; items already in the draft show greyed and aren't re-addable.
 
-function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onClose: () => void; onImported: () => void }) {
+function RegularsModal({
+  desktop,
+  draft,
+  onClose,
+  onAdded,
+}: {
+  desktop: boolean;
+  draft: OrderDraft;
+  onClose: () => void;
+  onAdded: (count: number) => void;
+}) {
   const [products, setProducts] = useState<KitchenRegularHit[] | null>(null);
   const [available, setAvailable] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -1255,7 +1279,7 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
       .then((r) => {
         setAvailable(r.available);
         setProducts(r.products);
-        setSelected(new Set(r.products.filter((p) => !p.alreadyStaple).map((p) => p.id)));
+        // NO pre-selection — the whole 131-item history must not default to "selected".
       })
       .catch(() => {
         setAvailable(false);
@@ -1271,26 +1295,49 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
       return next;
     });
 
-  const importSelected = async () => {
+  const filtered = useMemo(() => {
+    if (!products) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter((p) => p.name.toLowerCase().includes(q));
+  }, [products, query]);
+
+  const addSelected = async () => {
     if (!products) return;
+    const chosen = products.filter((p) => selected.has(p.id) && !p.inDraft);
+    if (!chosen.length) return;
     setBusy(true);
     try {
-      const chosen = products.filter((p) => selected.has(p.id) && !p.alreadyStaple);
-      await api.kitchen.importRegulars(
-        chosen.map((p) => ({ productId: p.id, name: p.name, priceEur: p.unitPrice, qty: p.recommendedQty })),
-      );
-      onImported();
+      // Mirror the tablet quickAdd line shape: a mapped, checked, priced order line.
+      const newLines: OrderLine[] = chosen.map((p) => {
+        const qty = p.recommendedQty || 1;
+        return {
+          id: '', // server assigns
+          source: 'regular',
+          productId: p.id,
+          ingredientKey: clientIngredientKey(p.name),
+          label: p.name,
+          qty,
+          unit: 'count',
+          checked: true,
+          ...(p.unitPrice != null ? { priceEur: Math.round(p.unitPrice * qty * 100) / 100 } : {}),
+        };
+      });
+      await api.kitchen.setOrderDraft({ lines: [...draft.lines, ...newLines] });
+      onAdded(chosen.length);
     } catch {
       setBusy(false);
     }
   };
+
+  const addable = products?.filter((p) => selected.has(p.id) && !p.inDraft).length ?? 0;
 
   return (
     <Modal
       open
       onClose={onClose}
       title="Your Mercadona regulars"
-      subtitle="One tap seeds them as staples — cadence hints take over from there"
+      subtitle="Tap to add to this week’s order."
       icon="sparkles"
       tone="battery"
       size="lg"
@@ -1301,13 +1348,31 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" loading={busy} disabled={selected.size === 0} onClick={() => void importSelected()}>
-            Add {selected.size} as staples
+          <Button variant="primary" loading={busy} disabled={addable === 0} onClick={() => void addSelected()}>
+            Add {addable} to order
           </Button>
         </>
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '16px 18px' }}>
+        {products !== null && available && products.length > 0 && (
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search your regulars…"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              background: 'var(--surface-1)',
+              border: '1px solid var(--border-1)',
+              borderRadius: 'var(--radius-md)',
+              padding: '9px 11px',
+              fontSize: 12.5,
+              color: 'var(--text-1)',
+            }}
+          />
+        )}
         {products === null && <LoadingState label="Reading your regulars…" />}
         {products !== null && !available && (
           <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
@@ -1317,9 +1382,12 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
         {products !== null && available && products.length === 0 && (
           <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No regulars on this account yet.</div>
         )}
-        {products?.map((p) => (
-          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px', opacity: p.alreadyStaple ? 0.5 : 1 }}>
-            <LineCheckbox on={p.alreadyStaple || selected.has(p.id)} onToggle={() => !p.alreadyStaple && toggle(p.id)} />
+        {products !== null && available && products.length > 0 && filtered.length === 0 && (
+          <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>No regulars match “{query.trim()}”.</div>
+        )}
+        {filtered.map((p) => (
+          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '8px 10px', opacity: p.inDraft ? 0.5 : 1 }}>
+            <LineCheckbox on={p.inDraft || selected.has(p.id)} onToggle={() => !p.inDraft && toggle(p.id)} />
             {p.photo ? (
               <img src={p.photo} alt="" style={{ width: 38, height: 38, borderRadius: 8, objectFit: 'cover', flex: 'none' }} />
             ) : (
@@ -1336,7 +1404,7 @@ function RegularsModal({ desktop, onClose, onImported }: { desktop: boolean; onC
               </span>
               <small style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
                 {p.packSizeDisplay ?? ''}
-                {p.alreadyStaple ? ' · already a staple' : ''}
+                {p.inDraft ? ' · in your order' : ''}
               </small>
             </span>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, flex: 'none' }}>{fmtEur(p.unitPrice)}</span>

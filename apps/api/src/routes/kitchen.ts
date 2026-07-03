@@ -39,7 +39,7 @@ import {
 } from '../kitchen/generate';
 import { syncOrderStatus } from '../kitchen/order-status';
 import { importRecipeFromUrl } from '../kitchen/import';
-import { mapRegulars, normalizeImports, type IncomingRegular } from '../kitchen/regulars';
+import { mapRegulars } from '../kitchen/regulars';
 import type {
   Cuisine,
   Household,
@@ -738,7 +738,8 @@ kitchenRouter.put(
         .filter((l) => l && typeof l === 'object' && typeof l.label === 'string')
         .map((l) => ({
           id: typeof l.id === 'string' && l.id ? l.id : kitchen.newId('line'),
-          source: l.source === 'staple' || l.source === 'manual' || l.source === 'tablet' ? l.source : 'recipe',
+          source:
+            l.source === 'staple' || l.source === 'manual' || l.source === 'tablet' || l.source === 'regular' ? l.source : 'recipe',
           ...(Array.isArray(l.recipeIds) ? { recipeIds: l.recipeIds.filter((x): x is string => typeof x === 'string') } : {}),
           productId: typeof l.productId === 'string' ? l.productId : null,
           ingredientKey: typeof l.ingredientKey === 'string' ? l.ingredientKey : '',
@@ -1187,8 +1188,12 @@ kitchenRouter.post(
   }),
 );
 
-// ---- "My regulars" staples seeding (P2, docs/41 §4) ----------------------------------------------
+// ---- "My regulars" browser (docs/43 — browse-to-add-to-order, decoupled from staples) ------------
 
+// Read-only: the repeat-purchase history for browsing. Rows are flagged `inDraft` when
+// the product is already a line in the current order draft (greyed, not re-addable in
+// the UI). Adding a regular goes through PUT /order/draft (source:'regular') — there is
+// NO import-to-staples path any more (that dumped all 131 regulars into staples).
 kitchenRouter.get(
   '/staples/regulars',
   wrap(async () => {
@@ -1196,49 +1201,11 @@ kitchenRouter.get(
     if (!cfg.account) return { ts: ts(), linked: false, available: false, products: [] };
     const raw = await mercadonaAuth.getMyRegulars();
     if (raw === null) return { ts: ts(), linked: true, available: false, products: [] };
-    const existing = new Set(kitchen.get().staples.map((s) => s.productId).filter(Boolean) as string[]);
+    const inDraft = new Set(kitchen.get().orderDraft.lines.map((l) => l.productId).filter(Boolean) as string[]);
     // myregulars returns WRAPPER rows { product, recommended_quantity, … } — unwrap
     // .product before normalizing (see kitchen/regulars.ts) and carry the quantity.
-    const products = mapRegulars(raw, existing);
+    const products = mapRegulars(raw, inDraft);
     return { ts: ts(), linked: true, available: true, products };
-  }),
-);
-
-kitchenRouter.post(
-  '/staples/import-regulars',
-  wrap((req) => {
-    const b = (req.body ?? {}) as { products?: unknown };
-    if (!Array.isArray(b.products) || !b.products.length) throw badInput('body.products array required');
-    const incoming = normalizeImports(b.products as IncomingRegular[]);
-    if (!incoming.length) throw badInput('no valid products in body.products');
-    const added = kitchen.update((d) => {
-      const have = new Set(d.staples.map((s) => s.productId).filter(Boolean) as string[]);
-      let n = 0;
-      for (const p of incoming) {
-        if (have.has(p.productId)) continue;
-        d.staples.push({
-          id: kitchen.newId('staple'),
-          productId: p.productId,
-          name: p.name,
-          defaultQty: p.defaultQty,
-          cadence: 'weekly',
-          lastOrderedAt: null,
-          priceEur: p.priceEur,
-        });
-        n++;
-      }
-      return n;
-    });
-    logEvent({
-      class: 'action',
-      category: 'kitchen',
-      severity: 'low',
-      summary: `Staples seeded from Mercadona regulars — ${added} added`,
-      trigger: { source: 'user' },
-      ok: true,
-      data: { added },
-    });
-    return { ts: ts(), ok: true, added, staples: kitchen.get().staples };
   }),
 );
 
