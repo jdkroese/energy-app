@@ -144,12 +144,56 @@ function canonicalQuery(path: string): string {
   return `${base}?${params.join('&')}`;
 }
 
+// ---- Quota guard -------------------------------------------------------------
+// When the IoT Core plan's API quota is exhausted (code 28841004) Tuya suspends the
+// whole service — every call fails, but our pollers (button-scan every 5s, fleet
+// refreshes, voltage monitor) would keep firing thousands of doomed requests. Cool
+// off: after a quota error, fail fast locally and let only one probe through per
+// minute to detect recovery. Log ONE high-severity connectivity event per outage
+// (forwards to Push/WA/Email) and a cleared event when service returns.
+
+const QUOTA_EXHAUSTED_CODE = 28841004;
+const QUOTA_PROBE_MS = 60_000;
+let quotaBlockedUntil = 0;
+let quotaOutage = false;
+
+function noteQuotaExhausted(msg: string): void {
+  quotaBlockedUntil = Date.now() + QUOTA_PROBE_MS;
+  if (quotaOutage) return;
+  quotaOutage = true;
+  logEvent({
+    class: 'observation',
+    category: 'connectivity',
+    severity: 'high',
+    state: 'active',
+    summary: 'Tuya API quota exhausted — all Tuya devices unavailable until the IoT Core plan is renewed/extended',
+    trigger: { source: 'health-probe', detail: msg },
+  });
+}
+
+function noteQuotaRecovered(): void {
+  if (!quotaOutage) return;
+  quotaOutage = false;
+  quotaBlockedUntil = 0;
+  logEvent({
+    class: 'observation',
+    category: 'connectivity',
+    severity: 'low',
+    state: 'cleared',
+    summary: 'Tuya API quota restored — Tuya devices reachable again',
+    trigger: { source: 'health-probe' },
+  });
+}
+
 async function request<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown,
   retry = true,
 ): Promise<T> {
+  if (Date.now() < quotaBlockedUntil) {
+    throw new Error('Tuya API quota exhausted (cooling off; renew the IoT Core plan in the Tuya console)');
+  }
   const c = mustCreds();
   const token = await getToken(c);
   const signedPath = canonicalQuery(path);
@@ -183,8 +227,10 @@ async function request<T>(
       tokenCache = null;
       return request<T>(method, path, body, false);
     }
+    if (json.code === QUOTA_EXHAUSTED_CODE) noteQuotaExhausted(`${path}: ${json.msg ?? ''}`);
     throw new Error(`Tuya ${path} failed: ${json.msg ?? 'error'} (code ${json.code ?? '?'})`);
   }
+  noteQuotaRecovered();
   return json.result as T;
 }
 
@@ -276,16 +322,34 @@ function knownDeviceIds(): string[] {
   }
 }
 
+// One probe per missing device per fleet refresh burned real API quota (~12 extra calls
+// per 20s refresh helped exhaust the IoT Core trial pack on 2026-07-03). Re-probe at most
+// every 2 min; between probes fold in the last recovered snapshot. Writes stay snappy —
+// invalidateFleet() (called after every successful command) clears this snapshot too, so
+// a just-commanded device is re-read fresh on the next refresh.
+const SUPPLEMENT_PROBE_MS = 120_000;
+let supplementCache: { ts: number; devices: TuyaDevice[] } | null = null;
+
+/** Called from invalidateFleet — a write just happened, drop the recovered snapshot. */
+function invalidateSupplement(): void {
+  supplementCache = null;
+}
+
 async function supplementDroppedDevices(fleet: TuyaDevice[]): Promise<TuyaDevice[]> {
   const have = new Set(fleet.map((d) => d.id));
   const missing = knownDeviceIds().filter((id) => !have.has(id));
   if (!missing.length) {
     lastDropoutKey = '';
+    supplementCache = null;
     return fleet;
+  }
+  if (supplementCache && Date.now() - supplementCache.ts < SUPPLEMENT_PROBE_MS) {
+    return [...fleet, ...supplementCache.devices.filter((d) => !have.has(d.id))];
   }
   const recovered = (await Promise.all(missing.map((id) => getDeviceDirect(id)))).filter(
     (d): d is TuyaDevice => d !== null,
   );
+  supplementCache = { ts: Date.now(), devices: recovered };
   noteFleetDropout(missing, recovered);
   return [...fleet, ...recovered];
 }
@@ -325,6 +389,7 @@ export function getDevices(): Promise<TuyaDevice[]> {
 /** Force the next getDevices() to refetch — call right after a successful write. */
 export function invalidateFleet(): void {
   invalidate(FLEET_KEY);
+  invalidateSupplement();
 }
 
 /**
