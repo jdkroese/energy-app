@@ -44,7 +44,7 @@ function toFlow(d: LiveResponse): FlowData {
         unit: 'kW',
         sub: named ? 'combined feed' : `${d.solar.arrays?.length || 2} arrays`,
         kw: d.solar.kw,
-        breakdown: named ? named.map((a) => ({ label: a.name, kw: a.kw, est: a.est })) : undefined,
+        breakdown: named ? named.map((a) => ({ label: a.name, kw: a.kw, est: a.est, dark: a.dark })) : undefined,
       };
     })(),
     sonnen: batteryNode('Sonnen', d.sonnen),

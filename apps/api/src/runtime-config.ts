@@ -75,3 +75,94 @@ export function sungrowConfig(): SungrowDongle[] {
     { ip: ip2, name: 'Solar Inverter 2' },
   ];
 }
+
+/**
+ * How often we actually hit the WiNet-S dongles (seconds), driving the connector's
+ * getNormalized() cache TTL. The WiNet-S dongle's embedded server crashes under
+ * repeated local polling (openHAB-community-confirmed lockup, incident 2026-07-03),
+ * so we deliberately poll GENTLY — default 60s (was 20s). Env `SUNGROW_POLL_SEC`
+ * overrides; clamped to a sane 20–600s so a bad env can't hammer or freeze the read.
+ */
+export function sungrowPollSec(): number {
+  const raw = Number(process.env.SUNGROW_POLL_SEC);
+  if (!Number.isFinite(raw) || raw <= 0) return 60;
+  return Math.max(20, Math.min(600, Math.round(raw)));
+}
+
+/**
+ * iSolarCloud OpenAPI config (Phase B — cloud backstop). Read from the Settings
+ * store (store.integrations.isolarcloud) with an env fallback. Returns `null` when
+ * unconfigured so the connector no-ops (disabled/gated until the owner's key lands).
+ * All secrets stay server-side; the config route never returns appkey/accessKey/rsa.
+ */
+export interface IsolarcloudConfig {
+  /** OpenAPI application key (x-access-key pairs with appkey). */
+  appkey: string;
+  /** OpenAPI access key (sent as the `x-access-key` header). */
+  accessKey: string;
+  /**
+   * RSA public key used to encrypt the AES session key. Accepts EITHER the bare base64
+   * X.509/SPKI DER body OR a full PEM block (`-----BEGIN PUBLIC KEY-----` … armor) — paste
+   * whichever iSolarCloud gives you. (Settings-label hint: "Paste the base64 key or the
+   * full -----BEGIN PUBLIC KEY----- PEM block.")
+   */
+  rsaPublicKey: string;
+  /** iSolarCloud account login (email/username) for the login grant. */
+  account: string;
+  /** iSolarCloud account password for the login grant. */
+  password: string;
+  /** Region host, default the EU gateway. */
+  region: string;
+  /** Optional owner-set serial→dongle-IP map (cloud dev ↔ local dongle). */
+  serialMap?: Record<string, string>;
+}
+
+const ISC_DEFAULT_REGION = 'gateway.isolarcloud.eu';
+
+// Allowlist of known iSolarCloud OpenAPI gateway hosts. `region` is interpolated
+// straight into the request URL (isolarcloud.ts signedPost), so it MUST be constrained
+// to real gateway hostnames — a free-text/invalid region can't be allowed to redirect
+// signed, credential-bearing requests to an arbitrary host. An unlisted region disables
+// the cloud (fail-soft), it never throws into the hot path. Hosts per the Sungrow
+// OpenAPI regional gateways (EU / global / China / Australia).
+const ISC_ALLOWED_REGIONS = new Set([
+  'gateway.isolarcloud.eu',
+  'gateway.isolarcloud.com',
+  'gateway.isolarcloud.com.hk',
+  'gateway.isolarcloud.com.cn',
+  'augateway.isolarcloud.com',
+]);
+
+/** True when `region` is a known iSolarCloud gateway host (exported for tests). */
+export function isAllowedIsolarcloudRegion(region: string): boolean {
+  return ISC_ALLOWED_REGIONS.has(region.trim().toLowerCase());
+}
+
+export function isolarcloudConfig(): IsolarcloudConfig | null {
+  const c = store.get().integrations?.isolarcloud;
+  const appkey = (c?.appkey?.trim() || process.env.ISOLARCLOUD_APPKEY?.trim() || '');
+  const accessKey = (c?.accessKey?.trim() || process.env.ISOLARCLOUD_ACCESS_KEY?.trim() || '');
+  const rsaPublicKey = (c?.rsaPublicKey?.trim() || process.env.ISOLARCLOUD_RSA_KEY?.trim() || '');
+  const account = (c?.account?.trim() || process.env.ISOLARCLOUD_ACCOUNT?.trim() || '');
+  const password = (c?.password || process.env.ISOLARCLOUD_PASSWORD || '');
+  const region = (c?.region?.trim() || process.env.ISOLARCLOUD_REGION?.trim() || ISC_DEFAULT_REGION);
+  // Fully configured means we can both authenticate (account+password) and sign
+  // (appkey+accessKey+rsa). Anything short of that → disabled (return null).
+  if (!appkey || !accessKey || !rsaPublicKey || !account || !password) return null;
+  // Reject an unknown gateway host — a bad/typo/hostile region must not redirect the
+  // signed, credential-bearing requests. Unlisted → cloud disabled (fail-soft, no throw).
+  if (!isAllowedIsolarcloudRegion(region)) {
+    console.warn(`[isolarcloud] region "${region}" is not an allowed gateway host — cloud backstop disabled`);
+    return null;
+  }
+  return {
+    appkey,
+    accessKey,
+    rsaPublicKey,
+    account,
+    password,
+    // Normalize to the canonical (lowercased) allowlisted host actually used in the URL.
+    region: region.trim().toLowerCase(),
+    ...(c?.serialMap && typeof c.serialMap === 'object' ? { serialMap: c.serialMap } : {}),
+  };
+}

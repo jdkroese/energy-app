@@ -1184,8 +1184,16 @@ function SungrowConnection({ first, open, onToggle, cfg, reload }: { first?: boo
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <DetailLine label="Status" value={status ? status.detail : '—'} tone={status?.ok ? 'solar' : 'grid'} />
           {(cfg?.sungrow.dongles ?? []).map((d, i) => (
-            <DetailLine key={d.ip || i} label={d.name || `Inverter ${i + 1}`} value={d.ip} />
+            <DetailLine
+              key={d.ip || i}
+              label={d.name || `Inverter ${i + 1}`}
+              value={`${d.ip}${d.lastSeen ? ` · seen ${relTime(d.lastSeen)}` : ' · never seen'}`}
+              tone={d.lastSeen ? undefined : 'text-3'}
+            />
           ))}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.5, background: 'var(--surface-3)', borderRadius: 8, padding: '8px 10px' }}>
+          <strong style={{ color: 'var(--text-2)' }}>Tip:</strong> set a DHCP reservation on your router for each dongle's MAC address so these IPs never change. A WiNet-S dongle that moves to a new IP looks "offline" here — a reservation prevents that.
         </div>
         {isAdmin ? (
           <>
@@ -1199,6 +1207,110 @@ function SungrowConnection({ first, open, onToggle, cfg, reload }: { first?: boo
           </>
         ) : (
           <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can change the Sungrow dongle IPs.</div>
+        )}
+      </div>
+    </ConnectionRow>
+  );
+}
+
+/* ============================================================================
+ * iSolarCloud — the LAN-independent CLOUD backstop for the Sungrow inverters
+ * (docs/44, Phase B). A crashed WiNet-S dongle or a home-LAN outage no longer blinds
+ * outage detection: the cloud is the source of truth for "an inverter is dark". GATED —
+ * disabled until the owner enters their OpenAPI credentials (appkey + access key + RSA
+ * public key + account). Secrets are write-only from the UI and never returned. Test/Save
+ * authenticate against the real OpenAPI before persisting.
+ * ==========================================================================*/
+
+function IsolarcloudConnection({ first, open, onToggle, cfg, reload }: { first?: boolean; open: boolean; onToggle: () => void; cfg: IntegrationsConfig | null; reload: () => void }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const isc = cfg?.isolarcloud;
+  const [appkey, setAppkey] = useState('');
+  const [accessKey, setAccessKey] = useState('');
+  const [rsaPublicKey, setRsaPublicKey] = useState('');
+  const [account, setAccount] = useState('');
+  const [password, setPassword] = useState('');
+  const [region, setRegion] = useState('');
+  const [busy, setBusy] = useState<'test' | 'save' | null>(null);
+  const [res, setRes] = useState<ProbeResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Seed the non-secret fields once config arrives (account/region are safe to echo).
+  useEffect(() => {
+    if (isc?.account && !account) setAccount(isc.account);
+    if (isc?.region && !region) setRegion(isc.region);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isc?.account, isc?.region]);
+
+  const payload = () => ({
+    appkey: appkey.trim() || undefined,
+    accessKey: accessKey.trim() || undefined,
+    rsaPublicKey: rsaPublicKey.trim() || undefined,
+    account: account.trim() || undefined,
+    password: password || undefined,
+    region: region.trim() || undefined,
+  });
+
+  const run = async (kind: 'test' | 'save') => {
+    setBusy(kind); setErr(null); setRes(null);
+    try {
+      if (kind === 'test') setRes(await api.integrations.testIsolarcloud(payload()));
+      else {
+        const r = await api.integrations.setIsolarcloud(payload());
+        setRes({ ok: r.ok, detail: r.detail });
+        setPassword(''); // never keep the entered secret in component state
+        reload();
+      }
+    } catch (e) { setErr(errMsg(e)); } finally { setBusy(null); }
+  };
+
+  const configured = isc?.configured ?? false;
+  const statusText = configured ? 'connected · cloud backstop' : 'not configured';
+  const statusTone = configured ? 'solar' : 'text-3';
+
+  return (
+    <ConnectionRow
+      first={first}
+      icon="cloud"
+      tone={configured ? 'solar' : undefined}
+      name="iSolarCloud"
+      statusText={statusText}
+      statusTone={statusTone}
+      showDot={cfg !== null}
+      open={open}
+      onToggle={onToggle}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={cfgDesc}>
+          The Sungrow cloud (iSolarCloud OpenAPI) — a <strong style={{ color: 'var(--text-1)' }}>LAN-independent</strong> source
+          of truth so a crashed WiNet-S dongle or a home-network outage never hides a tripped
+          breaker. Read-only. Enter your OpenAPI credentials from developer-api.isolarcloud.com.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <DetailLine label="Status" value={configured ? 'configured' : 'not configured'} tone={configured ? 'solar' : 'text-3'} />
+          <DetailLine label="Region" value={isc?.region || 'gateway.isolarcloud.eu'} />
+          {isc?.account && <DetailLine label="Account" value={isc.account} />}
+          <DetailLine label="App key" value={isc?.hasAppkey ? 'set' : 'not set'} tone={isc?.hasAppkey ? 'solar' : 'text-3'} />
+          <DetailLine label="Access key" value={isc?.hasAccessKey ? 'set' : 'not set'} tone={isc?.hasAccessKey ? 'solar' : 'text-3'} />
+          <DetailLine label="RSA key" value={isc?.hasRsaKey ? 'set' : 'not set'} tone={isc?.hasRsaKey ? 'solar' : 'text-3'} />
+        </div>
+        {isAdmin ? (
+          <>
+            <Input label="App key" value={appkey} onChange={(e) => setAppkey(e.target.value)} placeholder={isc?.hasAppkey ? '•••••••• (unchanged)' : 'OpenAPI appkey'} />
+            <Input label="Access key (x-access-key)" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} placeholder={isc?.hasAccessKey ? '•••••••• (unchanged)' : 'OpenAPI access key'} />
+            <Input label="RSA public key (base64)" value={rsaPublicKey} onChange={(e) => setRsaPublicKey(e.target.value)} placeholder={isc?.hasRsaKey ? '•••••••• (unchanged)' : 'X.509 public key, base64'} />
+            <Input label="Account (email)" value={account} onChange={(e) => setAccount(e.target.value)} placeholder="iSolarCloud login" />
+            <Input label="Password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={configured ? '•••••••• (unchanged)' : 'iSolarCloud password'} />
+            <Input label="Region host" value={region} onChange={(e) => setRegion(e.target.value)} placeholder="gateway.isolarcloud.eu" />
+            <ResultLine r={res} err={err} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button size="sm" variant="secondary" loading={busy === 'test'} onClick={() => void run('test')}>Test</Button>
+              <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void run('save')}>Save</Button>
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Only an admin can configure the iSolarCloud backstop.</div>
         )}
       </div>
     </ConnectionRow>
@@ -2267,6 +2379,7 @@ function ConnectionsCard({ connections }: { connections: SettingsResponse['conne
       <AcCloudConnection first={false} open={openId === 'accloud'} onToggle={() => toggle('accloud')} />
       <AirzoneConnection first={false} open={openId === 'airzone'} onToggle={() => toggle('airzone')} cfg={cfg} reload={loadCfg} />
       <SungrowConnection first={false} open={openId === 'sungrow'} onToggle={() => toggle('sungrow')} cfg={cfg} reload={loadCfg} />
+      <IsolarcloudConnection first={false} open={openId === 'isolarcloud'} onToggle={() => toggle('isolarcloud')} cfg={cfg} reload={loadCfg} />
       <RainbirdConnection first={false} open={openId === 'rainbird'} onToggle={() => toggle('rainbird')} />
       <TuyaConnection first={false} open={openId === 'tuya'} onToggle={() => toggle('tuya')} />
       <SonosConnection first={false} open={openId === 'sonos'} onToggle={() => toggle('sonos')} />

@@ -71,6 +71,7 @@ import type {
   SpotifyPlayResponse,
   LiveResponse,
   ProbeResult,
+  IsolarcloudCreds,
   LoginResponse,
   MeResponse,
   OtpChannel,
@@ -1018,6 +1019,17 @@ export const api = {
       putJSON<ProbeResult & { config: IntegrationsConfig }>(
         "/api/integrations/sungrow",
         { dongles },
+      ),
+
+    // iSolarCloud cloud backstop (docs/44, Phase B). Admin-only; secrets are
+    // write-only from the UI (omit a field to keep the stored one). Test/save both
+    // authenticate against the real OpenAPI before persisting.
+    testIsolarcloud: (creds: IsolarcloudCreds) =>
+      postJSON<ProbeResult>("/api/integrations/isolarcloud/test", creds),
+    setIsolarcloud: (creds: IsolarcloudCreds) =>
+      putJSON<ProbeResult & { config: IntegrationsConfig }>(
+        "/api/integrations/isolarcloud",
+        creds,
       ),
 
     // Rain Bird irrigation (LAN-local SIP; host prefilled, password required).

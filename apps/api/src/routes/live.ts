@@ -1,6 +1,7 @@
 import * as sonnen from '../connectors/sonnen';
 import * as tesla from '../connectors/tesla';
 import * as sungrow from '../connectors/sungrow';
+import type { InverterNormalized } from '../connectors/sungrow';
 import { bandInfo } from '../tariff';
 import { config } from '../config';
 import * as history5m from '../history5m';
@@ -31,6 +32,41 @@ export function clampSiteSolarKw(
 ): { kw: number; clamped: boolean } {
   if (!Number.isFinite(rawKw)) return { kw: 0, clamped: false };
   return { kw: Math.max(0, Math.min(ceilingKw, rawKw)), clamped: rawKw > ceilingKw };
+}
+
+/**
+ * Is this inverter LIVE for the energy-flow split? True when the local dongle answered
+ * (`reachable`) OR the LAN-independent cloud backstop is supplying its value
+ * (`source === 'cloud'`). After mergeSolarSources() a cloud-alive inverter has
+ * reachable:false but source:'cloud' + acPowerW>0, and its power is already counted in
+ * getNormalized().productionW — so filtering on `reachable` alone forced it to
+ * {kw:0, dark:true} and DROPPED it from the sum (the flow drew a producing inverter as
+ * dark). Treating cloud as live keeps the split consistent with productionW. Pure.
+ */
+export function isInverterLive(inv: Pick<InverterNormalized, 'reachable' | 'source'>): boolean {
+  return inv.reachable || inv.source === 'cloud';
+}
+
+/**
+ * Build the per-Sungrow energy-flow nodes + their summed kW from the merged inverter
+ * list. A LIVE inverter (local OR cloud) contributes its measured acPowerW; only a
+ * genuinely-dark inverter (dark from ALL sources) becomes a {kw:0, dark:true} node.
+ * Pure + side-effect-free so it's unit-testable and stays in lockstep with
+ * getNormalized().productionW (same live predicate). kW rounding uses `round`.
+ */
+export function splitSungrowArrays(
+  inverters: Pick<InverterNormalized, 'name' | 'acPowerW' | 'reachable' | 'source'>[],
+): { arrays: { name: string; kw: number; dark?: boolean }[]; sungrowKw: number } {
+  let sungrowKw = 0;
+  const arrays = inverters.map((i) => {
+    if (isInverterLive(i)) {
+      const kw = round(i.acPowerW / 1000);
+      sungrowKw += i.acPowerW / 1000;
+      return { name: i.name, kw };
+    }
+    return { name: i.name, kw: 0, dark: true };
+  });
+  return { arrays, sungrowKw: round(sungrowKw) };
 }
 
 // In-process rolling 24h day buffers for the day chart (best-effort; resets on
@@ -197,15 +233,24 @@ export async function getLive(): Promise<unknown> {
   // (avoiding a double-count) and fall back to the Sonnen proxy only when they aren't.
   const teslaSolar = t?.solarKw ?? 0;
   const sonnenSolar = s ? round(s.productionW / 1000) : 0;
-  const reachableInv = inv ? inv.inverters.filter((i) => i.reachable) : [];
-  let arrays: { name: string; kw: number; est?: boolean }[];
+  // "Live" = local dongle answered OR the cloud backstop is supplying the value. After
+  // mergeSolarSources() a local-unreachable-but-cloud-alive inverter is reachable:false
+  // + source:'cloud' + acPowerW>0; it must NOT be treated as dark (its power is already
+  // in getNormalized().productionW). See isInverterLive/splitSungrowArrays.
+  const liveInv = inv ? inv.inverters.filter((i) => isInverterLive(i)) : [];
+  let arrays: { name: string; kw: number; est?: boolean; dark?: boolean }[];
   let solarKw: number;
-  if (reachableInv.length > 0) {
-    // True 3-way split: one entry per reachable Sungrow + the Tesla array.
-    const sungrowKw = round(reachableInv.reduce((sum, i) => sum + i.acPowerW / 1000, 0));
-    arrays = reachableInv.map((i) => ({ name: i.name, kw: round(i.acPowerW / 1000) }));
+  if (liveInv.length > 0) {
+    // True 3-way split with resilience (docs/44): one entry per Sungrow + the Tesla
+    // array. When ONE inverter is live and the other is dark from ALL sources, do NOT
+    // collapse to the live-only view — keep the dark inverter as its own node (0 kW +
+    // dark:true) so the flow still attributes per-inverter and the dark unit is visible.
+    // A cloud-alive inverter counts as live (kw from its merged acPowerW) so we stay
+    // consistent with productionW and never draw a producing inverter as dark.
+    const split = splitSungrowArrays(inv!.inverters);
+    arrays = split.arrays;
     arrays.push({ name: 'Tesla', kw: teslaSolar });
-    solarKw = round(sungrowKw + teslaSolar);
+    solarKw = round(split.sungrowKw + teslaSolar);
   } else if (inv && inv.inverters.length > 0) {
     // Dongles configured but none reachable (usually asleep at night): keep the
     // named per-inverter nodes in the UI by splitting the Sonnen-metered Array A

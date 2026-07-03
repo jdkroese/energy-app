@@ -22,7 +22,7 @@ export interface FlowNode {
    * as its own node across the top, feeding a line into the combined Solar
    * "production feed" node. `est` marks proxy-estimated values (shown as ~).
    */
-  breakdown?: { label: string; kw: number; est?: boolean }[];
+  breakdown?: { label: string; kw: number; est?: boolean; dark?: boolean }[];
 }
 
 export interface FlowData {
@@ -229,18 +229,25 @@ export function EnergyFlow({ flow, size = 'sm' }: Props) {
       {srcPts.map((s, i) => (
         <div
           key={`src${i}`}
-          className={'pwr2__node pwr2__node--src' + (s.kw > 0.05 ? ' pwr2__node--active' : '')}
-          style={{ left: s.x + '%', top: s.y + '%', '--_c': COLOR.solar, animationDelay: `${(keys.length + i) * 45}ms` } as CSSProperties}
+          className={'pwr2__node pwr2__node--src' + (s.kw > 0.05 ? ' pwr2__node--active' : '') + (s.dark ? ' pwr2__node--dark' : '')}
+          style={{ left: s.x + '%', top: s.y + '%', '--_c': s.dark ? 'var(--grid)' : COLOR.solar, animationDelay: `${(keys.length + i) * 45}ms`, ...(s.dark ? { opacity: 0.55 } : {}) } as CSSProperties}
+          title={s.dark ? `${s.label} is dark (unreachable) — check the inverter/breaker` : undefined}
         >
           <div className="pwr2__chip">
-            <Icon name="sun" />
+            <Icon name={s.dark ? 'zap-off' : 'sun'} />
           </div>
           <div className="pwr2__lbl pwr2__lbl--above">
             <span className="pwr2__name">{shortSource(s.label)}</span>
             <span className="pwr2__kw">
-              {s.est ? '~' : ''}
-              {s.kw.toFixed(1)}
-              <small> kW</small>
+              {s.dark ? (
+                <small style={{ color: 'var(--grid)' }}>dark</small>
+              ) : (
+                <>
+                  {s.est ? '~' : ''}
+                  {s.kw.toFixed(1)}
+                  <small> kW</small>
+                </>
+              )}
             </span>
           </div>
         </div>

@@ -13,7 +13,7 @@ export type Band = "P1" | "P2" | "P3";
 
 export interface LiveResponse {
   ts: string;
-  solar: { kw: number; arrays?: { name: string; kw: number; est?: boolean }[] };
+  solar: { kw: number; arrays?: { name: string; kw: number; est?: boolean; dark?: boolean }[] };
   home: { kw: number };
   grid: { kw: number; dir: "importing" | "exporting" | "idle" };
   sonnen: { soc: number; kwh: number; kw: number; dir: FlowDir; mode?: string };
@@ -1250,8 +1250,31 @@ export interface IntegrationsConfig {
   tesla: { siteId: string; overridden: boolean };
   weather: { lat: number; lon: number; overridden: boolean };
   airzone: { host: string; overridden: boolean };
-  /** Sungrow solar inverters — the two WiNet-S dongles (docs/36). */
-  sungrow: { dongles: { ip: string; name: string }[]; overridden: boolean };
+  /** Sungrow solar inverters — the two WiNet-S dongles (docs/36). `lastSeen` surfaces
+   *  IP drift (a DHCP move) between polls. */
+  sungrow: { dongles: { ip: string; name: string; lastSeen: string | null }[]; overridden: boolean };
+  /** iSolarCloud cloud backstop (docs/44, Phase B). Secrets never returned — only
+   *  whether each is set + whether the integration is fully configured. */
+  isolarcloud?: {
+    configured: boolean;
+    region: string;
+    account: string;
+    hasAppkey: boolean;
+    hasAccessKey: boolean;
+    hasRsaKey: boolean;
+  };
+}
+
+/** iSolarCloud credential payload (Phase B). Any omitted field keeps the stored one;
+ *  password is write-only. serialMap optionally maps cloud serial → local dongle IP. */
+export interface IsolarcloudCreds {
+  appkey?: string;
+  accessKey?: string;
+  rsaPublicKey?: string;
+  account?: string;
+  password?: string;
+  region?: string;
+  serialMap?: Record<string, string>;
 }
 
 /** Result of a connection test / save. */

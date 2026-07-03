@@ -393,6 +393,20 @@ export interface IntegrationsState {
   /** Sungrow solar inverters — the two WiNet-S dongles (one per SG5.0RS), keyed on
    *  dongle IP. Read-only LAN integration (docs/36); env is the fallback. */
   sungrow?: { dongles?: { ip: string; name?: string; ratedKw?: number }[] } | null;
+  /** iSolarCloud OpenAPI backstop (docs/44, Phase B) — a LAN-independent cloud source of
+   *  truth for the Sungrow inverters so a dongle/LAN outage no longer blinds outage
+   *  detection. GATED: disabled/no-op until fully configured. Secrets stay server-side and
+   *  are NEVER returned by the config route. serialMap maps a cloud device serial → the
+   *  local dongle IP so cloud and local readings resolve to the same inverter. */
+  isolarcloud?: {
+    appkey?: string;
+    accessKey?: string;
+    rsaPublicKey?: string;
+    account?: string;
+    password?: string;
+    region?: string;
+    serialMap?: Record<string, string>;
+  } | null;
   /** Panasonic Comfort Cloud — native WiFi AC modules (CS-Z / CS-XZ series). */
   panasonic?: { username: string; password: string } | null;
   /** Sonos house-alarm. Local UPnP discovery (zero-config on the LAN); `seedIp` is a
@@ -1736,6 +1750,11 @@ export const DEFAULT_RULES: RuleState[] = [
   // ---- Solar inverters (Sungrow SG5.0RS ×2; docs/36) ----
   // A fault/alarm is Active on an inverter (fault log / work-state) — page immediately.
   { id: "rule-inverter-fault", enabled: true },
+  // RELIABLE single-inverter outage net (docs/44): an inverter is dark (unreachable/zero)
+  // while its twin produces OR clear-sky expects meaningful output — catches a breaker
+  // trip on ONE inverter even when the other is fine. Critical; re-alerts each daylight
+  // window while it persists. This is the safety net the 2026-07-03 incident needed.
+  { id: "rule-inverter-dark", enabled: true },
   // A dongle is unreachable in DAYLIGHT (night misses are expected + suppressed).
   { id: "rule-inverter-offline", enabled: true },
   // Reachable + Run/Standby but producing ~0 while clear-sky expects output.
@@ -2513,6 +2532,12 @@ function hydrate(raw: unknown): StoreSchema {
         ? { rainbird: p.integrations.rainbird }
         : {}),
       ...(p.integrations?.tuya ? { tuya: p.integrations.tuya } : {}),
+      // Carry over Sungrow dongle IPs + the iSolarCloud (docs/44) credentials so a
+      // configured solar integration survives a restart/deploy.
+      ...(p.integrations?.sungrow ? { sungrow: p.integrations.sungrow } : {}),
+      ...(p.integrations?.isolarcloud
+        ? { isolarcloud: p.integrations.isolarcloud }
+        : {}),
       ...(p.integrations?.panasonic
         ? { panasonic: p.integrations.panasonic }
         : {}),

@@ -19,8 +19,10 @@
 
 import { WebSocket as WsWebSocket } from 'ws';
 import { cached } from '../cache';
-import { sungrowConfig, type SungrowDongle } from '../runtime-config';
+import { sungrowConfig, sungrowPollSec, isolarcloudConfig, type SungrowDongle } from '../runtime-config';
 import { logEvent } from '../events';
+import { getCloudSnapshot } from './isolarcloud';
+import { mergeSolarSources } from '../solar-sources';
 
 // ---- Normalized shapes (also the Modbus-ready interface) -------------------
 
@@ -60,6 +62,28 @@ export interface InverterNormalized {
   reachable: boolean;
   /** ISO timestamp of the last successful read, or null if never seen this process. */
   lastSeen: string | null;
+  /**
+   * Coarse inverter state (docs/44):
+   *   • 'producing'   — reachable and generating meaningful AC power (>~50 W),
+   *   • 'asleep'      — reachable but ~0 W (idle/standby/de-energizing), OR unreachable
+   *                     while the sibling is ALSO unreachable and it's plausibly night,
+   *   • 'unreachable' — the dongle did not answer this poll (LAN/crash/breaker/DHCP).
+   * The alerts layer combines this with the daylight gate + `reachableSibling` to tell a
+   * single-inverter breaker trip (dark while the twin produces) apart from a night sleep.
+   */
+  state: 'producing' | 'asleep' | 'unreachable';
+  /** True when the OTHER dongle answered this same poll (independent source of truth). */
+  reachableSibling: boolean;
+  /** Epoch ms of the last successful read (process-lifetime), or null if never seen. */
+  lastGoodTs: number | null;
+  /**
+   * True when the inverter's outage is corroborated by the LAN-independent cloud source
+   * (iSolarCloud device offline) — set only when Phase B is configured. When true a dark
+   * alert is trustworthy even if the local LAN is entirely down. Undefined = no cloud data.
+   */
+  cloudConfirmedDark?: boolean;
+  /** Provenance of the live values this poll: 'local' | 'cloud' | 'none'. */
+  source?: 'local' | 'cloud' | 'none';
   /** Currently-Active faults/alarms from the dongle fault log (empty when healthy). */
   faults: InverterFault[];
   /**
@@ -391,9 +415,65 @@ export function activeFaults(faults: InverterFault[]): InverterFault[] {
   return faults.filter((f) => f.status.toLowerCase().includes('active'));
 }
 
+// ---- Meaningful-production threshold ---------------------------------------
+// Above this AC power (W) an inverter counts as actively 'producing'; at/under it
+// while reachable it's 'asleep' (idle/standby/de-energizing). Mirrors the alerts
+// layer's stall floor so the two agree.
+export const PRODUCING_FLOOR_W = 50;
+
+/**
+ * Classify a per-inverter poll into 'producing' | 'asleep' | 'unreachable'. Pure +
+ * side-effect-free (unit-tested directly). An unreachable dongle is only 'unreachable'
+ * — we never silently call an unreachable inverter "asleep" here; the daylight gate in
+ * the alerts layer decides whether an unreachable-in-daylight is an outage vs a night
+ * sleep (the whole string + dongle de-energize at dusk).
+ */
+export function classifyInverterState(reachable: boolean, acPowerW: number): 'producing' | 'asleep' | 'unreachable' {
+  if (!reachable) return 'unreachable';
+  return acPowerW > PRODUCING_FLOOR_W ? 'producing' : 'asleep';
+}
+
+// ---- Per-dongle exponential backoff ----------------------------------------
+// The WiNet-S embedded server crashes under repeated local polling and, once locked,
+// keeps rejecting until it recovers — so hammering a failed dongle both wastes the
+// poll and can deepen the lockup. After a failed read we skip that dongle until a
+// backoff window elapses, doubling 60s → 2m → 5m (capped). A success resets it.
+const BACKOFF_BASE_MS = 60_000;
+const BACKOFF_MAX_MS = 5 * 60_000;
+interface BackoffState {
+  /** Consecutive failures (0 when healthy). */
+  fails: number;
+  /** Epoch ms before which we must not retry this dongle. */
+  nextAttemptTs: number;
+}
+const backoffByIp = new Map<string, BackoffState>();
+
+/** Backoff delay (ms) for the Nth consecutive failure: 60s·2^(n-1), capped at 5m. */
+export function backoffDelayMs(fails: number): number {
+  if (fails <= 0) return 0;
+  return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (fails - 1));
+}
+
+/** True when this dongle is inside its backoff window and must be left alone this poll. */
+function inBackoff(ip: string, now: number): boolean {
+  const b = backoffByIp.get(ip);
+  return !!b && b.fails > 0 && now < b.nextAttemptTs;
+}
+
+function noteSuccess(ip: string): void {
+  backoffByIp.delete(ip);
+}
+
+function noteFailure(ip: string, now: number): void {
+  const prev = backoffByIp.get(ip);
+  const fails = (prev?.fails ?? 0) + 1;
+  backoffByIp.set(ip, { fails, nextAttemptTs: now + backoffDelayMs(fails) });
+}
+
 // ---- Per-dongle read + normalize ------------------------------------------
 
 const lastSeenByIp = new Map<string, string>();
+const lastGoodTsByIp = new Map<string, number>();
 
 async function readOne(dongle: SungrowDongle, index: number): Promise<InverterNormalized> {
   const { ip } = dongle;
@@ -410,8 +490,22 @@ async function readOne(dongle: SungrowDongle, index: number): Promise<InverterNo
     workState: 'Unknown',
     reachable: false,
     lastSeen: lastSeenByIp.get(ip) ?? null,
+    state: 'unreachable',
+    reachableSibling: false, // filled in by getNormalized() once both are read
+    lastGoodTs: lastGoodTsByIp.get(ip) ?? null,
     faults: [],
   };
+
+  // Respect the per-dongle backoff: once a read fails, leave the (likely locked)
+  // WiNet-S dongle ALONE until its backoff window elapses rather than hammering it.
+  // During the window we skip the socket entirely and report the last-known outage.
+  const now0 = Date.now();
+  if (inBackoff(ip, now0)) {
+    const b = backoffByIp.get(ip);
+    const waitS = b ? Math.max(0, Math.round((b.nextAttemptTs - now0) / 1000)) : 0;
+    base.detail = `backing off (retry in ~${waitS}s after ${b?.fails ?? 0} fail${b?.fails === 1 ? '' : 's'})`;
+    return base;
+  }
 
   // Live values + fault log come from ONE WebSocket session (fail-soft; a throw =
   // unreachable). The dongle rate-limits guest sockets, so we never open a second one.
@@ -458,11 +552,19 @@ async function readOne(dongle: SungrowDongle, index: number): Promise<InverterNo
     base.workState = v.workState;
     base.faults = v.faults;
     base.reachable = true;
-    const now = new Date().toISOString();
+    base.source = 'local';
+    const nowMs = Date.now();
+    const now = new Date(nowMs).toISOString();
     base.lastSeen = now;
+    base.lastGoodTs = nowMs;
     lastSeenByIp.set(ip, now);
+    lastGoodTsByIp.set(ip, nowMs);
+    base.state = classifyInverterState(true, base.acPowerW);
+    noteSuccess(ip); // healthy read clears any backoff
   } catch (e) {
     base.detail = (e as Error)?.message ?? 'unreachable';
+    base.state = 'unreachable';
+    noteFailure(ip, now0); // arm/deepen the backoff so we stop hammering a locked dongle
   }
 
   return base;
@@ -474,12 +576,56 @@ async function readOne(dongle: SungrowDongle, index: number): Promise<InverterNo
  * per-dongle failure degrades that inverter to unreachable, the other still reports.
  */
 export function getNormalized(): Promise<SungrowNormalized> {
-  return cached('sungrow.normalized', 20_000, async () => {
+  // TTL is config-driven (SUNGROW_POLL_SEC, default 60s) so we poll the fragile
+  // WiNet-S dongles gently; cached() also coalesces overlapping callers (single-flight)
+  // so /api/live + the alert loop never open two sockets to the same dongle at once.
+  return cached('sungrow.normalized', sungrowPollSec() * 1000, async () => {
     const dongles = sungrowConfig();
-    const results = await Promise.all(dongles.map((d, i) => readOne(d, i)));
-    const productionW = results.reduce((sum, inv) => sum + (inv.reachable ? inv.acPowerW : 0), 0);
+    let results = await Promise.all(dongles.map((d, i) => readOne(d, i)));
+
+    // Phase B backstop (docs/44): merge the LAN-independent iSolarCloud snapshot so
+    // per-inverter numbers survive a full local-LAN outage and the cloud can confirm a
+    // dark unit. GATED + fail-soft — getCloudSnapshot() returns null (no work) unless
+    // the integration is configured, and any error there degrades to local-only.
+    if (isolarcloudConfig()) {
+      try {
+        const cloud = await getCloudSnapshot();
+        results = mergeSolarSources(results, cloud, isolarcloudConfig()?.serialMap);
+      } catch {
+        /* cloud is a backstop — a failure must never break the local read */
+      }
+    }
+
+    // Each inverter learns whether its sibling(s) answered THIS poll — an independent
+    // source of truth the alerts layer uses to tell a single-inverter dark (breaker
+    // trip while the twin produces) apart from a both-down / night sleep.
+    const anyReachable = results.some((r) => r.reachable);
+    for (const r of results) {
+      r.reachableSibling = results.some((o) => o.id !== r.id && o.reachable);
+      // Refine 'unreachable' → 'asleep' ONLY when the whole array is dark together
+      // (both dongles down) AND the cloud doesn't say this unit is offline: that's the
+      // expected night/de-energize pattern, not a single-unit outage. A lone dark unit
+      // (or a cloud-confirmed dark one) stays 'unreachable' so the dark alert fires.
+      if (r.state === 'unreachable' && !anyReachable && results.length > 1 && r.cloudConfirmedDark !== true) {
+        r.state = 'asleep';
+      }
+    }
+    // Production sum counts a cloud-sourced live reading too (local-LAN-outage resilience).
+    const productionW = results.reduce(
+      (sum, inv) => sum + (inv.reachable || inv.source === 'cloud' ? inv.acPowerW : 0),
+      0,
+    );
     return { inverters: results, productionW };
   });
+}
+
+/**
+ * Last successful read timestamp (ISO) for a dongle IP, from the process-lifetime map —
+ * WITHOUT triggering a poll. Used by the Settings/config row to show "last seen" so IP
+ * drift (a DHCP move) is visible even between polls. Null if never seen this process.
+ */
+export function lastSeenFor(ip: string): string | null {
+  return lastSeenByIp.get(ip) ?? null;
 }
 
 /** Invalidate-free lightweight read used by the health probe (reuses the cache). */

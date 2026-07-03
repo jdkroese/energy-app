@@ -61,6 +61,9 @@ function inv(p: Partial<InverterNormalized>): InverterNormalized {
     workState: 'Run',
     reachable: true,
     lastSeen: null,
+    state: 'producing',
+    reachableSibling: false,
+    lastGoodTs: null,
     faults: [],
     ...p,
   };
