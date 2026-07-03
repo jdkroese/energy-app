@@ -298,16 +298,42 @@ export function isConfigured(): boolean {
   return isolarcloudConfig() !== null;
 }
 
+/** Raw topology walk result — the counts diagnose() surfaces to tell propagation from a filter bug. */
+export interface DiscoveryDetail {
+  /** ps_key candidates derived (inverter devices only). */
+  psKeys: string[];
+  /** Number of plants getPowerStationList returned. */
+  plantCount: number;
+  /** ps_id/ps_name pairs seen, for the human detail. */
+  plants: { psId: unknown; psName: string | null }[];
+  /** Total devices seen across all plants (getDeviceList). */
+  deviceCount: number;
+  /** DISTINCT device_type values seen across all plants (sorted). */
+  deviceTypes: number[];
+  /** True when the owner's serialMap short-circuited discovery (no plant/device walk ran). */
+  fromSerialMap: boolean;
+}
+
 /**
- * Discover the ps_key_list to query — the un-cached body. Prefers the owner's serial→dongle
- * map keys (the ps_key is derived as "<serial>_11_0_0" when only serials are mapped); else
- * walks the plant + device lists. Kept cache-free so the manual Test button (diagnose) can
- * hit the live topology endpoints directly; the hot path wraps this in `cached()` below.
+ * Discover the ps_key_list to query PLUS the raw topology counts — the un-cached body.
+ * Prefers the owner's serial→dongle map keys (the ps_key is derived as "<serial>_11_0_0"
+ * when only serials are mapped); else walks the plant + device lists. Kept cache-free so
+ * the manual Test button (diagnose) can hit the live topology endpoints directly and see
+ * the raw counts; the hot path wraps discoverPsKeys() below.
  */
-async function discoverPsKeysUncached(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
+async function discoverTopology(cfg: IsolarcloudConfig, token: string): Promise<DiscoveryDetail> {
   // If the owner mapped serials explicitly, derive the standard inverter ps_key.
   const mapped = cfg.serialMap ? Object.keys(cfg.serialMap) : [];
-  if (mapped.length > 0) return mapped.map((sn) => `${sn}_${DEVICE_TYPE_INVERTER}_0_0`);
+  if (mapped.length > 0) {
+    return {
+      psKeys: mapped.map((sn) => `${sn}_${DEVICE_TYPE_INVERTER}_0_0`),
+      plantCount: 0,
+      plants: [],
+      deviceCount: 0,
+      deviceTypes: [],
+      fromSerialMap: true,
+    };
+  }
   // Otherwise discover: plant list → device list per plant → inverter ps_keys.
   const plants = await signedPost(cfg, '/openapi/getPowerStationList', {
     api_key_param: apiKeyParam(),
@@ -318,8 +344,14 @@ async function discoverPsKeysUncached(cfg: IsolarcloudConfig, token: string): Pr
   const pdata = (plants.result_data ?? {}) as { pageList?: unknown };
   const plantList = Array.isArray(pdata.pageList) ? pdata.pageList : [];
   const psKeys: string[] = [];
+  const plantsSeen: { psId: unknown; psName: string | null }[] = [];
+  const deviceTypeSet = new Set<number>();
+  let deviceCount = 0;
   for (const p of plantList) {
-    const psId = (p as Record<string, unknown>)?.ps_id;
+    const prec = (p ?? {}) as Record<string, unknown>;
+    const psId = prec.ps_id;
+    const psName = prec.ps_name != null ? String(prec.ps_name).trim() : null;
+    plantsSeen.push({ psId, psName: psName || null });
     if (psId == null) continue;
     const devs = await signedPost(cfg, '/openapi/getDeviceList', {
       api_key_param: apiKeyParam(),
@@ -332,20 +364,64 @@ async function discoverPsKeysUncached(cfg: IsolarcloudConfig, token: string): Pr
     const devList = Array.isArray(ddata.pageList) ? ddata.pageList : [];
     for (const d of devList) {
       const rec = d as Record<string, unknown>;
-      if (Number(rec.device_type) !== DEVICE_TYPE_INVERTER) continue;
+      deviceCount += 1;
+      const dt = Number(rec.device_type);
+      if (Number.isFinite(dt)) deviceTypeSet.add(dt);
+      if (dt !== DEVICE_TYPE_INVERTER) continue;
       const psKey = String(rec.ps_key ?? '').trim();
       if (psKey) psKeys.push(psKey);
     }
   }
-  return psKeys;
+  return {
+    psKeys,
+    plantCount: plantList.length,
+    plants: plantsSeen,
+    deviceCount,
+    deviceTypes: [...deviceTypeSet].sort((a, b) => a - b),
+    fromSerialMap: false,
+  };
+}
+
+/** ps_key discovery for the hot path — just the keys (topology counts are diagnose-only). */
+async function discoverPsKeysUncached(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
+  return (await discoverTopology(cfg, token)).psKeys;
+}
+
+// A NON-empty discovery is stable topology → cache 30 min. An EMPTY result is NEVER cached:
+// right after the owner authorizes the plant, Sungrow needs a few minutes to propagate, and
+// a stale-empty cache would wedge us on "no inverters found" for half an hour. Leaving empty
+// uncached means each 5-min snapshot poll re-discovers, so the plant is picked up on the very
+// next poll once it propagates. Concurrent callers are still coalesced.
+const PSKEYS_TTL_FULL_MS = 30 * 60_000;
+let pskeysCache: { at: number; keys: string[] } | null = null;
+let pskeysInflight: Promise<string[]> | null = null;
+
+/** TEST ONLY: clear the ps_keys discovery cache. */
+export function resetPsKeysCacheForTest(): void {
+  pskeysCache = null;
+  pskeysInflight = null;
 }
 
 /**
  * Discover the ps_key_list to query, cached longer than the data poll (topology rarely
- * changes). Thin cache wrapper around discoverPsKeysUncached (the hot path).
+ * changes) — BUT an EMPTY result is never cached (see note above), so a freshly-authorized
+ * plant is picked up on the next poll instead of being stuck stale for 30 min. Coalesces
+ * concurrent callers. We manage the cache inline (rather than via `cached()`) because empty
+ * results must be skipped.
  */
-async function discoverPsKeys(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
-  return cached('isolarcloud.pskeys', 30 * 60_000, () => discoverPsKeysUncached(cfg, token));
+export async function discoverPsKeys(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
+  if (pskeysCache && Date.now() - pskeysCache.at < PSKEYS_TTL_FULL_MS) return pskeysCache.keys;
+  if (pskeysInflight) return pskeysInflight;
+  pskeysInflight = discoverPsKeysUncached(cfg, token)
+    .then((keys) => {
+      // Only cache a NON-empty topology; an empty list re-probes on the next call.
+      if (keys.length > 0) pskeysCache = { at: Date.now(), keys };
+      return keys;
+    })
+    .finally(() => {
+      pskeysInflight = null;
+    });
+  return pskeysInflight;
 }
 
 /**
@@ -399,6 +475,17 @@ function trimDetail(msg: string, max = 200): string {
 }
 
 /**
+ * Render the discovered plants as a compact " (Javea, Barn)" suffix (names when present,
+ * else ps_id), or '' when none/unknown — used inside the diagnose detail strings.
+ */
+function describePlants(topo: DiscoveryDetail): string {
+  const names = topo.plants
+    .map((p) => (p.psName ? p.psName : p.psId != null ? String(p.psId) : ''))
+    .filter((s) => s.length > 0);
+  return names.length > 0 ? ` (${names.join(', ')})` : '';
+}
+
+/**
  * FULL read-chain diagnostic — used by the Settings "Test" button. Unlike probe() (login
  * only), this runs the ENTIRE data path the hot snapshot uses (login → discover ps_keys →
  * getDeviceRealTimeData) and reports EXACTLY where it stops, so a permission/whitelist gap
@@ -418,10 +505,11 @@ export async function diagnose(
     return { ok: false, detail: `login failed — ${trimDetail((e as Error).message || 'unreachable')}` };
   }
 
-  // 2) Discover inverter ps_keys (getPowerStationList → getDeviceList), un-cached.
-  let psKeys: string[];
+  // 2) Discover inverter ps_keys (getPowerStationList → getDeviceList), un-cached, and
+  //    capture the RAW topology counts so we can tell propagation from a filter bug.
+  let topo: DiscoveryDetail;
   try {
-    psKeys = await discoverPsKeysUncached(cfg, token);
+    topo = await discoverTopology(cfg, token);
   } catch (e) {
     tokenState = null;
     return {
@@ -432,13 +520,47 @@ export async function diagnose(
         'direct account authorization (OAuth2.0 = No), or authorize the plant.',
     };
   }
+  const psKeys = topo.psKeys;
+  // Log the raw discovery to the mini logs regardless of outcome (server-side visibility).
+  console.error(
+    `[isolarcloud] discovery: ${
+      topo.fromSerialMap
+        ? `serialMap → ${psKeys.length} ps_key(s)`
+        : `${topo.plantCount} plant(s) ${JSON.stringify(topo.plants)} · ${topo.deviceCount} device(s) · ` +
+          `device_types [${topo.deviceTypes.join(',')}] · ${psKeys.length} inverter ps_key(s)`
+    }`,
+  );
+
   if (psKeys.length === 0) {
+    // Three distinct empty cases — surface WHICH so propagation ≠ filter bug ≠ genuinely empty.
+    if (!topo.fromSerialMap && topo.plantCount === 0) {
+      return {
+        ok: false,
+        detail:
+          'login OK · getPowerStationList returned 0 plants (Sungrow may still be propagating the ' +
+          'authorization — retry in a few min). If it persists, enable getPowerStationList/getDeviceList ' +
+          'in Service API management and set OAuth2.0 = No, or authorize the plant',
+      };
+    }
+    if (!topo.fromSerialMap && topo.deviceCount > 0) {
+      const plantLabel = describePlants(topo);
+      return {
+        ok: false,
+        detail:
+          `login OK · ${topo.plantCount} plant${topo.plantCount === 1 ? '' : 's'}${plantLabel} · ` +
+          `${topo.deviceCount} device${topo.deviceCount === 1 ? '' : 's'} but 0 are inverters ` +
+          `(device_types seen: [${topo.deviceTypes.join(',')}]) — device_type filter may need adjusting ` +
+          `(expected ${DEVICE_TYPE_INVERTER})`,
+      };
+    }
+    // Plants exist but have no devices at all (or serialMap derived nothing).
+    const plantLabel = describePlants(topo);
     return {
       ok: false,
       detail:
-        'login OK, but no inverters found — enable getPowerStationList/getDeviceList in Service ' +
-        'API management and set the app to direct account authorization (OAuth2.0 = No), or ' +
-        'authorize the plant',
+        `login OK · ${topo.plantCount} plant${topo.plantCount === 1 ? '' : 's'}${plantLabel} · ` +
+        '0 devices — getDeviceList returned nothing (Sungrow may still be propagating, or ' +
+        'getDeviceList is not enabled for this app)',
     };
   }
 
@@ -469,14 +591,20 @@ export async function diagnose(
     };
   }
 
-  // Success — per-device serial + kW + offline flag so real numbers are visible.
+  // Success — per-device serial + kW + offline flag so real numbers are visible, plus the
+  // raw discovery counts (plants / devices / device_types) so the topology is legible.
   const parts = devices.map((d) => {
     const kw = d.acPowerW == null ? '—' : `${(d.acPowerW / 1000).toFixed(2)}kW`;
     return `${d.serial || d.psKey || '?'} ${kw}${d.offline ? ' (offline)' : ''}`;
   });
+  const topoLabel = topo.fromSerialMap
+    ? 'serialMap'
+    : `${topo.plantCount} plant${topo.plantCount === 1 ? '' : 's'}${describePlants(topo)} · ` +
+      `${topo.deviceCount} device${topo.deviceCount === 1 ? '' : 's'} · device_types [${topo.deviceTypes.join(',')}]`;
   return {
     ok: true,
-    detail: `authenticated · ${devices.length} inverter${devices.length === 1 ? '' : 's'} · ${parts.join(', ')}`,
+    detail:
+      `login OK · ${topoLabel} · ${devices.length} inverter${devices.length === 1 ? '' : 's'} · ${parts.join(', ')}`,
     devices,
   };
 }

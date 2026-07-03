@@ -24,6 +24,8 @@ import {
   randomAesKey,
   diagnose,
   resetTokenForTest,
+  resetPsKeysCacheForTest,
+  discoverPsKeys,
 } from './isolarcloud';
 import type { IsolarcloudConfig } from '../runtime-config';
 
@@ -187,7 +189,9 @@ function mockGateway(byPath: Record<string, unknown>): void {
     const path = new URL(url).pathname;
     const xrsk = (init.headers as Record<string, string>)['x-random-secret-key'];
     const aesKey = unwrapAesKey(xrsk);
-    const resp = byPath[path];
+    let resp = byPath[path];
+    // A path may map to a function (called per-request) to count hits / vary the answer.
+    if (typeof resp === 'function') resp = (resp as () => unknown)();
     if (resp === undefined) return new Response('not found', { status: 404 });
     const respPlain = JSON.stringify(resp);
     return new Response(aesEncrypt(respPlain, aesKey), { status: 200 });
@@ -205,19 +209,62 @@ test('diagnose: login failure → ok:false, "login failed"', async () => {
   setFetchForTest(fetch);
 });
 
-test('diagnose: login OK but zero devices → ok:false, whitelist guidance', async () => {
+test('diagnose: login OK but 0 plants → ok:false, propagation guidance', async () => {
   resetTokenForTest();
   mockGateway({
     '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
-    // Empty plant list → no ps_keys discovered.
+    // Empty plant list → no ps_keys discovered (freshly-authorized / still propagating).
     '/openapi/getPowerStationList': { result_code: '1', result_data: { pageList: [] } },
   });
   const r = await diagnose(CFG);
   assert.equal(r.ok, false);
-  assert.match(r.detail, /login OK, but no inverters found/);
-  assert.match(r.detail, /getPowerStationList\/getDeviceList/);
-  assert.match(r.detail, /OAuth2\.0 = No/);
+  assert.match(r.detail, /login OK · getPowerStationList returned 0 plants/);
+  assert.match(r.detail, /still be propagating/);
   assert.equal(r.devices, undefined);
+  setFetchForTest(fetch);
+});
+
+test('diagnose: 1 plant + devices but none are inverters → device_type filter guidance', async () => {
+  resetTokenForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    '/openapi/getPowerStationList': {
+      result_code: '1',
+      result_data: { pageList: [{ ps_id: 7, ps_name: 'Javea' }] },
+    },
+    '/openapi/getDeviceList': {
+      result_code: '1',
+      result_data: {
+        pageList: [
+          { device_type: 1, ps_key: 'X_1_0_0' },
+          { device_type: 22, ps_key: 'Y_22_0_0' },
+        ],
+      },
+    },
+  });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /login OK · 1 plant \(Javea\) · 2 devices but 0 are inverters/);
+  assert.match(r.detail, /device_types seen: \[1,22\]/);
+  assert.match(r.detail, /device_type filter may need adjusting/);
+  assert.equal(r.devices, undefined);
+  setFetchForTest(fetch);
+});
+
+test('diagnose: 1 plant but 0 devices → getDeviceList-empty guidance', async () => {
+  resetTokenForTest();
+  mockGateway({
+    '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
+    '/openapi/getPowerStationList': {
+      result_code: '1',
+      result_data: { pageList: [{ ps_id: 7, ps_name: 'Javea' }] },
+    },
+    '/openapi/getDeviceList': { result_code: '1', result_data: { pageList: [] } },
+  });
+  const r = await diagnose(CFG);
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /login OK · 1 plant \(Javea\) · 0 devices/);
+  assert.match(r.detail, /getDeviceList returned nothing/);
   setFetchForTest(fetch);
 });
 
@@ -239,7 +286,7 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
   resetTokenForTest();
   mockGateway({
     '/openapi/login': { result_code: '1', result_data: { token: 'TKN' } },
-    '/openapi/getPowerStationList': { result_code: '1', result_data: { pageList: [{ ps_id: 42 }] } },
+    '/openapi/getPowerStationList': { result_code: '1', result_data: { pageList: [{ ps_id: 42, ps_name: 'Javea' }] } },
     '/openapi/getDeviceList': {
       result_code: '1',
       result_data: {
@@ -262,7 +309,7 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
   });
   const r = await diagnose(CFG);
   assert.equal(r.ok, true);
-  assert.match(r.detail, /^authenticated · 2 inverters ·/);
+  assert.match(r.detail, /^login OK · 1 plant \(Javea\) · 3 devices · device_types \[11,14\] · 2 inverters ·/);
   assert.match(r.detail, /A2160700249 2\.50kW/);
   assert.match(r.detail, /B2160700111 0\.00kW \(offline\)/);
   assert.equal(r.devices?.length, 2);
@@ -288,8 +335,54 @@ test('diagnose: serialMap set → derives ps_keys without plant discovery, succe
   const r = await diagnose({ ...CFG, serialMap: { A2160700249: '192.168.1.67' } });
   assert.equal(r.ok, true);
   assert.equal(r.devices?.length, 1);
+  assert.match(r.detail, /^login OK · serialMap · 1 inverter ·/);
   assert.match(r.detail, /A2160700249 1\.20kW/);
   setFetchForTest(fetch);
+});
+
+// ---- discoverPsKeys caching: EMPTY must NOT stick for 30 min (post-authorization propagation) ----
+
+test('discoverPsKeys does not cache an empty discovery — re-probes on the next call', async () => {
+  resetPsKeysCacheForTest();
+  let plantCalls = 0;
+  mockGateway({
+    // Empty plant list every time → 0 ps_keys. A 30-min cache would freeze this stale.
+    '/openapi/getPowerStationList': (() => {
+      plantCalls += 1;
+      return { result_code: '1', result_data: { pageList: [] } };
+    }),
+  });
+
+  const first = await discoverPsKeys(CFG, 'TKN');
+  assert.deepEqual(first, []);
+  const callsAfterFirst = plantCalls;
+  // A NON-empty result would be served from cache; an empty one must re-hit the endpoint.
+  const second = await discoverPsKeys(CFG, 'TKN');
+  assert.deepEqual(second, []);
+  assert.ok(plantCalls > callsAfterFirst, 'empty discovery was cached (should have re-probed)');
+  setFetchForTest(fetch);
+  resetPsKeysCacheForTest();
+});
+
+test('discoverPsKeys caches a NON-empty discovery — no re-probe on the next call', async () => {
+  resetPsKeysCacheForTest();
+  let plantCalls = 0;
+  mockGateway({
+    '/openapi/getPowerStationList': (() => {
+      plantCalls += 1;
+      return { result_code: '1', result_data: { pageList: [{ ps_id: 7 }] } };
+    }),
+    '/openapi/getDeviceList': { result_code: '1', result_data: { pageList: [{ device_type: 11, ps_key: 'A_11_0_0' }] } },
+  });
+
+  const first = await discoverPsKeys(CFG, 'TKN');
+  assert.deepEqual(first, ['A_11_0_0']);
+  const callsAfterFirst = plantCalls;
+  const second = await discoverPsKeys(CFG, 'TKN');
+  assert.deepEqual(second, ['A_11_0_0']);
+  assert.equal(plantCalls, callsAfterFirst, 'non-empty discovery should be served from cache');
+  setFetchForTest(fetch);
+  resetPsKeysCacheForTest();
 });
 
 test('diagnose never throws (fail-soft) on a transport error', async () => {
