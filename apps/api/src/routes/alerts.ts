@@ -34,6 +34,7 @@ const RULE_META: Record<string, { icon: string; label: string }> = {
   'rule-charge-stall': { icon: 'battery-warning', label: 'Sonnen not absorbing surplus' },
   'rule-voltage': { icon: 'zap', label: 'Grid voltage out of band' },
   'rule-inverter-fault': { icon: 'triangle-alert', label: 'Solar inverter fault/alarm' },
+  'rule-inverter-dark': { icon: 'zap-off', label: 'Solar inverter dark (breaker/outage)' },
   'rule-inverter-offline': { icon: 'wifi-off', label: 'Solar inverter offline (daylight)' },
   'rule-inverter-stall': { icon: 'sun-dim', label: 'Solar inverter not producing' },
   'rule-inverter-grid-quality': { icon: 'zap', label: 'Repeated grid-voltage trips (inverter)' },
@@ -53,6 +54,21 @@ const gridTripActive = new Map<string, Set<string>>(); // inverterId → fault k
 function isVoltageTrip(name: string): boolean {
   const n = name.toLowerCase();
   return n.includes('voltage') && (n.includes('under') || n.includes('over'));
+}
+
+/**
+ * Madrid calendar-date key (YYYY-MM-DD). The dark-inverter alert id is suffixed with
+ * this so a still-dark inverter re-alerts once per DAYLIGHT WINDOW (a new day mints a
+ * new id → the 6h re-notify dedupe can't permanently silence a multi-day outage — the
+ * exact failure mode of the 2026-07-03 incident where a tripped breaker went unnoticed).
+ */
+function madridDateKey(d: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Madrid',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
 }
 
 /** Fold this poll's fault list into the rolling voltage-trip counter for an inverter. */
@@ -278,6 +294,7 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
   // alert when clear-sky expects meaningful production.
   const wantInverterRules =
     ruleEnabled('rule-inverter-fault') ||
+    ruleEnabled('rule-inverter-dark') ||
     ruleEnabled('rule-inverter-offline') ||
     ruleEnabled('rule-inverter-stall') ||
     ruleEnabled('rule-inverter-grid-quality') ||
@@ -289,6 +306,47 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
       const daylight = await expectMeaningfulProductionNow().catch(() => false);
 
       for (const iv of invRes.inverters) {
+        // 0) DARK — the reliable single-inverter outage net (docs/44). Fire when this
+        //    inverter is dark (unreachable, OR reachable-but-zero) AND either its twin is
+        //    reachable+producing (independent proof the roof CAN produce right now) OR
+        //    clear-sky expects meaningful production. Catches a breaker trip on ONE
+        //    inverter even when the other is healthy — without depending on both being
+        //    down. Trusts the cloud backstop when present (LAN outage no longer blinds us).
+        //    Critical severity; the id is daylight-window-keyed so a persistent outage
+        //    re-alerts each new day rather than being silenced by the 6h dedupe.
+        if (ruleEnabled('rule-inverter-dark')) {
+          const isDark = !iv.reachable || iv.acPowerW < 50;
+          const siblingProducing = invRes.inverters.some(
+            (o) => o.id !== iv.id && o.reachable && o.acPowerW >= 50,
+          );
+          const cloudSaysDark = iv.cloudConfirmedDark === true;
+          // Gate: fire only when production is genuinely expected — either the twin is
+          // actively producing (unarguable proof) OR the clear-sky model expects output,
+          // OR the cloud source confirms this specific unit is offline. This suppresses
+          // the whole-array night sleep (both dark, no daylight) that is normal.
+          if (isDark && (siblingProducing || daylight || cloudSaysDark)) {
+            const why = iv.reachable
+              ? `reachable but producing ~0 W`
+              : `unreachable (${iv.detail ?? 'no response'})`;
+            const proof = siblingProducing
+              ? `its twin is producing ${((invRes.inverters.find((o) => o.id !== iv.id && o.reachable && o.acPowerW >= 50)?.acPowerW ?? 0) / 1000).toFixed(1)} kW right now`
+              : cloudSaysDark
+                ? `iSolarCloud reports this inverter offline`
+                : `clear-sky expects meaningful production now`;
+            live.push({
+              id: `inverter-dark-${iv.id}-${madridDateKey()}`,
+              severity: 'danger',
+              icon: 'zap-off',
+              title: `${iv.name} is dark`,
+              sub: `${iv.name} ${why} while ${proof} — likely a tripped breaker or a crashed dongle. Check the inverter.`,
+              device: iv.name,
+              ts: now,
+              status: 'new',
+              rule: 'rule-inverter-dark',
+            });
+          }
+        }
+
         // 1) Fault/alarm Active — page immediately, naming the cause. Not night-gated
         //    (a real fault while asleep is unusual but still worth surfacing).
         if (ruleEnabled('rule-inverter-fault')) {

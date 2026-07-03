@@ -5,7 +5,17 @@
 import * as store from '../store';
 import * as tesla from '../connectors/tesla';
 import * as sungrow from '../connectors/sungrow';
-import { sonnenHost, sonnenToken, teslaSiteId, weatherCoords, airzoneHost, sungrowConfig } from '../runtime-config';
+import * as isolarcloud from '../connectors/isolarcloud';
+import {
+  sonnenHost,
+  sonnenToken,
+  teslaSiteId,
+  weatherCoords,
+  airzoneHost,
+  sungrowConfig,
+  isolarcloudConfig,
+  type IsolarcloudConfig,
+} from '../runtime-config';
 
 function badInput(msg: string): never {
   const e = new Error(msg) as Error & { code?: string };
@@ -29,8 +39,18 @@ export function getIntegrationsConfig(): unknown {
     weather: { lat: coords.lat, lon: coords.lon, overridden: Boolean(i?.weather) },
     airzone: { host: airzoneHost(), overridden: Boolean(i?.airzone?.host) },
     sungrow: {
-      dongles: sungrowConfig().map((d) => ({ ip: d.ip, name: d.name ?? '' })),
+      // lastSeen surfaces IP drift (a DHCP move) between polls without triggering one.
+      dongles: sungrowConfig().map((d) => ({ ip: d.ip, name: d.name ?? '', lastSeen: sungrow.lastSeenFor(d.ip) })),
       overridden: Boolean(i?.sungrow?.dongles && i.sungrow.dongles.length > 0),
+    },
+    isolarcloud: {
+      // Gated cloud backstop (docs/44) — never leaks the appkey/accessKey/RSA/password.
+      configured: isolarcloudConfig() !== null,
+      region: i?.isolarcloud?.region?.trim() || 'gateway.isolarcloud.eu',
+      account: i?.isolarcloud?.account?.trim() || '',
+      hasAppkey: Boolean(i?.isolarcloud?.appkey),
+      hasAccessKey: Boolean(i?.isolarcloud?.accessKey),
+      hasRsaKey: Boolean(i?.isolarcloud?.rsaPublicKey),
     },
   };
 }
@@ -243,6 +263,76 @@ export async function setSungrow(donglesRaw?: unknown): Promise<unknown> {
   store.update((s) => {
     s.integrations = s.integrations ?? { intesis: null };
     s.integrations.sungrow = { dongles };
+  });
+  return { ts: new Date().toISOString(), ...probe, config: getIntegrationsConfig() };
+}
+
+// ---- iSolarCloud (Phase B — cloud backstop, docs/44) --------------------
+// The LAN-independent source of truth for the Sungrow inverters. GATED: no-op until
+// fully configured. Test authenticates against the real OpenAPI (login → token) before
+// persisting; secrets (appkey/accessKey/RSA/password) are stored server-side and NEVER
+// returned. Ships UNVERIFIED against real credentials until the owner's key is issued.
+
+/** Build a candidate config from raw input, merging kept secrets from the current store. */
+function isolarcloudCandidate(raw: Record<string, unknown>): IsolarcloudConfig {
+  const cur = store.get().integrations?.isolarcloud ?? {};
+  const str = (v: unknown, keep: string | undefined) => {
+    const s = v === undefined || v === null ? '' : String(v).trim();
+    return s || (keep ?? '');
+  };
+  return {
+    appkey: str(raw.appkey, cur.appkey),
+    accessKey: str(raw.accessKey, cur.accessKey),
+    rsaPublicKey: str(raw.rsaPublicKey, cur.rsaPublicKey),
+    account: str(raw.account, cur.account),
+    // Password is write-only from the UI — keep the stored one when omitted.
+    password: raw.password ? String(raw.password) : (cur.password ?? ''),
+    region: str(raw.region, cur.region) || 'gateway.isolarcloud.eu',
+  };
+}
+
+function requireComplete(c: IsolarcloudConfig): void {
+  const missing: string[] = [];
+  if (!c.appkey) missing.push('appkey');
+  if (!c.accessKey) missing.push('access key');
+  if (!c.rsaPublicKey) missing.push('RSA public key');
+  if (!c.account) missing.push('account');
+  if (!c.password) missing.push('password');
+  if (missing.length) badInput(`Missing ${missing.join(', ')}`);
+}
+
+export async function testIsolarcloud(raw?: unknown): Promise<ProbeResult> {
+  const c = isolarcloudCandidate((raw ?? {}) as Record<string, unknown>);
+  requireComplete(c);
+  return isolarcloud.probe(c);
+}
+
+export async function setIsolarcloud(raw?: unknown): Promise<unknown> {
+  const input = (raw ?? {}) as Record<string, unknown>;
+  const c = isolarcloudCandidate(input);
+  requireComplete(c);
+  const probe = await isolarcloud.probe(c);
+  if (!probe.ok) badInput(`iSolarCloud did not authenticate — ${probe.detail}`);
+  // Optional owner serial→dongle-IP map (cloud device ↔ local dongle).
+  let serialMap: Record<string, string> | undefined;
+  if (input.serialMap && typeof input.serialMap === 'object') {
+    serialMap = {};
+    for (const [k, v] of Object.entries(input.serialMap as Record<string, unknown>)) {
+      const ip = String(v ?? '').trim();
+      if (k.trim() && ip) serialMap[k.trim()] = ip;
+    }
+  }
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.isolarcloud = {
+      appkey: c.appkey,
+      accessKey: c.accessKey,
+      rsaPublicKey: c.rsaPublicKey,
+      account: c.account,
+      password: c.password,
+      region: c.region,
+      ...(serialMap && Object.keys(serialMap).length ? { serialMap } : {}),
+    };
   });
   return { ts: new Date().toISOString(), ...probe, config: getIntegrationsConfig() };
 }

@@ -1,0 +1,365 @@
+// iSolarCloud OpenAPI connector — the LAN-INDEPENDENT cloud backstop for the Sungrow
+// SG5.0RS inverters (docs/44, Phase B). READ-ONLY: it only reads per-device real-time
+// power + yield + device state so outage detection has a source of truth that does NOT
+// die with the WiNet-S dongle or the home LAN. It NEVER issues a command and touches no
+// control/armed/battery path.
+//
+// GATED: every entry point no-ops (returns null / []) until the integration is fully
+// configured (appkey + access-key + RSA public key + account + password). Until the
+// owner's OpenAPI key lands this ships disabled, so it can't affect /api/live at all.
+//
+// Protocol (reverse-engineered EU OpenAPI, references github.com/bugjam/pysolarcloud +
+// github.com/MickMake/GoSungrow + jsanchezdelvillar/Sungrow-API):
+//   • Host: gateway.isolarcloud.eu (region-configurable).
+//   • Every request body is JSON, AES-128-ECB / PKCS7 encrypted with a per-request
+//     random 16-char key, hex-uppercase encoded. That AES key is itself RSA-encrypted
+//     (PKCS1 v1.5) with the account's OpenAPI RSA public key (X.509 DER, base64url) and
+//     sent as the `x-random-secret-key` header; the response is AES-decrypted with the
+//     same key. `x-access-key` carries the access key; `sys_code:901` is required.
+//   • Login: POST /openapi/login { appkey, login_type:"1", user_account, user_password,
+//     api_key_param:{nonce,timestamp} } → result_data.token (cached, re-minted on expiry).
+//   • Data: POST /openapi/getDeviceRealTimeData { appkey, device_type:11, ps_key_list,
+//     point_id_list } → result_data.device_point_list[].device_point.p83033 (AC power W),
+//     p83022 (daily yield Wh). Plant/device discovery: /openapi/getPowerStationList,
+//     /openapi/getDeviceList.
+//
+// UNVERIFIED against real credentials until the owner's key is issued — the signing +
+// endpoint shapes are covered by unit tests (mock HTTP) but the live handshake is pending.
+
+import * as crypto from 'node:crypto';
+import { cached } from '../cache';
+import { isolarcloudConfig, type IsolarcloudConfig } from '../runtime-config';
+
+// ---- Normalized cloud reading (per device) ---------------------------------
+
+export interface CloudDevice {
+  /** Device serial (dev_sn) — the key we match to a local dongle. */
+  serial: string;
+  /** ps_key (e.g. "<sn>_11_0_0") used in the real-time-data query. */
+  psKey: string;
+  /** Live AC active power (W), or null when not reported. */
+  acPowerW: number | null;
+  /** Today's yield (kWh), or null. */
+  dailyKwh: number | null;
+  /** Device run/fault state label, or null. */
+  deviceState: string | null;
+  /** True when the cloud marks the device offline/faulted (outage source of truth). */
+  offline: boolean;
+}
+
+export interface CloudSnapshot {
+  devices: CloudDevice[];
+  /** ISO timestamp of this snapshot. */
+  ts: string;
+}
+
+// ---- Protocol constants ----------------------------------------------------
+
+const SYS_CODE = '901';
+const LOGIN_TYPE = '1';
+const DEVICE_TYPE_INVERTER = 11;
+// Point ids we read (jsanchezdelvillar/Sungrow-API): 83033 AC power (W), 83022 daily
+// yield (Wh), 83025 running state. Kept small so we stay well under any point quota.
+const POINT_ACTIVE_POWER = '83033';
+const POINT_DAILY_YIELD = '83022';
+const POINT_RUN_STATE = '83025';
+const POINT_ID_LIST = [POINT_ACTIVE_POWER, POINT_DAILY_YIELD, POINT_RUN_STATE];
+const HTTP_TIMEOUT_MS = 12_000;
+// Cloud is the SLOW/rate-limited backstop — poll every 5 min (config TTL below).
+const CLOUD_TTL_MS = 5 * 60_000;
+
+// ---- Crypto (pure, unit-testable) ------------------------------------------
+
+/** A random 16-char alphanumeric AES key (matches the reference client's alphabet). */
+export function randomAesKey(): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  const bytes = crypto.randomBytes(16);
+  for (let i = 0; i < 16; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+/** A 32-char alphanumeric nonce for api_key_param. */
+export function randomNonce(len = 32): string {
+  return crypto.randomBytes(len).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, len).padEnd(len, '0');
+}
+
+/**
+ * AES-128-ECB / PKCS7 encrypt `plaintext` with a 16-char key → hex-uppercase string.
+ * (The OpenAPI uses the raw UTF-8 key bytes right-padded/truncated to 16.)
+ */
+export function aesEncrypt(plaintext: string, key: string): string {
+  const keyBuf = Buffer.alloc(16, ' ');
+  Buffer.from(key, 'utf8').copy(keyBuf, 0, 0, 16);
+  const cipher = crypto.createCipheriv('aes-128-ecb', keyBuf, null);
+  cipher.setAutoPadding(true); // PKCS7
+  const enc = Buffer.concat([cipher.update(Buffer.from(plaintext, 'utf8')), cipher.final()]);
+  return enc.toString('hex').toUpperCase();
+}
+
+/** AES-128-ECB / PKCS7 decrypt a hex-uppercase body with the same 16-char key → UTF-8. */
+export function aesDecrypt(hex: string, key: string): string {
+  const keyBuf = Buffer.alloc(16, ' ');
+  Buffer.from(key, 'utf8').copy(keyBuf, 0, 0, 16);
+  const decipher = crypto.createDecipheriv('aes-128-ecb', keyBuf, null);
+  decipher.setAutoPadding(true);
+  const dec = Buffer.concat([decipher.update(Buffer.from(hex, 'hex')), decipher.final()]);
+  return dec.toString('utf8');
+}
+
+/**
+ * RSA-encrypt the AES key with the account's OpenAPI public key (X.509 DER, base64url),
+ * PKCS1 v1.5 padding, → base64url. This becomes the `x-random-secret-key` header.
+ */
+export function rsaEncryptKey(aesKey: string, rsaPublicKeyBase64: string): string {
+  const der = Buffer.from(rsaPublicKeyBase64.trim(), 'base64');
+  const keyObj = crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
+  const enc = crypto.publicEncrypt(
+    { key: keyObj, padding: crypto.constants.RSA_PKCS1_PADDING },
+    Buffer.from(aesKey, 'utf8'),
+  );
+  return enc.toString('base64url');
+}
+
+/** Build the signed headers + encrypted body for one request. Pure (crypto only). */
+export function buildSignedRequest(
+  cfg: Pick<IsolarcloudConfig, 'accessKey' | 'rsaPublicKey'>,
+  bodyObj: Record<string, unknown>,
+  token?: string,
+): { headers: Record<string, string>; body: string; aesKey: string } {
+  const aesKey = randomAesKey();
+  const xRandom = rsaEncryptKey(aesKey, cfg.rsaPublicKey);
+  const headers: Record<string, string> = {
+    'User-Agent': 'EnergyApp',
+    'x-access-key': cfg.accessKey,
+    'x-random-secret-key': xRandom,
+    'Content-Type': 'application/json',
+    sys_code: SYS_CODE,
+  };
+  if (token) headers.token = token;
+  const body = aesEncrypt(JSON.stringify(bodyObj), aesKey);
+  return { headers, body, aesKey };
+}
+
+// ---- HTTP (mockable) -------------------------------------------------------
+
+/** The fetch used for cloud calls — swappable in tests via setFetchForTest(). */
+let fetchImpl: typeof fetch = fetch;
+/** TEST ONLY: inject a mock fetch. Restore with setFetchForTest(fetch). */
+export function setFetchForTest(f: typeof fetch): void {
+  fetchImpl = f;
+}
+
+function apiKeyParam(): { nonce: string; timestamp: string } {
+  return { nonce: randomNonce(), timestamp: String(Date.now()) };
+}
+
+/**
+ * POST one signed+encrypted request and return the AES-decrypted JSON. Throws on a
+ * transport error, a non-200, an undecryptable body, or a non-"1" result_code (the
+ * caller decides how to fail-soft). Never logs the plaintext credentials.
+ */
+export async function signedPost(
+  cfg: IsolarcloudConfig,
+  path: string,
+  bodyObj: Record<string, unknown>,
+  token?: string,
+): Promise<Record<string, unknown>> {
+  const { headers, body, aesKey } = buildSignedRequest(cfg, bodyObj, token);
+  const url = `https://${cfg.region}${path}`;
+  const res = await fetchImpl(url, {
+    method: 'POST',
+    headers,
+    body,
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`iSolarCloud HTTP ${res.status}`);
+  const text = await res.text();
+  let json: Record<string, unknown>;
+  try {
+    // Some endpoints answer plaintext JSON on an auth/handshake error; try that first.
+    json = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    json = JSON.parse(aesDecrypt(text.trim(), aesKey)) as Record<string, unknown>;
+  }
+  const code = String(json.result_code ?? '');
+  if (code !== '1') {
+    throw new Error(`iSolarCloud result_code ${code || 'missing'} (${String(json.result_msg ?? 'error')})`);
+  }
+  return json;
+}
+
+// ---- Token (login) ---------------------------------------------------------
+
+interface TokenState {
+  token: string;
+  /** Epoch ms this token was minted (we re-login well inside the server's window). */
+  mintedAt: number;
+}
+let tokenState: TokenState | null = null;
+const TOKEN_TTL_MS = 60 * 60_000; // re-login hourly (conservative)
+
+/** TEST ONLY: reset the cached login token. */
+export function resetTokenForTest(): void {
+  tokenState = null;
+}
+
+async function login(cfg: IsolarcloudConfig): Promise<string> {
+  const json = await signedPost(cfg, '/openapi/login', {
+    api_key_param: apiKeyParam(),
+    appkey: cfg.appkey,
+    login_type: LOGIN_TYPE,
+    user_account: cfg.account,
+    user_password: cfg.password,
+  });
+  const data = (json.result_data ?? {}) as { token?: unknown; login_state?: unknown };
+  const token = String(data.token ?? '');
+  if (!token) throw new Error('iSolarCloud login returned no token');
+  tokenState = { token, mintedAt: Date.now() };
+  return token;
+}
+
+async function ensureToken(cfg: IsolarcloudConfig): Promise<string> {
+  if (tokenState && Date.now() - tokenState.mintedAt < TOKEN_TTL_MS) return tokenState.token;
+  return login(cfg);
+}
+
+// ---- Parsing (pure) --------------------------------------------------------
+
+function toNum(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (t === '' || t === '--') return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
+ * Parse a getDeviceRealTimeData response into normalized per-device readings. Pure +
+ * side-effect-free (unit-tested). Tolerant to missing points. Power (p83033) is W; daily
+ * yield (p83022) is Wh → kWh. A device flagged non-running by p83025 / a missing power
+ * point reads offline=true so the dark-alert can trust the cloud as an outage source.
+ */
+export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] {
+  const data = (json.result_data ?? {}) as { device_point_list?: unknown };
+  const list = Array.isArray(data.device_point_list) ? data.device_point_list : [];
+  const out: CloudDevice[] = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const point = ((entry as Record<string, unknown>).device_point ?? {}) as Record<string, unknown>;
+    const serial = String(point.dev_sn ?? point.device_sn ?? (entry as Record<string, unknown>).ps_key ?? '').trim();
+    const psKey = String((entry as Record<string, unknown>).ps_key ?? point.ps_key ?? '').trim();
+    const acPowerW = toNum(point[`p${POINT_ACTIVE_POWER}`]);
+    const dailyWh = toNum(point[`p${POINT_DAILY_YIELD}`]);
+    const runState = point[`p${POINT_RUN_STATE}`];
+    const stateStr = runState == null ? null : String(runState);
+    // Offline = cloud reports no live power AND (no run-state or a non-running one).
+    const running = stateStr != null && /1|run|online|正常/i.test(stateStr);
+    const offline = (acPowerW == null || acPowerW <= 0) && !running;
+    out.push({
+      serial,
+      psKey,
+      acPowerW,
+      dailyKwh: dailyWh == null ? null : dailyWh / 1000,
+      deviceState: stateStr,
+      offline,
+    });
+  }
+  return out;
+}
+
+// ---- Public API (gated + cached + fail-soft) -------------------------------
+
+/** True when the cloud backstop is fully configured (credentials present). */
+export function isConfigured(): boolean {
+  return isolarcloudConfig() !== null;
+}
+
+/**
+ * Discover the ps_key_list to query. Prefers the owner's serial→dongle map keys (the
+ * ps_key is derived as "<serial>_11_0_0" when only serials are mapped); else walks the
+ * plant + device lists. Cached longer than the data poll (topology rarely changes).
+ */
+async function discoverPsKeys(cfg: IsolarcloudConfig, token: string): Promise<string[]> {
+  return cached('isolarcloud.pskeys', 30 * 60_000, async () => {
+    // If the owner mapped serials explicitly, derive the standard inverter ps_key.
+    const mapped = cfg.serialMap ? Object.keys(cfg.serialMap) : [];
+    if (mapped.length > 0) return mapped.map((sn) => `${sn}_${DEVICE_TYPE_INVERTER}_0_0`);
+    // Otherwise discover: plant list → device list per plant → inverter ps_keys.
+    const plants = await signedPost(cfg, '/openapi/getPowerStationList', {
+      api_key_param: apiKeyParam(),
+      appkey: cfg.appkey,
+      curPage: 1,
+      size: 100,
+    }, token);
+    const pdata = (plants.result_data ?? {}) as { pageList?: unknown };
+    const plantList = Array.isArray(pdata.pageList) ? pdata.pageList : [];
+    const psKeys: string[] = [];
+    for (const p of plantList) {
+      const psId = (p as Record<string, unknown>)?.ps_id;
+      if (psId == null) continue;
+      const devs = await signedPost(cfg, '/openapi/getDeviceList', {
+        api_key_param: apiKeyParam(),
+        appkey: cfg.appkey,
+        ps_id: psId,
+        curPage: 1,
+        size: 100,
+      }, token);
+      const ddata = (devs.result_data ?? {}) as { pageList?: unknown };
+      const devList = Array.isArray(ddata.pageList) ? ddata.pageList : [];
+      for (const d of devList) {
+        const rec = d as Record<string, unknown>;
+        if (Number(rec.device_type) !== DEVICE_TYPE_INVERTER) continue;
+        const psKey = String(rec.ps_key ?? '').trim();
+        if (psKey) psKeys.push(psKey);
+      }
+    }
+    return psKeys;
+  });
+}
+
+/**
+ * Read the cloud snapshot (per-device live power + yield + offline flag), or null when
+ * the integration is unconfigured / the read fails. Cached ~5 min (rate-limit-friendly)
+ * + coalesced. Fail-soft: any error → null so it can NEVER break /api/live.
+ */
+export function getCloudSnapshot(): Promise<CloudSnapshot | null> {
+  const cfg = isolarcloudConfig();
+  if (!cfg) return Promise.resolve(null); // gated — disabled until configured
+  return cached('isolarcloud.snapshot', CLOUD_TTL_MS, async () => {
+    try {
+      const token = await ensureToken(cfg);
+      const psKeys = await discoverPsKeys(cfg, token);
+      if (psKeys.length === 0) return null;
+      const json = await signedPost(cfg, '/openapi/getDeviceRealTimeData', {
+        api_key_param: apiKeyParam(),
+        appkey: cfg.appkey,
+        device_type: DEVICE_TYPE_INVERTER,
+        point_id_list: POINT_ID_LIST,
+        ps_key_list: psKeys,
+      }, token);
+      return { devices: parseRealTimeData(json), ts: new Date().toISOString() };
+    } catch (e) {
+      // On an auth error the token may have expired — drop it so the next poll re-logs in.
+      tokenState = null;
+      console.error('[isolarcloud] snapshot failed:', (e as Error).message);
+      return null;
+    }
+  });
+}
+
+/**
+ * Probe the cloud integration WITHOUT persisting anything — used by the Settings
+ * test button. Returns a short human detail. Never throws.
+ */
+export async function probe(cfg: IsolarcloudConfig): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const token = await login(cfg);
+    return { ok: Boolean(token), detail: token ? 'authenticated · token issued' : 'no token returned' };
+  } catch (e) {
+    return { ok: false, detail: (e as Error).message?.slice(0, 80) || 'unreachable' };
+  }
+}

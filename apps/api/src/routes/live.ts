@@ -198,12 +198,19 @@ export async function getLive(): Promise<unknown> {
   const teslaSolar = t?.solarKw ?? 0;
   const sonnenSolar = s ? round(s.productionW / 1000) : 0;
   const reachableInv = inv ? inv.inverters.filter((i) => i.reachable) : [];
-  let arrays: { name: string; kw: number; est?: boolean }[];
+  let arrays: { name: string; kw: number; est?: boolean; dark?: boolean }[];
   let solarKw: number;
   if (reachableInv.length > 0) {
-    // True 3-way split: one entry per reachable Sungrow + the Tesla array.
+    // True 3-way split with resilience (docs/44): one entry per Sungrow + the Tesla
+    // array. When ONE dongle is reachable and the other isn't, do NOT collapse to the
+    // reachable-only view — keep the dark inverter as its own node (0 kW + dark:true) so
+    // the flow still attributes per-inverter and the dark unit is visible, not hidden.
     const sungrowKw = round(reachableInv.reduce((sum, i) => sum + i.acPowerW / 1000, 0));
-    arrays = reachableInv.map((i) => ({ name: i.name, kw: round(i.acPowerW / 1000) }));
+    arrays = inv!.inverters.map((i) =>
+      i.reachable
+        ? { name: i.name, kw: round(i.acPowerW / 1000) }
+        : { name: i.name, kw: 0, dark: true },
+    );
     arrays.push({ name: 'Tesla', kw: teslaSolar });
     solarKw = round(sungrowKw + teslaSolar);
   } else if (inv && inv.inverters.length > 0) {

@@ -35,6 +35,7 @@ const DEBOUNCE_RULES = new Set([
   'rule-charge-stall',
   'rule-inverter-offline',
   'rule-inverter-stall',
+  'rule-inverter-dark',
 ]);
 const DEBOUNCE_MIN_STREAK = 2;
 // Per-rule streak overrides (ticks) where the default 2 (~75s) is too jumpy. The inverter
@@ -42,6 +43,10 @@ const DEBOUNCE_MIN_STREAK = 2;
 const DEBOUNCE_STREAK_OVERRIDE: Record<string, number> = {
   'rule-inverter-offline': 5,
   'rule-inverter-stall': 5,
+  // The dark net wants ~5 min of consecutive daylight confirmation before paging so a
+  // single WiFi blip on one dongle doesn't cry breaker-trip — but it still fires well
+  // inside the outage window (the incident went unnoticed for hours).
+  'rule-inverter-dark': 5,
 };
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -177,6 +182,9 @@ async function tick(): Promise<void> {
       // never miss an outage) wants the "back online / cleared" message too.
       if (a.rule === 'rule-inverter-fault') {
         recoveryWatch.set(a.id, { device: a.device, title: `${a.device} fault cleared`, body: 'The inverter fault/alarm is no longer active' });
+      }
+      if (a.rule === 'rule-inverter-dark') {
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is reachable and generating again — the outage cleared' });
       }
       if (a.rule === 'rule-inverter-offline') {
         recoveryWatch.set(a.id, { device: a.device, title: `${a.device} back online`, body: 'The inverter/dongle is reachable again' });

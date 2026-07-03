@@ -93,6 +93,8 @@ import {
   reauthTesla,
   testSungrow,
   setSungrow,
+  testIsolarcloud,
+  setIsolarcloud,
 } from "./routes/integrations-config";
 import { getInverters, getInvertersHistory } from "./routes/inverters";
 import {
@@ -1288,6 +1290,19 @@ app.put(
     const b = (req.body ?? {}) as { dongles?: unknown };
     return setSungrow(b.dongles);
   }),
+);
+
+// iSolarCloud cloud backstop (docs/44, Phase B) — admin-only; test authenticates
+// against the real OpenAPI before persisting. GATED: disabled until fully configured.
+app.post(
+  "/api/integrations/isolarcloud/test",
+  requireAdmin,
+  wrap((req) => testIsolarcloud(req.body)),
+);
+app.put(
+  "/api/integrations/isolarcloud",
+  requireAdmin,
+  wrap((req) => setIsolarcloud(req.body)),
 );
 
 // ---- Rain Bird irrigation ----

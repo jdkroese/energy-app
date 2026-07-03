@@ -75,3 +75,63 @@ export function sungrowConfig(): SungrowDongle[] {
     { ip: ip2, name: 'Solar Inverter 2' },
   ];
 }
+
+/**
+ * How often we actually hit the WiNet-S dongles (seconds), driving the connector's
+ * getNormalized() cache TTL. The WiNet-S dongle's embedded server crashes under
+ * repeated local polling (openHAB-community-confirmed lockup, incident 2026-07-03),
+ * so we deliberately poll GENTLY — default 60s (was 20s). Env `SUNGROW_POLL_SEC`
+ * overrides; clamped to a sane 20–600s so a bad env can't hammer or freeze the read.
+ */
+export function sungrowPollSec(): number {
+  const raw = Number(process.env.SUNGROW_POLL_SEC);
+  if (!Number.isFinite(raw) || raw <= 0) return 60;
+  return Math.max(20, Math.min(600, Math.round(raw)));
+}
+
+/**
+ * iSolarCloud OpenAPI config (Phase B — cloud backstop). Read from the Settings
+ * store (store.integrations.isolarcloud) with an env fallback. Returns `null` when
+ * unconfigured so the connector no-ops (disabled/gated until the owner's key lands).
+ * All secrets stay server-side; the config route never returns appkey/accessKey/rsa.
+ */
+export interface IsolarcloudConfig {
+  /** OpenAPI application key (x-access-key pairs with appkey). */
+  appkey: string;
+  /** OpenAPI access key (sent as the `x-access-key` header). */
+  accessKey: string;
+  /** RSA public key (PEM body, base64) used to encrypt the AES session key. */
+  rsaPublicKey: string;
+  /** iSolarCloud account login (email/username) for the login grant. */
+  account: string;
+  /** iSolarCloud account password for the login grant. */
+  password: string;
+  /** Region host, default the EU gateway. */
+  region: string;
+  /** Optional owner-set serial→dongle-IP map (cloud dev ↔ local dongle). */
+  serialMap?: Record<string, string>;
+}
+
+const ISC_DEFAULT_REGION = 'gateway.isolarcloud.eu';
+
+export function isolarcloudConfig(): IsolarcloudConfig | null {
+  const c = store.get().integrations?.isolarcloud;
+  const appkey = (c?.appkey?.trim() || process.env.ISOLARCLOUD_APPKEY?.trim() || '');
+  const accessKey = (c?.accessKey?.trim() || process.env.ISOLARCLOUD_ACCESS_KEY?.trim() || '');
+  const rsaPublicKey = (c?.rsaPublicKey?.trim() || process.env.ISOLARCLOUD_RSA_KEY?.trim() || '');
+  const account = (c?.account?.trim() || process.env.ISOLARCLOUD_ACCOUNT?.trim() || '');
+  const password = (c?.password || process.env.ISOLARCLOUD_PASSWORD || '');
+  const region = (c?.region?.trim() || process.env.ISOLARCLOUD_REGION?.trim() || ISC_DEFAULT_REGION);
+  // Fully configured means we can both authenticate (account+password) and sign
+  // (appkey+accessKey+rsa). Anything short of that → disabled (return null).
+  if (!appkey || !accessKey || !rsaPublicKey || !account || !password) return null;
+  return {
+    appkey,
+    accessKey,
+    rsaPublicKey,
+    account,
+    password,
+    region,
+    ...(c?.serialMap && typeof c.serialMap === 'object' ? { serialMap: c.serialMap } : {}),
+  };
+}
