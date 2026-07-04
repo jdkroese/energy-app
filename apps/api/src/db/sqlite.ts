@@ -261,6 +261,14 @@ export function isMeteringEnabled(): boolean {
   return db() !== null;
 }
 
+/** Resolved metering DB file path (for diagnostics). Read-only, never opens the DB. */
+export function meteringDbPath(): string {
+  return dbPath();
+}
+
+/** Metering schema version this build targets (for diagnostics). */
+export const meteringSchemaVersion = SCHEMA_VERSION;
+
 /** Why metering is disabled (for diagnostics), or null when enabled. */
 export function meteringDisabledReason(): string | null {
   db(); // ensure init attempted

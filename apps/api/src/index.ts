@@ -1,5 +1,11 @@
 import express, { type Request, type Response } from "express";
 import { config } from "./config";
+import {
+  isMeteringEnabled,
+  meteringDisabledReason,
+  meteringDbPath,
+  meteringSchemaVersion,
+} from "./db/sqlite";
 import * as sonnen from "./connectors/sonnen";
 import * as tesla from "./connectors/tesla";
 import { getLive } from "./routes/live";
@@ -293,12 +299,39 @@ app.use((req, res, next) => {
 
 // --- PUBLIC routes (no session required): /api/health and /api/auth/* only ---
 app.get("/api/health", (_req: Request, res: Response) => {
+  // Fail-soft diagnostics for the durable metering store. Each lookup is wrapped so
+  // health never throws even if the sqlite module is in a bad state — purely additive,
+  // touches no DB behavior. Surfaces why db() is null on the mini (e.g. native ABI
+  // mismatch: CI builds for node 24, runtime may differ — compare modules below).
+  let metering: {
+    enabled: boolean;
+    reason: string | null;
+    path: string | null;
+    schema: number | null;
+  };
+  try {
+    metering = {
+      enabled: isMeteringEnabled(),
+      reason: meteringDisabledReason(),
+      path: meteringDbPath(),
+      schema: meteringSchemaVersion,
+    };
+  } catch (e) {
+    metering = {
+      enabled: false,
+      reason: `health-probe-failed: ${(e as Error).message}`,
+      path: null,
+      schema: null,
+    };
+  }
   res.json({
     ok: true,
     service: "energy-api",
     env: config.env,
     node: process.version,
+    modules: process.versions.modules,
     time: new Date().toISOString(),
+    metering,
   });
 });
 app.use("/api/auth", authRouter);
