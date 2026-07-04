@@ -39,6 +39,8 @@ const RULE_META: Record<string, { icon: string; label: string }> = {
   'rule-inverter-stall': { icon: 'sun-dim', label: 'Solar inverter not producing' },
   'rule-inverter-grid-quality': { icon: 'zap', label: 'Repeated grid-voltage trips (inverter)' },
   'rule-inverter-imbalance': { icon: 'scale', label: 'Solar inverters producing unevenly' },
+  'rule-tesla-solar-dark': { icon: 'zap-off', label: 'Tesla solar array dark (breaker/outage)' },
+  'rule-sonnen-fault': { icon: 'battery-warning', label: 'Sonnen battery fault' },
 };
 
 // ---- Grid-quality trip aggregation (rule-inverter-grid-quality) -------------
@@ -298,7 +300,10 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
     ruleEnabled('rule-inverter-offline') ||
     ruleEnabled('rule-inverter-stall') ||
     ruleEnabled('rule-inverter-grid-quality') ||
-    ruleEnabled('rule-inverter-imbalance');
+    ruleEnabled('rule-inverter-imbalance') ||
+    // The Tesla-array-dark rule needs the Sungrow reading (as its producing-daylight proof),
+    // so include it in the gate that fetches invRes.
+    ruleEnabled('rule-tesla-solar-dark');
   if (wantInverterRules) {
     const invRes = await sungrow.getNormalized().catch(() => null);
     if (invRes && invRes.inverters.length > 0) {
@@ -468,6 +473,63 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
           }
         }
       }
+
+      // 6) TESLA-METERED ARRAY DARK (rule-tesla-solar-dark) — the 3rd solar source is the
+      //    Tesla-metered array (dedicated = solar_power − the Sungrows, since the Tesla CT
+      //    reads whole-site solar). Nothing else monitors it going dark. Fire ONLY when
+      //    the Sungrows PROVE it's a genuine producing-daylight moment (so we don't page
+      //    at dawn/dusk on a low-sun sample) and Tesla's own array reads ~0: a likely
+      //    tripped breaker / crashed gateway on that string. Conservative + daylight-gated;
+      //    debounced ~5 ticks in the alert loop. Danger; recovery message on real recovery.
+      if (ruleEnabled('rule-tesla-solar-dark') && probe.tesla.ok && tRes.status === 'fulfilled') {
+        const teslaSolarKw = tRes.value.solarKw;
+        // Measured Sungrow AC across LIVE inverters (local OR cloud), same predicate the
+        // energy-flow split uses — this is the "it's genuinely producing weather" proof.
+        const sungrowKw =
+          invRes.inverters.reduce(
+            (sum, iv) => sum + (iv.reachable && iv.acPowerW > 0 ? iv.acPowerW : 0),
+            0,
+          ) / 1000;
+        const teslaDedicated = Math.max(0, teslaSolarKw - sungrowKw);
+        // Gate: only when the Sungrows are clearly producing (>1 kW) — an unarguable proof
+        // the roof CAN produce right now — AND daylight expects output — AND Tesla's own
+        // residual is ~dark (<0.1 kW).
+        if (daylight && sungrowKw > 1 && teslaDedicated < 0.1) {
+          live.push({
+            id: `tesla-solar-dark-${madridDateKey()}`,
+            severity: 'danger',
+            icon: 'zap-off',
+            title: 'Tesla solar array is dark',
+            sub: `The Tesla-metered array is producing ~0 kW while the Sungrows are generating ${sungrowKw.toFixed(1)} kW under the same sun — likely a tripped breaker or a crashed gateway on that string. Check the array.`,
+            device: 'Tesla',
+            ts: now,
+            status: 'new',
+            rule: 'rule-tesla-solar-dark',
+          });
+        }
+      }
+    }
+  }
+
+  // ---- Battery fault/health (Sonnen; monitoring only, docs/45) ----------------
+  // Sonnen reports a hardware/comms FAULT via ic_status (front LED red / DC-shutdown /
+  // error code). This is DISTINCT from plain unreachability (rule-offline already covers
+  // that for both packs). Read-only + conservative: only fires on a clearly-negative,
+  // reliably-present field; a missing field ⇒ known:false ⇒ no alert. Debounced ~3 ticks.
+  if (ruleEnabled('rule-sonnen-fault')) {
+    const fs = await sonnen.getFaultStatus().catch(() => null);
+    if (fs && fs.known && fs.fault) {
+      live.push({
+        id: 'sonnen-fault',
+        severity: 'danger',
+        icon: 'battery-warning',
+        title: 'Sonnen battery fault',
+        sub: `Sonnen reports a fault/comms error — ${fs.reason}. Check the battery.`,
+        device: 'Sonnen',
+        ts: now,
+        status: 'new',
+        rule: 'rule-sonnen-fault',
+      });
     }
   }
 

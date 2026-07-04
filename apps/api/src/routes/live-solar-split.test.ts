@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isInverterLive, splitSungrowArrays } from './live';
+import { isInverterLive, splitSungrowArrays, teslaDedicatedKw } from './live';
 
 // Minimal shape the pure helpers actually read.
 type Inv = { name: string; acPowerW: number; reachable: boolean; source?: 'local' | 'cloud' | 'none' };
@@ -62,6 +62,35 @@ test('genuinely dark inverter (unreachable, no cloud) → kw 0 + dark:true, excl
   assert.equal(sungrowKw, 2.6);
   assert.deepEqual(arrays[0], { name: 'A', kw: 0, dark: true });
   assert.equal(arrays[1].kw, 2.6);
+});
+
+// ---- Tesla-array DEDUP (Part A) — the Tesla meter reads TOTAL site solar (Sungrows
+// included), so the Tesla TILE must show only the dedicated residual and the three tiles
+// must sum EXACTLY to the true total, never double-counting. -----------------------
+test('no double-count: sungrow 3.6 + 3.7 with tesla-total 12.8 → Tesla tile 5.5, combined 12.8', () => {
+  const inv: Inv[] = [
+    { name: 'S1', acPowerW: 3600, reachable: true, source: 'local' },
+    { name: 'S2', acPowerW: 3700, reachable: true, source: 'local' },
+  ];
+  const { sungrowKw } = splitSungrowArrays(inv);
+  assert.equal(sungrowKw, 7.3);
+  const teslaTotal = 12.8; // Tesla gateway solar_power = whole-site total
+  const teslaTile = teslaDedicatedKw(teslaTotal, sungrowKw);
+  assert.equal(teslaTile, 5.5); // 12.8 − 7.3
+  // Combined = sungrow + dedicated Tesla = the true site total (no 20.1 kW double-count).
+  assert.equal(Math.round((sungrowKw + teslaTile) * 100) / 100, 12.8);
+});
+
+test('teslaDedicatedKw floors at 0 when a Sungrow sample momentarily exceeds the Tesla meter', () => {
+  // A WiNet catch-up spike briefly reads Sungrows higher than the Tesla-meter total.
+  assert.equal(teslaDedicatedKw(6.0, 7.3), 0); // never negative
+  // Combined then equals the (higher) sungrow value = max(teslaSolar, sungrowKw).
+  assert.equal(Math.round((7.3 + teslaDedicatedKw(6.0, 7.3)) * 100) / 100, 7.3);
+});
+
+test('teslaDedicatedKw is fail-soft on non-finite inputs', () => {
+  assert.equal(teslaDedicatedKw(NaN, 3), 0);
+  assert.equal(teslaDedicatedKw(5, NaN), 5);
 });
 
 test('sum stays consistent with productionW semantics (reachable || cloud)', () => {

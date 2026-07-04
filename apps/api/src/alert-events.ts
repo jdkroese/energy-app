@@ -47,6 +47,8 @@ function categoryFor(a: Alert): EventCategory {
     case 'rule-grid-charge':
     case 'rule-reserve':
     case 'rule-charge-stall':
+    // Sonnen hardware/comms fault (ic_status) is a battery event.
+    case 'rule-sonnen-fault':
       return 'battery';
     // Solar inverters (Sungrow SG5.0RS ×2, docs/36). Grid-quality trips are a grid
     // phenomenon (like rule-voltage); the rest are solar-production events.
@@ -56,6 +58,8 @@ function categoryFor(a: Alert): EventCategory {
     case 'rule-inverter-offline':
     case 'rule-inverter-stall':
     case 'rule-inverter-imbalance':
+    // The Tesla-metered array going dark is a solar-production event.
+    case 'rule-tesla-solar-dark':
       return 'solar';
     default:
       return 'grid';

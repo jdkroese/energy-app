@@ -138,6 +138,76 @@ function modeLabel(m: number | string | undefined): string | undefined {
   return typeof m === 'string' ? m : undefined;
 }
 
+// ---- Read-only fault/health status (rule-sonnen-fault; monitoring only) ------
+// The sonnenBatterie eco firmware exposes a rich health/error bitfield under
+// `ic_status` in /api/v2/latestdata, plus a coarse `SystemStatus` (OnGrid/OffGrid) in
+// /status. `ic_status` is a nested object whose exact keys vary by firmware, so we read
+// DEFENSIVELY across the documented shapes and only report a fault on a CLEARLY-negative
+// signal — never inventing one. The canonical fault indicators on eco hardware are the
+// front "Eclipse Led" going Solid/Blinking RED, and any non-zero DC-shutdown / secondary
+// error code. Everything here is READ-ONLY and fail-soft; a missing field ⇒ no fault.
+
+export interface SonnenFaultStatus {
+  /** true only when a reliable field clearly indicates a fault/comms-error state. */
+  fault: boolean;
+  /** Human-readable reason for the fault (for the alert sub-line). Empty when none. */
+  reason: string;
+  /** Whether we actually found a field to evaluate (so callers can stay conservative). */
+  known: boolean;
+}
+
+/** Case-insensitively pluck the first present key from an object. */
+function pick(obj: Record<string, unknown> | undefined, ...keys: string[]): unknown {
+  if (!obj) return undefined;
+  const lower = new Map(Object.keys(obj).map((k) => [k.toLowerCase(), k]));
+  for (const k of keys) {
+    const hit = lower.get(k.toLowerCase());
+    if (hit !== undefined && obj[hit] !== undefined && obj[hit] !== null) return obj[hit];
+  }
+  return undefined;
+}
+
+/**
+ * Read /latestdata (+ /status) and derive a conservative fault signal. Reads only fields
+ * documented as reliably present on eco firmware; if none are found, returns
+ * { fault:false, known:false } so the rule stays silent rather than guessing.
+ */
+export async function getFaultStatus(): Promise<SonnenFaultStatus> {
+  const ld = (await getLatestData().catch(() => null)) as
+    | (Record<string, unknown> & { ic_status?: Record<string, unknown> })
+    | null;
+  const ic = ld?.ic_status;
+
+  let known = false;
+  const reasons: string[] = [];
+
+  // 1) Eclipse LED — the front status LED. Solid/blinking RED = fault/comms-error. The
+  //    key is an object of boolean state flags on eco firmware.
+  const eclipse = pick(ic, 'Eclipse Led', 'eclipse_led') as Record<string, unknown> | undefined;
+  if (eclipse && typeof eclipse === 'object') {
+    known = true;
+    for (const [state, on] of Object.entries(eclipse)) {
+      if (on === true && /red/i.test(state)) reasons.push(`status LED ${state}`);
+    }
+  }
+
+  // 2) DC shutdown / secondary error codes — any non-zero value is a real fault reason.
+  const dcShutdown = pick(ic, 'DC Shutdown Reason', 'dc_shutdown_reason');
+  if (dcShutdown !== undefined) {
+    known = true;
+    const n = typeof dcShutdown === 'string' ? Number(dcShutdown) : (dcShutdown as number);
+    if (Number.isFinite(n) && n > 0) reasons.push(`DC shutdown reason ${n}`);
+  }
+  const secErr = pick(ic, 'secondary_error', 'Secondary Error', 'error');
+  if (secErr !== undefined) {
+    known = true;
+    const n = typeof secErr === 'string' ? Number(secErr) : (secErr as number);
+    if (Number.isFinite(n) && n > 0) reasons.push(`error code ${n}`);
+  }
+
+  return { fault: reasons.length > 0, reason: reasons.join('; '), known };
+}
+
 /** Fetch /status and normalize to the /api/live sonnen shape. */
 export async function getNormalized(): Promise<SonnenNormalized> {
   const raw = (await getStatus()) as SonnenStatusRaw;

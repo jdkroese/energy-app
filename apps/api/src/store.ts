@@ -1801,6 +1801,15 @@ export const DEFAULT_RULES: RuleState[] = [
   { id: "rule-inverter-grid-quality", enabled: true },
   // One inverter materially under-producing vs its identical twin (slow degradation).
   { id: "rule-inverter-imbalance", enabled: true },
+  // The Tesla-metered array (3rd solar source) is dark while the Sungrows PROVE it's a
+  // producing-daylight moment — likely a tripped breaker / crashed gateway on that array.
+  // Conservative: only fires when the Sungrows are genuinely producing. Daylight-gated,
+  // debounced ~5 ticks in the alert loop. (docs/45)
+  { id: "rule-tesla-solar-dark", enabled: true },
+  // ---- Battery fault/health (Sonnen; docs/45) ----
+  // Sonnen reports a hardware/comms FAULT (ic_status red LED / DC-shutdown / error code) —
+  // distinct from rule-offline (which covers plain unreachability). Debounced ~3 ticks.
+  { id: "rule-sonnen-fault", enabled: true },
 ];
 
 /** Grid-voltage monitor defaults — ENABLED, band 190–240 V, breaker auto-picked. */
