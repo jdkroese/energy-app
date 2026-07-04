@@ -128,6 +128,10 @@ import { startControllerCoordinator } from "./control/controller-coordinator";
 import { startBreakerMetering } from "./control/breaker-metering";
 import { startEnergyHistory } from "./control/energy-history";
 import { runEnergyBackfill } from "./control/energy-backfill";
+import {
+  getSolarHistoryCorrection,
+  postSolarHistoryCorrection,
+} from "./routes/solar-history-correction";
 import { getBreakerUsage, getUsageSummary } from "./routes/breaker-usage";
 import {
   parseUpload,
@@ -387,6 +391,20 @@ app.get(
     const offset = Number(req.query.offset ?? 0);
     return getHistoryDay(Number.isFinite(offset) ? offset : 0);
   }),
+);
+
+// ---- One-time solar-history double-count correction (admin-only; data ONLY) ----
+// GET = DRY RUN (writes nothing); POST = APPLY (idempotent, backed-up, marker-guarded).
+// Admin-gated like Settings mutations. No control coupling.
+app.get(
+  "/api/admin/solar-history-correction",
+  requireAdmin,
+  wrap(() => getSolarHistoryCorrection()),
+);
+app.post(
+  "/api/admin/solar-history-correction",
+  requireAdmin,
+  wrap(() => postSolarHistoryCorrection()),
 );
 
 // ---- Alerts ----
