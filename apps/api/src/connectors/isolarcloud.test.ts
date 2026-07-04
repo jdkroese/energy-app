@@ -150,85 +150,115 @@ test('signedPost surfaces an HTTP error', async () => {
 
 // ---- parseRealTimeData ------------------------------------------------------
 
-test('parseRealTimeData maps p83002→W (device-level AC power), p83022→kWh and flags offline via dev_status', () => {
+test('parseRealTimeData maps p24→W (AC power), p1→daily kWh, p2→total kWh (confirmed SG ids)', () => {
+  // CONFIRMED LIVE 2026-07-04: SG5.0RS report p24=AC power(W), p1=daily(Wh), p2=total(Wh).
   const json = {
     result_code: '1',
     result_data: {
       device_point_list: [
-        // Metadata dev_status "1"/running → online; producing power.
-        { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '1', dev_fault_status: '0', p83002: '2500', p83022: '9400' } },
-        // dev_status "0" (stopped) → offline regardless of power.
-        { ps_key: 'B2160700111_1_0_0', device_point: { dev_sn: 'B2160700111', dev_status: '0', dev_fault_status: '0', p83002: '0', p83022: '0' } },
+        { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '1', dev_fault_status: '0', p24: '3142', p1: '4600', p2: '26757800' } },
+        { ps_key: 'A2160700256_1_0_0', device_point: { dev_sn: 'A2160700256', dev_status: '1', dev_fault_status: '0', p24: '3200', p1: '5100', p2: '28601600' } },
       ],
     },
   };
   const devs = parseRealTimeData(json);
   assert.equal(devs.length, 2);
   assert.equal(devs[0].serial, 'A2160700249');
-  assert.equal(devs[0].acPowerW, 2500);
-  assert.equal(devs[0].rawAcPower, 2500); // raw p83002 surfaced
-  assert.equal(devs[0].dailyKwh, 9.4); // 9400 Wh → 9.4 kWh
-  assert.equal(devs[0].offline, false); // dev_status running
-  assert.equal(devs[0].pointsPresent, null); // power present → no fallback keys
-  // allPoints dumps every p-key (dev_sn/dev_status/dev_fault_status are NOT p<digits>).
-  assert.deepEqual(
-    devs[0].allPoints.map((p) => `${p.key}=${p.value}`),
-    ['p83002=2500', 'p83022=9400'],
-  );
-  assert.equal(devs[1].acPowerW, 0);
-  assert.equal(devs[1].offline, true); // dev_status stopped
-  assert.equal(devs[1].pointsPresent, null); // p83002 present (value "0") → real zero, not a miss
+  assert.equal(devs[0].acPowerW, 3142); // p24 = watts
+  assert.equal(devs[0].dailyKwh, 4.6); // p1 4600 Wh → 4.6 kWh
+  assert.equal(devs[0].totalKwh, 26757.8); // p2 26,757,800 Wh → 26757.8 kWh
+  assert.equal(devs[0].offline, false); // producing → online
+  assert.equal(devs[1].acPowerW, 3200);
+  assert.equal(devs[1].dailyKwh, 5.1);
+  assert.equal(devs[1].totalKwh, 28601.6);
+  assert.equal(devs[1].offline, false);
 });
 
-test('parseRealTimeData: maps acPowerW from p24 (candidate) when p83002/p83033 absent', () => {
-  // The SG5.0RS string inverters may carry AC power under a DIFFERENT id (e.g. p24). The
-  // best-effort candidate list [83033,83002,24,83023,83020] must pick it up.
+test('parseRealTimeData: acPowerW>0 ⇒ ONLINE even when dev_status is stopped/unknown (false-offline fix)', () => {
+  // The bug this fixes: both SG5.0RS were labelled "(offline)" while producing 3.1 kW because
+  // dev_status mis-maps for device_type 1. Producing power is ground truth → online.
   const json = {
     result_code: '1',
     result_data: {
       device_point_list: [
-        { ps_key: 'S1_1_0_0', device_point: { dev_sn: 'S1', dev_status: '1', p24: '3100', p83072: '4000' } },
+        // dev_status "0" (would say offline) but 3142 W flowing → MUST be online.
+        { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '0', p24: '3142', p1: '4600', p2: '26757800' } },
+        // No dev_status at all, but producing → online, and raw values surfaced.
+        { ps_key: 'A2160700256_1_0_0', device_point: { dev_sn: 'A2160700256', p24: '3200' } },
       ],
     },
   };
   const devs = parseRealTimeData(json);
-  assert.equal(devs[0].acPowerW, 3100); // fell through candidates to p24
-  assert.equal(devs[0].rawAcPower, null); // rawAcPower tracks p83002 only (absent here)
-  assert.equal(devs[0].dailyKwh, 4); // p83072 (candidate) → 4000 Wh → 4 kWh
-  // Both power points absent → pointsPresent captures ALL keys, allPoints dumps p-key values.
-  assert.deepEqual(devs[0].pointsPresent, ['dev_sn', 'dev_status', 'p24', 'p83072']);
-  assert.deepEqual(
-    devs[0].allPoints.map((p) => `${p.key}=${p.value}`),
-    ['p24=3100', 'p83072=4000'],
-  );
+  assert.equal(devs[0].offline, false); // power overrides dev_status "0"
+  assert.equal(devs[0].rawDevStatus, '0'); // raw value still surfaced for later refinement
+  assert.equal(devs[1].offline, false);
+  assert.equal(devs[1].rawDevStatus, null);
 });
 
-test('parseRealTimeData: dev_fault_status non-zero → offline even when dev_status looks running', () => {
+test('parseRealTimeData: near-zero power falls back to dev_status (offline honoured when NOT producing)', () => {
   const json = {
     result_code: '1',
     result_data: {
       device_point_list: [
-        { ps_key: 'F1_1_0_0', device_point: { dev_sn: 'F1', dev_status: '1', dev_fault_status: '17', p83002: '1200', p83022: '3000' } },
+        // dev_status stopped + no power → offline (metadata trusted only when power ~0).
+        { ps_key: 'Z_1_0_0', device_point: { dev_sn: 'Z', dev_status: '0', dev_fault_status: '0', p24: '0', p1: '0', p2: '0' } },
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].acPowerW, 0);
+  assert.equal(devs[0].offline, true); // no power → dev_status stopped honoured
+});
+
+test('parseRealTimeData: legacy hybrid ids (p83002/p83022) still work as fallbacks', () => {
+  // Other device types (hybrid SH) may still report the old ids — the fallbacks must map them.
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        { ps_key: 'H_11_0_0', device_point: { dev_sn: 'H', dev_status: '1', p83002: '2500', p83022: '9400' } },
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].acPowerW, 2500); // fell through candidates to p83002
+  assert.equal(devs[0].dailyKwh, 9.4); // p83022 fallback → 9400 Wh → 9.4 kWh
+  assert.equal(devs[0].totalKwh, null); // no total id present
+  assert.equal(devs[0].offline, false); // producing
+});
+
+test('parseRealTimeData: dev_fault_status non-zero → offline ONLY when NOT producing power', () => {
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        // Faulted AND producing → producing wins (online); raw fault still surfaced.
+        { ps_key: 'F1_1_0_0', device_point: { dev_sn: 'F1', dev_status: '1', dev_fault_status: '17', p24: '1200', p1: '3000' } },
+        // Faulted AND dark → offline (metadata trusted when power ~0).
+        { ps_key: 'F2_1_0_0', device_point: { dev_sn: 'F2', dev_status: '1', dev_fault_status: '17', p24: '0', p1: '0' } },
       ],
     },
   };
   const devs = parseRealTimeData(json);
   assert.equal(devs[0].acPowerW, 1200); // still read power
-  assert.equal(devs[0].offline, true); // but faulted → offline
+  assert.equal(devs[0].offline, false); // producing overrides the fault flag
+  assert.equal(devs[0].rawDevFaultStatus, '17'); // raw fault surfaced for later refinement
+  assert.equal(devs[1].offline, true); // dark + faulted → offline
 });
 
 test('parseRealTimeData: falls back to p83025 run-state when dev_status/dev_fault_status absent', () => {
+  // No power AND no dev_status metadata → the legacy p83025 run-state heuristic decides.
   const json = {
     result_code: '1',
     result_data: {
       device_point_list: [
-        { ps_key: 'L1_1_0_0', device_point: { dev_sn: 'L1', p83002: '900', p83022: '2000', p83025: '1' } }, // running
-        { ps_key: 'L2_1_0_0', device_point: { dev_sn: 'L2', p83002: '0', p83022: '0', p83025: '0' } }, // stopped
+        { ps_key: 'L1_1_0_0', device_point: { dev_sn: 'L1', p24: '0', p1: '2000', p83025: '1' } }, // running by run-state
+        { ps_key: 'L2_1_0_0', device_point: { dev_sn: 'L2', p24: '0', p1: '0', p83025: '0' } }, // stopped
       ],
     },
   };
   const devs = parseRealTimeData(json);
-  assert.equal(devs[0].offline, false); // p83025 running + power
+  assert.equal(devs[0].offline, false); // p83025 running (no power, but run-state says running)
   assert.equal(devs[1].offline, true); // p83025 stopped + no power
 });
 
@@ -266,8 +296,8 @@ test('parseRealTimeData: {value, unit} object points are tolerated (reads .value
           device_point: {
             dev_sn: 'U1',
             dev_status: '1',
-            p83002: { value: '4.2', unit: 'kW' }, // AC power as an object, in kW
-            p83022: { value: '11', unit: 'kWh' },
+            p24: { value: '4.2', unit: 'kW' }, // AC power as an object, in kW
+            p1: { value: '11', unit: 'kWh' },
           },
         },
       ],
@@ -452,17 +482,20 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
       result_data: {
         pageList: [
           { device_type: 1, ps_key: 'A2160700249_1_0_0' },
-          { device_type: 1, ps_key: 'B2160700111_1_0_0' },
+          { device_type: 1, ps_key: 'A2160700256_1_0_0' },
           { device_type: 14, ps_key: 'METER_14_0_0' }, // non-inverter, ignored
         ],
       },
     },
+    // Real live shape (2026-07-04): both SG5.0RS producing ~3.1 kW under the CONFIRMED ids
+    // p24 (AC W) / p1 (daily Wh) / p2 (total Wh) — even the one whose dev_status reads "0"
+    // must show ONLINE because it is producing power.
     '/openapi/getDeviceRealTimeData': {
       result_code: '1',
       result_data: {
         device_point_list: [
-          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '1', dev_fault_status: '0', p83002: '2500', p83022: '9400' } },
-          { ps_key: 'B2160700111_1_0_0', device_point: { dev_sn: 'B2160700111', dev_status: '0', dev_fault_status: '0', p83002: '0', p83022: '0' } },
+          { ps_key: 'A2160700249_1_0_0', device_point: { dev_sn: 'A2160700249', dev_status: '0', dev_fault_status: '0', p24: '3142', p1: '4600', p2: '26757800' } },
+          { ps_key: 'A2160700256_1_0_0', device_point: { dev_sn: 'A2160700256', dev_status: '0', dev_fault_status: '0', p24: '3200', p1: '5100', p2: '28601600' } },
         ],
       },
     },
@@ -470,11 +503,15 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
   const r = await diagnose(CFG);
   assert.equal(r.ok, true);
   assert.match(r.detail, /^login OK · 1 plant \(Javea\) · 3 devices · device_types \[1,14\] · 2 inverters ·/);
-  assert.match(r.detail, /A2160700249 2\.50kW.*points: p83002=2500 p83022=9400/);
-  assert.match(r.detail, /B2160700111 0\.00kW \(offline\).*points: p83002=0 p83022=0/);
+  // Both producing ~3.1 kW → ONLINE (no "(offline)"), with daily/total kWh + raw dev_status surfaced.
+  assert.match(r.detail, /A2160700249 3\.14kW 4\.6kWh\/d 26758kWh tot \[status=0 fault=0\] · points: p1=4600 p2=26757800 p24=3142/);
+  assert.match(r.detail, /A2160700256 3\.20kW 5\.1kWh\/d 28602kWh tot/);
+  assert.doesNotMatch(r.detail, /\(offline\)/); // producing inverters are never labelled offline
   assert.equal(r.devices?.length, 2);
   assert.equal(r.devices?.[0].serial, 'A2160700249');
-  assert.equal(r.devices?.[0].acPowerW, 2500);
+  assert.equal(r.devices?.[0].acPowerW, 3142);
+  assert.equal(r.devices?.[0].totalKwh, 26757.8);
+  assert.equal(r.devices?.[0].offline, false);
   setFetchForTest(fetch);
 });
 

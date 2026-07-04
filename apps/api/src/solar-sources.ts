@@ -59,6 +59,7 @@ export function mergeSolarSources(
       if (!inv.reachable || inv.acPowerW <= 0) {
         if (cloudDev.acPowerW != null) merged.acPowerW = Math.max(0, Math.round(cloudDev.acPowerW));
         if (cloudDev.dailyKwh != null) merged.dailyKwh = cloudDev.dailyKwh;
+        if (cloudDev.totalKwh != null) merged.totalKwh = cloudDev.totalKwh;
       }
       // Cloud says it's producing → the array is alive even if the LAN is down.
       if (!cloudDev.offline && merged.acPowerW > 0) {

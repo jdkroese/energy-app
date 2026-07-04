@@ -51,8 +51,18 @@ export interface CloudDevice {
   rawAcPowerUnit: string | null;
   /** Today's yield (kWh), or null. */
   dailyKwh: number | null;
+  /** Lifetime/total yield (kWh) from p2, or null. */
+  totalKwh: number | null;
   /** Device run/fault state label, or null. */
   deviceState: string | null;
+  /**
+   * The RAW dev_status metadata value exactly as the cloud returned it (string), or null.
+   * Surfaced in the diagnose detail so the true-offline mapping can be refined later — but it
+   * is NOT trusted when acPowerW > 0 (producing power is ground truth for online).
+   */
+  rawDevStatus: string | null;
+  /** The RAW dev_fault_status metadata value, or null. Surfaced for the same reason. */
+  rawDevFaultStatus: string | null;
   /** True when the cloud marks the device offline/faulted (outage source of truth). */
   offline: boolean;
   /**
@@ -92,45 +102,54 @@ const DEVICE_TYPE_INVERTER = ((): number => {
   const n = raw ? Number(raw) : NaN;
   return Number.isFinite(n) && n > 0 ? n : 1;
 })();
-// Point ids we read (GoSungrow/Sungrow-API point map). CRITICAL: p83033 is "Plant Power"
-// — a PLANT-level point, so it is NEVER returned for a DEVICE query (getDeviceRealTimeData);
-// that's why an earlier build saw "no p83033" against real inverters. The correct DEVICE-level
-// point is p83002 = Inverter AC Power. So:
-//   • 83002 = Inverter AC Power (DEVICE-level, W or kW)   ← the intended acPowerW source
-//   • 83022 = Daily yield (kWh/Wh)                        ← dailyKwh
-//   • 83025 = Running state (kept as a harmless extra / metadata fallback)
-//   • 83033 = Plant Power (PLANT-level — WRONG for a device query; still requested + parsed
-//             as a last-resort fallback for acPowerW, but 83002 is the real source)
+// CONFIRMED LIVE 2026-07-04 (docs/44, Settings Test against both SG5.0RS, device_type 1):
+// the STRING inverters (SG series) report their real-time data under the SHORT numeric ids
+// p24 / p1 / p2, NOT the hybrid-inverter p83xxx ids our first build assumed. Decoded against
+// iSolarCloud's own device page (3.1 kW output) + the units' known lifetime totals:
+//   • p24 = AC output power in WATTS        (3142/3200 W ≈ 3.1 kW)   ← acPowerW  (PRIMARY)
+//   • p1  = daily yield in Wh (÷1000 → kWh) (~4600/5100 Wh)          ← dailyKwh  (PRIMARY)
+//   • p2  = total/lifetime yield in Wh (÷1000 → kWh) (26.7M/28.6M Wh)← totalKwh  (PRIMARY)
+//   • p3/p4/p5 = voltage/temp/other — ignored.
+// The old hybrid ids are kept only as SECONDARY fallbacks for other device types:
+//   • 83002 = Inverter AC Power (device-level, hybrid)   — acPowerW fallback after p24
+//   • 83033 = Plant Power (PLANT-level — usually absent on a device query) — last-resort
+//   • 83022 = Daily yield (hybrid)                        — dailyKwh fallback after p1
+//   • 83025 = Running state (metadata fallback only)
 // Device online/fault detection comes from the response METADATA (dev_status /
-// dev_fault_status), not a p-point (see parseRealTimeData). Kept small so we stay well
-// under any point quota.
-const POINT_ACTIVE_POWER = '83002'; // Inverter AC Power (device-level)
-const POINT_PLANT_POWER = '83033'; // Plant Power (plant-level — fallback only, usually absent)
-const POINT_DAILY_YIELD = '83022';
+// dev_fault_status), not a p-point (see parseRealTimeData) — but PRODUCING POWER OVERRIDES it:
+// acPowerW > ~10 W ⇒ online regardless of dev_status. Kept small so we stay under any quota.
+const POINT_ACTIVE_POWER = '24'; // AC output power in WATTS (device-level, SG string inverter) — PRIMARY
+const POINT_PLANT_POWER = '83033'; // Plant Power (plant-level — last-resort fallback, usually absent)
+const POINT_DAILY_YIELD = '1'; // Daily yield in Wh (SG string inverter) — PRIMARY
+const POINT_TOTAL_YIELD = '2'; // Total/lifetime yield in Wh (SG string inverter) — PRIMARY
 const POINT_RUN_STATE = '83025';
+// Any device producing more than this many watts is unambiguously ONLINE, whatever a stale
+// dev_status metadata field claims (fixes the false "(offline)" on a 3.1 kW inverter).
+const PRODUCING_ONLINE_W = 10;
 
-// DISCOVERY superset — the SG5.0RS (device_type 1, STRING inverter) do NOT report the
-// hybrid-inverter (type-11) point ids (p83002/p83022/p83025/p83033) our first build assumed:
-// iSolarCloud's own device list shows both units Normal at ~3.1 kW / ~4 kWh/day, yet the
-// getDeviceRealTimeData response came back with metadata ONLY (no p-points). So we request a
-// WIDE candidate set of known Sungrow measuring-point ids and let the API return whichever
-// exist for this device_type; diagnose() then DUMPS every returned p-key so the id carrying
-// the ~3100 W AC output and the ~4 kWh daily yield is visible empirically. Best-effort mapping
-// (parseRealTimeData) then picks acPowerW / dailyKwh from prioritized candidate lists.
+// Point set requested from getDeviceRealTimeData. The CONFIRMED SG5.0RS ids (24 = AC power W,
+// 1 = daily Wh, 2 = total Wh) are FIRST and MUST always be present; a handful of the old
+// hybrid ids follow as fallbacks for other device types, plus p3/p4/p5 so the diagnose p-key
+// dump keeps showing the voltage/temp context. diagnose() still DUMPS every returned p-key.
 //
 // Kept a named array with a size cap: some OpenAPI deployments reject an over-long
-// point_id_list, so we cap at ~30 ids (the set below is 24, comfortably under).
+// point_id_list, so we cap at ~30 ids (the set below is well under).
 const CANDIDATE_POINT_IDS = [
-  '83002', '83022', '83025', '83033', '83072', '83102', '83106', '83001', '83023',
-  '83020', '83021', '24', '1', '2', '3', '4', '5', '83124', '83125', '83126', '83250',
-  '83252',
+  // Confirmed primary ids for the SG string inverters (device_type 1) — never drop these.
+  '24', '1', '2',
+  // Voltage/temp context (dumped in diagnose, not mapped).
+  '3', '4', '5',
+  // Legacy hybrid-inverter ids, kept as best-effort fallbacks for other device types.
+  '83002', '83022', '83025', '83033', '83072', '83023', '83020',
 ];
 const MAX_POINT_IDS = 30;
 const POINT_ID_LIST = CANDIDATE_POINT_IDS.slice(0, MAX_POINT_IDS);
 
 // Best-effort mapping candidates (parseRealTimeData tries each in order, first present wins).
-const AC_POWER_CANDIDATES = ['83033', '83002', '24', '83023', '83020'];
-const DAILY_YIELD_CANDIDATES = ['83022', '83072', '1'];
+// PRIMARY ids for the SG string inverters lead; the old hybrid ids trail as fallbacks.
+const AC_POWER_CANDIDATES = ['24', '83002', '83033', '83023', '83020'];
+const DAILY_YIELD_CANDIDATES = ['1', '83022', '83072'];
+const TOTAL_YIELD_CANDIDATES = ['2'];
 const HTTP_TIMEOUT_MS = 12_000;
 // Cloud is the SLOW/rate-limited backstop — poll every 5 min (config TTL below).
 const CLOUD_TTL_MS = 5 * 60_000;
@@ -365,15 +384,16 @@ function looksFaulted(s: string): boolean {
 /**
  * Parse a getDeviceRealTimeData response into normalized per-device readings. Pure +
  * side-effect-free (unit-tested). Tolerant to missing points and to points arriving as a
- * scalar OR an `{ value, unit }` object. Power is read from p83002 (Inverter AC Power,
- * DEVICE-level) with p83033 (Plant Power) as a last-resort fallback; daily yield (p83022)
- * is normalized to kWh.
+ * scalar OR an `{ value, unit }` object. For the SG string inverters (device_type 1) power
+ * is read from p24 (AC output W), daily yield from p1 (Wh→kWh) and total yield from p2
+ * (Wh→kWh); the old hybrid ids (p83002/p83033/p83022) trail as best-effort fallbacks.
  *
- * OFFLINE/RUNNING detection is derived PRIMARILY from the response METADATA — dev_status
- * and dev_fault_status ARE present for a device query (unlike a run-state p-point), so a
- * fault there ⇒ offline and a running dev_status ⇒ online. We fall back to the old
- * p83025/power heuristic only when neither metadata field is present, so the cloud stays a
- * trustworthy outage source.
+ * OFFLINE/RUNNING detection: PRODUCING POWER IS GROUND TRUTH — acPowerW > ~10 W ⇒ online,
+ * whatever dev_status says (this fixes the false "(offline)" on a producing inverter and the
+ * false dark-inverter alert). Only when power is ~0/absent do we consult the response
+ * METADATA (dev_status / dev_fault_status), then finally the p83025 run-state heuristic. The
+ * raw dev_status / dev_fault_status values are always surfaced (rawDevStatus /
+ * rawDevFaultStatus) so the true-offline mapping can be refined later.
  */
 export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] {
   const data = (json.result_data ?? {}) as { device_point_list?: unknown };
@@ -418,13 +438,25 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
       }
     }
 
-    // Daily yield: p83022 first, then the candidate list [83022,83072,1]; first present wins.
+    // Daily yield (Wh): p1 first, then the candidate list [1,83022,83072]; first present wins.
     let dailyWh = toNum(point[`p${POINT_DAILY_YIELD}`]);
     if (dailyWh == null) {
       for (const id of DAILY_YIELD_CANDIDATES) {
         const v = toNum(point[`p${id}`]);
         if (v != null) {
           dailyWh = v;
+          break;
+        }
+      }
+    }
+
+    // Total/lifetime yield (Wh): p2 first, then the candidate list; first present wins.
+    let totalWh = toNum(point[`p${POINT_TOTAL_YIELD}`]);
+    if (totalWh == null) {
+      for (const id of TOTAL_YIELD_CANDIDATES) {
+        const v = toNum(point[`p${id}`]);
+        if (v != null) {
+          totalWh = v;
           break;
         }
       }
@@ -441,8 +473,15 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
     const stateStr = statusStr ?? runStateStr;
 
     let offline: boolean;
-    if (statusStr != null || faultStr != null) {
-      // Metadata path (authoritative): a real fault ⇒ offline; else honour dev_status.
+    if (acPowerW != null && acPowerW > PRODUCING_ONLINE_W) {
+      // GROUND TRUTH: a device producing real power is ONLINE, whatever dev_status claims. This
+      // fixes the false "(offline)" seen on both SG5.0RS while they output 3.1 kW (their
+      // dev_status metadata mis-maps for device_type 1). We still surface the raw dev_status /
+      // dev_fault_status VALUES (below) so the true-offline mapping can be refined later — we
+      // just don't TRUST them while power flows.
+      offline = false;
+    } else if (statusStr != null || faultStr != null) {
+      // No/near-zero power → fall to the metadata: a real fault ⇒ offline; else honour dev_status.
       const faulted = faultStr != null && looksFaulted(faultStr);
       const running = statusStr != null ? looksRunning(statusStr) : true;
       offline = faulted || !running;
@@ -465,7 +504,10 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
       rawAcPower,
       rawAcPowerUnit,
       dailyKwh: dailyWh == null ? null : dailyWh / 1000,
+      totalKwh: totalWh == null ? null : totalWh / 1000,
       deviceState: stateStr,
+      rawDevStatus: statusStr,
+      rawDevFaultStatus: faultStr,
       offline,
       pointsPresent,
       allPoints,
@@ -779,17 +821,24 @@ export async function diagnose(
   const parts = devices.map((d) => {
     const id = d.serial || d.psKey || '?';
     const kw = d.acPowerW == null ? '—' : `${(d.acPowerW / 1000).toFixed(2)}kW`;
-    const state = d.deviceState ? ` ${d.deviceState}` : '';
-    // THE KEY OUTPUT: dump EVERY returned measurement point (p<digits>=value[unit]) so the id
-    // carrying the ~3100 W AC output and the ~4 kWh daily yield is visible empirically. This is
-    // how we discover the correct point ids for these SG5.0RS string inverters (device_type 1).
+    const yields =
+      (d.dailyKwh != null ? ` ${d.dailyKwh.toFixed(1)}kWh/d` : '') +
+      (d.totalKwh != null ? ` ${Math.round(d.totalKwh)}kWh tot` : '');
+    // Raw dev_status/dev_fault_status VALUES surfaced for later refinement of the true-offline
+    // mapping — but NOT trusted while power flows (producing ⇒ online above).
+    const rawState =
+      d.rawDevStatus != null || d.rawDevFaultStatus != null
+        ? ` [status=${d.rawDevStatus ?? '—'} fault=${d.rawDevFaultStatus ?? '—'}]`
+        : '';
+    // THE KEY OUTPUT: dump EVERY returned measurement point (p<digits>=value[unit]) so the ids
+    // carrying AC output (p24) / daily yield (p1) / total yield (p2) stay visible empirically.
     const dump =
       d.allPoints.length > 0
         ? d.allPoints
             .map((p) => `${p.key}=${p.value == null ? '—' : p.value}${p.unit ? p.unit : ''}`)
             .join(' ')
         : 'no p-keys returned (metadata only)';
-    return `${id} ${kw}${d.offline ? ' (offline)' : ''}${state} · points: ${dump}`;
+    return `${id} ${kw}${yields}${d.offline ? ' (offline)' : ''}${rawState} · points: ${dump}`;
   });
   const topoLabel = topo.fromSerialMap
     ? 'serialMap'
