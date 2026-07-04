@@ -170,9 +170,37 @@ test('parseRealTimeData maps p83002→W (device-level AC power), p83022→kWh an
   assert.equal(devs[0].dailyKwh, 9.4); // 9400 Wh → 9.4 kWh
   assert.equal(devs[0].offline, false); // dev_status running
   assert.equal(devs[0].pointsPresent, null); // power present → no fallback keys
+  // allPoints dumps every p-key (dev_sn/dev_status/dev_fault_status are NOT p<digits>).
+  assert.deepEqual(
+    devs[0].allPoints.map((p) => `${p.key}=${p.value}`),
+    ['p83002=2500', 'p83022=9400'],
+  );
   assert.equal(devs[1].acPowerW, 0);
   assert.equal(devs[1].offline, true); // dev_status stopped
   assert.equal(devs[1].pointsPresent, null); // p83002 present (value "0") → real zero, not a miss
+});
+
+test('parseRealTimeData: maps acPowerW from p24 (candidate) when p83002/p83033 absent', () => {
+  // The SG5.0RS string inverters may carry AC power under a DIFFERENT id (e.g. p24). The
+  // best-effort candidate list [83033,83002,24,83023,83020] must pick it up.
+  const json = {
+    result_code: '1',
+    result_data: {
+      device_point_list: [
+        { ps_key: 'S1_1_0_0', device_point: { dev_sn: 'S1', dev_status: '1', p24: '3100', p83072: '4000' } },
+      ],
+    },
+  };
+  const devs = parseRealTimeData(json);
+  assert.equal(devs[0].acPowerW, 3100); // fell through candidates to p24
+  assert.equal(devs[0].rawAcPower, null); // rawAcPower tracks p83002 only (absent here)
+  assert.equal(devs[0].dailyKwh, 4); // p83072 (candidate) → 4000 Wh → 4 kWh
+  // Both power points absent → pointsPresent captures ALL keys, allPoints dumps p-key values.
+  assert.deepEqual(devs[0].pointsPresent, ['dev_sn', 'dev_status', 'p24', 'p83072']);
+  assert.deepEqual(
+    devs[0].allPoints.map((p) => `${p.key}=${p.value}`),
+    ['p24=3100', 'p83072=4000'],
+  );
 });
 
 test('parseRealTimeData: dev_fault_status non-zero → offline even when dev_status looks running', () => {
@@ -375,7 +403,7 @@ test('diagnose: a device_type=1 device (SG string inverter) IS recognized as an 
   assert.equal(r.ok, true);
   assert.match(r.detail, /device_types \[1,7,22\] · 1 inverter ·/);
   assert.match(r.detail, /SG1 4\.20kW/);
-  assert.match(r.detail, /raw p83002=4200/); // raw value surfaced
+  assert.match(r.detail, /points: p83002=4200 p83022=11000/); // full p-key dump surfaced
   assert.equal(r.devices?.length, 1);
   assert.equal(r.devices?.[0].serial, 'SG1');
   assert.equal(r.devices?.[0].acPowerW, 4200);
@@ -442,8 +470,8 @@ test('diagnose: full success → ok:true, per-device serial + kW, devices return
   const r = await diagnose(CFG);
   assert.equal(r.ok, true);
   assert.match(r.detail, /^login OK · 1 plant \(Javea\) · 3 devices · device_types \[1,14\] · 2 inverters ·/);
-  assert.match(r.detail, /A2160700249 2\.50kW/);
-  assert.match(r.detail, /B2160700111 0\.00kW \[raw p83002=0\] \(offline\)/);
+  assert.match(r.detail, /A2160700249 2\.50kW.*points: p83002=2500 p83022=9400/);
+  assert.match(r.detail, /B2160700111 0\.00kW \(offline\).*points: p83002=0 p83022=0/);
   assert.equal(r.devices?.length, 2);
   assert.equal(r.devices?.[0].serial, 'A2160700249');
   assert.equal(r.devices?.[0].acPowerW, 2500);
@@ -471,7 +499,9 @@ test('diagnose: inverter found but power points missing → detail surfaces the 
   });
   const r = await diagnose(CFG);
   assert.equal(r.ok, true); // a device WAS read — the chain works, only the point ids differ
-  assert.match(r.detail, /SG1: no p83002\/p83033 — points present: dev_sn,p83001,p83022,p83067/);
+  // No AC-power candidate matches p83067 → acPowerW null, but the p-key DUMP names every key
+  // (p83001/p83022/p83067) so the right AC-power id is visible empirically in ONE Test.
+  assert.match(r.detail, /SG1 —.*points: p83001=2 p83022=11000 p83067=4200/);
   assert.equal(r.devices?.[0].acPowerW, null);
   assert.deepEqual(r.devices?.[0].pointsPresent, ['dev_sn', 'p83001', 'p83022', 'p83067']);
   setFetchForTest(fetch);
@@ -497,7 +527,7 @@ test('diagnose: serialMap set → derives ps_keys without plant discovery, succe
   assert.equal(r.devices?.length, 1);
   assert.match(r.detail, /^login OK · serialMap · 1 inverter ·/);
   assert.match(r.detail, /A2160700249 1\.20kW/);
-  assert.match(r.detail, /raw p83002=1200/);
+  assert.match(r.detail, /points: p83002=1200 p83022=3000/);
   setFetchForTest(fetch);
 });
 
