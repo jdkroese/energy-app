@@ -61,10 +61,21 @@ export function mergeSolarSources(
         if (cloudDev.dailyKwh != null) merged.dailyKwh = cloudDev.dailyKwh;
         if (cloudDev.totalKwh != null) merged.totalKwh = cloudDev.totalKwh;
       }
-      // Cloud says it's producing → the array is alive even if the LAN is down.
-      if (!cloudDev.offline && merged.acPowerW > 0) {
-        merged.state = 'producing';
-      } else if (cloudDev.offline) {
+      if (!cloudDev.offline) {
+        // Cloud says it's ONLINE → treat the inverter as live even though the LAN read
+        // failed: every consumer that keys off `reachable` (the per-inverter cards, the
+        // online-count, the issues/health rollup, history recording) must reflect the
+        // cloud-supplied truth instead of showing a producing inverter as offline.
+        merged.reachable = true;
+        merged.lastGoodTs = nowMs;
+        merged.lastSeen = new Date(nowMs).toISOString();
+        // Adopt a running work-state label when the local read left it empty/Unknown, so
+        // the card chip + health reason read "Run" rather than "Unknown".
+        if (!merged.workState || merged.workState === 'Unknown') merged.workState = 'Run';
+        if (merged.acPowerW > 0) merged.state = 'producing';
+      } else {
+        // Cloud confirms an OUTAGE → keep it unreachable + cloudConfirmedDark so the
+        // dark-inverter alert still fires (a dongle/router outage no longer blinds it).
         merged.state = 'unreachable';
       }
       return merged;
