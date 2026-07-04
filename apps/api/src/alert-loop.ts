@@ -37,6 +37,11 @@ const DEBOUNCE_RULES = new Set([
   'rule-inverter-offline',
   'rule-inverter-stall',
   'rule-inverter-dark',
+  // The Tesla-metered array going dark is debounced like rule-inverter-dark (~5 min of
+  // consecutive daylight confirmation) so a single flaky Tesla-cloud sample can't cry
+  // breaker-trip. Sonnen-fault is debounced ~3 ticks (below).
+  'rule-tesla-solar-dark',
+  'rule-sonnen-fault',
 ]);
 const DEBOUNCE_MIN_STREAK = 2;
 // Per-rule streak overrides (ticks) where the default 2 (~75s) is too jumpy. The inverter
@@ -48,6 +53,11 @@ const DEBOUNCE_STREAK_OVERRIDE: Record<string, number> = {
   // single WiFi blip on one dongle doesn't cry breaker-trip — but it still fires well
   // inside the outage window (the incident went unnoticed for hours).
   'rule-inverter-dark': 5,
+  // Same ~5 min daylight confirmation as the Sungrow-dark net before paging the Tesla array.
+  'rule-tesla-solar-dark': 5,
+  // A real battery fault should page fast, but survive a single garbage ic_status read:
+  // require ~3 consecutive ticks (~2 min).
+  'rule-sonnen-fault': 3,
 };
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -78,6 +88,9 @@ const DAYLIGHT_GATED_RECOVERY_RULES = new Set([
   'rule-inverter-dark',
   'rule-inverter-offline',
   'rule-inverter-stall',
+  // The Tesla-array-dark rule is daylight-gated too (it can only fire while the Sungrows
+  // prove daylight), so its "producing again" all-clear must be held at night like the rest.
+  'rule-tesla-solar-dark',
 ]);
 
 /**
@@ -244,6 +257,14 @@ async function tick(): Promise<void> {
       }
       if (a.rule === 'rule-inverter-stall') {
         recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is generating again', daylightGated: true });
+      }
+      // Tesla-metered array recovered — daylight-gated all-clear (only on a real daytime read).
+      if (a.rule === 'rule-tesla-solar-dark') {
+        recoveryWatch.set(a.id, { device: a.device, title: 'Tesla solar producing again', body: 'The Tesla-metered array is generating again — the outage cleared', daylightGated: true });
+      }
+      // Sonnen fault cleared — NOT daylight-gated (a battery fault can clear any time).
+      if (a.rule === 'rule-sonnen-fault') {
+        recoveryWatch.set(a.id, { device: a.device, title: 'Sonnen fault cleared', body: 'The Sonnen battery is no longer reporting a fault/comms error' });
       }
     }
 

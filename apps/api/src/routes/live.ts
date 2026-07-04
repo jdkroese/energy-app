@@ -48,6 +48,20 @@ export function isInverterLive(inv: Pick<InverterNormalized, 'reachable' | 'sour
 }
 
 /**
+ * The Tesla gateway meter (`solar_power`) reads TOTAL site solar — it ALREADY includes
+ * the Sungrows behind the same PW3 CT. Given that total and the measured (or proxied)
+ * Sungrow kW, return the DEDICATED Tesla-array residual for the Tesla tile: floored at 0
+ * so a momentary Sungrow-over-Tesla catch-up sample can't draw a negative Tesla node.
+ * combined = sungrowKw + this ≡ max(teslaSolar, sungrowKw), so the tiles sum exactly to
+ * the true total and never double-count. Pure + side-effect-free (unit-testable).
+ */
+export function teslaDedicatedKw(teslaSolarKw: number, sungrowKw: number): number {
+  const total = Number.isFinite(teslaSolarKw) ? teslaSolarKw : 0;
+  const sg = Number.isFinite(sungrowKw) ? sungrowKw : 0;
+  return Math.max(0, round(total - sg));
+}
+
+/**
  * Build the per-Sungrow energy-flow nodes + their summed kW from the merged inverter
  * list. A LIVE inverter (local OR cloud) contributes its measured acPowerW; only a
  * genuinely-dark inverter (dark from ALL sources) becomes a {kw:0, dark:true} node.
@@ -240,6 +254,14 @@ export async function getLive(): Promise<unknown> {
   const liveInv = inv ? inv.inverters.filter((i) => isInverterLive(i)) : [];
   let arrays: { name: string; kw: number; est?: boolean; dark?: boolean }[];
   let solarKw: number;
+  // The Tesla gateway meter (teslaSolar = solar_power) measures TOTAL site solar — it
+  // ALREADY INCLUDES the two Sungrow inverters (they sit behind the same Tesla PW3 CT).
+  // So we must NOT add Sungrow + Tesla (that double-counts the Sungrows and inflates the
+  // whole live flow, the Production&consumption chart, and history). Instead the Tesla
+  // TILE shows only the DEDICATED Tesla-array residual = teslaSolar − (measured Sungrows),
+  // floored at 0. Then solarKw = sungrow + teslaDedicated = max(teslaSolar, sungrowKw):
+  // the three tiles always sum EXACTLY to the true total and can never go negative even
+  // if a Sungrow momentarily reads higher than the Tesla meter's catch-up sample.
   if (liveInv.length > 0) {
     // True 3-way split with resilience (docs/44): one entry per Sungrow + the Tesla
     // array. When ONE inverter is live and the other is dark from ALL sources, do NOT
@@ -249,23 +271,30 @@ export async function getLive(): Promise<unknown> {
     // consistent with productionW and never draw a producing inverter as dark.
     const split = splitSungrowArrays(inv!.inverters);
     arrays = split.arrays;
-    arrays.push({ name: 'Tesla', kw: teslaSolar });
-    solarKw = round(split.sungrowKw + teslaSolar);
+    const teslaDedicated = teslaDedicatedKw(teslaSolar, split.sungrowKw);
+    arrays.push({ name: 'Tesla', kw: teslaDedicated });
+    solarKw = round(split.sungrowKw + teslaDedicated);
   } else if (inv && inv.inverters.length > 0) {
     // Dongles configured but none reachable (usually asleep at night): keep the
     // named per-inverter nodes in the UI by splitting the Sonnen-metered Array A
-    // proxy evenly across them, flagged `est` so the UI can mark the values (~).
+    // proxy evenly across them, flagged `est` so the UI can mark the values (~). The
+    // Sonnen proxy stands in for the Sungrows here, so the Tesla tile is the residual
+    // teslaSolar − sonnenSolar (floored at 0) to avoid the same double-count.
     const per = sonnenSolar / inv.inverters.length;
     arrays = inv.inverters.map((i) => ({ name: i.name, kw: round(per), est: true }));
-    arrays.push({ name: 'Tesla', kw: teslaSolar });
-    solarKw = round(sonnenSolar + teslaSolar);
+    const teslaDedicated = teslaDedicatedKw(teslaSolar, sonnenSolar);
+    arrays.push({ name: 'Tesla', kw: teslaDedicated });
+    solarKw = round(sonnenSolar + teslaDedicated);
   } else {
-    // No Sungrow dongles configured at all → the legacy A/B proxy split.
+    // No Sungrow dongles configured at all → the legacy A/B proxy split. A = the
+    // Sonnen-metered array; B = the dedicated Tesla residual (teslaSolar − sonnenSolar,
+    // floored at 0) so A + B = max(teslaSolar, sonnenSolar) and never double-counts.
+    const b = teslaDedicatedKw(teslaSolar, sonnenSolar);
     arrays = [
       { name: 'A', kw: sonnenSolar },
-      { name: 'B', kw: teslaSolar },
+      { name: 'B', kw: b },
     ];
-    solarKw = round(teslaSolar + sonnenSolar);
+    solarKw = round(sonnenSolar + b);
   }
 
   // Site-wide solar plausibility clamp (defense-in-depth). The per-inverter guard in
