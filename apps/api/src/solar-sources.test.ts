@@ -100,11 +100,38 @@ test('merge: unreachable local falls back to cloud power + confirms not-dark', (
   assert.equal(out[0].cloudConfirmedDark, false);
 });
 
-test('merge: local dark + cloud says offline → cloudConfirmedDark set (outage source of truth)', () => {
+test('merge: cloud-online inverter (local unreachable) counts as reachable — cards/online-count/issues reflect it', () => {
+  const local = [
+    inv({ acPowerW: 0, reachable: false, state: 'unreachable', workState: 'Unknown', lastSeen: null, lastGoodTs: NOW - 10 * 60_000 }),
+  ];
+  const cloud = snap([cloudDev({ acPowerW: 2500, dailyKwh: 12.4, totalKwh: 26700, offline: false })]);
+  const out = mergeSolarSources(local, cloud, undefined, NOW);
+  assert.equal(out[0].reachable, true, 'a cloud-online inverter must read as reachable');
+  assert.equal(out[0].source, 'cloud');
+  assert.equal(out[0].acPowerW, 2500, 'kW now renders the cloud acPowerW');
+  assert.equal(out[0].state, 'producing');
+  assert.equal(out[0].lastGoodTs, NOW, 'seen just now, not "never seen"');
+  assert.equal(out[0].lastSeen, new Date(NOW).toISOString());
+  assert.equal(out[0].workState, 'Run', 'empty/Unknown work-state adopts a running label');
+  assert.equal(out[0].cloudConfirmedDark, false);
+});
+
+test('merge: cloud-online but no cloud power yet (0 W) → reachable, state stays as classified (not forced producing)', () => {
+  const local = [inv({ acPowerW: 0, reachable: false, state: 'unreachable', workState: 'Unknown', lastGoodTs: NOW - 10 * 60_000 })];
+  const cloud = snap([cloudDev({ acPowerW: 0, offline: false })]);
+  const out = mergeSolarSources(local, cloud, undefined, NOW);
+  assert.equal(out[0].reachable, true);
+  assert.equal(out[0].acPowerW, 0);
+  assert.notEqual(out[0].state, 'producing'); // no measured power → not forced to producing
+  assert.equal(out[0].workState, 'Run');
+});
+
+test('merge: local dark + cloud says offline → cloudConfirmedDark set + STAYS unreachable (outage source of truth)', () => {
   const local = [inv({ acPowerW: 0, reachable: false, state: 'unreachable', lastGoodTs: NOW - 10 * 60_000 })];
   const cloud = snap([cloudDev({ acPowerW: 0, offline: true })]);
   const out = mergeSolarSources(local, cloud, undefined, NOW);
   assert.equal(out[0].source, 'cloud');
+  assert.equal(out[0].reachable, false, 'a genuine outage must NOT read as reachable');
   assert.equal(out[0].cloudConfirmedDark, true);
   assert.equal(out[0].state, 'unreachable');
 });
