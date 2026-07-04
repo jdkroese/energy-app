@@ -30,7 +30,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # MUST match the mini's runtime node major (currently 26). better-sqlite3 is a
+          # native module locked to node's ABI (NODE_MODULE_VERSION): a binary built here
+          # under a different major fails to load at runtime with "compiled against a
+          # different Node.js version", which silently DISABLES the durable metering DB
+          # (per-inverter + tiered history). Keep this in lockstep with the launchd node.
+          node-version: 26
           cache: pnpm
 
       - name: Install
