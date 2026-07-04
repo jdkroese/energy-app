@@ -62,6 +62,14 @@ export interface CloudDevice {
    * reported (normal case).
    */
   pointsPresent: string[] | null;
+  /**
+   * EVERY measurement-point key the cloud returned for this device (any `p<digits>` key),
+   * paired with its numeric value + unit — the empirical DUMP that lets us SEE which point id
+   * carries the ~3100 W AC output and the ~4 kWh daily yield on the SG5.0RS string inverters.
+   * Sorted by key. Always populated (even when power WAS mapped) so a Test always shows the
+   * ground truth.
+   */
+  allPoints: { key: string; value: number | null; unit: string | null; raw: unknown }[];
 }
 
 export interface CloudSnapshot {
@@ -100,7 +108,29 @@ const POINT_ACTIVE_POWER = '83002'; // Inverter AC Power (device-level)
 const POINT_PLANT_POWER = '83033'; // Plant Power (plant-level — fallback only, usually absent)
 const POINT_DAILY_YIELD = '83022';
 const POINT_RUN_STATE = '83025';
-const POINT_ID_LIST = [POINT_ACTIVE_POWER, POINT_DAILY_YIELD, POINT_RUN_STATE, POINT_PLANT_POWER];
+
+// DISCOVERY superset — the SG5.0RS (device_type 1, STRING inverter) do NOT report the
+// hybrid-inverter (type-11) point ids (p83002/p83022/p83025/p83033) our first build assumed:
+// iSolarCloud's own device list shows both units Normal at ~3.1 kW / ~4 kWh/day, yet the
+// getDeviceRealTimeData response came back with metadata ONLY (no p-points). So we request a
+// WIDE candidate set of known Sungrow measuring-point ids and let the API return whichever
+// exist for this device_type; diagnose() then DUMPS every returned p-key so the id carrying
+// the ~3100 W AC output and the ~4 kWh daily yield is visible empirically. Best-effort mapping
+// (parseRealTimeData) then picks acPowerW / dailyKwh from prioritized candidate lists.
+//
+// Kept a named array with a size cap: some OpenAPI deployments reject an over-long
+// point_id_list, so we cap at ~30 ids (the set below is 24, comfortably under).
+const CANDIDATE_POINT_IDS = [
+  '83002', '83022', '83025', '83033', '83072', '83102', '83106', '83001', '83023',
+  '83020', '83021', '24', '1', '2', '3', '4', '5', '83124', '83125', '83126', '83250',
+  '83252',
+];
+const MAX_POINT_IDS = 30;
+const POINT_ID_LIST = CANDIDATE_POINT_IDS.slice(0, MAX_POINT_IDS);
+
+// Best-effort mapping candidates (parseRealTimeData tries each in order, first present wins).
+const AC_POWER_CANDIDATES = ['83033', '83002', '24', '83023', '83020'];
+const DAILY_YIELD_CANDIDATES = ['83022', '83072', '1'];
 const HTTP_TIMEOUT_MS = 12_000;
 // Cloud is the SLOW/rate-limited backstop — poll every 5 min (config TTL below).
 const CLOUD_TTL_MS = 5 * 60_000;
@@ -359,13 +389,46 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
     const serial = String(meta('dev_sn') ?? meta('device_sn') ?? rec.ps_key ?? '').trim();
     const psKey = String(rec.ps_key ?? point.ps_key ?? '').trim();
 
+    // DUMP every returned measurement point (any `p<digits>` key) with its coerced value +
+    // unit — the empirical ground truth that reveals which id carries AC power / daily yield.
+    const allPoints = Object.keys(point)
+      .filter((k) => /^p\d+$/.test(k))
+      .sort()
+      .map((key) => ({ key, value: toNum(point[key]), unit: pointUnit(point[key]), raw: point[key] }));
+
     // Power: p83002 (device-level Inverter AC Power) first; p83033 (plant-level) fallback.
     const p83002 = point[`p${POINT_ACTIVE_POWER}`];
     const p83033 = point[`p${POINT_PLANT_POWER}`];
     const rawAcPower = toNum(p83002);
-    const acPowerW = rawAcPower != null ? rawAcPower : toNum(p83033);
-    const rawAcPowerUnit = pointUnit(p83002) ?? pointUnit(p83033);
-    const dailyWh = toNum(point[`p${POINT_DAILY_YIELD}`]);
+    // Best-effort acPowerW: p83002/p83033 first (unit surfaced above), then the wider
+    // candidate list [83033,83002,24,83023,83020] — first present PLAUSIBLE value wins. When
+    // none of the candidates are present, acPowerW stays null (the allPoints dump still tells
+    // the truth). "Plausible" here = a finite number (a present-but-null/"--" point is skipped
+    // so we don't lock onto an empty candidate ahead of a real later one).
+    let acPowerW = rawAcPower != null ? rawAcPower : toNum(p83033);
+    let rawAcPowerUnit = pointUnit(p83002) ?? pointUnit(p83033);
+    if (acPowerW == null) {
+      for (const id of AC_POWER_CANDIDATES) {
+        const v = toNum(point[`p${id}`]);
+        if (v != null) {
+          acPowerW = v;
+          rawAcPowerUnit = pointUnit(point[`p${id}`]);
+          break;
+        }
+      }
+    }
+
+    // Daily yield: p83022 first, then the candidate list [83022,83072,1]; first present wins.
+    let dailyWh = toNum(point[`p${POINT_DAILY_YIELD}`]);
+    if (dailyWh == null) {
+      for (const id of DAILY_YIELD_CANDIDATES) {
+        const v = toNum(point[`p${id}`]);
+        if (v != null) {
+          dailyWh = v;
+          break;
+        }
+      }
+    }
 
     // Run/fault state — prefer metadata, fall back to the p83025 run-state point.
     const devStatus = meta('dev_status');
@@ -405,6 +468,7 @@ export function parseRealTimeData(json: Record<string, unknown>): CloudDevice[] 
       deviceState: stateStr,
       offline,
       pointsPresent,
+      allPoints,
     });
   }
   return out;
@@ -714,19 +778,18 @@ export async function diagnose(
   // raw discovery counts (plants / devices / device_types) so the topology is legible.
   const parts = devices.map((d) => {
     const id = d.serial || d.psKey || '?';
-    // If BOTH power points were MISSING, the point ids likely differ for this device_type —
-    // show the keys actually present so the right ids are visible in ONE Test.
-    if (d.pointsPresent) {
-      const present = d.pointsPresent.length ? d.pointsPresent.join(',') : 'none';
-      return `${id}: no p${POINT_ACTIVE_POWER}/p${POINT_PLANT_POWER} — points present: ${present}`;
-    }
     const kw = d.acPowerW == null ? '—' : `${(d.acPowerW / 1000).toFixed(2)}kW`;
-    // Surface the RAW p83002 value (+ unit if the point was an object) so a 1000× unit
-    // mismatch (kW returned where we assume W) is visible against real production.
-    const raw =
-      d.rawAcPower == null ? '' : ` [raw p${POINT_ACTIVE_POWER}=${d.rawAcPower}${d.rawAcPowerUnit ? d.rawAcPowerUnit : ''}]`;
     const state = d.deviceState ? ` ${d.deviceState}` : '';
-    return `${id} ${kw}${raw}${d.offline ? ' (offline)' : ''}${state}`;
+    // THE KEY OUTPUT: dump EVERY returned measurement point (p<digits>=value[unit]) so the id
+    // carrying the ~3100 W AC output and the ~4 kWh daily yield is visible empirically. This is
+    // how we discover the correct point ids for these SG5.0RS string inverters (device_type 1).
+    const dump =
+      d.allPoints.length > 0
+        ? d.allPoints
+            .map((p) => `${p.key}=${p.value == null ? '—' : p.value}${p.unit ? p.unit : ''}`)
+            .join(' ')
+        : 'no p-keys returned (metadata only)';
+    return `${id} ${kw}${d.offline ? ' (offline)' : ''}${state} · points: ${dump}`;
   });
   const topoLabel = topo.fromSerialMap
     ? 'serialMap'
