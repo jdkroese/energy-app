@@ -689,6 +689,12 @@ export interface SolarSurplusPrecoolParams {
   minRunSec?: number;
   /** Fan speed the rule sets when it switches a unit on (0=auto, 1..5). Absent ⇒ 2. */
   fanLevel?: number;
+  /**
+   * One-time migration flag (COOLING rule only): once true, the rule's applied baseline was
+   * re-forced to the owner-requested spec (cool @ 24°C, fan 2). Runs exactly once per rule so
+   * a later deliberate UI edit is never re-clobbered. See baselineCoolSurplus() in hydrate.
+   */
+  cool24Fan2Baselined?: boolean;
 }
 
 /**
@@ -2434,7 +2440,7 @@ function mergeAutomations(
     (b) =>
       !dismissedSet.has(b.id) && !deduped.some((a) => sameRuleAsDefault(a, b)),
   );
-  return [...deduped, ...toSeed].map(tuneSurplusDefaults);
+  return [...deduped, ...toSeed].map(tuneSurplusDefaults).map(baselineCoolSurplus);
 }
 
 /**
@@ -2457,6 +2463,25 @@ function tuneSurplusDefaults(a: Automation): Automation {
   };
   if (a.type === "solar_surplus_precool") base.targetSetpointC = 24;
   return { ...a, params: { ...p, ...base } };
+}
+
+/**
+ * ONE-TIME re-baseline of the COOLING surplus rule to the owner-requested applied spec:
+ * cool @ 24°C, fan speed 2. Keyed off the ABSENCE of `cool24Fan2Baselined` so it runs
+ * exactly once per rule, then never touches later owner edits (a deliberate UI change to
+ * temp/fan afterward sticks). The rule's mode is always 'cool' and vanes are always driven
+ * to AUTO by the coordinator, so only setpoint + fan need forcing here. No-op for the
+ * heating rule and for any rule already flagged. (`vanes: auto` is enforced in the
+ * coordinator's write path, not persisted here.)
+ */
+function baselineCoolSurplus(a: Automation): Automation {
+  if (a.type !== "solar_surplus_precool") return a;
+  const p = a.params as SolarSurplusPrecoolParams;
+  if (p.cool24Fan2Baselined) return a; // already re-baselined — respect any later owner edit
+  return {
+    ...a,
+    params: { ...p, targetSetpointC: 24, fanLevel: 2, cool24Fan2Baselined: true },
+  };
 }
 
 /** Keep persisted rule enable-states but append any newly-shipped default rules

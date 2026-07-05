@@ -325,12 +325,17 @@ async function evaluateSurplusDirection(
     }
 
     const reason = `${automation.name}: ${dir}@${targetC}°C (room ${room}°C, surplus ${(snap.surplusW / 1000).toFixed(1)}kW)`;
-    // Drive: mode + target setpoint + fan speed + power on. Order: mode → setpoint → fan → power.
-    // Fan is re-issued each maintain tick like mode/setpoint (issueClimate no-ops when unchanged),
-    // so the unit stays pinned at the configured speed.
+    // Drive a COMPLETE, consistent setting on every unit the rule runs:
+    // mode + target setpoint + fan speed + vanes(auto) + power on.
+    // Order: mode → setpoint → fan → vanes → power. All of mode/setpoint/fan/vanes are
+    // re-issued each maintain tick (issueClimate no-ops when already in place), so the unit
+    // stays pinned at the configured mode/setpoint/fan and both vanes stay on AUTO (0) —
+    // the rule never leaves a vane stuck in a fixed position it inherited from a remote/schedule.
     await issueClimate(u, 'mode', dir, reason, { ...snap, pendingImportKw });
     await issueClimate(u, 'setpoint', targetC, reason, { ...snap, pendingImportKw });
     await issueClimate(u, 'fan', fanLevel, reason, { ...snap, pendingImportKw });
+    await issueClimate(u, 'vaneUpDown', 0, reason, { ...snap, pendingImportKw }); // 0 = auto
+    await issueClimate(u, 'vaneLeftRight', 0, reason, { ...snap, pendingImportKw }); // 0 = auto
     const res = await issueClimate(u, 'power', true, reason, { ...snap, pendingImportKw });
     if (res.ok) addSurplusStarted(u.id); // rule owns this unit now (persisted)
     // Stamp the min-run start ONLY on a true compressor start (not maintain ticks, which would
