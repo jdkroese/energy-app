@@ -37,6 +37,10 @@ const DEBOUNCE_RULES = new Set([
   'rule-inverter-offline',
   'rule-inverter-stall',
   'rule-inverter-dark',
+  // The divergence net (twin clearly producing while this one is dark) is corroborated enough
+  // to page FAST — it stays at the default 2-tick (~2 min) debounce, NOT the 5-tick override
+  // the weather-ambiguous dark/offline nets need. Only rejects a single flaky poll.
+  'rule-inverter-divergence',
   // The Tesla-metered array going dark is debounced like rule-inverter-dark (~5 min of
   // consecutive daylight confirmation) so a single flaky Tesla-cloud sample can't cry
   // breaker-trip. Sonnen-fault is debounced ~3 ticks (below).
@@ -86,6 +90,7 @@ const recoveryWatch = new Map<string, RecoveryInfo>();
 // their alert stops firing when the daylight gate closes, not on a real recovery.
 const DAYLIGHT_GATED_RECOVERY_RULES = new Set([
   'rule-inverter-dark',
+  'rule-inverter-divergence',
   'rule-inverter-offline',
   'rule-inverter-stall',
   // The Tesla-array-dark rule is daylight-gated too (it can only fire while the Sungrows
@@ -251,6 +256,11 @@ async function tick(): Promise<void> {
       // time, including at night) so it stays a plain watch above.
       if (a.rule === 'rule-inverter-dark') {
         recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is reachable and generating again — the outage cleared', daylightGated: true });
+      }
+      // Divergence (twin-corroborated trip) recovers daylight-gated too. Recovery clears the
+      // dedupe stamp, so the NEXT trip re-notifies — giving a page per outage, not once/day.
+      if (a.rule === 'rule-inverter-divergence') {
+        recoveryWatch.set(a.id, { device: a.device, title: `${a.device} producing again`, body: 'The inverter is generating again — its AC circuit is back (the trip cleared)', daylightGated: true });
       }
       if (a.rule === 'rule-inverter-offline') {
         recoveryWatch.set(a.id, { device: a.device, title: `${a.device} back online`, body: 'The inverter/dongle is reachable again', daylightGated: true });

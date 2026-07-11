@@ -35,6 +35,7 @@ const RULE_META: Record<string, { icon: string; label: string }> = {
   'rule-voltage': { icon: 'zap', label: 'Grid voltage out of band' },
   'rule-inverter-fault': { icon: 'triangle-alert', label: 'Solar inverter fault/alarm' },
   'rule-inverter-dark': { icon: 'zap-off', label: 'Solar inverter dark (breaker/outage)' },
+  'rule-inverter-divergence': { icon: 'zap-off', label: 'Solar inverter tripped (twin still producing)' },
   'rule-inverter-offline': { icon: 'wifi-off', label: 'Solar inverter offline (daylight)' },
   'rule-inverter-stall': { icon: 'sun-dim', label: 'Solar inverter not producing' },
   'rule-inverter-grid-quality': { icon: 'zap', label: 'Repeated grid-voltage trips (inverter)' },
@@ -297,6 +298,7 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
   const wantInverterRules =
     ruleEnabled('rule-inverter-fault') ||
     ruleEnabled('rule-inverter-dark') ||
+    ruleEnabled('rule-inverter-divergence') ||
     ruleEnabled('rule-inverter-offline') ||
     ruleEnabled('rule-inverter-stall') ||
     ruleEnabled('rule-inverter-grid-quality') ||
@@ -319,20 +321,45 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
         //    down. Trusts the cloud backstop when present (LAN outage no longer blinds us).
         //    Critical severity; the id is daylight-window-keyed so a persistent outage
         //    re-alerts each new day rather than being silenced by the 6h dedupe.
-        if (ruleEnabled('rule-inverter-dark')) {
+        if (ruleEnabled('rule-inverter-dark') || ruleEnabled('rule-inverter-divergence')) {
           const isDark = !iv.reachable || iv.acPowerW < 50;
+          const why = iv.reachable
+            ? `reachable but producing ~0 W`
+            : `unreachable (${iv.detail ?? 'no response'})`;
+          // STRONG proof: a twin is clearly producing (≥1 kW) right now, so the roof CAN
+          // produce and the grid is up — this inverter being dark means ITS OWN AC circuit
+          // tripped (Sungrow logs "grid power outage"), not weather. This is the high-
+          // confidence, real-time net: it pages fast (2-tick debounce ≈ 2 min) because the
+          // producing twin rules out the dawn/dusk/cloud ambiguity the slow dark net guards.
+          const strongTwin = invRes.inverters.find(
+            (o) => o.id !== iv.id && o.reachable && o.acPowerW >= 1000,
+          );
           const siblingProducing = invRes.inverters.some(
             (o) => o.id !== iv.id && o.reachable && o.acPowerW >= 50,
           );
           const cloudSaysDark = iv.cloudConfirmedDark === true;
-          // Gate: fire only when production is genuinely expected — either the twin is
-          // actively producing (unarguable proof) OR the clear-sky model expects output,
-          // OR the cloud source confirms this specific unit is offline. This suppresses
-          // the whole-array night sleep (both dark, no daylight) that is normal.
-          if (isDark && (siblingProducing || daylight || cloudSaysDark)) {
-            const why = iv.reachable
-              ? `reachable but producing ~0 W`
-              : `unreachable (${iv.detail ?? 'no response'})`;
+
+          if (isDark && strongTwin && ruleEnabled('rule-inverter-divergence')) {
+            // Fast lane: twin clearly running → this unit's AC circuit tripped. Own this case
+            // (skip the slow dark net below) so we don't double-page for the same outage.
+            live.push({
+              id: `inverter-divergence-${iv.id}-${madridDateKey()}`,
+              severity: 'danger',
+              icon: 'zap-off',
+              title: `${iv.name} is dark`,
+              sub: `${iv.name} ${why} while ${strongTwin.name} is generating ${(strongTwin.acPowerW / 1000).toFixed(1)} kW right now — its AC circuit has tripped (Sungrow logs this as "grid power outage"). Check this inverter's AC breaker/wiring.`,
+              device: iv.name,
+              ts: now,
+              status: 'new',
+              rule: 'rule-inverter-divergence',
+            });
+          } else if (
+            ruleEnabled('rule-inverter-dark') &&
+            isDark &&
+            (siblingProducing || daylight || cloudSaysDark)
+          ) {
+            // Slow net: weaker evidence (a low-producing twin, clear-sky expectation, or the
+            // cloud backstop). Kept at the ~5-min debounce to avoid dawn/dusk/WiFi false alarms.
             const proof = siblingProducing
               ? `its twin is producing ${((invRes.inverters.find((o) => o.id !== iv.id && o.reachable && o.acPowerW >= 50)?.acPowerW ?? 0) / 1000).toFixed(1)} kW right now`
               : cloudSaysDark

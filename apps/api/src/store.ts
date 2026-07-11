@@ -1811,6 +1811,10 @@ export const DEFAULT_RULES: RuleState[] = [
   // trip on ONE inverter even when the other is fine. Critical; re-alerts each daylight
   // window while it persists. This is the safety net the 2026-07-03 incident needed.
   { id: "rule-inverter-dark", enabled: true },
+  // FAST twin-corroborated trip net: this inverter is dark while its twin is clearly producing
+  // (≥1 kW) — its own AC circuit tripped (Sungrow "grid power outage"). Pages in ~2 min (vs the
+  // ~5-min dark net) and re-notifies per outage, so a flapping breaker is caught in real time.
+  { id: "rule-inverter-divergence", enabled: true },
   // A dongle is unreachable in DAYLIGHT (night misses are expected + suppressed).
   { id: "rule-inverter-offline", enabled: true },
   // Reachable + Run/Standby but producing ~0 while clear-sky expects output.
