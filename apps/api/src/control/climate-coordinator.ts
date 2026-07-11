@@ -224,8 +224,10 @@ async function evaluateSurplusDirection(
         : (a.currentTempC ?? Infinity) - (b.currentTempC ?? Infinity),
     );
 
-  // Track committed import as we stagger starts within this tick.
+  // Track committed import (start-inrush) AND committed running-load as we stagger starts within
+  // this tick — the snapshot's meters don't reflect a unit we started until the next tick.
   let pendingImportKw = 0;
+  let pendingLoadKw = 0;
 
   for (const u of candidates) {
     // Provenance reconcile: if a rule-started unit is observed OFF (someone turned it off),
@@ -315,12 +317,31 @@ async function evaluateSurplusDirection(
 
     // ----- START / maintain -----
     const startingCompressor = !u.power;
+    const g = store.get().devices.guardrails;
+    const acLoadKw = g.acStartLoadKw ?? 1.5;
+
+    // (a) Grid-import cap: don't let the start-inrush push projected grid import past the cap.
     const projected = snap.gridImportKw + pendingImportKw + (startingCompressor ? COMPRESSOR_START_KW : 0);
-    if (startingCompressor && projected > store.get().devices.guardrails.gridImportCapKw) {
+    if (startingCompressor && projected > g.gridImportCapKw) {
       logDecision(
         u.id,
         `${automation.name}: defer start`,
         `staggering — projected ${projected.toFixed(1)}kW > cap`,
+      );
+      continue;
+    }
+
+    // (b) Whole-house consumption cap: never start a unit that would push total house load past
+    // houseLoadCapKw (default 13 kW). Reserve ~acStartLoadKw (1.5 kW) per unit already committed
+    // this tick plus this one, since the snapshot load won't reflect them until the next tick —
+    // so additional units only start while current use stays below cap − 1.5 kW (≈ 11.5 kW).
+    const houseCapKw = g.houseLoadCapKw ?? 13;
+    const projectedLoadKw = snap.houseLoadW / 1000 + pendingLoadKw + (startingCompressor ? acLoadKw : 0);
+    if (startingCompressor && projectedLoadKw > houseCapKw) {
+      logDecision(
+        u.id,
+        `${automation.name}: defer start`,
+        `house load ${projectedLoadKw.toFixed(1)}kW > ${houseCapKw}kW cap`,
       );
       continue;
     }
@@ -344,6 +365,7 @@ async function evaluateSurplusDirection(
     if (res.ok && startingCompressor) {
       surplusStartedAt.set(u.id, Date.now());
       pendingImportKw += COMPRESSOR_START_KW;
+      pendingLoadKw += acLoadKw; // reserve this unit's running draw against the house-load cap
     }
   }
 
