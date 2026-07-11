@@ -1008,6 +1008,12 @@ export interface ClimateGuardrails {
   minCycleMin: number;
   /** After a manual command, automation defers on that unit for this long (min). */
   manualOverrideMin: number;
+  /** Stagger (seconds) enforced between consecutive compressor SWITCH-ONs across the fleet, so
+   *  several AC units don't inrush simultaneously and trip the main breaker. Default 5. */
+  staggerOnSec?: number;
+  /** Stagger (seconds) between consecutive SWITCH-OFFs. Default 0 — offs cause no inrush and we
+   *  don't want to slow protective stops (e.g. the P1-peak stand-down); raise only if desired. */
+  staggerOffSec?: number;
   /** One-time migration flag: the default manual-override hold was raised 120 → 480 min
    *  (2h → 8h). On first hydrate after that change, a persisted config still sitting on the
    *  OLD default (120) is bumped to 480 once; set true so it runs exactly once and never
@@ -1950,6 +1956,8 @@ export function defaultDevices(): DevicesState {
       minCycleMin: 8,
       manualOverrideMin: 480,
       manualOverrideBumpedTo480: true,
+      staggerOnSec: 5,
+      staggerOffSec: 0,
     },
     manualOverrides: {},
     surplusStartedIds: [],

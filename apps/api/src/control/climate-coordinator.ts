@@ -37,6 +37,7 @@ import { config } from '../config';
 
 const TICK_MS = 45_000;
 let timer: ReturnType<typeof setInterval> | null = null;
+let ticking = false; // re-entrancy guard — a staggered tick can outlast the interval
 
 // Per-device "surplus first dropped at" timestamp, for the sustained-clear debounce.
 const surplusClearedSince = new Map<string, number>();
@@ -474,6 +475,11 @@ export async function evaluateSchedules(fleet: ClimateUnit[], snap: RichClimateS
 }
 
 async function tick(): Promise<void> {
+  // Re-entrancy guard: staggering compressor starts can make a tick run for several × 5s, which
+  // could exceed the 45s setInterval cadence. Skip a fire while the previous tick is still going
+  // so two ticks never drive the fleet at once.
+  if (ticking) return;
+  ticking = true;
   try {
     const dev = store.get().devices;
     if (!dev.armed || dev.mode !== 'auto') return; // self-gated: inert unless armed+auto
@@ -538,6 +544,8 @@ async function tick(): Promise<void> {
       s.devices.lastError = `climate coordinator tick failed: ${(e as Error).message}`;
     });
     console.error('[climate] coordinator tick failed:', (e as Error).message);
+  } finally {
+    ticking = false;
   }
 }
 

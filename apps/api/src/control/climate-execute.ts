@@ -27,6 +27,26 @@ export type { ClimateLever } from './climate-guardrails';
 const RATE_LIMIT_MS = 30_000;
 const lastWriteAt = new Map<string, number>();
 
+// ---- Cross-device compressor stagger ---------------------------------------
+// Several AC units starting at once inrush simultaneously and can trip the main breaker. Enforce
+// a minimum gap between consecutive POWER state-changes ACROSS the whole fleet (a single global
+// clock, not per-device): before a rule-driven switch-on we wait until `staggerOnSec` has elapsed
+// since the last power write, so compressors spin up one at a time. Off-transitions use
+// `staggerOffSec` (default 0 — offs cause no inrush and we don't want to slow protective stops).
+// Manual commands from the device page are never delayed (single, user-initiated), but they DO
+// stamp the clock so a following automation write is still spaced from them.
+let lastPowerWriteAt = 0;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Wait out the fleet-wide power stagger for a pending on/off transition (no-op when disabled). */
+async function awaitPowerStagger(toOn: boolean): Promise<void> {
+  const g = store.get().devices.guardrails;
+  const gapSec = toOn ? (g.staggerOnSec ?? 5) : (g.staggerOffSec ?? 0);
+  if (gapSec <= 0) return;
+  const waitMs = lastPowerWriteAt + gapSec * 1000 - Date.now();
+  if (waitMs > 0) await sleep(waitMs);
+}
+
 /** Detail string stamped on a no-op (value already in place). Used to coalesce/identify them. */
 export const NOOP_DETAIL = 'unchanged — no write';
 
@@ -163,10 +183,14 @@ export async function issueClimate(
       }
       if (unit.power === to) return noop(unit.id, lever, to ? 'on' : 'off');
       if (rateLimited(unit.id, lever)) return reject(unit.id, lever, unit.power ? 'on' : 'off', 'rate-limited (<30s)');
+      // Stagger the physical switch so multiple compressors don't inrush at once and trip the
+      // main breaker. Automation writes wait for the fleet-wide gap; manual writes fire now.
+      if (!opts.manual) await awaitPowerStagger(to);
       if (isAirzone(unit.id)) await airzone.setLever(unit.id, 'power', to);
       else if (isPanasonic(unit.id)) await panasonic.setLever(unit.id, 'power', to);
       else await intesis.setDatapoint(unit.id, UID.power, to ? 1 : 0);
       markWritten(unit.id, lever);
+      lastPowerWriteAt = Date.now(); // stamp the fleet clock (manual + automation) after the write
       return confirmPower(unit.id, unit.power, to, reason);
     }
 
@@ -251,4 +275,5 @@ function confirmPower(
 /** Clear rate-limit memory — used on disarm and by tests. */
 export function _resetClimateRateLimits(): void {
   lastWriteAt.clear();
+  lastPowerWriteAt = 0; // also clear the stagger clock so the next action isn't held back
 }
