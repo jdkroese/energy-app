@@ -1014,6 +1014,13 @@ export interface ClimateGuardrails {
   /** Stagger (seconds) between consecutive SWITCH-OFFs. Default 0 — offs cause no inrush and we
    *  don't want to slow protective stops (e.g. the P1-peak stand-down); raise only if desired. */
   staggerOffSec?: number;
+  /** Whole-house consumption cap (kW): the surplus cool/heat rule will not switch a unit ON if
+   *  doing so would push total house load past this. Protects the main breaker's total current
+   *  (distinct from gridImportCapKw, which caps grid import only). Default 13. */
+  houseLoadCapKw?: number;
+  /** Assumed running draw (kW) of one AC unit, reserved against houseLoadCapKw when projecting
+   *  whether another unit can start. Default 1.5 (⇒ additional units start only up to ~11.5 kW). */
+  acStartLoadKw?: number;
   /** One-time migration flag: the default manual-override hold was raised 120 → 480 min
    *  (2h → 8h). On first hydrate after that change, a persisted config still sitting on the
    *  OLD default (120) is bumped to 480 once; set true so it runs exactly once and never
@@ -1958,6 +1965,8 @@ export function defaultDevices(): DevicesState {
       manualOverrideBumpedTo480: true,
       staggerOnSec: 5,
       staggerOffSec: 0,
+      houseLoadCapKw: 13,
+      acStartLoadKw: 1.5,
     },
     manualOverrides: {},
     surplusStartedIds: [],
