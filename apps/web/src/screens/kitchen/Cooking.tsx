@@ -1204,7 +1204,10 @@ function PickSheet({
       try {
         const r = await api.kitchen.planRequest(week, day.date, queryText || undefined, excludeIds);
         setCandidates(r.candidates);
-        shownIds.current = r.candidates.map((c) => c.recipe.id);
+        // Refresh ACCUMULATES exclusions (excludeIds carried the previous rounds) so a
+        // third Refresh can't re-surface the first set; a fresh run (submit / quick chip /
+        // sheet open — empty excludeIds) resets the memory to just this new list.
+        shownIds.current = [...excludeIds, ...r.candidates.map((c) => c.recipe.id)];
       } catch {
         setError('Could not load suggestions — try again');
         setCandidates([]);
