@@ -15,6 +15,45 @@ export const CUISINE_LABEL: Record<KitchenCuisine, string> = {
   global: 'Global',
 };
 
+// ---- Nutrition guardrail scales (docs/46 §1a + design addendum §B) ----------------------
+// One shared number↔label mapping used by both the desktop and mobile rendering of the
+// PreferencesModal "Nutrition & sourcing" sliders (same component either way, but keeping
+// this pure and exported lets it be pinned by a test independently of the UI).
+
+export type NutritionScaleKey = 'calories' | 'carbs' | 'fish' | 'veg' | 'protein';
+
+/** 1–10 → the exact qualitative label shown next to each guardrail slider. */
+export function nutritionScaleLabel(key: NutritionScaleKey, value: number): string {
+  const v = Math.max(1, Math.min(10, Math.round(value)));
+  if (key === 'calories') {
+    if (v <= 2) return 'very light';
+    if (v <= 4) return 'light';
+    if (v === 5) return 'balanced';
+    if (v <= 7) return 'hearty';
+    return 'very hearty';
+  }
+  if (key === 'carbs') {
+    if (v <= 2) return 'low-carb';
+    if (v <= 4) return 'lighter carbs';
+    if (v === 5) return 'balanced';
+    if (v <= 7) return 'carb-friendly';
+    return 'carb-happy';
+  }
+  if (key === 'fish' || key === 'veg') {
+    // Shows the DERIVED weekly target (engine.ts weeklyMixTarget) so the weekly-mix
+    // semantics are visible on the slider, not just the per-recipe bias.
+    if (v <= 2) return 'rarely (0/wk)';
+    if (v <= 4) return '≈1/wk';
+    if (v <= 6) return '≈1–2/wk';
+    if (v <= 8) return '≈2–3/wk';
+    return '≈3–4/wk';
+  }
+  // protein
+  if (v <= 4) return 'no preference';
+  if (v <= 7) return 'protein-aware';
+  return 'protein-focused';
+}
+
 export function fmtEur(v: number | null | undefined): string {
   if (v == null) return '—';
   return `${v.toFixed(2).replace('.', ',')} €`;

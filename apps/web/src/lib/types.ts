@@ -2354,6 +2354,15 @@ export interface KitchenHouseholdGoals {
   notes?: string;
 }
 
+/** Dietary guardrail sliders (docs/46 §1a) — all 1–10, 5 = neutral/no bias. */
+export interface KitchenNutritionScales {
+  calories: number;
+  carbs: number;
+  fish: number;
+  veg: number;
+  protein: number;
+}
+
 export interface KitchenHousehold {
   adults: number;
   kids: number;
@@ -2366,6 +2375,11 @@ export interface KitchenHousehold {
   cuisineWeights: Record<KitchenCuisine, number>;
   goals: KitchenHouseholdGoals;
   showNutritionOnCards: boolean;
+  nutritionScales: KitchenNutritionScales;
+  /** Prefer in-season/local produce for our location (Jávea, Costa Blanca). */
+  seasonalLocal: boolean;
+  /** Free-text ingredient chips to boost (garden surplus). */
+  boostIngredients: string[];
 }
 
 export interface KitchenReminders {
@@ -2491,6 +2505,9 @@ export interface MealPlanResponse {
   note?: string;
 }
 export interface PlanAskResponse { ts: string; ok: boolean; reason?: string; candidateIds: string[]; note?: string }
+/** POST /plan/request candidate (docs/46 §1c): a scored recipe + a short human reason. */
+export interface PlanRequestCandidate { recipe: Recipe; why: string }
+export interface PlanRequestResponse { ts: string; ok: boolean; aiUsed: boolean; candidates: PlanRequestCandidate[] }
 export interface StaplesResponse { ts: string; staples: StaplesItem[] }
 export interface OrderDraftResponse { ts: string; draft: OrderDraft }
 export interface OrderHistoryResponse { ts: string; history: OrderHistoryEntry[] }

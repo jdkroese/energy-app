@@ -4,15 +4,25 @@
 // + the library shelf with URL import. Mobile <768px: thumb-first stacked rows with a
 // sticky "Add week to Groceries" CTA. Recipe tap → quick-view overlay (modal / sheet).
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ShellContext } from '../../components/shell/AppShell';
 import { Badge, Button, Card, Icon, Input, LoadingState, Modal, Slider, Switch } from '../../components/ui';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
-import type { KitchenCuisine, KitchenHousehold, MealPlan, MealPlanDay, Recipe } from '../../lib/types';
+import type { KitchenCuisine, KitchenHousehold, MealPlan, MealPlanDay, PlanRequestCandidate, Recipe } from '../../lib/types';
 import { MobileHeader } from '../_shared';
-import { CUISINE_LABEL, MetaChips, RecipePhoto, RecipeQuickView, ServingsStepper, dayLabel, weekLabel } from './shared';
+import {
+  CUISINE_LABEL,
+  MetaChips,
+  nutritionScaleLabel,
+  RecipePhoto,
+  RecipeQuickView,
+  ServingsStepper,
+  dayLabel,
+  weekLabel,
+  type NutritionScaleKey,
+} from './shared';
 import { WhatCanIMake } from './WhatCanIMake';
 
 // ---- Week helpers (client mirrors of the server's engine) ---------------------------
@@ -86,6 +96,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
   const [quickView, setQuickView] = useState<{ recipe: Recipe; day?: MealPlanDay } | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [pickDay, setPickDay] = useState<MealPlanDay | null>(null);
   const [askText, setAskText] = useState('');
   const [askResult, setAskResult] = useState<{ ids: string[]; note?: string } | null>(null);
 
@@ -140,6 +151,13 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
     } finally {
       setBusy(null);
     }
+  };
+
+  // Per-day "Pick" (docs/46 §1c): assign optimistically — close the sheet immediately, the
+  // network call (same mechanism as a hand-pick: pinned:true) finishes in the background.
+  const pickForDay = (date: string, recipeId: string) => {
+    setPickDay(null);
+    void patchDay({ date, recipeId });
   };
 
   const addWeekToGroceries = async () => {
@@ -456,6 +474,9 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
             <button type="button" style={mini} disabled={busy === day.date} onClick={() => void suggest(day.date)}>
               <Icon name="refresh-cw" size={13} /> {recipe ? 'Swap' : 'Suggest'}
             </button>
+            <button type="button" style={mini} onClick={() => setPickDay(day)}>
+              <Icon name="search" size={13} /> Pick
+            </button>
             <button type="button" style={mini} onClick={() => void patchDay({ date: day.date, skip: true })}>
               <Icon name="utensils-crossed" size={13} /> Skip
             </button>
@@ -522,6 +543,9 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
         </div>
         <button type="button" aria-label={recipe ? 'Swap' : 'Suggest'} disabled={busy === day.date} onClick={() => void suggest(day.date)} style={{ ...mini, flex: 'none', width: 46, minHeight: 46 }}>
           <Icon name="refresh-cw" size={15} />
+        </button>
+        <button type="button" aria-label="Pick" onClick={() => setPickDay(day)} style={{ ...mini, flex: 'none', width: 46, minHeight: 46 }}>
+          <Icon name="search" size={15} />
         </button>
         <button type="button" aria-label="Skip" onClick={() => void patchDay({ date: day.date, skip: true })} style={{ ...mini, flex: 'none', width: 46, minHeight: 46 }}>
           <Icon name="utensils-crossed" size={15} />
@@ -600,6 +624,16 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
             void refetchRecipes();
             setQuickView({ recipe: r });
           }}
+        />
+      )}
+      {pickDay && (
+        <PickSheet
+          desktop={wide}
+          day={pickDay}
+          week={week}
+          showNutrition={showNutrition}
+          onClose={() => setPickDay(null)}
+          onPick={(recipeId) => pickForDay(pickDay.date, recipeId)}
         />
       )}
     </>
@@ -719,6 +753,280 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
       </div>
       {overlays}
     </>
+  );
+}
+
+// ---- Per-day "Pick" sheet (docs/46 §1c + design addendum §A) --------------------------
+// Request text + 6 candidates for ONE day. Deterministic-first (POST /plan/request), the
+// server optionally re-ranks with AI behind the plannerRequestBox feature — this component
+// doesn't know or care which path answered; it just renders what came back.
+
+const PICK_QUICK_CHIPS: Array<{ label: string; text: string }> = [
+  { label: 'Fish', text: 'fish' },
+  { label: 'Veggie', text: 'veggie' },
+  { label: 'Quick (≤25 min)', text: 'quick under 25 minutes' },
+  { label: "Kids' favourite", text: 'kids favourite' },
+];
+
+/** "Tuesday · 15 Jul" for the sheet header. */
+function pickSheetTitle(dateStr: string): string {
+  const d = new Date(`${dateStr}T12:00:00`);
+  const weekday = d.toLocaleDateString('en-GB', { weekday: 'long' });
+  const month = d.toLocaleDateString('en-GB', { month: 'short' });
+  return `${weekday} · ${d.getDate()} ${month}`;
+}
+
+function PickSkeletonCard() {
+  return (
+    <div
+      style={{
+        height: 88,
+        borderRadius: 'var(--radius-md)',
+        background: 'linear-gradient(90deg,var(--surface-1),var(--surface-2),var(--surface-1))',
+        backgroundSize: '200% 100%',
+        animation: 'pwr-shimmer 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
+function PickCandidateCard({
+  candidate,
+  showNutrition,
+  busy,
+  onPick,
+}: {
+  candidate: PlanRequestCandidate;
+  showNutrition: boolean;
+  busy: boolean;
+  onPick: () => void;
+}) {
+  const { recipe } = candidate;
+  const [hot, setHot] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={onPick}
+      onMouseEnter={() => setHot(true)}
+      onMouseLeave={() => {
+        setHot(false);
+        setPressed(false);
+      }}
+      onMouseDown={() => setPressed(true)}
+      onMouseUp={() => setPressed(false)}
+      style={{
+        display: 'flex',
+        gap: 10,
+        alignItems: 'flex-start',
+        textAlign: 'left',
+        padding: 9,
+        borderRadius: 'var(--radius-md)',
+        border: `1px solid ${hot ? 'var(--solar)' : 'var(--border-2)'}`,
+        background: 'var(--surface-2)',
+        cursor: busy ? 'default' : 'pointer',
+        opacity: busy ? 0.6 : pressed ? 0.75 : 1,
+        transform: hot && !pressed ? 'translateY(-1px)' : 'none',
+        transition: 'border-color var(--dur-fast, 120ms) var(--ease-out), transform var(--dur-fast, 120ms) var(--ease-out), opacity var(--dur-fast, 120ms) var(--ease-out)',
+        width: '100%',
+      }}
+    >
+      <RecipePhoto recipe={recipe} height={72} radius="var(--radius-md)" style={{ width: 72 }} />
+      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 600,
+            lineHeight: 1.25,
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
+        >
+          {recipe.title}
+        </div>
+        <MetaChips recipe={recipe} showNutrition={showNutrition} />
+        <div style={{ fontSize: 11, color: 'var(--solar)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Icon name="zap" size={11} /> {candidate.why}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function PickSheet({
+  desktop,
+  day,
+  week,
+  showNutrition,
+  onClose,
+  onPick,
+}: {
+  desktop: boolean;
+  day: MealPlanDay;
+  week: string;
+  showNutrition: boolean;
+  onClose: () => void;
+  onPick: (recipeId: string) => void;
+}) {
+  const [text, setText] = useState('');
+  const [candidates, setCandidates] = useState<PlanRequestCandidate[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const shownIds = useRef<string[]>([]);
+
+  const run = useCallback(
+    async (queryText: string, excludeIds: string[] = []) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const r = await api.kitchen.planRequest(week, day.date, queryText || undefined, excludeIds);
+        setCandidates(r.candidates);
+        shownIds.current = r.candidates.map((c) => c.recipe.id);
+      } catch {
+        setError('Could not load suggestions — try again');
+        setCandidates([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [week, day.date],
+  );
+
+  useEffect(() => {
+    void run('');
+    // day.date pins this effect to the day this sheet was opened for; run() itself is
+    // stable per (week, day.date) so it's safe to omit from the deps list here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [day.date]);
+
+  const submit = () => void run(text.trim());
+  const refresh = () => void run(text.trim(), shownIds.current);
+  const quickChip = (q: string) => {
+    setText(q);
+    void run(q);
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={
+        <span>
+          <span className="pwr-eyebrow" style={{ display: 'block', marginBottom: 2 }}>
+            Pick a dinner
+          </span>
+          {pickSheetTitle(day.date)}
+        </span>
+      }
+      icon="search"
+      size="lg"
+      placement={desktop ? 'center' : 'sheet'}
+      wideViewport={desktop}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '14px 18px 18px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 8px 6px 13px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px dashed var(--border-2)',
+            background: 'var(--surface-1)',
+            minHeight: 46,
+          }}
+        >
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+            }}
+            placeholder="What do you fancy? e.g. light, with fish…"
+            style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-1)', fontSize: 12.5, minWidth: 0 }}
+          />
+          <button
+            type="button"
+            aria-label="Search"
+            onClick={submit}
+            style={{ width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--solar-wash)', color: 'var(--solar)', border: 'none', cursor: 'pointer', flex: 'none' }}
+          >
+            <Icon name="arrow-right" size={15} />
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {PICK_QUICK_CHIPS.map((c) => (
+            <button
+              key={c.label}
+              type="button"
+              onClick={() => quickChip(c.text)}
+              style={{
+                fontSize: 11.5,
+                padding: '4px 10px',
+                borderRadius: 999,
+                border: '1px solid var(--border-2)',
+                background: 'var(--surface-2)',
+                color: 'var(--text-2)',
+                cursor: 'pointer',
+              }}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+
+        {loading && (
+          <div style={{ display: 'grid', gridTemplateColumns: desktop ? '1fr 1fr' : '1fr', gap: 8 }}>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <PickSkeletonCard key={i} />
+            ))}
+          </div>
+        )}
+
+        {!loading && error && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div>}
+
+        {!loading && !error && candidates && candidates.length === 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '20px 10px', textAlign: 'center' }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>Nothing matches that — try loosening the request</div>
+            <Button size="sm" variant="secondary" onClick={() => quickChip('')}>
+              Show good options
+            </Button>
+          </div>
+        )}
+
+        {!loading && !error && candidates && candidates.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: desktop ? '1fr 1fr' : '1fr', gap: 8 }}>
+            {candidates.map((c) => (
+              <PickCandidateCard key={c.recipe.id} candidate={c} showNutrition={showNutrition} busy={false} onPick={() => onPick(c.recipe.id)} />
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-start', paddingTop: 2 }}>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={loading}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12,
+              color: 'var(--text-2)',
+              background: 'none',
+              border: 'none',
+              cursor: loading ? 'default' : 'pointer',
+              padding: '4px 2px',
+            }}
+          >
+            <Icon name="rotate-ccw" size={13} /> Refresh
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -931,6 +1239,58 @@ function PreferencesModal({
           </div>
           <Switch checked={h.showNutritionOnCards} onChange={(e) => setH({ ...h, showNutritionOnCards: e.target.checked })} />
         </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0 4px' }}>
+          <div style={{ fontSize: 10.5, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--home)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="leaf" size={12} /> Nutrition &amp; sourcing
+          </div>
+          <button
+            type="button"
+            onClick={() => setH({ ...h, nutritionScales: { calories: 5, carbs: 5, fish: 5, veg: 5, protein: 5 } })}
+            style={{ border: 'none', background: 'none', color: 'var(--text-3)', fontSize: 11.5, cursor: 'pointer', padding: 0 }}
+          >
+            Reset
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '2px 0 8px' }}>
+          {(
+            [
+              ['calories', 'Calories'],
+              ['carbs', 'Carbs'],
+              ['fish', 'Fish'],
+              ['veg', 'Veg'],
+              ['protein', 'Protein'],
+            ] as Array<[NutritionScaleKey, string]>
+          ).map(([key, label]) => (
+            <div key={key}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-1)' }}>{label}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--solar)', fontWeight: 600 }}>{nutritionScaleLabel(key, h.nutritionScales[key])}</span>
+              </div>
+              <Slider
+                min={1}
+                max={10}
+                showValue={false}
+                value={h.nutritionScales[key]}
+                onChange={(v) => setH({ ...h, nutritionScales: { ...h.nutritionScales, [key]: v } })}
+              />
+            </div>
+          ))}
+        </div>
+        <div style={row}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>Seasonal &amp; local</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Prefer in-season produce (Costa Blanca)</div>
+          </div>
+          <Switch checked={h.seasonalLocal} onChange={(e) => setH({ ...h, seasonalLocal: e.target.checked })} />
+        </div>
+        <ChipsEditor
+          label="Boost ingredients (garden surplus)"
+          hint="We'll favour recipes that use these — e.g. aguacate, tomate"
+          values={h.boostIngredients ?? []}
+          tone="solar"
+          onChange={(boostIngredients) => setH({ ...h, boostIngredients })}
+        />
 
         <ChipsEditor
           label="Loves — always welcome"

@@ -117,6 +117,7 @@ import type {
   RecipeImportResponse,
   MealPlanResponse,
   PlanAskResponse,
+  PlanRequestResponse,
   StaplesItem,
   StaplesResponse,
   OrderLine,
@@ -794,6 +795,16 @@ export const api = {
       ),
     ask: (text: string) =>
       postJSON<PlanAskResponse>("/api/kitchen/plan/ask", { text }),
+    /* Per-day "Pick" (docs/46 §1c): top 6 candidates for one day; excludeIds powers Refresh. */
+    planRequest: (week: string, date: string, text?: string, excludeIds?: string[]) =>
+      postJSON<PlanRequestResponse>(
+        `/api/kitchen/plan/request?week=${enc(week)}`,
+        {
+          date,
+          ...(text ? { text } : {}),
+          ...(excludeIds && excludeIds.length ? { excludeIds } : {}),
+        },
+      ),
     staples: () => getJSON<StaplesResponse>("/api/kitchen/staples"),
     setStaples: (staples: StaplesItem[]) =>
       putJSON<StaplesResponse>("/api/kitchen/staples", { staples }),
