@@ -10,6 +10,7 @@ import type {
   ProductMapEntry,
   Recipe,
   RecipeIngredient,
+  RecipeSlim,
   Season,
 } from './types';
 
@@ -299,7 +300,7 @@ function proteinBias(nutrition: Recipe['nutrition'], scale: number): number {
 /** Fish recipes only: scale 1 ("avoid fish") penalizes, scale 10 ("fish-forward") boosts,
  *  scaling with distance from the neutral midpoint 5. Cap ±8 — the weekly mix (suggestWeek)
  *  does the heavier lifting on how OFTEN fish shows up across the week. */
-function fishBias(r: Recipe, scale: number): number {
+function fishBias(r: RecipeSlim, scale: number): number {
   if (!isFishRecipe(r)) return 0;
   const dist = (clampScale(scale) - 5) / 5; // -0.8 at scale 1 … +1 at scale 10
   return Math.max(-8, Math.min(8, dist * 8));
@@ -308,7 +309,7 @@ function fishBias(r: Recipe, scale: number): number {
 /** Continuous over vegRichness (0..1, share of produce ingredients): a veg-forward scale
  *  boosts produce-rich recipes and penalizes meat-forward ones, and vice versa for a
  *  meat-forward scale. Cap ±8. */
-function vegBias(r: Recipe, scale: number): number {
+function vegBias(r: RecipeSlim, scale: number): number {
   const dist = (clampScale(scale) - 5) / 5; // -0.8 at scale 1 … +1 at scale 10
   const richness = vegRichness(r); // 0..1
   return Math.max(-8, Math.min(8, dist * (richness - 0.5) * 16));
@@ -329,7 +330,7 @@ export function weeklyMixTarget(scale: number): number {
 
 /** Fish/veggie dinners already assigned in a plan (any day with a recipe, pinned or not —
  *  docs/46: "track counts incl. pinned days"). */
-export function weeklyMixCounts(plan: MealPlan, recipes: Recipe[]): { fish: number; veg: number } {
+export function weeklyMixCounts(plan: MealPlan, recipes: RecipeSlim[]): { fish: number; veg: number } {
   const byId = new Map(recipes.map((r) => [r.id, r]));
   let fish = 0;
   let veg = 0;
@@ -344,7 +345,7 @@ export function weeklyMixCounts(plan: MealPlan, recipes: Recipe[]): { fish: numb
 }
 
 /** Hard filters: allergies + diet restrictions (never suggested) + same-recipe-twice-in-a-week. */
-export function isEligible(r: Recipe, ctx: ScoreContext): boolean {
+export function isEligible(r: RecipeSlim, ctx: ScoreContext): boolean {
   if (ctx.usedThisWeek.has(r.id)) return false;
   const h = ctx.household;
   const names = ingredientNames(r);
@@ -361,7 +362,7 @@ export function isEligible(r: Recipe, ctx: ScoreContext): boolean {
  * rotation (3 weeks) · cuisine weight · weekday time budget (Mon–Thu) · goal fit ·
  * loves boost / dislikes penalty · season tags. Allergies are a hard filter (isEligible).
  */
-export function scoreRecipe(r: Recipe, ctx: ScoreContext): number {
+export function scoreRecipe(r: RecipeSlim, ctx: ScoreContext): number {
   const h = ctx.household;
   let score = 0;
 
@@ -456,7 +457,7 @@ const SWAP_MEMORY_CAP = 12;
  */
 export function suggestWeek(
   plan: MealPlan,
-  recipes: Recipe[],
+  recipes: RecipeSlim[],
   household: Household,
   now: Date,
   onlyDate?: string,
@@ -511,12 +512,12 @@ export function suggestWeek(
     };
     const replacedId = d.recipeId ?? null;
     const eligible = recipes.filter((r) => isEligible(r, ctx));
-    const best = (pool: Recipe[]): Recipe | undefined =>
+    const best = (pool: RecipeSlim[]): RecipeSlim | undefined =>
       pool
         .map((r) => ({ r, s: scoreRecipe(r, ctx) }))
         .sort((a, b) => b.s - a.s || a.r.id.localeCompare(b.r.id))[0]?.r;
 
-    let pick: Recipe | undefined;
+    let pick: RecipeSlim | undefined;
     if (!fullWeek) {
       // Single-slot Swap: exclude the current pick AND the rotation memory.
       let memory = d.recentSwapIds ?? [];
@@ -557,20 +558,20 @@ export function suggestWeek(
 // ---- Per-day request/pick (docs/46 §1c) -----------------------------------------------
 
 export interface PlanRequestCandidate {
-  recipe: Recipe;
+  recipe: RecipeSlim;
   /** Short human reason, e.g. "fish · in season · 24 min". */
   why: string;
 }
 
 /** Same >3-char word-overlap heuristic as /plan/ask's deterministic fallback (title/tags/
  *  cuisine/ingredient names), reused here for the per-day request's text path. */
-function keywordHits(r: Recipe, words: string[]): number {
+function keywordHits(r: RecipeSlim, words: string[]): number {
   if (!words.length) return 0;
   const hay = `${r.title} ${r.tags.join(' ')} ${r.cuisine} ${r.ingredients.map((i) => `${i.name} ${i.es}`).join(' ')}`.toLowerCase();
   return words.filter((w) => hay.includes(w)).length;
 }
 
-function planRequestWhy(r: Recipe, date: string, household: Household): string {
+function planRequestWhy(r: RecipeSlim, date: string, household: Household): string {
   const parts: string[] = [];
   if (isFishRecipe(r)) parts.push('fish');
   else if (isVeggieRecipe(r)) parts.push('veggie');
@@ -590,7 +591,7 @@ function planRequestWhy(r: Recipe, date: string, household: Household): string {
  * fail soft straight onto this order.
  */
 export function rankPlanRequestCandidates(
-  recipes: Recipe[],
+  recipes: RecipeSlim[],
   household: Household,
   plan: MealPlan,
   opts: { date: string; now: Date; text?: string; excludeIds?: string[] },

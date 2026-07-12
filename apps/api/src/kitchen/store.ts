@@ -214,7 +214,17 @@ function filePath(): string {
   return resolve(dataDir(), 'kitchen.json');
 }
 
+/** Resolved kitchen.json path (recipes-repo.ts's pre-sqlite backup step — read-only). */
+export function kitchenFilePath(): string {
+  return filePath();
+}
+
 let cache: KitchenData | null = null;
+
+/** Test-only: drop the in-memory cache so the next get()/update() re-reads KITCHEN_FILE. */
+export function _resetCacheForTests(): void {
+  cache = null;
+}
 
 function load(): KitchenData {
   if (cache) return cache;

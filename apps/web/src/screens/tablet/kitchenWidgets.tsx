@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { Badge, Button, Icon, Modal } from '../../components/ui';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
-import type { MealPlan, MealPlanDay, OrderLine, Recipe, StaplesItem } from '../../lib/types';
+import type { MealPlan, MealPlanDay, OrderLine, RecipeSlim, StaplesItem } from '../../lib/types';
 import { CUISINE_LABEL, RecipePhoto, clientIngredientKey } from '../kitchen/shared';
 
 /* ---- Date helpers ------------------------------------------------------------- */
@@ -30,11 +30,11 @@ function currentWeekStart(): string {
 /* ---- Shared data hook ------------------------------------------------------------ */
 
 export interface TonightData {
-  recipes: Recipe[];
+  recipes: RecipeSlim[];
   plan: MealPlan | null;
   today: string;
   day: MealPlanDay | null;
-  recipe: Recipe | null;
+  recipe: RecipeSlim | null;
   servingsSplit: string | null;
   refetchPlan: () => void;
   refetchRecipes: () => void;
@@ -43,7 +43,7 @@ export interface TonightData {
 
 /** Plan + recipes + household for the kiosk "Tonight" surfaces (one week, today). */
 export function useTonight(): TonightData {
-  const { data: recipesResp, refetch: refetchRecipes } = usePolling(api.kitchen.recipes, 60_000);
+  const { data: recipesResp, refetch: refetchRecipes } = usePolling(api.kitchen.recipesAll, 60_000);
   const { data: householdResp } = usePolling(api.kitchen.household, 0);
   const [plan, setPlan] = useState<MealPlan | null>(null);
   const week = currentWeekStart();
@@ -176,7 +176,7 @@ export function TonightCard({ t }: { t: TonightData }) {
 
 /* ---- Kiosk-friendly library picker ("Cook something else") -------------------------- */
 
-function RecipePicker({ recipes, onClose, onPick }: { recipes: Recipe[]; onClose: () => void; onPick: (r: Recipe) => void }) {
+function RecipePicker({ recipes, onClose, onPick }: { recipes: RecipeSlim[]; onClose: () => void; onPick: (r: RecipeSlim) => void }) {
   const [q, setQ] = useState('');
   const list = recipes.filter((r) => !q.trim() || r.title.toLowerCase().includes(q.trim().toLowerCase()));
   return (

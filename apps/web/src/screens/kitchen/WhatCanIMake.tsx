@@ -17,7 +17,7 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Badge, Button, Icon } from '../../components/ui';
 import { api } from '../../lib/api';
-import type { Recipe, WhatCanIMakeResult } from '../../lib/types';
+import type { Recipe, RecipeSlim, WhatCanIMakeResult } from '../../lib/types';
 import { RecipePhoto, RecipeQuickView } from './shared';
 import { buildPalette, normalizeIngredientText, SECTION_ORDER, type PaletteSection } from './ingredientPalette';
 
@@ -32,19 +32,21 @@ export function WhatCanIMake({
   onSaveAndPlan,
   onSaveAndCook,
 }: {
-  recipes: Recipe[];
+  recipes: RecipeSlim[];
   /** Intelligence master + recipe-generation feature both on (drives Invent/ask). */
   aiOn: boolean;
   wide: boolean;
   kiosk?: boolean;
-  onOpenRecipe: (r: Recipe) => void;
+  /** Cookbook results are RecipeSlim; AI candidates are full Recipe — only `.id` is needed
+   *  here (the caller re-fetches the full recipe by id, docs/46 §2a P2). */
+  onOpenRecipe: (r: Pick<Recipe, 'id'>) => void;
   showNutrition?: boolean;
   /** Save an AI candidate into the library → returns the saved recipe (refetches upstream). */
   onSaveCandidate?: (r: Recipe) => Promise<Recipe>;
   /** Save + plan into the first open day of the current week (Cooking only). */
-  onSaveAndPlan?: (r: Recipe) => Promise<void>;
+  onSaveAndPlan?: (r: Pick<Recipe, 'id'>) => Promise<void>;
   /** Save + open cooking mode (Cooking only; kiosk navigates via onOpenRecipe). */
-  onSaveAndCook?: (r: Recipe) => Promise<void>;
+  onSaveAndCook?: (r: Pick<Recipe, 'id'>) => Promise<void>;
 }) {
   const [chips, setChips] = useState<string[]>([]);
   const [draft, setDraft] = useState('');
@@ -59,6 +61,10 @@ export function WhatCanIMake({
   const [candidates, setCandidates] = useState<Recipe[] | null>(null);
   const [candidateNote, setCandidateNote] = useState<string | null>(null);
   const [savedIds, setSavedIds] = useState<Record<string, string>>({});
+  // The full saved Recipe (with steps) keyed by the candidate's temp gen_<n> id — byId only
+  // has the slim library index (docs/46 §2a P2), so re-opening an already-saved candidate
+  // in the same session needs its own cache to keep steps/ingredients available.
+  const [savedRecipes, setSavedRecipes] = useState<Record<string, Recipe>>({});
   const [openCandidate, setOpenCandidate] = useState<Recipe | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
@@ -130,11 +136,12 @@ export function WhatCanIMake({
   // actions (Add to week / Cook now) act on a real library id.
   const saveCandidate = async (cand: Recipe): Promise<Recipe | null> => {
     if (!onSaveCandidate) return null;
-    if (savedIds[cand.id]) return byId.get(savedIds[cand.id]) ?? null;
+    if (savedIds[cand.id]) return savedRecipes[cand.id] ?? cand;
     setSavingId(cand.id);
     try {
       const saved = await onSaveCandidate(cand);
       setSavedIds((m) => ({ ...m, [cand.id]: saved.id }));
+      setSavedRecipes((m) => ({ ...m, [cand.id]: saved }));
       return saved;
     } catch {
       setCandidateNote('Could not save that recipe — try again.');
@@ -187,7 +194,7 @@ export function WhatCanIMake({
   const hasIngredients = chips.length > 0 || draft.trim().length > 0;
 
   // A consistent recipe card used by both result groups + candidates.
-  const recipeCard = (r: Recipe, opts: { onClick: () => void; right?: ReactNode; subtitle?: string }) => (
+  const recipeCard = (r: RecipeSlim, opts: { onClick: () => void; right?: ReactNode; subtitle?: string }) => (
     <button
       key={r.id}
       type="button"
@@ -392,7 +399,7 @@ export function WhatCanIMake({
           {sectionHeading('sparkles', 'var(--solar)', 'Fresh ideas — tap to keep')}
           {candidates.map((cand) => {
             const savedId = savedIds[cand.id];
-            const saved = savedId ? byId.get(savedId) ?? cand : cand;
+            const saved = savedId ? savedRecipes[cand.id] ?? cand : cand;
             return recipeCard(cand, {
               onClick: () => setOpenCandidate(saved),
               subtitle: `${cand.prepMin + cand.cookMin} min · ${cand.ingredients.length} ingredients`,
@@ -428,14 +435,14 @@ export function WhatCanIMake({
             if (saved) setOpenCandidate(saved);
           }}
           onAddToWeek={async () => {
-            const saved = (await saveCandidate(openCandidate)) ?? (savedIds[openCandidate.id] ? byId.get(savedIds[openCandidate.id]) : null);
+            const saved = await saveCandidate(openCandidate);
             if (saved && onSaveAndPlan) {
               await onSaveAndPlan(saved);
               setOpenCandidate(null);
             }
           }}
           onCookNow={async () => {
-            const saved = (await saveCandidate(openCandidate)) ?? (savedIds[openCandidate.id] ? byId.get(savedIds[openCandidate.id]) : null);
+            const saved = await saveCandidate(openCandidate);
             if (!saved) return;
             if (onSaveAndCook) await onSaveAndCook(saved);
             else onOpenRecipe(saved); // kiosk: navigate to cook

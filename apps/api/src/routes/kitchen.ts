@@ -41,6 +41,8 @@ import {
 import { syncOrderStatus } from '../kitchen/order-status';
 import { importRecipeFromUrl } from '../kitchen/import';
 import { mapRegulars } from '../kitchen/regulars';
+import * as recipesRepo from '../kitchen/recipes-repo';
+import * as libraryGen from '../kitchen/library-generate';
 import type {
   Cuisine,
   Household,
@@ -168,9 +170,42 @@ kitchenRouter.put(
 
 // ---- Recipes ---------------------------------------------------------------------------
 
+// GET /recipes — search/pagination at scale (docs/46 §2b). `all=slim` returns the FULL slim
+// index unpaginated (the planner/engine's source; also handy for small libraries). Otherwise
+// paginated (default pageSize 50) + filtered, FTS-backed when `q` is given. Response always
+// includes `total` (and `page`/`pageSize` for the paginated shape) alongside `recipes`.
 kitchenRouter.get(
   '/recipes',
-  wrap(() => ({ ts: ts(), recipes: kitchen.get().recipes })),
+  wrap((req) => {
+    const q = req.query;
+    if (String(q.all ?? '') === 'slim') {
+      const recipes = recipesRepo.listAllSlim();
+      return { ts: ts(), recipes, total: recipes.length };
+    }
+    const cuisine = typeof q.cuisine === 'string' && CUISINES.includes(q.cuisine as Cuisine) ? (q.cuisine as Cuisine) : undefined;
+    const result = recipesRepo.search({
+      ...(typeof q.q === 'string' && q.q.trim() ? { q: q.q.trim() } : {}),
+      ...(cuisine ? { cuisine } : {}),
+      ...(typeof q.tag === 'string' && q.tag.trim() ? { tag: q.tag.trim() } : {}),
+      ...(typeof q.maxMin === 'string' && Number.isFinite(Number(q.maxMin)) ? { maxMin: Number(q.maxMin) } : {}),
+      ...(String(q.fish ?? '') === 'true' ? { fish: true } : {}),
+      ...(String(q.veggie ?? '') === 'true' ? { veggie: true } : {}),
+      ...(typeof q.page === 'string' ? { page: Number(q.page) } : {}),
+      ...(typeof q.pageSize === 'string' ? { pageSize: Number(q.pageSize) } : {}),
+    });
+    return { ts: ts(), recipes: result.items, total: result.total, page: result.page, pageSize: result.pageSize };
+  }),
+);
+
+// Full recipe (with steps) by id — cook mode / quick-view fetch this on demand since the
+// list/search paths above only carry the slim shape (docs/46 §2a).
+kitchenRouter.get(
+  '/recipes/:id',
+  wrap((req) => {
+    const recipe = recipesRepo.getFull(String(req.params.id));
+    if (!recipe) throw badInput(`recipe ${req.params.id} not found`);
+    return { ts: ts(), recipe };
+  }),
 );
 
 function sanitizeRecipe(body: Partial<Recipe>, existing?: Recipe): Omit<Recipe, 'id' | 'createdAt' | 'updatedAt'> {
@@ -239,9 +274,7 @@ kitchenRouter.post(
     const clean = sanitizeRecipe((req.body ?? {}) as Partial<Recipe>);
     const now = ts();
     const recipe: Recipe = { ...clean, id: kitchen.newId('recipe'), createdAt: now, updatedAt: now };
-    kitchen.update((d) => {
-      d.recipes.push(recipe);
-    });
+    recipesRepo.insertRecipe(recipe);
     return { ts: now, recipe };
   }),
 );
@@ -258,9 +291,7 @@ kitchenRouter.post(
     }
     const now = ts();
     const recipe: Recipe = { ...result.recipe, id: kitchen.newId('recipe'), createdAt: now, updatedAt: now };
-    kitchen.update((d) => {
-      d.recipes.push(recipe);
-    });
+    recipesRepo.insertRecipe(recipe);
     logEvent({
       class: 'system',
       category: 'kitchen',
@@ -277,30 +308,23 @@ kitchenRouter.put(
   '/recipes/:id',
   wrap((req) => {
     const id = String(req.params.id);
-    const updated = kitchen.update((d) => {
-      const idx = d.recipes.findIndex((r) => r.id === id);
-      if (idx < 0) return null;
-      const merged: Recipe = {
-        ...sanitizeRecipe((req.body ?? {}) as Partial<Recipe>, d.recipes[idx]),
-        id,
-        createdAt: d.recipes[idx].createdAt,
-        updatedAt: ts(),
-      };
-      d.recipes[idx] = merged;
-      return merged;
-    });
-    if (!updated) throw badInput(`recipe ${id} not found`);
-    return { ts: ts(), recipe: updated };
+    const existing = recipesRepo.getFull(id);
+    if (!existing) throw badInput(`recipe ${id} not found`);
+    const merged: Recipe = {
+      ...sanitizeRecipe((req.body ?? {}) as Partial<Recipe>, existing),
+      id,
+      createdAt: existing.createdAt,
+      updatedAt: ts(),
+    };
+    recipesRepo.updateRecipe(merged);
+    return { ts: ts(), recipe: merged };
   }),
 );
 
 kitchenRouter.delete(
   '/recipes/:id',
   wrap((req) => {
-    const id = String(req.params.id);
-    kitchen.update((d) => {
-      d.recipes = d.recipes.filter((r) => r.id !== id);
-    });
+    recipesRepo.deleteRecipe(String(req.params.id));
     return { ts: ts(), ok: true };
   }),
 );
@@ -316,14 +340,19 @@ kitchenRouter.post(
     const rating = raw === 'up' || raw === 'meh' || raw === 'down' ? raw : null;
     const value = rating === 'up' ? 1 : rating === 'down' ? -1 : rating === 'meh' ? 0 : null;
     const now = ts();
-    const updated = kitchen.update((d) => {
-      const r = d.recipes.find((x) => x.id === id);
-      if (!r) return null;
-      r.lastCookedAt = now;
-      if (value != null) r.ratings = { ...(r.ratings ?? {}), [now]: value };
-      r.updatedAt = now;
-      return r;
-    });
+    const existing = recipesRepo.getFull(id);
+    const updated = existing
+      ? (() => {
+          const r: Recipe = {
+            ...existing,
+            lastCookedAt: now,
+            updatedAt: now,
+            ...(value != null ? { ratings: { ...(existing.ratings ?? {}), [now]: value } } : {}),
+          };
+          recipesRepo.updateRecipe(r);
+          return r;
+        })()
+      : null;
     if (!updated) throw badInput(`recipe ${id} not found`);
     logEvent({
       class: 'action',
@@ -357,7 +386,7 @@ kitchenRouter.post(
   '/what-can-i-make',
   wrap((req) => {
     const terms = onHandParam(req);
-    return { ts: ts(), results: rankRecipesByCoverage(kitchen.get().recipes, terms) };
+    return { ts: ts(), results: rankRecipesByCoverage(recipesRepo.listAllSlim(), terms) };
   }),
 );
 
@@ -409,9 +438,12 @@ kitchenRouter.post(
     if (!claude.isFeatureEnabled('cookingSuggestions')) {
       return { ts: ts(), ok: false, reason: 'intelligence-off', libraryIds: [], ideas: [] };
     }
-    const d = kitchen.get();
-    const h = d.household;
-    const library = d.recipes
+    const h = kitchen.get().household;
+    // AI prompts NEVER embed the full library (docs/46 §2b) — retrieval-cap to the top ≤120
+    // slim entries most relevant to the question (FTS/keyword-scored), same idiom /plan/ask
+    // uses below.
+    const pool = recipesRepo.promptPool(question, 120);
+    const library = pool
       .map((r) => `${r.id} | ${r.title} | ${r.cuisine} | ${r.prepMin + r.cookMin} min | ${r.nutrition?.kcal ?? '?'} kcal | ${r.tags.join(',')}`)
       .join('\n');
     try {
@@ -431,7 +463,7 @@ kitchenRouter.post(
           (h.kids > 0 ? `\nCooking for ${h.adults} adults + ${h.kids} kids — keep it kid-friendly.` : ''),
         maxTokens: 700,
       });
-      const clean = cleanAnswer(parsed, d.recipes);
+      const clean = cleanAnswer(parsed, pool);
       if (!clean.libraryIds.length && !clean.ideas.length) {
         return { ts: ts(), ok: false, reason: 'no-answer', libraryIds: [], ideas: [] };
       }
@@ -519,6 +551,67 @@ kitchenRouter.post(
   }),
 );
 
+// ---- Bulk library generation (docs/46 §2c — admin only, Message Batches API) --------------
+// A long-running background job (kitchen/library-generate.ts): start/status/cancel here are
+// thin wrappers — all the coverage-plan/dispatch/poll/dedupe logic lives in that module so it
+// stays independently unit-testable with fixture batch results (no live network in tests).
+
+function libraryStatusPayload() {
+  const job = libraryGen.jobStatus();
+  return {
+    ts: ts(),
+    job,
+    libraryCount: recipesRepo.count(),
+    configured: claude.isConfigured(),
+  };
+}
+
+kitchenRouter.get('/library/generate/status', requireAdmin, wrap(() => libraryStatusPayload()));
+
+kitchenRouter.post(
+  '/library/generate',
+  requireAdmin,
+  wrap((req) => {
+    const b = (req.body ?? {}) as { target?: unknown; capEur?: unknown };
+    const target = typeof b.target === 'number' && Number.isFinite(b.target) ? b.target : 2000;
+    const capEur = typeof b.capEur === 'number' && Number.isFinite(b.capEur) ? b.capEur : undefined;
+    const result = libraryGen.startGeneration(target, capEur);
+    if (!result.ok) {
+      return { ok: false, reason: result.reason, ...libraryStatusPayload() };
+    }
+    void libraryGen.tick(); // kick the coordinator now rather than waiting for the next poll tick
+    logEvent({
+      class: 'action',
+      category: 'kitchen',
+      severity: 'low',
+      summary: `Recipe library generation started — target ${Math.round(target)}`,
+      trigger: { source: 'user' },
+      ok: true,
+      data: { target: Math.round(target) },
+    });
+    return { ok: true, ...libraryStatusPayload() };
+  }),
+);
+
+kitchenRouter.post(
+  '/library/generate/cancel',
+  requireAdmin,
+  wrap(() => {
+    const result = libraryGen.cancelGeneration();
+    if (result.ok) {
+      logEvent({
+        class: 'action',
+        category: 'kitchen',
+        severity: 'low',
+        summary: 'Recipe library generation cancelled',
+        trigger: { source: 'user' },
+        ok: true,
+      });
+    }
+    return { ...result, ...libraryStatusPayload() };
+  }),
+);
+
 // ---- Week planner -----------------------------------------------------------------------
 
 function planFor(weekStart: string): MealPlan {
@@ -580,7 +673,7 @@ kitchenRouter.put(
         }
       }
       if (b.recipeId !== undefined && b.recipeId !== null) {
-        if (!d.recipes.some((r) => r.id === b.recipeId)) throw badInput(`recipe ${b.recipeId} not found`);
+        if (!recipesRepo.exists(String(b.recipeId))) throw badInput(`recipe ${b.recipeId} not found`);
         day.recipeId = b.recipeId;
         day.pinned = true; // a hand-pick is a pin — it survives re-suggest
         delete day.skip;
@@ -606,7 +699,7 @@ kitchenRouter.post(
     planFor(weekStart);
     const d = kitchen.get();
     const before = d.plans[weekStart].days.map((x) => x.recipeId ?? null).join('|');
-    const suggested = suggestWeek(d.plans[weekStart], d.recipes, d.household, new Date(), b.day);
+    const suggested = suggestWeek(d.plans[weekStart], recipesRepo.listAllSlim(), d.household, new Date(), b.day);
     kitchen.update((k) => {
       k.plans[weekStart] = suggested;
     });
@@ -628,13 +721,13 @@ kitchenRouter.post(
   wrap(async (req) => {
     const text = String((req.body as { text?: unknown })?.text ?? '').trim();
     if (!text) throw badInput('body.text required');
-    const d = kitchen.get();
     const fallback = () => {
       const words = text
         .toLowerCase()
         .split(/\s+/)
         .filter((w) => w.length > 3);
-      const scored = d.recipes
+      const scored = recipesRepo
+        .listAllSlim()
         .map((r) => {
           const hay = `${r.title} ${r.tags.join(' ')} ${r.cuisine} ${r.ingredients.map((i) => `${i.name} ${i.es}`).join(' ')}`.toLowerCase();
           return { r, s: words.filter((w) => hay.includes(w)).length };
@@ -647,7 +740,11 @@ kitchenRouter.post(
     if (!claude.isFeatureEnabled('plannerRequestBox')) {
       return { ts: ts(), ok: false, reason: 'intelligence-off', candidateIds: fallback() };
     }
-    const library = d.recipes
+    // AI prompts NEVER embed the full library (docs/46 §2b) — retrieval-cap to the top ≤120
+    // slim entries relevant to the request; candidate ids are validated against this SAME
+    // pool below (Claude can only cite what it was shown).
+    const pool = recipesRepo.promptPool(text, 120);
+    const library = pool
       .map((r) => `${r.id} | ${r.title} | ${r.cuisine} | ${r.prepMin + r.cookMin} min | ${r.nutrition?.kcal ?? '?'} kcal | ${r.tags.join(',')}`)
       .join('\n');
     const parsed = await claude.completeJSON<{ candidateIds?: string[]; note?: string }>({
@@ -657,7 +754,8 @@ kitchenRouter.post(
       prompt: `Library:\n${library}\n\nRequest: ${text}`,
       maxTokens: 400,
     });
-    const valid = (parsed?.candidateIds ?? []).filter((id) => d.recipes.some((r) => r.id === id));
+    const poolIds = new Set(pool.map((r) => r.id));
+    const valid = (parsed?.candidateIds ?? []).filter((id) => poolIds.has(id));
     if (!valid.length) return { ts: ts(), ok: false, reason: 'no-match', candidateIds: fallback() };
     return { ts: ts(), ok: true, candidateIds: valid.slice(0, 5), note: parsed?.note };
   }),
@@ -684,7 +782,7 @@ kitchenRouter.post(
     const plan = d.plans[weekStart];
     if (!plan.days.some((day) => day.date === date)) throw badInput(`date ${date} not in week ${weekStart}`);
 
-    const ranked = rankPlanRequestCandidates(d.recipes, d.household, plan, {
+    const ranked = rankPlanRequestCandidates(recipesRepo.listAllSlim(), d.household, plan, {
       date,
       now: new Date(),
       ...(text ? { text } : {}),
@@ -860,7 +958,7 @@ kitchenRouter.post(
     const totals = new Map<string, Agg>();
     for (const day of plan.days) {
       if (day.skip || !day.recipeId) continue;
-      const recipe = d.recipes.find((r) => r.id === day.recipeId);
+      const recipe = recipesRepo.getFull(day.recipeId); // ingredients needed to explode the order — full fetch by id
       if (!recipe) continue;
       const scale = day.servings / recipe.servingsBase;
       for (const ing of recipe.ingredients) {
