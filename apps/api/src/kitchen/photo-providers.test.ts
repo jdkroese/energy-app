@@ -118,6 +118,50 @@ test('candidateIsRelevant: is diacritic/case-insensitive and does a basic EN/ES 
   assert.equal(candidateIsRelevant('PAELLAS valencianas', ['paëlla valenciana']), true);
 });
 
+// ---- skipUrls (docs/48 W1 — dead-URL wedge guard) ------------------------------------------------
+
+test('skipUrls: a known-dead top candidate is passed over — the next relevant result is picked instead', async () => {
+  reset();
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) return commonsNoHit();
+    return fakeResponse(200, {
+      results: [
+        { url: 'https://example.com/dead.jpg', title: 'Chicken teriyaki closeup', width: 800, height: 600 },
+        { url: 'https://example.com/alive.jpg', title: 'Chicken teriyaki plate', creator: 'Ana', width: 800, height: 600 },
+      ],
+    });
+  });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+    skipUrls: new Set(['https://example.com/dead.jpg']),
+  });
+  assert.equal(outcome.kind, 'found');
+  if (outcome.kind === 'found') assert.equal(outcome.result.url, 'https://example.com/alive.jpg', 'the dead top hit was skipped');
+});
+
+test('skipUrls: when EVERY relevant candidate is known-dead the search is a no-hit, never a repeat pick', async () => {
+  reset();
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) return commonsNoHit();
+    return fakeResponse(200, {
+      results: [{ url: 'https://example.com/dead.jpg', title: 'Chicken teriyaki plate', width: 800, height: 600 }],
+    });
+  });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+    skipUrls: new Set(['https://example.com/dead.jpg']),
+  });
+  assert.equal(outcome.kind, 'no-hit');
+});
+
 // ---- throttle / backoff (pure, injected clock) -----------------------------------------------
 
 test('canRequestNow: false before minInterval has elapsed, true after', () => {

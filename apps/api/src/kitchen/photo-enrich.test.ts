@@ -13,7 +13,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { tick } from './photo-enrich';
+import { tick, _resetFailuresForTests } from './photo-enrich';
 import * as recipesRepo from './recipes-repo';
 import { update as updateAppStore } from '../store';
 import {
@@ -32,6 +32,7 @@ function freshEnv(): void {
   recipesRepo._resetForTests();
   _resetProviderThrottle();
   _resetCacheThrottle();
+  _resetFailuresForTests();
   _setProviderClock();
   _setCacheClock();
   _setProviderFetch();
@@ -40,6 +41,13 @@ function freshEnv(): void {
     s.kitchen.intelligence.pexelsApiKey = null;
     s.kitchen.openverseBudget = { day: '', used: 0 };
   });
+}
+
+/** Multi-tick W1 tests need each tick to actually reach the network — clear the search AND
+ *  download pacing between ticks (the real coordinator gets this for free from wall time). */
+function resetThrottlesBetweenTicks(): void {
+  _resetProviderThrottle();
+  _resetCacheThrottle();
 }
 
 function recipe(id: string, overrides: Partial<Recipe> = {}): Recipe {
@@ -332,4 +340,145 @@ test('tick: backfill — a download failure on a hotlinked candidate leaves it h
 
   const full = recipesRepo.getFull('r1');
   assert.equal(full?.photo, 'https://images.example.com/rotten.jpg', 'download failed — still hotlinked, not nulled out');
+});
+
+// ---- Dead-URL wedge guard (docs/48 W1 review fix) ------------------------------------------------
+
+test('W1: a dead top hit is remembered — the NEXT relevant result gets picked on the following tick', async () => {
+  freshEnv();
+  recipesRepo.insertRecipe(recipe('r1', { title: 'Tortilla de patatas' }));
+  installFakeFetch((url) => {
+    if (url.includes('commons.wikimedia.org')) return { status: 200, json: { query: { pages: {} } } };
+    if (url.includes('api.openverse.org')) {
+      return {
+        status: 200,
+        json: {
+          results: [
+            { url: 'https://example.com/dead.jpg', title: 'Tortilla de patatas closeup', width: 800, height: 600 },
+            { url: 'https://example.com/alive.jpg', title: 'Tortilla de patatas plate', creator: 'Ana', width: 800, height: 600 },
+          ],
+        },
+      };
+    }
+    if (url === 'https://example.com/dead.jpg') return { status: 404, bytes: Buffer.alloc(0) }; // INVALID download
+    return { status: 200, bytes: BIG_ENOUGH, contentType: 'image/jpeg' };
+  });
+
+  await tick(); // picks dead.jpg (top hit) → download invalid → URL recorded, recipe untouched
+  let full = recipesRepo.getFull('r1');
+  assert.equal(full?.photo, null, 'first tick: invalid download stores nothing');
+  assert.equal(full?.photoTriedAt, null, 'one invalid download is not yet a give-up');
+
+  resetThrottlesBetweenTicks();
+  await tick(); // dead.jpg is now in skipUrls → alive.jpg gets its chance and caches fine
+
+  full = recipesRepo.getFull('r1');
+  assert.equal(full?.photo, '/api/kitchen/photos/r1', 'second tick: the NEXT relevant candidate was picked and cached');
+  assert.equal(full?.photoCredit?.name, 'Ana');
+});
+
+test('W1: after 3 invalid downloads the recipe is marked tried (functional no-hit) and the queue moves on', async () => {
+  freshEnv();
+  recipesRepo.insertRecipe(recipe('all-dead', { title: 'Apple dish' })); // sorts first — would wedge the queue without W1
+  recipesRepo.insertRecipe(recipe('healthy', { title: 'Zebra dish' }));
+  installFakeFetch((url) => {
+    if (url.includes('commons.wikimedia.org')) return { status: 200, json: { query: { pages: {} } } };
+    if (url.includes('api.openverse.org')) {
+      const q = decodeURIComponent(url);
+      if (q.includes('Apple dish')) {
+        return {
+          status: 200,
+          json: {
+            results: [
+              { url: 'https://example.com/dead1.jpg', title: 'Apple dish one', width: 800, height: 600 },
+              { url: 'https://example.com/dead2.jpg', title: 'Apple dish two', width: 800, height: 600 },
+              { url: 'https://example.com/dead3.jpg', title: 'Apple dish three', width: 800, height: 600 },
+            ],
+          },
+        };
+      }
+      return { status: 200, json: { results: [{ url: 'https://example.com/zebra.jpg', title: 'Zebra dish plate', width: 800, height: 600 }] } };
+    }
+    if (url.startsWith('https://example.com/dead')) return { status: 200, bytes: Buffer.alloc(100), contentType: 'image/jpeg' }; // <10KB → INVALID
+    return { status: 200, bytes: BIG_ENOUGH, contentType: 'image/jpeg' };
+  });
+
+  for (let i = 0; i < 3; i++) {
+    await tick(); // each tick: next dead URL picked (earlier ones skipped) → invalid download
+    resetThrottlesBetweenTicks();
+  }
+
+  const dead = recipesRepo.getFull('all-dead');
+  assert.equal(dead?.photo, null);
+  assert.ok(dead?.photoTriedAt, 'third invalid download marks the recipe tried — a functional no-hit');
+
+  await tick(); // the queue is unwedged: the NEXT recipe gets processed
+
+  const healthy = recipesRepo.getFull('healthy');
+  assert.equal(healthy?.photo, '/api/kitchen/photos/healthy', 'the recipe behind the dead one finally gets its photo');
+});
+
+test('W1: cache-only — after 3 invalid downloads the recipe is skipped and the item behind it proceeds', async () => {
+  freshEnv();
+  recipesRepo.insertRecipe(
+    recipe('dead-hotlink', {
+      title: 'Apple dish', // sorts first inside the priority-2 bucket
+      photo: 'https://images.example.com/dead.jpg',
+      photoCredit: { name: 'Ana', url: 'https://x.test', provider: 'openverse' },
+    }),
+  );
+  recipesRepo.insertRecipe(
+    recipe('good-hotlink', {
+      title: 'Zebra dish',
+      photo: 'https://images.example.com/alive.jpg',
+      photoCredit: { name: 'Bob', url: 'https://x.test/b', provider: 'openverse' },
+    }),
+  );
+  installFakeFetch((url) => {
+    if (url === 'https://images.example.com/dead.jpg') return { status: 404, bytes: Buffer.alloc(0) }; // INVALID forever
+    return { status: 200, bytes: BIG_ENOUGH, contentType: 'image/jpeg' };
+  });
+
+  for (let i = 0; i < 3; i++) {
+    await tick(); // dead-hotlink is first in the bucket — invalid each time
+    resetThrottlesBetweenTicks();
+  }
+  let deadHotlink = recipesRepo.getFull('dead-hotlink');
+  assert.equal(deadHotlink?.photo, 'https://images.example.com/dead.jpg', 'still hotlinked — cache-only never nulls a photo');
+
+  await tick(); // 3 invalids reached → dead-hotlink skipped, good-hotlink gets cached
+
+  const goodHotlink = recipesRepo.getFull('good-hotlink');
+  assert.equal(goodHotlink?.photo, '/api/kitchen/photos/good-hotlink', 'the item behind the dead hotlink proceeds');
+  deadHotlink = recipesRepo.getFull('dead-hotlink');
+  assert.equal(deadHotlink?.photo, 'https://images.example.com/dead.jpg', 'the skipped recipe keeps rendering via its hotlink');
+});
+
+test('W1: throttled/network-error downloads do NOT count toward the invalid limit or the skip list', async () => {
+  freshEnv();
+  recipesRepo.insertRecipe(recipe('r1', { title: 'Tortilla de patatas' }));
+  let downloadAttempts = 0;
+  installFakeFetch((url) => {
+    if (url.includes('commons.wikimedia.org')) return { status: 200, json: { query: { pages: {} } } };
+    if (url.includes('api.openverse.org')) {
+      return { status: 200, json: { results: [{ url: 'https://example.com/flaky.jpg', title: 'Tortilla de patatas plate', width: 800, height: 600 }] } };
+    }
+    // The image download itself: 3 network exceptions, then success — a transient blip, not a dead URL.
+    downloadAttempts++;
+    if (downloadAttempts <= 3) throw new Error('ECONNRESET');
+    return { status: 200, bytes: BIG_ENOUGH, contentType: 'image/jpeg' };
+  });
+
+  for (let i = 0; i < 3; i++) {
+    await tick(); // search finds flaky.jpg, download throws (network 'error') — nothing counted
+    resetThrottlesBetweenTicks();
+    const mid = recipesRepo.getFull('r1');
+    assert.equal(mid?.photoTriedAt, null, `network errors never mark the recipe tried (attempt ${i + 1})`);
+  }
+
+  await tick(); // 4th attempt: the SAME url is retried (never skip-listed) and now succeeds
+
+  const full = recipesRepo.getFull('r1');
+  assert.equal(full?.photo, '/api/kitchen/photos/r1', 'the same URL was retried after transient errors and cached fine');
+  assert.equal(full?.photoTriedAt, null);
 });

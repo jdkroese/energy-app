@@ -358,6 +358,34 @@ test('nextPhotoWorkItem: a manually-entered remote photo (no credit, source != u
   assert.equal(repo.nextPhotoWorkItem(Date.now(), 30 * 24 * 60 * 60 * 1000), null);
 });
 
+test('nextPhotoWorkItem: skipCacheOnlyIds excludes cache-only items (both buckets) but never search-mode ones', () => {
+  freshEnv();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  repo.insertRecipe(
+    recipe('hotlinked', {
+      title: 'Apple dish',
+      photo: 'https://images.example.com/dead.jpg',
+      photoCredit: { name: 'Ana', url: 'https://x.test', provider: 'openverse' },
+    }),
+  );
+  repo.insertRecipe(recipe('imported', { title: 'Mango dish', photo: 'https://cdn.example.com/og.jpg', source: 'url', sourceUrl: 'https://x.test' }));
+
+  const skip = new Set(['hotlinked']);
+  const item = repo.nextPhotoWorkItem(Date.now(), thirtyDays, skip);
+  assert.equal(item?.recipe.id, 'imported', 'the skipped priority-2 item is passed over; priority 3 proceeds');
+
+  skip.add('imported');
+  assert.equal(repo.nextPhotoWorkItem(Date.now(), thirtyDays, skip), null, 'both cache-only items skipped → nothing to do');
+
+  // A photo-null (search-mode) recipe is NEVER filtered by the skip set — its give-up
+  // mechanism is photoTriedAt, owned by photo-enrich.ts.
+  repo.insertRecipe(recipe('needs-search', { title: 'Zebra dish', photo: null }));
+  skip.add('needs-search');
+  const searchItem = repo.nextPhotoWorkItem(Date.now(), thirtyDays, skip);
+  assert.equal(searchItem?.mode, 'search');
+  assert.equal(searchItem?.recipe.id, 'needs-search');
+});
+
 test('nextPhotoWorkItem: null when every recipe is cached, or in its cool-off, or otherwise not queue-eligible', () => {
   freshEnv();
   const now = Date.now();

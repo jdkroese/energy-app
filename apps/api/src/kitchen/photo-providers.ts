@@ -466,7 +466,12 @@ type AttemptOutcome =
   | { outcome: 'stop'; detail: string } // rate-limited — provider now backing off
   | { outcome: 'error'; detail: string };
 
-async function attemptProviderQuery(spec: ProviderSpec, query: string, guardTexts: string[]): Promise<AttemptOutcome> {
+async function attemptProviderQuery(
+  spec: ProviderSpec,
+  query: string,
+  guardTexts: string[],
+  skipUrls: Set<string> | undefined,
+): Promise<AttemptOutcome> {
   const raw = await spec.call(query);
   if (spec.kind === 'openverse') recordOpenverseUse(clock());
 
@@ -482,8 +487,12 @@ async function attemptProviderQuery(spec: ProviderSpec, query: string, guardText
   if (raw.kind === 'network-error') return { outcome: 'error', detail: raw.detail ?? 'network' };
   if (raw.kind === 'no-hit') return { outcome: 'no-hit' };
 
-  const hit = (raw.candidates ?? []).find((c) => candidateIsRelevant(c.title, guardTexts));
-  if (!hit) return { outcome: 'no-hit' }; // candidates existed but none passed the guard
+  // skipUrls (docs/48 W1 review fix): URLs whose DOWNLOAD came back invalid on an earlier tick
+  // (dead link / html error page / <10KB). Without this, the deterministic search + deterministic
+  // first-pick would re-choose the same dead top hit forever — one bad URL wedging the entire
+  // photo queue. Skipping it here lets the NEXT plausible+relevant candidate get its chance.
+  const hit = (raw.candidates ?? []).find((c) => candidateIsRelevant(c.title, guardTexts) && !skipUrls?.has(c.url));
+  if (!hit) return { outcome: 'no-hit' }; // candidates existed but none passed the guard (or all known-dead)
   return {
     outcome: 'found',
     result: { url: hit.url, credit: hit.credit, creditUrl: hit.creditUrl, provider: spec.kind, ...(hit.license ? { license: hit.license } : {}) },
@@ -506,6 +515,9 @@ export async function searchFoodPhoto(opts: {
   fallbackQuery: string | null;
   fallbackGuardText: string | null;
   pexelsApiKey: string | null;
+  /** URLs already proven un-downloadable for this recipe (docs/48 W1) — candidates with these
+   *  urls are passed over so a dead top hit can't wedge the recipe (and the queue) forever. */
+  skipUrls?: Set<string>;
 }): Promise<SearchOutcome> {
   const guardBase = [opts.recipeTitle];
   const specs = providerCascade(opts.pexelsApiKey);
@@ -519,7 +531,7 @@ export async function searchFoodPhoto(opts: {
     spec.state.lastRequestAt = now0;
     anyAttempted = true;
 
-    const first = await attemptProviderQuery(spec, opts.primaryQuery, guardBase);
+    const first = await attemptProviderQuery(spec, opts.primaryQuery, guardBase, opts.skipUrls);
     if (first.outcome === 'found') return { kind: 'found', result: first.result };
     if (first.outcome === 'stop') {
       lastError = first.detail;
@@ -532,7 +544,7 @@ export async function searchFoodPhoto(opts: {
       // its throttle clock again so the next turn waits a full interval from THIS request.
       spec.state.lastRequestAt = clock();
       const guardTexts2 = opts.fallbackGuardText ? [...guardBase, opts.fallbackGuardText] : guardBase;
-      const second = await attemptProviderQuery(spec, opts.fallbackQuery, guardTexts2);
+      const second = await attemptProviderQuery(spec, opts.fallbackQuery, guardTexts2, opts.skipUrls);
       if (second.outcome === 'found') return { kind: 'found', result: second.result };
       if (second.outcome === 'stop') {
         lastError = second.detail;

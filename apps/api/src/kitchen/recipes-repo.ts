@@ -359,8 +359,14 @@ export type PhotoWorkItem =
  * (/recipes/*.jpg) are already local and never enter this queue. Stable order (by title)
  * within each priority bucket so a restart resumes predictably. This query IS the queue
  * (docs/47 cross-cutting note) — no separate job state to persist or resume.
+ *
+ * `skipCacheOnlyIds` (docs/48 W1): recipe ids whose existing remote URL repeatedly downloaded
+ * as invalid this process lifetime — excluded from the cache-only buckets so one permanently
+ * dead hotlink can't sit at the front of the backfill queue forever. Harmless to skip: the
+ * recipe keeps rendering via its hotlink, and the in-memory set resets on restart. Search-mode
+ * candidates are NOT filtered here — their give-up path is photoTriedAt (photo-enrich.ts).
  */
-export function nextPhotoWorkItem(now: number, retryAfterMs: number): PhotoWorkItem | null {
+export function nextPhotoWorkItem(now: number, retryAfterMs: number, skipCacheOnlyIds?: Set<string>): PhotoWorkItem | null {
   const all = [...listAllSlim()].sort((a, b) => a.title.localeCompare(b.title));
 
   for (const r of all) {
@@ -374,12 +380,14 @@ export function nextPhotoWorkItem(now: number, retryAfterMs: number): PhotoWorkI
 
   for (const r of all) {
     if (!isRemotePhotoUrl(r.photo) || !r.photoCredit?.provider) continue;
+    if (skipCacheOnlyIds?.has(r.id)) continue;
     return { mode: 'cache-only', recipe: r };
   }
 
   for (const r of all) {
     if (!isRemotePhotoUrl(r.photo) || r.photoCredit?.provider) continue; // priority 2 already covers credited ones
     if (r.source !== 'url') continue; // only og:image imports land here — nothing else is ever a bare remote URL
+    if (skipCacheOnlyIds?.has(r.id)) continue;
     return { mode: 'cache-only', recipe: r };
   }
 
