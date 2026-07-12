@@ -46,6 +46,8 @@ interface Row {
   ratings_json: string | null;
   created_at: string;
   updated_at: string;
+  photo_credit_json: string | null;
+  photo_tried_at: string | null;
 }
 
 function safeParse<T>(s: string | null | undefined, fallback: T): T {
@@ -79,6 +81,8 @@ function rowToFull(row: Row): Recipe {
     ...(row.ratings_json ? { ratings: safeParse(row.ratings_json, undefined) } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.photo_credit_json ? { photoCredit: safeParse(row.photo_credit_json, undefined) } : {}),
+    photoTriedAt: row.photo_tried_at ?? null,
   };
 }
 
@@ -114,6 +118,8 @@ function toRow(r: Recipe): Row {
     ratings_json: r.ratings ? JSON.stringify(r.ratings) : null,
     created_at: r.createdAt,
     updated_at: r.updatedAt,
+    photo_credit_json: r.photoCredit ? JSON.stringify(r.photoCredit) : null,
+    photo_tried_at: r.photoTriedAt ?? null,
   };
 }
 
@@ -121,6 +127,7 @@ const COLUMNS = [
   'id', 'title', 'cuisine', 'photo', 'source', 'source_url', 'servings_base', 'prep_min', 'cook_min',
   'tags_json', 'kid_score', 'season_json', 'nutrition_json', 'tools_json', 'ingredients_json', 'steps_json',
   'last_cooked_at', 'ratings_json', 'created_at', 'updated_at', 'is_fish', 'is_veggie', 'veg_rich',
+  'photo_credit_json', 'photo_tried_at',
 ] as const;
 
 // ---- Low-level SQLite CRUD (callers already gate on isRecipesDbEnabled()) -----------------
@@ -144,7 +151,7 @@ function dbInsertOrReplace(handle: RecipesDb, r: Recipe): void {
       row.id, row.title, row.cuisine, row.photo, row.source, row.source_url, row.servings_base, row.prep_min,
       row.cook_min, row.tags_json, row.kid_score, row.season_json, row.nutrition_json, row.tools_json,
       row.ingredients_json, row.steps_json, row.last_cooked_at, row.ratings_json, row.created_at, row.updated_at,
-      fish, veggie, rich,
+      fish, veggie, rich, row.photo_credit_json, row.photo_tried_at,
     );
   ftsUpsert(handle, r);
 }
@@ -293,6 +300,60 @@ export function countByCuisine(): Record<Cuisine, number> {
   const out: Record<Cuisine, number> = { spanish: 0, dutch: 0, japanese: 0, italian: 0, global: 0 };
   for (const r of listAllSlim()) out[r.cuisine] = (out[r.cuisine] ?? 0) + 1;
   return out;
+}
+
+// ---- Photo enrichment (docs/47 §3b) ---------------------------------------------------------
+// Works identically over sqlite or the JSON fallback — everything here reads/writes through
+// listAllSlim()/getFull()/updateRecipe(), same as the rest of this module.
+
+export interface PhotoCoverage {
+  total: number;
+  withPhoto: number;
+}
+
+/** Library card "Photos 812 / 2,047" stat. */
+export function photoCoverage(): PhotoCoverage {
+  const all = listAllSlim();
+  return { total: all.length, withPhoto: all.filter((r) => Boolean(r.photo)).length };
+}
+
+/**
+ * The next recipe the enrichment coordinator should try — ANY source, photo-null, skipping
+ * ones tried in the last `retryAfterMs` (a definitive no-hit isn't retried forever). Stable
+ * order (by title) so a restart mid-enrichment resumes predictably rather than jumping
+ * around. The photo-null query IS the queue (docs/47 cross-cutting note) — no separate job
+ * state to persist or resume.
+ */
+export function nextPhotoEnrichmentCandidate(now: number, retryAfterMs: number): RecipeSlim | null {
+  const all = [...listAllSlim()].sort((a, b) => a.title.localeCompare(b.title));
+  for (const r of all) {
+    if (r.photo) continue;
+    if (r.photoTriedAt) {
+      const triedAt = Date.parse(r.photoTriedAt);
+      if (Number.isFinite(triedAt) && now - triedAt < retryAfterMs) continue;
+    }
+    return r;
+  }
+  return null;
+}
+
+/** Store a fetched photo + its attribution, and clear any stale "tried, no hit" marker. */
+export function setRecipePhoto(
+  id: string,
+  photo: string,
+  credit: { name: string; url: string; provider: 'openverse' | 'pexels' },
+): void {
+  const full = getFull(id);
+  if (!full) return;
+  updateRecipe({ ...full, photo, photoCredit: credit, photoTriedAt: null, updatedAt: new Date().toISOString() });
+}
+
+/** Mark a definitive no-hit so the next tick moves on to a different candidate instead of
+ *  re-querying the same recipe every 20s forever — re-tried after 30 days (docs/47 §3b). */
+export function markPhotoTried(id: string, whenIso: string): void {
+  const full = getFull(id);
+  if (!full) return;
+  updateRecipe({ ...full, photoTriedAt: whenIso });
 }
 
 // ---- Search / pagination (docs/46 §2b) -----------------------------------------------------

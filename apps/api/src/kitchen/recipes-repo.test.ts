@@ -292,3 +292,82 @@ test('a genuinely fresh install (no kitchen.json at all) seeds 50 recipes, and m
   assert.equal(result.count, 50, 'the store seeds SEED_RECIPES on first load; migration moves all of them into sqlite');
   assert.equal(repo.count(), 50);
 });
+
+// ---- Photo enrichment repo helpers (docs/47 §3b) --------------------------------------------
+
+test('photoCoverage counts total vs. with-photo', () => {
+  freshEnv();
+  repo.insertRecipe(recipe('r1', { photo: '/recipes/r1.jpg' }));
+  repo.insertRecipe(recipe('r2', { photo: null }));
+  repo.insertRecipe(recipe('r3', { photo: null }));
+  assert.deepEqual(repo.photoCoverage(), { total: 3, withPhoto: 1 });
+});
+
+test('nextPhotoEnrichmentCandidate: skips photo-present recipes, returns photo-null ones in stable (title) order', () => {
+  freshEnv();
+  repo.insertRecipe(recipe('r1', { title: 'Zebra dish', photo: null }));
+  repo.insertRecipe(recipe('r2', { title: 'Apple dish', photo: '/recipes/r2.jpg' }));
+  repo.insertRecipe(recipe('r3', { title: 'Mango dish', photo: null }));
+
+  const now = Date.now();
+  const first = repo.nextPhotoEnrichmentCandidate(now, 30 * 24 * 60 * 60 * 1000);
+  assert.equal(first?.id, 'r3', 'title-sorted: Mango before Zebra, and Apple (has a photo) is skipped');
+});
+
+test('nextPhotoEnrichmentCandidate: a recently-tried no-hit is skipped, an old one is retried', () => {
+  freshEnv();
+  const now = Date.now();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  repo.insertRecipe(recipe('recent', { photo: null, photoTriedAt: new Date(now - 1000).toISOString() }));
+  repo.insertRecipe(recipe('old', { photo: null, photoTriedAt: new Date(now - thirtyDays - 1000).toISOString() }));
+
+  const candidate = repo.nextPhotoEnrichmentCandidate(now, thirtyDays);
+  assert.equal(candidate?.id, 'old');
+});
+
+test('nextPhotoEnrichmentCandidate: null when every recipe has a photo or is in its cool-off', () => {
+  freshEnv();
+  const now = Date.now();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  repo.insertRecipe(recipe('r1', { photo: '/recipes/r1.jpg' }));
+  repo.insertRecipe(recipe('r2', { photo: null, photoTriedAt: new Date(now - 1000).toISOString() }));
+  assert.equal(repo.nextPhotoEnrichmentCandidate(now, thirtyDays), null);
+});
+
+test('setRecipePhoto stores the photo + credit and clears any stale tried marker', () => {
+  freshEnv();
+  repo.insertRecipe(recipe('r1', { photo: null, photoTriedAt: '2026-01-01T00:00:00.000Z' }));
+  repo.setRecipePhoto('r1', 'https://example.com/x.jpg', { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+  const full = repo.getFull('r1');
+  assert.equal(full?.photo, 'https://example.com/x.jpg');
+  assert.deepEqual(full?.photoCredit, { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+  assert.equal(full?.photoTriedAt, null);
+});
+
+test('markPhotoTried records the timestamp without touching the photo field', () => {
+  freshEnv();
+  repo.insertRecipe(recipe('r1', { photo: null }));
+  repo.markPhotoTried('r1', '2026-03-01T00:00:00.000Z');
+  const full = repo.getFull('r1');
+  assert.equal(full?.photo, null);
+  assert.equal(full?.photoTriedAt, '2026-03-01T00:00:00.000Z');
+});
+
+// ---- Schema v2 migration idempotence (docs/47 cross-cutting) --------------------------------
+
+test('schema v2 (photo_credit_json / photo_tried_at) migration is idempotent — reopening the same db file is a no-op, not a crash', () => {
+  const { dir } = freshEnv();
+  repo.insertRecipe(recipe('r1', { photo: null }));
+  repo.setRecipePhoto('r1', 'https://example.com/x.jpg', { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+
+  // Simulate a restart: close the handle and reopen against the SAME file — migrate() runs
+  // again on the existing (already-v2) file. Must not throw "duplicate column name" and must
+  // preserve the data written before the "restart".
+  repo._resetForTests();
+  process.env.RECIPES_DB_FILE = join(dir, 'recipes.db');
+  process.env.KITCHEN_FILE = join(dir, 'kitchen.json');
+
+  const full = repo.getFull('r1');
+  assert.equal(full?.photo, 'https://example.com/x.jpg');
+  assert.deepEqual(full?.photoCredit, { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+});

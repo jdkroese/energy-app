@@ -44,7 +44,7 @@ export type RecipesDb = {
   close: () => void;
 };
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 let initTried = false;
 let disabledReason: string | null = null;
@@ -57,6 +57,14 @@ function dbPath(): string {
   const repoRoot =
     typeof __dirname !== 'undefined' ? resolve(__dirname, '..', '..', '..') : resolve(process.cwd(), '..', '..');
   return resolve(repoRoot, '.data', 'recipes.db');
+}
+
+/** True when `table` already has `column` — guards the additive ALTERs below so re-running
+ *  migrate() on every boot (already the existing contract) stays idempotent instead of
+ *  throwing "duplicate column name" on the second+ boot. */
+function columnExists(handle: RecipesDb, table: string, column: string): boolean {
+  const rows = handle.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((r) => r.name === column);
 }
 
 function migrate(handle: RecipesDb): void {
@@ -101,6 +109,17 @@ function migrate(handle: RecipesDb): void {
       id UNINDEXED, title, tags, ingredients, tokenize = 'unicode61 remove_diacritics 2'
     );
   `);
+
+  // Schema v2 (docs/47 §3b, photo enrichment) — additive columns only, guarded so this is
+  // safe to run unconditionally on every boot regardless of which schema version the file
+  // was created at.
+  if (!columnExists(handle, 'recipes', 'photo_credit_json')) {
+    handle.exec(`ALTER TABLE recipes ADD COLUMN photo_credit_json TEXT`);
+  }
+  if (!columnExists(handle, 'recipes', 'photo_tried_at')) {
+    handle.exec(`ALTER TABLE recipes ADD COLUMN photo_tried_at TEXT`);
+  }
+
   handle
     .prepare(`INSERT INTO recipes_meta (k, v) VALUES ('schema_version', ?)
               ON CONFLICT(k) DO UPDATE SET v = excluded.v`)
