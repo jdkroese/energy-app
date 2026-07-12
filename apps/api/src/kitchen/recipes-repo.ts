@@ -18,7 +18,7 @@
 // steps. getFull(id) fetches the one full recipe (with steps) on demand.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { db, type RecipesDb } from './recipes-db';
+import { closeRecipesDb, db, type RecipesDb } from './recipes-db';
 import * as kitchenStore from './store';
 import { isFishRecipe, isVeggieRecipe, vegRichness } from './engine';
 import type { Cuisine, Recipe, RecipeSlim } from './types';
@@ -484,4 +484,12 @@ function backupKitchenJson(): void {
   const bak = `${f}.pre-sqlite.bak`;
   const raw = readFileSync(f, 'utf8');
   writeFileSync(bak, raw, 'utf8');
+}
+
+/** Test-only: drop every in-memory/handle cache so a fresh RECIPES_DB_FILE/KITCHEN_FILE
+ *  env pair is picked up cleanly by the next call. */
+export function _resetForTests(): void {
+  closeRecipesDb();
+  kitchenStore._resetCacheForTests();
+  invalidateSlimCache();
 }
