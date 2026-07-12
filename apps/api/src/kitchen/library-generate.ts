@@ -229,9 +229,14 @@ function titlesSampleForSpecs(specs: GenSpec[]): string[] {
   return out;
 }
 
-/** Start a new run. Refuses if one is already running, or if there's genuinely nothing left
- *  to generate (already at/above target for every cuisine bucket). Kicks the coordinator
- *  immediately (fire-and-forget) so the caller doesn't wait on the first batch dispatch. */
+/**
+ * Start a new run. Refuses if one is already running, or if there's genuinely nothing left
+ * to generate (already at/above target for every cuisine bucket). Deliberately does NOT call
+ * tick() itself — that would fire a real network request (createBatch) as a side effect of a
+ * plain state-mutation function, which is exactly what library-generate.test.ts must never
+ * trigger. The route (POST /library/generate) kicks the coordinator with `void tick()` after
+ * a successful start; the periodic coordinator timer would pick it up within POLL_MS anyway.
+ */
 export function startGeneration(target: number, capEur = DEFAULT_CAP_EUR): { ok: boolean; reason?: string } {
   if (!claude.isConfigured()) {
     return { ok: false, reason: 'No Anthropic key — add it in Settings → Intelligence' };
@@ -264,12 +269,13 @@ export function startGeneration(target: number, capEur = DEFAULT_CAP_EUR): { ok:
       remainingJson: JSON.stringify(plan),
     };
   });
-  void tick();
   return { ok: true };
 }
 
 /** Stop the run: best-effort cancel of any in-flight batches, mark cancelled, drop the queue
- *  (a later Generate press recomputes the shortfall fresh — nothing is lost). */
+ *  (a later Generate press recomputes the shortfall fresh — nothing is lost). Fire-and-forget
+ *  network cancels only run when there are actual batchIds to cancel — a job with none in
+ *  flight (e.g. cancelled the instant after starting) makes no network call at all. */
 export function cancelGeneration(): { ok: boolean } {
   const job = jobStatus();
   if (job.status !== 'running') return { ok: false };

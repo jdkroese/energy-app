@@ -579,6 +579,7 @@ kitchenRouter.post(
     if (!result.ok) {
       return { ok: false, reason: result.reason, ...libraryStatusPayload() };
     }
+    void libraryGen.tick(); // kick the coordinator now rather than waiting for the next poll tick
     logEvent({
       class: 'action',
       category: 'kitchen',
