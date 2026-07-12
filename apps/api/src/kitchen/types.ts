@@ -181,6 +181,24 @@ export interface HouseholdGoals {
   notes?: string;
 }
 
+/**
+ * Dietary guardrail sliders (docs/46 §1a) — all 1–10, 5 = neutral/no bias. These bias
+ * scoreRecipe per-recipe AND (fish/veg) drive weekly-mix targets in suggestWeek —
+ * see engine.ts.
+ */
+export interface NutritionScales {
+  /** 1 = light dinners preferred … 10 = hearty. */
+  calories: number;
+  /** 1 = low-carb preferred … 10 = carb-happy. */
+  carbs: number;
+  /** 1 = avoid fish … 10 = fish-forward. */
+  fish: number;
+  /** 1 = meat-forward … 10 = veg-forward. */
+  veg: number;
+  /** 1 = indifferent … 10 = high-protein priority. */
+  protein: number;
+}
+
 export interface Household {
   adults: number;
   kids: number;
@@ -199,6 +217,12 @@ export interface Household {
   cuisineWeights: Record<Cuisine, number>;
   goals: HouseholdGoals;
   showNutritionOnCards: boolean;
+  /** Dietary guardrail sliders (docs/46 §1a). */
+  nutritionScales: NutritionScales;
+  /** Prefer in-season/local produce for our location (Jávea, Costa Blanca) — default true. */
+  seasonalLocal: boolean;
+  /** Free-text ingredient chips to boost (garden surplus, e.g. 'aguacate', 'tomate'). */
+  boostIngredients: string[];
 }
 
 export interface Reminders {
