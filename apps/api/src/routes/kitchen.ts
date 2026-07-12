@@ -590,7 +590,8 @@ function libraryStatusPayload() {
 // overwrite the same path, but that's rare enough that a stale browser cache for a few hours
 // is a fine trade for not re-fetching a multi-hundred-KB file on every screen visit).
 kitchenRouter.get('/photos/:recipeId', (req: Request, res: Response) => {
-  const file = readCachedPhoto(req.params.recipeId);
+  const recipeId = Array.isArray(req.params.recipeId) ? req.params.recipeId[0] : req.params.recipeId;
+  const file = readCachedPhoto(recipeId);
   if (!file) {
     res.status(404).json({ error: 'no cached photo for this recipe', code: 'NOT_FOUND' });
     return;

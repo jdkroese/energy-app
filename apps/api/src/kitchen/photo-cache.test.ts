@@ -36,7 +36,7 @@ function fakeImageResponse(status: number, bytes: Buffer, contentType = 'image/j
     ok: status >= 200 && status < 300,
     status,
     headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? contentType : null) },
-    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
   };
 }
 

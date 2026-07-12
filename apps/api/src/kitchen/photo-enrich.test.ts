@@ -79,7 +79,7 @@ function installFakeFetch(handler: Handler): void {
       status: h.status,
       headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? h.contentType ?? 'application/json' : null) },
       json: async () => h.json ?? {},
-      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
     };
   };
   _setProviderFetch(impl);
