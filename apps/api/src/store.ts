@@ -1613,9 +1613,32 @@ export interface KitchenIntelligenceConfig {
   usage: { month: string; inputTokens: number; outputTokens: number; eur: number };
 }
 
+/**
+ * Bulk library-generation job state (docs/46 §2c) — persisted so a restart doesn't orphan
+ * a running Batch API job: batch ids are kept and polling resumes on boot. `remainingJson` is
+ * the serialized tail of the coverage plan not yet dispatched (opaque to store.ts; only
+ * kitchen/library-generate.ts interprets it) — also needed to resume across a restart.
+ */
+export interface LibraryGenerationJob {
+  status: 'idle' | 'running' | 'done' | 'error' | 'cancelled';
+  target: number;
+  capEur: number;
+  startedAt: string | null;
+  updatedAt: string;
+  batchIds: string[];
+  queued: number;
+  insertedCount: number;
+  duplicateCount: number;
+  failedCount: number;
+  spentEur: number;
+  error: string | null;
+  remainingJson: string | null;
+}
+
 export interface KitchenSettings {
   mercadona: KitchenMercadonaConfig;
   intelligence: KitchenIntelligenceConfig;
+  libraryGeneration: LibraryGenerationJob;
 }
 
 export function defaultKitchen(): KitchenSettings {
@@ -1641,6 +1664,21 @@ export function defaultKitchen(): KitchenSettings {
         recipeGeneration: true,
       },
       usage: { month: "", inputTokens: 0, outputTokens: 0, eur: 0 },
+    },
+    libraryGeneration: {
+      status: "idle",
+      target: 0,
+      capEur: 25,
+      startedAt: null,
+      updatedAt: new Date(0).toISOString(),
+      batchIds: [],
+      queued: 0,
+      insertedCount: 0,
+      duplicateCount: 0,
+      failedCount: 0,
+      spentEur: 0,
+      error: null,
+      remainingJson: null,
     },
   };
 }
@@ -1713,6 +1751,32 @@ function hydrateKitchen(p: unknown): KitchenSettings {
         eur: typeof u.eur === "number" ? Math.max(0, u.eur) : 0,
       },
     },
+    libraryGeneration: hydrateLibraryGenerationJob(k.libraryGeneration, base.libraryGeneration),
+  };
+}
+
+/** Additive (docs/46 P2): older state.json has no libraryGeneration — default to idle. */
+function hydrateLibraryGenerationJob(p: unknown, base: LibraryGenerationJob): LibraryGenerationJob {
+  if (!p || typeof p !== "object") return base;
+  const j = p as Partial<LibraryGenerationJob>;
+  const num = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : fallback);
+  return {
+    status:
+      j.status === "running" || j.status === "done" || j.status === "error" || j.status === "cancelled"
+        ? j.status
+        : "idle",
+    target: num(j.target, base.target),
+    capEur: num(j.capEur, base.capEur),
+    startedAt: typeof j.startedAt === "string" ? j.startedAt : null,
+    updatedAt: typeof j.updatedAt === "string" ? j.updatedAt : base.updatedAt,
+    batchIds: Array.isArray(j.batchIds) ? j.batchIds.filter((x): x is string => typeof x === "string") : [],
+    queued: num(j.queued, 0),
+    insertedCount: num(j.insertedCount, 0),
+    duplicateCount: num(j.duplicateCount, 0),
+    failedCount: num(j.failedCount, 0),
+    spentEur: num(j.spentEur, 0),
+    error: typeof j.error === "string" ? j.error : null,
+    remainingJson: typeof j.remainingJson === "string" ? j.remainingJson : null,
   };
 }
 

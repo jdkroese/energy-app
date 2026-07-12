@@ -4,7 +4,7 @@
 // % coverage. The Claude "More ideas" path lives in routes/kitchen.ts behind the
 // Intelligence master + cooking-suggestions toggles and fails soft to this list.
 
-import type { Recipe, RecipeIngredient } from './types';
+import type { Recipe, RecipeIngredient, RecipeSlim } from './types';
 
 /** Lower-case, accent-stripped — same normalisation as the mapping-memory key. */
 export function normalizeIngredientText(s: string): string {
@@ -58,7 +58,7 @@ export interface CoverageResult {
  * "I can make this with what's on hand". Deterministic: coverage desc, real hits desc,
  * fewer missing first, id as the final tie-break.
  */
-export function rankRecipesByCoverage(recipes: Recipe[], onHand: string[], limit = 8): CoverageResult[] {
+export function rankRecipesByCoverage(recipes: RecipeSlim[], onHand: string[], limit = 8): CoverageResult[] {
   const terms = onHand.map((s) => s.trim()).filter(Boolean);
   if (!terms.length) return [];
   const scored: CoverageResult[] = [];

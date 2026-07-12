@@ -32,6 +32,21 @@ function apiKey(): string | null {
   return process.env.ANTHROPIC_API_KEY || store.get().kitchen.intelligence.apiKey || null;
 }
 
+/** The resolved key (env override or stored), or null — for callers outside this module
+ *  that need to make their own request (e.g. the Message Batches API, connectors/claude-batch.ts). */
+export function getApiKey(): string | null {
+  return apiKey();
+}
+
+/** Pre-flight € estimate at the Batches API's 50% discount — used by the bulk generator's
+ *  hard cost cap BEFORE a batch is actually sent (recordBatchUsage records the REAL cost
+ *  once results are back; this is just for "should I dispatch one more batch?"). */
+export function estimateBatchCostEur(inputTokens: number, outputTokens: number): number {
+  return (inputTokens / 1_000_000) * (EUR_PER_MTOK_IN / 2) + (outputTokens / 1_000_000) * (EUR_PER_MTOK_OUT / 2);
+}
+
+export { API_VERSION };
+
 /** Master switch + per-feature toggle + a usable key. Callers fail soft when false. */
 export function isFeatureEnabled(feature: IntelligenceFeature): boolean {
   const cfg = store.get().kitchen.intelligence;
@@ -55,6 +70,25 @@ function recordUsage(inputTokens: number, outputTokens: number): void {
     u.inputTokens += inputTokens;
     u.outputTokens += outputTokens;
     u.eur += (inputTokens / 1_000_000) * EUR_PER_MTOK_IN + (outputTokens / 1_000_000) * EUR_PER_MTOK_OUT;
+  });
+}
+
+/** Same monthly € counter, priced at the Message Batches API's 50% discount (docs/46 §2c —
+ *  the bulk library-generation pipeline uses Batches exclusively). Exported so
+ *  kitchen/library-generate.ts can record real usage as batch results come back. */
+export function recordBatchUsage(inputTokens: number, outputTokens: number): void {
+  const month = new Date().toISOString().slice(0, 7);
+  store.update((s) => {
+    const u = s.kitchen.intelligence.usage;
+    if (u.month !== month) {
+      u.month = month;
+      u.inputTokens = 0;
+      u.outputTokens = 0;
+      u.eur = 0;
+    }
+    u.inputTokens += inputTokens;
+    u.outputTokens += outputTokens;
+    u.eur += (inputTokens / 1_000_000) * (EUR_PER_MTOK_IN / 2) + (outputTokens / 1_000_000) * (EUR_PER_MTOK_OUT / 2);
   });
 }
 

@@ -177,6 +177,8 @@ import type { IrrigationLever } from "./control/irrigation-execute";
 import { startIrrigationCoordinator } from "./control/irrigation-coordinator";
 import { kitchenRouter } from "./routes/kitchen";
 import { startKitchenCoordinator } from "./control/kitchen-coordinator";
+import { runBootMigrationIfNeeded as runRecipesMigration } from "./kitchen/recipes-repo";
+import { startLibraryGenerationCoordinator } from "./kitchen/library-generate";
 import {
   getDiscovered,
   ignoreDiscovered,
@@ -1720,6 +1722,35 @@ startIrrigationCoordinator();
 // Start the Kitchen Hub reminders coordinator (hourly tick; LOG-ONLY + push nudges —
 // plan-your-week + submit-before-cutoff, docs/39). No control-loop interaction at all.
 startKitchenCoordinator();
+
+// Recipe library boot migration (docs/46 §2a): idempotent — moves kitchen.json's `recipes`
+// array into SQLite (+ backs up kitchen.json → kitchen.json.pre-sqlite.bak) once, then no-ops
+// on every later boot. FAIL-SAFE by design: on ANY error the JSON array is left untouched and
+// recipes-repo.ts transparently falls back to reading/writing kitchen.json directly, so a
+// migration failure can never break the Kitchen Hub (or, obviously, touch the armed control
+// loop — this is pure kitchen-data plumbing). Guarded so it can never throw into boot.
+try {
+  const result = runRecipesMigration();
+  if (result.migrated) {
+    console.log(`[energy-api] recipe library migrated to sqlite (${result.count} recipes)`);
+  } else if (result.reason) {
+    console.log(`[energy-api] recipe library migration skipped: ${result.reason}`);
+  }
+} catch (e) {
+  console.error(
+    "[energy-api] recipe library migration failed (kitchen.json stays authoritative, recipes still work):",
+    (e as Error).message,
+  );
+}
+
+// Start the bulk recipe-library generation poll timer (docs/46 §2c) — resumes a run that was
+// still in progress at the last restart (batch ids + remaining queue are persisted). No-op
+// (idle) until the owner presses Generate in the Cooking screen's admin-only library card.
+try {
+  startLibraryGenerationCoordinator();
+} catch (e) {
+  console.error("[energy-api] library-generation coordinator failed to start:", (e as Error).message);
+}
 
 // Start circuit-breaker usage metering (additive + READ-ONLY: reads the Tuya
 // fleet, writes its own SQLite store; no control authority). Fail-soft — if the
