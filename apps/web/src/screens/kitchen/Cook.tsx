@@ -86,7 +86,13 @@ export function CookScreen({ recipeId, desktop, kiosk = false }: { recipeId: str
   const [params] = useSearchParams();
   const planDate = /^\d{4}-\d{2}-\d{2}$/.test(params.get('date') ?? '') ? (params.get('date') as string) : localDateStr(new Date());
 
-  const { data: recipesResp } = usePolling(api.kitchen.recipes, 0);
+  // Full recipe (with steps) fetched by id directly — cook mode needs the whole thing, and
+  // at library scale the client no longer holds every recipe in memory (docs/46 §2a P2).
+  const {
+    data: recipeResp,
+    loading: recipeLoading,
+    error: recipeError,
+  } = usePolling(() => api.kitchen.recipe(recipeId), 0, [recipeId], Boolean(recipeId));
   const { data: householdResp } = usePolling(api.kitchen.household, 0);
   const [plan, setPlan] = useState<MealPlan | null>(null);
   useEffect(() => {
@@ -96,7 +102,7 @@ export function CookScreen({ recipeId, desktop, kiosk = false }: { recipeId: str
       .catch(() => setPlan(null));
   }, [planDate]);
 
-  const recipe = recipesResp?.recipes.find((r) => r.id === recipeId) ?? null;
+  const recipe = recipeResp?.recipe ?? null;
   const household = householdResp?.household ?? null;
 
   // Tonight's servings: resumed session > the plan's entry for this recipe/day >
@@ -171,8 +177,8 @@ export function CookScreen({ recipeId, desktop, kiosk = false }: { recipeId: str
   const miseSteps = useMemo(() => (recipe ? recipe.steps.filter((s) => s.phase === 'mise') : []), [recipe]);
   const cookSteps = useMemo(() => (recipe ? recipe.steps.filter((s) => s.phase === 'cook') : []), [recipe]);
 
-  if (!recipesResp) return <LoadingState label="Loading the recipe…" />;
-  if (!recipe) {
+  if (recipeLoading && !recipe) return <LoadingState label="Loading the recipe…" />;
+  if (!recipe || recipeError) {
     return (
       <div style={{ padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: 'var(--text-2)' }}>
         <Icon name="chef-hat" size={30} color="var(--text-3)" />

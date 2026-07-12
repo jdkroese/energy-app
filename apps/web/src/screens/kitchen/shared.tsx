@@ -5,7 +5,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Badge, Button, Icon, Modal } from '../../components/ui';
-import type { KitchenCuisine, OrderLine, Recipe } from '../../lib/types';
+import type { KitchenCuisine, OrderLine, Recipe, RecipeSlim } from '../../lib/types';
 
 export const CUISINE_LABEL: Record<KitchenCuisine, string> = {
   spanish: 'Spanish',
@@ -249,7 +249,7 @@ export function ServingsStepper({
 
 // ---- Meta chips (time / cuisine / kcal / kids) ------------------------------------------
 
-export function MetaChips({ recipe, showNutrition }: { recipe: Recipe; showNutrition: boolean }) {
+export function MetaChips({ recipe, showNutrition }: { recipe: RecipeSlim; showNutrition: boolean }) {
   const chip: CSSProperties = {
     fontSize: 11,
     padding: '2px 7px',

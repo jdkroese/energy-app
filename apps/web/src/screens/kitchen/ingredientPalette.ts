@@ -5,6 +5,10 @@
 // so the palette is useful even with a thin library. Pure + unit-tested (frequency+dedup).
 
 import type { Recipe } from '../../lib/types';
+// Only `.ingredients` is read here — RecipeSlim (P2, docs/46 §2a) is a strict superset for
+// this purpose, so accepting Pick<Recipe,'ingredients'> works for both Recipe[] and
+// RecipeSlim[] callers without pulling in the full Recipe shape (steps included).
+type IngredientsOnly = Pick<Recipe, 'ingredients'>;
 
 /** Lower-case, accent-stripped — client mirror of api normalizeIngredientText. */
 export function normalizeIngredientText(s: string): string {
@@ -91,7 +95,7 @@ function guessSection(text: string): PaletteSection {
  * already present get appended so every section stays useful). Deterministic: frequency
  * desc, then first-seen order; ties broken by insertion order (stable sort).
  */
-export function buildPalette(recipes: Recipe[], perSection = 8): PaletteItem[] {
+export function buildPalette(recipes: IngredientsOnly[], perSection = 8): PaletteItem[] {
   interface Agg {
     label: string;
     key: string;

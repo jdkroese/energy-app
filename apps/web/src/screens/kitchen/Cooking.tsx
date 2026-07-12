@@ -7,10 +7,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ShellContext } from '../../components/shell/AppShell';
-import { Badge, Button, Card, Icon, Input, LoadingState, Modal, Slider, Switch } from '../../components/ui';
+import { Badge, Button, Card, Icon, Input, LoadingState, Modal, ProgressBar, Slider, Switch } from '../../components/ui';
 import { api } from '../../lib/api';
 import { usePolling } from '../../lib/usePolling';
-import type { KitchenCuisine, KitchenHousehold, MealPlan, MealPlanDay, PlanRequestCandidate, Recipe } from '../../lib/types';
+import { useAuth } from '../../auth/AuthProvider';
+import type {
+  KitchenCuisine,
+  KitchenHousehold,
+  LibraryGenerateStatusResponse,
+  MealPlan,
+  MealPlanDay,
+  PlanRequestCandidate,
+  Recipe,
+  RecipeSlim,
+} from '../../lib/types';
 import { MobileHeader } from '../_shared';
 import {
   CUISINE_LABEL,
@@ -59,7 +69,7 @@ function servingsLabel(servings: number, hh: KitchenHousehold | null): string {
 }
 
 /** True when this recipe was cooked ON that calendar day (P3 ✓ state on day cards). */
-function cookedOn(recipe: Recipe | null | undefined, date: string): boolean {
+function cookedOn(recipe: Pick<Recipe, 'lastCookedAt'> | null | undefined, date: string): boolean {
   if (!recipe?.lastCookedAt) return false;
   const d = new Date(recipe.lastCookedAt);
   const p = (n: number) => String(n).padStart(2, '0');
@@ -87,6 +97,8 @@ const mini: CSSProperties = {
 export function Cooking({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   const [week, setWeek] = useState(currentWeekStart());
   const [plan, setPlan] = useState<MealPlan | null>(null);
@@ -100,7 +112,24 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
   const [askText, setAskText] = useState('');
   const [askResult, setAskResult] = useState<{ ids: string[]; note?: string } | null>(null);
 
-  const { data: recipesResp, refetch: refetchRecipes } = usePolling(api.kitchen.recipes, 0);
+  // Shelf search + browse (docs/46 §2b/design spec A): a search box (debounced 300ms → server
+  // `q`) + Fish/Veggie chips swap the default horizontal shelf for a paginated server-backed
+  // grid; "Browse all" does the same with an empty query.
+  const [shelfQuery, setShelfQuery] = useState('');
+  const [shelfQueryDebounced, setShelfQueryDebounced] = useState('');
+  const [browseAll, setBrowseAll] = useState(false);
+  const [fishOnly, setFishOnly] = useState(false);
+  const [veggieOnly, setVeggieOnly] = useState(false);
+  const [gridPage, setGridPage] = useState(1);
+  const [gridItems, setGridItems] = useState<RecipeSlim[]>([]);
+  const [gridTotal, setGridTotal] = useState(0);
+  const [gridLoading, setGridLoading] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShelfQueryDebounced(shelfQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [shelfQuery]);
+
+  const { data: recipesResp, refetch: refetchRecipes } = usePolling(api.kitchen.recipesAll, 0);
   const { data: householdResp, refetch: refetchHousehold } = usePolling(api.kitchen.household, 0);
   const { data: remindersResp } = usePolling(api.kitchen.reminders, 0);
   const { data: intelResp } = usePolling(api.kitchen.intelligence, 0);
@@ -203,13 +232,70 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
     void refetchRecipes();
     return r.recipe;
   };
-  const saveAndPlan = async (recipe: Recipe) => {
+  // Only `.id` is needed (candidates may be a full Recipe or a slim library entry — docs/46
+  // §2a P2 keeps the client off the full-recipe payload everywhere except cook mode/quick-view).
+  const saveAndPlan = async (recipe: Pick<Recipe, 'id'>) => {
     const target = plan?.days.find((d) => !d.skip && !d.recipeId) ?? plan?.days.find((d) => !d.skip);
     if (target) await patchDay({ date: target.date, recipeId: recipe.id });
   };
-  const saveAndCook = async (recipe: Recipe) => {
+  const saveAndCook = async (recipe: Pick<Recipe, 'id'>) => {
     navigate(`/cook/${recipe.id}`);
   };
+
+  // Quick-view always needs the FULL recipe (ingredients + steps) — fetch it by id on open
+  // rather than keeping every recipe's steps in the client's slim index (docs/46 §2a P2).
+  const openRecipe = async (id: string, day?: MealPlanDay) => {
+    setBusy(`open-${id}`);
+    try {
+      const r = await api.kitchen.recipe(id);
+      setQuickView({ recipe: r.recipe, day });
+    } catch {
+      setNote('Could not load that recipe');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Shelf search/browse (docs/46 §2b): query or Browse-all or a Fish/Veggie chip swaps the
+  // default horizontal shelf for a paginated server-backed grid (search.ts's FTS/filters).
+  // Cuisine + "quick" (≤25 min) chips carry over into the grid query; "kids ❤"/"fits goal"
+  // have no server-side equivalent (not in docs/46's query param list) so they stay
+  // default-shelf-only filters.
+  const gridMode = Boolean(shelfQueryDebounced) || browseAll || fishOnly || veggieOnly;
+  const gridCuisine = filter !== 'all' && filter !== 'quick' && filter !== 'kids' && filter !== 'goal' ? (filter as KitchenCuisine) : undefined;
+  useEffect(() => {
+    setGridPage(1);
+  }, [shelfQueryDebounced, browseAll, fishOnly, veggieOnly, gridCuisine, filter]);
+  useEffect(() => {
+    if (!gridMode) return;
+    let cancelled = false;
+    setGridLoading(true);
+    api.kitchen
+      .searchRecipes({
+        ...(shelfQueryDebounced ? { q: shelfQueryDebounced } : {}),
+        ...(gridCuisine ? { cuisine: gridCuisine } : {}),
+        ...(filter === 'quick' ? { maxMin: 25 } : {}),
+        ...(fishOnly ? { fish: true } : {}),
+        ...(veggieOnly ? { veggie: true } : {}),
+        page: gridPage,
+        pageSize: 30,
+      })
+      .then((r) => {
+        if (cancelled) return;
+        setGridItems((prev) => (gridPage === 1 ? r.recipes : [...prev, ...r.recipes]));
+        setGridTotal(r.total);
+      })
+      .catch(() => {
+        if (!cancelled) setNote('Search failed — try again');
+      })
+      .finally(() => {
+        if (!cancelled) setGridLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridMode, shelfQueryDebounced, gridCuisine, filter, fishOnly, veggieOnly, gridPage]);
 
   const filteredShelf = recipes.filter((r) => {
     if (filter === 'all') return true;
@@ -317,7 +403,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
         const r = byId.get(id);
         if (!r) return null;
         return (
-          <button key={id} type="button" onClick={() => setQuickView({ recipe: r })} style={{ ...mini, flex: 'none' }}>
+          <button key={id} type="button" onClick={() => void openRecipe(r.id)} style={{ ...mini, flex: 'none' }}>
             <Icon name="chef-hat" size={12} /> {r.title}
           </button>
         );
@@ -325,6 +411,40 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
       <button type="button" onClick={() => setAskResult(null)} style={{ ...mini, flex: 'none' }} aria-label="Dismiss suggestions">
         <Icon name="x" size={12} />
       </button>
+    </div>
+  );
+
+  // Search row (docs/46 §2b design spec A) — icon + input, 300ms debounce → server `q`.
+  const searchRow = (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '6px 8px 6px 13px',
+        borderRadius: 'var(--radius-md)',
+        border: '1px solid var(--border-2)',
+        background: 'var(--surface-1)',
+        minHeight: 40,
+      }}
+    >
+      <Icon name="search" size={15} color="var(--text-3)" />
+      <input
+        value={shelfQuery}
+        onChange={(e) => setShelfQuery(e.target.value)}
+        placeholder="Search recipes — title, ingredient, tag…"
+        style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-1)', fontSize: 12.5, minWidth: 0 }}
+      />
+      {shelfQuery && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          onClick={() => setShelfQuery('')}
+          style={{ border: 'none', background: 'none', color: 'var(--text-3)', cursor: 'pointer', display: 'grid', placeItems: 'center', padding: 4 }}
+        >
+          <Icon name="x" size={13} />
+        </button>
+      )}
     </div>
   );
 
@@ -357,6 +477,13 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
           <Badge tone={filter === key ? 'grid' : 'neutral'}>{label}</Badge>
         </button>
       ))}
+      {/* Server-backed filters (docs/46 §2b) — selecting either swaps the shelf for the grid. */}
+      <button type="button" onClick={() => setFishOnly((v) => !v)} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+        <Badge tone={fishOnly ? 'grid' : 'neutral'}>Fish</Badge>
+      </button>
+      <button type="button" onClick={() => setVeggieOnly((v) => !v)} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+        <Badge tone={veggieOnly ? 'grid' : 'neutral'}>Veggie</Badge>
+      </button>
       <div style={{ flex: 1 }} />
       <Button size="sm" variant="secondary" iconLeft={<Icon name="link" size={13} />} onClick={() => setImportOpen(true)}>
         {wide ? 'New recipe · paste a URL' : 'Import'}
@@ -364,27 +491,87 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
     </div>
   );
 
-  const shelf = (
-    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6 }}>
-      {filteredShelf.map((r) => (
-        <Card
-          key={r.id}
-          interactive
-          style={{ width: 168, flex: 'none', padding: 0, overflow: 'hidden', cursor: 'pointer' }}
-          onClick={() => setQuickView({ recipe: r })}
+  const shelfCard = (r: RecipeSlim, width: number | undefined) => (
+    <Card
+      key={r.id}
+      interactive
+      style={{ width, flex: width ? 'none' : undefined, padding: 0, overflow: 'hidden', cursor: 'pointer' }}
+      onClick={() => void openRecipe(r.id)}
+    >
+      <RecipePhoto recipe={r} height={72} />
+      <div style={{ padding: '9px 11px 11px' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+          {r.title}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10.5, color: 'var(--text-3)' }}>
+          <span>{CUISINE_LABEL[r.cuisine]}</span>
+          {showNutrition && r.nutrition && <span style={{ fontFamily: 'var(--font-mono)' }}>{r.nutrition.kcal} kcal</span>}
+        </div>
+      </div>
+    </Card>
+  );
+
+  const shimmerCard = (key: number) => (
+    <div
+      key={key}
+      style={{
+        height: 72 + 46,
+        borderRadius: 'var(--radius-card, 14px)',
+        background: 'linear-gradient(90deg,var(--surface-1),var(--surface-2),var(--surface-1))',
+        backgroundSize: '200% 100%',
+        animation: 'pwr-shimmer 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+
+  // "Your cookbook" section header — the count + "Browse all →" button live here (default
+  // shelf only; the grid header shows "Showing X of Y" near its Load more footer instead).
+  const cookbookHeader = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+        Your cookbook
+      </div>
+      {!gridMode && (
+        <button
+          type="button"
+          onClick={() => setBrowseAll(true)}
+          style={{ border: 'none', background: 'none', color: 'var(--solar)', fontSize: 11.5, cursor: 'pointer', padding: 0 }}
         >
-          <RecipePhoto recipe={r} height={72} />
-          <div style={{ padding: '9px 11px 11px' }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-              {r.title}
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10.5, color: 'var(--text-3)' }}>
-              <span>{CUISINE_LABEL[r.cuisine]}</span>
-              {showNutrition && r.nutrition && <span style={{ fontFamily: 'var(--font-mono)' }}>{r.nutrition.kcal} kcal</span>}
-            </div>
-          </div>
-        </Card>
-      ))}
+          Browse all {recipes.length.toLocaleString()} →
+        </button>
+      )}
+    </div>
+  );
+
+  const gridColumns = wide ? 'repeat(auto-fill, minmax(168px, 1fr))' : 'repeat(2, 1fr)';
+
+  const shelf = gridMode ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: gridColumns, gap: 10 }}>
+        {gridItems.map((r) => shelfCard(r, undefined))}
+        {gridLoading && gridPage === 1 && Array.from({ length: 6 }).map((_, i) => shimmerCard(i))}
+      </div>
+      {!gridLoading && gridItems.length === 0 && (
+        <div style={{ fontSize: 12.5, color: 'var(--text-3)', textAlign: 'center', padding: '18px 4px' }}>
+          No recipes match — try fewer words
+        </div>
+      )}
+      {gridItems.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {gridItems.length < gridTotal && (
+            <Button size="sm" variant="secondary" loading={gridLoading && gridPage > 1} onClick={() => setGridPage((p) => p + 1)}>
+              Load more
+            </Button>
+          )}
+          <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+            Showing {gridItems.length} of {gridTotal.toLocaleString()}
+          </span>
+        </div>
+      )}
+    </div>
+  ) : (
+    <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6 }}>
+      {filteredShelf.slice(0, 30).map((r) => shelfCard(r, 168))}
       {filteredShelf.length === 0 && (
         <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '14px 4px' }}>No recipes match this filter yet.</div>
       )}
@@ -424,7 +611,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
     return (
       <Card style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {recipe ? (
-          <div style={{ cursor: 'pointer' }} onClick={() => setQuickView({ recipe, day })}>
+          <div style={{ cursor: 'pointer' }} onClick={() => void openRecipe(recipe.id, day)}>
             <RecipePhoto recipe={recipe} height={96} />
           </div>
         ) : (
@@ -457,7 +644,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
             <>
               <div
                 style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.3, cursor: 'pointer', minHeight: 35 }}
-                onClick={() => setQuickView({ recipe, day })}
+                onClick={() => void openRecipe(recipe.id, day)}
               >
                 {recipe.title}
               </div>
@@ -515,7 +702,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
     return (
       <Card style={{ padding: 10, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
         {recipe ? (
-          <div style={{ width: 56, flex: 'none', cursor: 'pointer' }} onClick={() => setQuickView({ recipe, day })}>
+          <div style={{ width: 56, flex: 'none', cursor: 'pointer' }} onClick={() => void openRecipe(recipe.id, day)}>
             <RecipePhoto recipe={recipe} height={56} radius="var(--radius-md)" style={{ width: 56 }} />
           </div>
         ) : (
@@ -523,7 +710,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
             <Icon name="chef-hat" size={18} />
           </div>
         )}
-        <div style={{ flex: 1, minWidth: 0 }} onClick={() => recipe && setQuickView({ recipe, day })}>
+        <div style={{ flex: 1, minWidth: 0 }} onClick={() => recipe && void openRecipe(recipe.id, day)}>
           <div style={{ fontSize: 13.5, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {recipe ? recipe.title : 'Nothing planned'}
           </div>
@@ -676,16 +863,16 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
             aiOn={aiGenOn}
             wide
             showNutrition={showNutrition}
-            onOpenRecipe={(r) => setQuickView({ recipe: r })}
+            onOpenRecipe={(r) => void openRecipe(r.id)}
             onSaveCandidate={saveCandidate}
             onSaveAndPlan={saveAndPlan}
             onSaveAndCook={saveAndCook}
           />
         </div>
-        <div style={{ marginTop: 4 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 10 }}>
-            Your cookbook
-          </div>
+        <LibraryCard isAdmin={isAdmin} libraryCount={recipes.length} />
+        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {cookbookHeader}
+          {searchRow}
           {filterChips}
         </div>
         {shelf}
@@ -732,16 +919,16 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
             aiOn={aiGenOn}
             wide={false}
             showNutrition={showNutrition}
-            onOpenRecipe={(r) => setQuickView({ recipe: r })}
+            onOpenRecipe={(r) => void openRecipe(r.id)}
             onSaveCandidate={saveCandidate}
             onSaveAndPlan={saveAndPlan}
             onSaveAndCook={saveAndCook}
           />
         </div>
-        <div style={{ marginTop: 4 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>
-            Your cookbook
-          </div>
+        <LibraryCard isAdmin={isAdmin} libraryCount={recipes.length} />
+        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 9 }}>
+          {cookbookHeader}
+          {searchRow}
           {filterChips}
         </div>
         {shelf}
@@ -753,6 +940,139 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
       </div>
       {overlays}
     </>
+  );
+}
+
+// ---- Recipe library card (docs/46 §2c design spec B) — admin-only generation control; -----
+// non-admin sees just the count line. Polls status every 5s only while a run is in progress
+// (idle/done/error/cancelled don't need it — a manual refetch after Start/Cancel is enough).
+function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount: number }) {
+  const [status, setStatus] = useState<LibraryGenerateStatusResponse | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [target, setTarget] = useState(2000);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api.kitchen
+      .libraryGenerateStatus()
+      .then((r) => setStatus(r))
+      .catch(() => undefined);
+  }, []);
+  useEffect(load, [load]);
+  useEffect(() => {
+    if (status?.job.status !== 'running') return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [status?.job.status, load]);
+
+  if (!isAdmin) {
+    return (
+      <div style={{ fontSize: 11.5, color: 'var(--text-3)', padding: '2px 2px 0' }}>
+        {libraryCount.toLocaleString()} recipe{libraryCount === 1 ? '' : 's'} in your cookbook
+      </div>
+    );
+  }
+
+  const job = status?.job;
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.kitchen.startLibraryGeneration(target);
+      setStatus(r);
+      if (!r.ok) setError(r.reason ?? 'Could not start generation');
+      else setConfirming(false);
+    } catch {
+      setError('Could not start generation — try again');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cancel = async () => {
+    setBusy(true);
+    try {
+      const r = await api.kitchen.cancelLibraryGeneration();
+      setStatus(r);
+    } catch {
+      setError('Could not stop generation');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card style={{ padding: '13px 16px 15px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="pwr-eyebrow">RECIPE LIBRARY</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: 'var(--text-1)' }}>
+          {(status?.libraryCount ?? libraryCount).toLocaleString()} recipe{(status?.libraryCount ?? libraryCount) === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Target 2,000 · AI-generated, tuned to your household</div>
+
+      {(!job || job.status === 'idle' || job.status === 'cancelled') && !confirming && (
+        <Button size="sm" variant="primary" iconLeft={<Icon name="sparkles" size={13} />} onClick={() => setConfirming(true)} style={{ alignSelf: 'flex-start' }}>
+          Generate
+        </Button>
+      )}
+
+      {(!job || job.status === 'idle' || job.status === 'cancelled') && confirming && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-2)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>Target</span>
+            <button
+              type="button"
+              onClick={() => setTarget((t) => Math.max(250, t - 250))}
+              style={{ width: 26, height: 26, borderRadius: 7, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: 'var(--text-1)', cursor: 'pointer' }}
+            >
+              −
+            </button>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, minWidth: 52, textAlign: 'center' }}>{target.toLocaleString()}</span>
+            <button
+              type="button"
+              onClick={() => setTarget((t) => Math.min(5000, t + 250))}
+              style={{ width: 26, height: 26, borderRadius: 7, border: '1px solid var(--border-2)', background: 'var(--surface-2)', color: 'var(--text-1)', cursor: 'pointer' }}
+            >
+              +
+            </button>
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>≈ €12–18 · hard cap €25</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant="primary" loading={busy} onClick={() => void start()}>
+              Start
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {job?.status === 'running' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <ProgressBar value={job.insertedCount} max={Math.max(1, job.target)} tone="solar" height={7} />
+          <div style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+            queued {job.queued} · inserted {job.insertedCount} · dupes {job.duplicateCount} · failed {job.failedCount} · €{job.spentEur.toFixed(2)} spent
+          </div>
+          <Button size="sm" variant="ghost" loading={busy} onClick={() => void cancel()} style={{ alignSelf: 'flex-start' }}>
+            Stop
+          </Button>
+        </div>
+      )}
+
+      {job?.status === 'done' && (
+        <div style={{ fontSize: 12.5, color: 'var(--solar)' }}>
+          Library grew to {(status?.libraryCount ?? libraryCount).toLocaleString()} recipes · €{job.spentEur.toFixed(2)} spent
+        </div>
+      )}
+
+      {(job?.status === 'error' || error || (status && !status.configured && confirming)) && (
+        <div style={{ fontSize: 12, color: 'var(--danger)' }}>
+          {error || job?.error || 'No Anthropic key — add it in Settings → Intelligence'}
+        </div>
+      )}
+    </Card>
   );
 }
 

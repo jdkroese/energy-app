@@ -147,6 +147,9 @@ import type {
   WhatCanIMakeIdeasResponse,
   WhatCanIMakeAnswerResponse,
   GenerateRecipesResponse,
+  KitchenCuisine,
+  LibraryGenerateStatusResponse,
+  LibraryGenerateStartResponse,
 } from "./types";
 
 /**
@@ -764,7 +767,33 @@ export const api = {
     reminders: () => getJSON<KitchenRemindersResponse>("/api/kitchen/reminders"),
     setReminders: (patch: Partial<KitchenReminders>) =>
       putJSON<KitchenRemindersResponse>("/api/kitchen/reminders", patch),
-    recipes: () => getJSON<RecipesResponse>("/api/kitchen/recipes"),
+    /** Unpaginated slim index — the planner/engine/day-card source (docs/46 §2b P2). */
+    recipesAll: () => getJSON<RecipesResponse>("/api/kitchen/recipes?all=slim"),
+    /** Paginated + filtered + FTS-backed search/browse (the shelf's search box + Browse all). */
+    searchRecipes: (opts: {
+      q?: string;
+      cuisine?: KitchenCuisine;
+      tag?: string;
+      maxMin?: number;
+      fish?: boolean;
+      veggie?: boolean;
+      page?: number;
+      pageSize?: number;
+    }) => {
+      const params = new URLSearchParams();
+      if (opts.q) params.set("q", opts.q);
+      if (opts.cuisine) params.set("cuisine", opts.cuisine);
+      if (opts.tag) params.set("tag", opts.tag);
+      if (opts.maxMin != null) params.set("maxMin", String(opts.maxMin));
+      if (opts.fish) params.set("fish", "true");
+      if (opts.veggie) params.set("veggie", "true");
+      if (opts.page != null) params.set("page", String(opts.page));
+      if (opts.pageSize != null) params.set("pageSize", String(opts.pageSize));
+      const qs = params.toString();
+      return getJSON<RecipesResponse>(`/api/kitchen/recipes${qs ? `?${qs}` : ""}`);
+    },
+    /** Full recipe (with steps) by id — cook mode / quick-view fetch this on demand. */
+    recipe: (id: string) => getJSON<RecipeResponse>(`/api/kitchen/recipes/${enc(id)}`),
     createRecipe: (recipe: Partial<Recipe>) =>
       postJSON<RecipeResponse>("/api/kitchen/recipes", recipe),
     updateRecipe: (id: string, recipe: Partial<Recipe>) =>
@@ -773,6 +802,16 @@ export const api = {
       delJSON<{ ok: boolean }>(`/api/kitchen/recipes/${enc(id)}`),
     importRecipe: (url: string) =>
       postJSON<RecipeImportResponse>("/api/kitchen/recipes/import", { url }),
+    /* -- docs/46 P2 §2c: bulk AI library generation (admin only) -- */
+    libraryGenerateStatus: () =>
+      getJSON<LibraryGenerateStatusResponse>("/api/kitchen/library/generate/status"),
+    startLibraryGeneration: (target: number, capEur?: number) =>
+      postJSON<LibraryGenerateStartResponse>("/api/kitchen/library/generate", {
+        target,
+        ...(capEur != null ? { capEur } : {}),
+      }),
+    cancelLibraryGeneration: () =>
+      postJSON<LibraryGenerateStartResponse>("/api/kitchen/library/generate/cancel"),
     plan: (week?: string) =>
       getJSON<MealPlanResponse>(
         `/api/kitchen/plan${week ? `?week=${enc(week)}` : ""}`,

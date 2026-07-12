@@ -2268,6 +2268,13 @@ export interface Recipe {
   updatedAt: string;
 }
 
+/**
+ * Slim recipe shape (docs/46 §2a P2): everything EXCEPT `steps` (the bulky cook-instruction
+ * text) — what the shelf/search/planner surfaces work with at scale. Fetch the full Recipe
+ * (with steps) by id via api.kitchen.recipe(id) only when actually cooking/quick-viewing one.
+ */
+export type RecipeSlim = Omit<Recipe, 'steps'>;
+
 export interface MealPlanDay {
   date: string;
   recipeId?: string | null;
@@ -2489,7 +2496,10 @@ export interface KitchenRegularHit {
   recommendedQty: number;
 }
 
-export interface RecipesResponse { ts: string; recipes: Recipe[] }
+/** GET /recipes (docs/46 §2b): paginated + filtered + FTS-backed by default; `total` is the
+ *  FULL match count (not just this page). `?all=slim` returns the whole slim index unpaginated
+ *  (page/pageSize are then absent) — see api.kitchen.recipesAll(). */
+export interface RecipesResponse { ts: string; recipes: RecipeSlim[]; total: number; page?: number; pageSize?: number }
 export interface RecipeResponse { ts: string; recipe: Recipe }
 export interface RecipeImportResponse {
   ts: string;
@@ -2506,7 +2516,7 @@ export interface MealPlanResponse {
 }
 export interface PlanAskResponse { ts: string; ok: boolean; reason?: string; candidateIds: string[]; note?: string }
 /** POST /plan/request candidate (docs/46 §1c): a scored recipe + a short human reason. */
-export interface PlanRequestCandidate { recipe: Recipe; why: string }
+export interface PlanRequestCandidate { recipe: RecipeSlim; why: string }
 export interface PlanRequestResponse { ts: string; ok: boolean; aiUsed: boolean; candidates: PlanRequestCandidate[] }
 export interface StaplesResponse { ts: string; staples: StaplesItem[] }
 export interface OrderDraftResponse { ts: string; draft: OrderDraft }
@@ -2570,4 +2580,33 @@ export interface GenerateRecipesResponse {
   reason?: 'intelligence-off' | 'no-recipes';
   cached?: boolean;
   recipes: Recipe[];
+}
+
+/* ---- Bulk recipe-library generation (docs/46 P2 §2c) — admin only ---- */
+
+export interface LibraryGenerationJob {
+  status: 'idle' | 'running' | 'done' | 'error' | 'cancelled';
+  target: number;
+  capEur: number;
+  startedAt: string | null;
+  updatedAt: string;
+  batchIds: string[];
+  queued: number;
+  insertedCount: number;
+  duplicateCount: number;
+  failedCount: number;
+  spentEur: number;
+  error: string | null;
+}
+
+export interface LibraryGenerateStatusResponse {
+  ts: string;
+  job: LibraryGenerationJob;
+  libraryCount: number;
+  configured: boolean;
+}
+
+export interface LibraryGenerateStartResponse extends LibraryGenerateStatusResponse {
+  ok: boolean;
+  reason?: string;
 }
