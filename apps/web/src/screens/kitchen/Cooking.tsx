@@ -949,6 +949,7 @@ export function Cooking({ ctx }: { ctx: ShellContext }) {
 function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount: number }) {
   const [status, setStatus] = useState<LibraryGenerateStatusResponse | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [confirmingStop, setConfirmingStop] = useState(false);
   const [target, setTarget] = useState(2000);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -961,10 +962,13 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
   }, []);
   useEffect(load, [load]);
   useEffect(() => {
-    if (status?.job.status !== 'running') return;
+    // Poll while a run is in progress OR auto-fill is still below target (idle-but-waiting-
+    // on-budget/key can flip to running the moment the coordinator's next tick allows it).
+    const waiting = status && status.job.status !== 'running' && status.job.autoTarget > (status.libraryCount ?? 0);
+    if (status?.job.status !== 'running' && !waiting) return;
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
-  }, [status?.job.status, load]);
+  }, [status, load]);
 
   if (!isAdmin) {
     return (
@@ -975,6 +979,7 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
   }
 
   const job = status?.job;
+  const photos = status?.photos;
   const start = async () => {
     setBusy(true);
     setError(null);
@@ -994,6 +999,7 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
     try {
       const r = await api.kitchen.cancelLibraryGeneration();
       setStatus(r);
+      setConfirmingStop(false);
     } catch {
       setError('Could not stop generation');
     } finally {
@@ -1008,8 +1014,38 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: 'var(--text-1)' }}>
           {(status?.libraryCount ?? libraryCount).toLocaleString()} recipe{(status?.libraryCount ?? libraryCount) === 1 ? '' : 's'}
         </span>
+        {job?.status === 'running' && job.autoTarget > 0 && (
+          <Badge tone="solar">Auto-filling to {job.autoTarget.toLocaleString()}</Badge>
+        )}
       </div>
-      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Target 2,000 · AI-generated, tuned to your household</div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+        {job && job.autoTarget > 0
+          ? `Auto-fill target ${job.autoTarget.toLocaleString()} · AI-generated, tuned to your household`
+          : 'Auto-fill off · AI-generated, tuned to your household'}
+      </div>
+
+      {status?.autoIdleReason && job?.status !== 'running' && (
+        <div style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
+          <Icon name="clock" size={11} /> {status.autoIdleReason}
+        </div>
+      )}
+
+      {photos && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+            Photos{' '}
+            <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>
+              {photos.withPhoto.toLocaleString()} / {photos.total.toLocaleString()}
+            </b>{' '}
+            · {photos.provider === 'pexels' ? 'Pexels · fast' : 'Openverse · free'}
+          </div>
+          {photos.pexelsWouldHelp && (
+            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+              Add a free Pexels key in Settings → Intelligence to fetch photos ~40× faster
+            </div>
+          )}
+        </div>
+      )}
 
       {(!job || job.status === 'idle' || job.status === 'cancelled') && !confirming && (
         <Button size="sm" variant="primary" iconLeft={<Icon name="sparkles" size={13} />} onClick={() => setConfirming(true)} style={{ alignSelf: 'flex-start' }}>
@@ -1037,7 +1073,7 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
               +
             </button>
           </div>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>≈ €12–18 · hard cap €25</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>≈ €12–18 · hard cap €25 · also becomes the auto-fill target</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button size="sm" variant="primary" loading={busy} onClick={() => void start()}>
               Start
@@ -1049,15 +1085,31 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
         </div>
       )}
 
-      {job?.status === 'running' && (
+      {job?.status === 'running' && !confirmingStop && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <ProgressBar value={job.insertedCount} max={Math.max(1, job.target)} tone="solar" height={7} />
           <div style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
             queued {job.queued} · inserted {job.insertedCount} · dupes {job.duplicateCount} · failed {job.failedCount} · €{job.spentEur.toFixed(2)} spent
           </div>
-          <Button size="sm" variant="ghost" loading={busy} onClick={() => void cancel()} style={{ alignSelf: 'flex-start' }}>
+          <Button size="sm" variant="ghost" onClick={() => setConfirmingStop(true)} style={{ alignSelf: 'flex-start' }}>
             Stop
           </Button>
+        </div>
+      )}
+
+      {job?.status === 'running' && confirmingStop && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-2)' }}>
+          <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+            Stop means stop — auto-fill turns off at {(status?.libraryCount ?? libraryCount).toLocaleString()} recipes until you press Generate again.
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button size="sm" variant="danger" loading={busy} onClick={() => void cancel()}>
+              Stop
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmingStop(false)}>
+              Never mind
+            </Button>
+          </div>
         </div>
       )}
 
@@ -1070,6 +1122,12 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
       {(job?.status === 'error' || error || (status && !status.configured && confirming)) && (
         <div style={{ fontSize: 12, color: 'var(--danger)' }}>
           {error || job?.error || 'No Anthropic key — add it in Settings → Intelligence'}
+        </div>
+      )}
+
+      {photos && (
+        <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 2 }}>
+          Photos via {photos.pexelsConfigured ? 'Openverse and Pexels' : 'Openverse'}
         </div>
       )}
     </Card>

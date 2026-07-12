@@ -895,6 +895,7 @@ export const api = {
     setIntelligence: (patch: {
       enabled?: boolean;
       apiKey?: string;
+      pexelsApiKey?: string;
       features?: Partial<KitchenIntelligence["features"]>;
     }) => putJSON<KitchenIntelligenceResponse>("/api/kitchen/intelligence", patch),
     /* -- P3 (docs/42): cooked feedback · what-can-I-make -- */
