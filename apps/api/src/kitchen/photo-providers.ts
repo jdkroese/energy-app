@@ -218,11 +218,14 @@ function applyBackoff(state: ThrottleState, retryAfterHeader: string | null | un
 
 /**
  * Search for a food photo: Pexels when a key is configured (preferred fast path), Openverse
- * otherwise (keyless default). One throttle check gates the WHOLE turn (both the primary and,
- * if needed, the one fallback query count as a single turn against the >=20s/request pace —
- * they're two requests for the SAME recipe, not a burst against the provider). Never throws;
- * network/parse failures surface as 'error' so the caller (photo-enrich.ts) can just retry
- * next tick without marking the recipe as a definitive no-hit.
+ * otherwise (keyless default). One throttle check gates the start of the turn, and every
+ * request the turn actually makes advances `lastRequestAt` — so a two-request turn (primary
+ * no-hit → one fallback query) delays the NEXT allowed request by a full interval from the
+ * SECOND request, keeping the sustained pace at <=1 request per interval (<=180/hr) even
+ * when every candidate needs the fallback. Any non-429 completion resets the 429 streak so
+ * intermittent rate-limits spread across days don't keep escalating the backoff. Never
+ * throws; network/parse failures surface as 'error' so the caller (photo-enrich.ts) can
+ * just retry next tick without marking the recipe as a definitive no-hit.
  */
 export async function searchFoodPhoto(opts: {
   primaryQuery: string;
@@ -237,21 +240,34 @@ export async function searchFoodPhoto(opts: {
   state.lastRequestAt = now;
 
   const call = (q: string) => (usePexels ? rawPexelsCall(q, opts.pexelsApiKey as string) : rawOpenverseCall(q));
+  // N1 (review): any completed request that ISN'T a 429 ends the 429 streak — found, no-hit,
+  // and plain network errors all count. Without this, occasional 429s spread across days
+  // would keep doubling the backoff (20s→40s→…→10min) despite hundreds of successes between.
+  const endStreak = () => {
+    state.consecutive429 = 0;
+  };
 
   const first = await call(opts.primaryQuery);
-  if (first.kind === 'found' && first.result) return { kind: 'found', result: first.result };
   if (first.kind === 'rate-limited') {
     applyBackoff(state, first.retryAfterHeader);
     return { kind: 'error', detail: '429' };
   }
+  endStreak();
+  if (first.kind === 'found' && first.result) return { kind: 'found', result: first.result };
 
   if (opts.fallbackQuery) {
     const second = await call(opts.fallbackQuery);
-    if (second.kind === 'found' && second.result) return { kind: 'found', result: second.result };
+    // N2 (review): the fallback is a SECOND real request against the provider — advance the
+    // throttle clock again so the next turn waits a full interval from THIS request, not from
+    // the turn's start. Otherwise a fallback-heavy stretch runs 2 requests per window
+    // (360/hr — over Pexels' limit and double the intended Openverse pace).
+    state.lastRequestAt = clock();
     if (second.kind === 'rate-limited') {
       applyBackoff(state, second.retryAfterHeader);
       return { kind: 'error', detail: '429' };
     }
+    endStreak();
+    if (second.kind === 'found' && second.result) return { kind: 'found', result: second.result };
     if (second.kind === 'no-hit' || first.kind === 'no-hit') return { kind: 'no-hit' };
     return { kind: 'error', detail: second.detail ?? first.detail ?? 'network' };
   }

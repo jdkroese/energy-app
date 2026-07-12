@@ -316,3 +316,70 @@ test('searchFoodPhoto: a 429 with no Retry-After falls back to exponential backo
   const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
   assert.equal(third.kind, 'error', 'the 20s mark just clears backoff, then a fresh 429 doubles it again');
 });
+
+test('searchFoodPhoto: a success between 429s RESETS the streak — the next 429 backs off 20s, not 40s', async () => {
+  reset();
+  let now = 0;
+  _setClockForTests(() => now);
+  let calls = 0;
+  _setFetchForTests(async () => {
+    calls++;
+    if (calls === 2) {
+      return fakeResponse(200, { results: [{ url: 'https://example.com/a.jpg', width: 800, height: 600 }] });
+    }
+    return fakeResponse(429, {});
+  });
+
+  // Call 1 at t=0: 429 → first backoff step (20s), streak = 1.
+  const first = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: null, pexelsApiKey: null });
+  assert.equal(first.kind, 'error');
+
+  // Call 2 at t=20s: success — this must END the 429 streak.
+  now = 20_000;
+  const second = await searchFoodPhoto({ primaryQuery: 'b', fallbackQuery: null, pexelsApiKey: null });
+  assert.equal(second.kind, 'found');
+
+  // Call 3 at t=40s: a fresh 429. With the streak reset it backs off the FIRST step again
+  // (20s → clear at t=60s). Without the reset it would be the SECOND step (40s → t=80s).
+  now = 40_000;
+  const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
+  assert.equal(third.kind, 'error');
+
+  now = 59_999;
+  const inside = await searchFoodPhoto({ primaryQuery: 'd', fallbackQuery: null, pexelsApiKey: null });
+  assert.equal(inside.kind, 'throttled', 'still inside the 20s first-step backoff');
+
+  now = 60_000;
+  const after = await searchFoodPhoto({ primaryQuery: 'e', fallbackQuery: null, pexelsApiKey: null });
+  assert.notEqual(after.kind, 'throttled', 'a 20s (first-step) backoff cleared — the streak was reset by the success');
+});
+
+test('searchFoodPhoto: a two-request turn (primary no-hit → fallback) delays the next allowed request by a full interval from the SECOND request', async () => {
+  reset();
+  let now = 0;
+  _setClockForTests(() => now);
+  let calls = 0;
+  _setFetchForTests(async () => {
+    calls++;
+    now += 5_000; // each real request takes/advances 5s of clock
+    return fakeResponse(200, { results: [] }); // always empty → primary no-hit, fallback fires
+  });
+
+  // Turn 1 starts at t=0: primary request ends at t=5s, fallback request ends at t=10s.
+  const first = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: 'a-fallback', pexelsApiKey: null });
+  assert.equal(first.kind, 'no-hit');
+  assert.equal(calls, 2);
+
+  // t=20s: a full interval from the turn's START, but only 10s after the SECOND request —
+  // must still be throttled (otherwise a fallback-heavy stretch sustains 2 requests / window).
+  now = 20_000;
+  const second = await searchFoodPhoto({ primaryQuery: 'b', fallbackQuery: null, pexelsApiKey: null });
+  assert.equal(second.kind, 'throttled', 'the fallback request must also consume a throttle window');
+  assert.equal(calls, 2, 'no network call while throttled');
+
+  // t=30s: a full 20s after the second request (which landed at t=10s) — now allowed.
+  now = 30_000;
+  const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
+  assert.notEqual(third.kind, 'throttled');
+  assert.equal(calls, 3);
+});
