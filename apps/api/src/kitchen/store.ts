@@ -12,6 +12,7 @@ import type {
   Household,
   KitchenData,
   MealPlan,
+  NutritionScales,
   OrderDraft,
   Recipe,
   Reminders,
@@ -20,6 +21,10 @@ import type {
 export * from './types';
 
 // ---- Defaults ---------------------------------------------------------------
+
+export function defaultNutritionScales(): NutritionScales {
+  return { calories: 5, carbs: 5, fish: 5, veg: 5, protein: 5 };
+}
 
 export function defaultHousehold(): Household {
   return {
@@ -33,6 +38,9 @@ export function defaultHousehold(): Household {
     cuisineWeights: { spanish: 80, japanese: 65, italian: 60, dutch: 45, global: 50 },
     goals: { mode: null, kcalPerDinner: null },
     showNutritionOnCards: true,
+    nutritionScales: defaultNutritionScales(),
+    seasonalLocal: true,
+    boostIngredients: [],
   };
 }
 
@@ -133,6 +141,13 @@ function hydrate(p: unknown): KitchenData {
       },
       showNutritionOnCards:
         typeof hh.showNutritionOnCards === 'boolean' ? hh.showNutritionOnCards : base.household.showNutritionOnCards,
+      // Additive (docs/46): older stored households have no nutritionScales/seasonalLocal/
+      // boostIngredients — hydrate defensively, same pattern as dietRestrictions above.
+      nutritionScales: hydrateNutritionScales(hh.nutritionScales),
+      seasonalLocal: typeof hh.seasonalLocal === 'boolean' ? hh.seasonalLocal : base.household.seasonalLocal,
+      boostIngredients: Array.isArray(hh.boostIngredients)
+        ? hh.boostIngredients.filter((x): x is string => typeof x === 'string').slice(0, 30)
+        : [],
     },
     reminders: {
       planWeekDow: typeof rem.planWeekDow === 'number' ? ((rem.planWeekDow % 7) + 7) % 7 : base.reminders.planWeekDow,
@@ -150,6 +165,22 @@ function hydrate(p: unknown): KitchenData {
     },
     suggestionMutes: hydrateMutes(k.suggestionMutes),
     seededAt: typeof k.seededAt === 'string' ? k.seededAt : null,
+  };
+}
+
+/** Clamp each 1–10 scale defensively; a missing/malformed object falls back to all-5 (neutral). */
+function hydrateNutritionScales(p: unknown): NutritionScales {
+  const base = defaultNutritionScales();
+  if (!p || typeof p !== 'object') return base;
+  const s = p as Partial<NutritionScales>;
+  const clamp = (v: unknown, fallback: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.max(1, Math.min(10, Math.round(v))) : fallback;
+  return {
+    calories: clamp(s.calories, base.calories),
+    carbs: clamp(s.carbs, base.carbs),
+    fish: clamp(s.fish, base.fish),
+    veg: clamp(s.veg, base.veg),
+    protein: clamp(s.protein, base.protein),
   };
 }
 

@@ -22,6 +22,7 @@ import {
   formatQty,
   ingredientKey,
   normalizeQty,
+  rankPlanRequestCandidates,
   suggestWeek,
   weekStartOf,
 } from '../kitchen/engine';
@@ -125,6 +126,16 @@ kitchenRouter.put(
         else if (typeof g.kcalPerDinner === 'number') h.goals.kcalPerDinner = Math.max(200, Math.min(2000, g.kcalPerDinner));
       }
       if (typeof b.showNutritionOnCards === 'boolean') h.showNutritionOnCards = b.showNutritionOnCards;
+      if (b.nutritionScales && typeof b.nutritionScales === 'object') {
+        const ns = b.nutritionScales as unknown as Record<string, unknown>;
+        for (const k of ['calories', 'carbs', 'fish', 'veg', 'protein'] as const) {
+          const v = ns[k];
+          if (typeof v === 'number' && Number.isFinite(v)) h.nutritionScales[k] = Math.max(1, Math.min(10, Math.round(v)));
+        }
+      }
+      if (typeof b.seasonalLocal === 'boolean') h.seasonalLocal = b.seasonalLocal;
+      if (Array.isArray(b.boostIngredients))
+        h.boostIngredients = b.boostIngredients.filter((x): x is string => typeof x === 'string').slice(0, 30);
       return h;
     });
     return { ts: ts(), household };
@@ -649,6 +660,69 @@ kitchenRouter.post(
     const valid = (parsed?.candidateIds ?? []).filter((id) => d.recipes.some((r) => r.id === id));
     if (!valid.length) return { ts: ts(), ok: false, reason: 'no-match', candidateIds: fallback() };
     return { ts: ts(), ok: true, candidateIds: valid.slice(0, 5), note: parsed?.note };
+  }),
+);
+
+// Per-day "Pick" (docs/46 §1c): top 6 candidates for one day, deterministic-first. text is
+// optional free-form ("something with fish, light"); excludeIds lets the sheet's Refresh
+// button re-request while skipping the candidates already shown. Optional AI re-rank of the
+// deterministic top ~30 rides the SAME plannerRequestBox feature as /plan/ask, fails soft.
+const REQUEST_AI_POOL = 30;
+const REQUEST_LIMIT = 6;
+
+kitchenRouter.post(
+  '/plan/request',
+  wrap(async (req) => {
+    const weekStart = weekParam(req);
+    const b = (req.body ?? {}) as { date?: unknown; text?: unknown; excludeIds?: unknown };
+    const date = String(b.date ?? '').trim();
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw badInput('body.date (YYYY-MM-DD) required');
+    const text = typeof b.text === 'string' ? b.text.trim() : '';
+    const excludeIds = Array.isArray(b.excludeIds) ? b.excludeIds.filter((x): x is string => typeof x === 'string') : [];
+    planFor(weekStart);
+    const d = kitchen.get();
+    const plan = d.plans[weekStart];
+    if (!plan.days.some((day) => day.date === date)) throw badInput(`date ${date} not in week ${weekStart}`);
+
+    const ranked = rankPlanRequestCandidates(d.recipes, d.household, plan, {
+      date,
+      now: new Date(),
+      ...(text ? { text } : {}),
+      excludeIds,
+    });
+
+    let ordered = ranked;
+    let aiUsed = false;
+    if (text && ranked.length > 1 && claude.isFeatureEnabled('plannerRequestBox')) {
+      const pool = ranked.slice(0, REQUEST_AI_POOL);
+      const library = pool
+        .map(
+          ({ recipe: r }) =>
+            `${r.id} | ${r.title} | ${r.cuisine} | ${r.prepMin + r.cookMin} min | ${r.nutrition?.kcal ?? '?'} kcal | ${r.tags.join(',')}`,
+        )
+        .join('\n');
+      try {
+        const parsed = await claude.completeJSON<{ order?: string[] }>({
+          system:
+            "You help pick tonight's dinner. Given a candidate pool (one per line: id | title | cuisine | " +
+            'total min | kcal | tags), already filtered to fit the household, output ONLY JSON: ' +
+            '{"order": [pool ids, BEST match for the request first, every id present exactly once]}.',
+          prompt: `Pool:\n${library}\n\nRequest: ${text}`,
+          maxTokens: 400,
+        });
+        const byId = new Map(pool.map((c) => [c.recipe.id, c]));
+        const orderedIds = (parsed?.order ?? []).filter((id) => byId.has(id));
+        if (orderedIds.length) {
+          const seen = new Set(orderedIds);
+          const rest = pool.filter((c) => !seen.has(c.recipe.id));
+          ordered = [...orderedIds.map((id) => byId.get(id)!), ...rest, ...ranked.slice(REQUEST_AI_POOL)];
+          aiUsed = true;
+        }
+      } catch {
+        // fail soft — the deterministic order stands
+      }
+    }
+    return { ts: ts(), ok: true, aiUsed, candidates: ordered.slice(0, REQUEST_LIMIT) };
   }),
 );
 
