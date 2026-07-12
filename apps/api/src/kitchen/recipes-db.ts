@@ -44,7 +44,7 @@ export type RecipesDb = {
   close: () => void;
 };
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let initTried = false;
 let disabledReason: string | null = null;
@@ -118,6 +118,18 @@ function migrate(handle: RecipesDb): void {
   }
   if (!columnExists(handle, 'recipes', 'photo_tried_at')) {
     handle.exec(`ALTER TABLE recipes ADD COLUMN photo_tried_at TEXT`);
+  }
+
+  // Schema v3 (docs/48 §4b, local photo cache) — one additive column so "cached / total"
+  // coverage and the backfill-queue priority are cheap + indexable, instead of a JS scan of
+  // every recipe's `photo` string on every status poll. Guarded exactly like v2's ALTERs.
+  // Recomputed from the CURRENT `photo` value on every insert/update (recipes-repo.ts's
+  // toRow()) — this migration only needs to BACKFILL it once for rows written before this
+  // column existed; every future write keeps it correct automatically.
+  if (!columnExists(handle, 'recipes', 'photo_cached')) {
+    handle.exec(`ALTER TABLE recipes ADD COLUMN photo_cached INTEGER NOT NULL DEFAULT 0`);
+    handle.exec(`UPDATE recipes SET photo_cached = CASE WHEN photo LIKE '/%' THEN 1 ELSE 0 END`);
+    handle.exec(`CREATE INDEX IF NOT EXISTS idx_recipes_photo_cached ON recipes(photo_cached)`);
   }
 
   handle

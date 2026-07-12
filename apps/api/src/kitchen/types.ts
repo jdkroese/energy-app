@@ -39,9 +39,16 @@ export interface Recipe {
    *  photo-null recipes of ANY source get hotlinked here by the enrichment coordinator
    *  (docs/47 §3b). */
   photo?: string | null;
-  /** Attribution for an enrichment-fetched photo — required by both providers' terms.
+  /** Attribution for an enrichment-fetched photo — required by all providers' terms.
    *  Absent for seed/url photos (those aren't stock-photo hotlinks). */
-  photoCredit?: { name: string; url: string; provider: 'openverse' | 'pexels' } | null;
+  photoCredit?: {
+    name: string;
+    url: string;
+    provider: 'openverse' | 'pexels' | 'commons';
+    /** Short license name (e.g. "CC BY-SA 4.0") — present for Commons (and any CC-licensed
+     *  Openverse hit); absent for Pexels (its own free license, no SPDX-style short name). */
+    license?: string;
+  } | null;
   /** ISO timestamp of the last enrichment attempt that found nothing — re-tried after 30
    *  days (docs/47 §3b) so a transiently-empty search doesn't block the recipe forever.
    *  Cleared once a photo is actually found. Repo/sqlite bookkeeping only, not rendered. */

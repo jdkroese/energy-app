@@ -293,55 +293,127 @@ test('a genuinely fresh install (no kitchen.json at all) seeds 50 recipes, and m
   assert.equal(repo.count(), 50);
 });
 
-// ---- Photo enrichment repo helpers (docs/47 §3b) --------------------------------------------
+// ---- Photo enrichment + local cache repo helpers (docs/47 §3b, hardened docs/48 §4b) --------
 
-test('photoCoverage counts total vs. with-photo', () => {
+test('photoCoverage: counts CACHED (local) vs. LINKED (remote, not yet cached) separately', () => {
   freshEnv();
-  repo.insertRecipe(recipe('r1', { photo: '/recipes/r1.jpg' }));
-  repo.insertRecipe(recipe('r2', { photo: null }));
-  repo.insertRecipe(recipe('r3', { photo: null }));
-  assert.deepEqual(repo.photoCoverage(), { total: 3, withPhoto: 1 });
+  repo.insertRecipe(recipe('r1', { photo: '/recipes/r1.jpg' })); // bundled seed — durable/local
+  repo.insertRecipe(recipe('r2', { photo: '/api/kitchen/photos/r2' })); // our own cache route — durable/local
+  repo.insertRecipe(recipe('r3', { photo: 'https://images.example.com/hotlink.jpg' })); // remote — linked, not cached
+  repo.insertRecipe(recipe('r4', { photo: null }));
+  assert.deepEqual(repo.photoCoverage(), { total: 4, cached: 2, linked: 1 });
 });
 
-test('nextPhotoEnrichmentCandidate: skips photo-present recipes, returns photo-null ones in stable (title) order', () => {
+test('nextPhotoWorkItem: priority 1 — skips photo-present recipes, returns photo-null ones in stable (title) order', () => {
   freshEnv();
   repo.insertRecipe(recipe('r1', { title: 'Zebra dish', photo: null }));
   repo.insertRecipe(recipe('r2', { title: 'Apple dish', photo: '/recipes/r2.jpg' }));
   repo.insertRecipe(recipe('r3', { title: 'Mango dish', photo: null }));
 
   const now = Date.now();
-  const first = repo.nextPhotoEnrichmentCandidate(now, 30 * 24 * 60 * 60 * 1000);
-  assert.equal(first?.id, 'r3', 'title-sorted: Mango before Zebra, and Apple (has a photo) is skipped');
+  const item = repo.nextPhotoWorkItem(now, 30 * 24 * 60 * 60 * 1000);
+  assert.equal(item?.mode, 'search');
+  assert.equal(item?.recipe.id, 'r3', 'title-sorted: Mango before Zebra, and Apple (has a photo) is skipped');
 });
 
-test('nextPhotoEnrichmentCandidate: a recently-tried no-hit is skipped, an old one is retried', () => {
+test('nextPhotoWorkItem: a recently-tried no-hit is skipped, an old one is retried', () => {
   freshEnv();
   const now = Date.now();
   const thirtyDays = 30 * 24 * 60 * 60 * 1000;
   repo.insertRecipe(recipe('recent', { photo: null, photoTriedAt: new Date(now - 1000).toISOString() }));
   repo.insertRecipe(recipe('old', { photo: null, photoTriedAt: new Date(now - thirtyDays - 1000).toISOString() }));
 
-  const candidate = repo.nextPhotoEnrichmentCandidate(now, thirtyDays);
-  assert.equal(candidate?.id, 'old');
+  const item = repo.nextPhotoWorkItem(now, thirtyDays);
+  assert.equal(item?.mode, 'search');
+  assert.equal(item?.recipe.id, 'old');
 });
 
-test('nextPhotoEnrichmentCandidate: null when every recipe has a photo or is in its cool-off', () => {
+test('nextPhotoWorkItem: priority 2 — a provider-hotlinked photo is offered for cache-only backfill once no photo-null recipes remain', () => {
+  freshEnv();
+  repo.insertRecipe(
+    recipe('r1', { photo: 'https://images.example.com/hotlink.jpg', photoCredit: { name: 'Ana', url: 'https://x.test', provider: 'openverse' } }),
+  );
+  const item = repo.nextPhotoWorkItem(Date.now(), 30 * 24 * 60 * 60 * 1000);
+  assert.equal(item?.mode, 'cache-only');
+  assert.equal(item?.recipe.id, 'r1');
+});
+
+test('nextPhotoWorkItem: priority 3 — an og:image URL-import photo is offered LAST, behind provider-hotlinked ones', () => {
+  freshEnv();
+  repo.insertRecipe(recipe('imported', { title: 'Apple dish', photo: 'https://cdn.example.com/og.jpg', source: 'url', sourceUrl: 'https://x.test' }));
+  repo.insertRecipe(
+    recipe('hotlinked', {
+      title: 'Zebra dish',
+      photo: 'https://images.example.com/hotlink.jpg',
+      photoCredit: { name: 'Ana', url: 'https://x.test', provider: 'openverse' },
+    }),
+  );
+  const item = repo.nextPhotoWorkItem(Date.now(), 30 * 24 * 60 * 60 * 1000);
+  assert.equal(item?.recipe.id, 'hotlinked', 'priority 2 (credited hotlink) is offered before priority 3 (bare og:image import)');
+});
+
+test('nextPhotoWorkItem: a manually-entered remote photo (no credit, source != url) never enters the backfill queue', () => {
+  freshEnv();
+  repo.insertRecipe(recipe('manual', { source: 'manual', photo: 'https://cdn.example.com/manual.jpg' }));
+  assert.equal(repo.nextPhotoWorkItem(Date.now(), 30 * 24 * 60 * 60 * 1000), null);
+});
+
+test('nextPhotoWorkItem: skipCacheOnlyIds excludes cache-only items (both buckets) but never search-mode ones', () => {
+  freshEnv();
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  repo.insertRecipe(
+    recipe('hotlinked', {
+      title: 'Apple dish',
+      photo: 'https://images.example.com/dead.jpg',
+      photoCredit: { name: 'Ana', url: 'https://x.test', provider: 'openverse' },
+    }),
+  );
+  repo.insertRecipe(recipe('imported', { title: 'Mango dish', photo: 'https://cdn.example.com/og.jpg', source: 'url', sourceUrl: 'https://x.test' }));
+
+  const skip = new Set(['hotlinked']);
+  const item = repo.nextPhotoWorkItem(Date.now(), thirtyDays, skip);
+  assert.equal(item?.recipe.id, 'imported', 'the skipped priority-2 item is passed over; priority 3 proceeds');
+
+  skip.add('imported');
+  assert.equal(repo.nextPhotoWorkItem(Date.now(), thirtyDays, skip), null, 'both cache-only items skipped → nothing to do');
+
+  // A photo-null (search-mode) recipe is NEVER filtered by the skip set — its give-up
+  // mechanism is photoTriedAt, owned by photo-enrich.ts.
+  repo.insertRecipe(recipe('needs-search', { title: 'Zebra dish', photo: null }));
+  skip.add('needs-search');
+  const searchItem = repo.nextPhotoWorkItem(Date.now(), thirtyDays, skip);
+  assert.equal(searchItem?.mode, 'search');
+  assert.equal(searchItem?.recipe.id, 'needs-search');
+});
+
+test('nextPhotoWorkItem: null when every recipe is cached, or in its cool-off, or otherwise not queue-eligible', () => {
   freshEnv();
   const now = Date.now();
   const thirtyDays = 30 * 24 * 60 * 60 * 1000;
   repo.insertRecipe(recipe('r1', { photo: '/recipes/r1.jpg' }));
   repo.insertRecipe(recipe('r2', { photo: null, photoTriedAt: new Date(now - 1000).toISOString() }));
-  assert.equal(repo.nextPhotoEnrichmentCandidate(now, thirtyDays), null);
+  assert.equal(repo.nextPhotoWorkItem(now, thirtyDays), null);
 });
 
-test('setRecipePhoto stores the photo + credit and clears any stale tried marker', () => {
+test('setRecipePhoto: stores the LOCAL route + credit (incl. an optional license), clears any stale tried marker', () => {
   freshEnv();
   repo.insertRecipe(recipe('r1', { photo: null, photoTriedAt: '2026-01-01T00:00:00.000Z' }));
-  repo.setRecipePhoto('r1', 'https://example.com/x.jpg', { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+  repo.setRecipePhoto('r1', '/api/kitchen/photos/r1', { name: 'Someone', url: 'https://commons.wikimedia.org/wiki/File:X.jpg', provider: 'commons', license: 'CC BY-SA 4.0' });
   const full = repo.getFull('r1');
-  assert.equal(full?.photo, 'https://example.com/x.jpg');
-  assert.deepEqual(full?.photoCredit, { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+  assert.equal(full?.photo, '/api/kitchen/photos/r1');
+  assert.deepEqual(full?.photoCredit, { name: 'Someone', url: 'https://commons.wikimedia.org/wiki/File:X.jpg', provider: 'commons', license: 'CC BY-SA 4.0' });
   assert.equal(full?.photoTriedAt, null);
+});
+
+test('setRecipePhotoLocal: flips an existing hotlink to its cached local route, keeping whatever credit it already had', () => {
+  freshEnv();
+  repo.insertRecipe(
+    recipe('r1', { photo: 'https://images.example.com/hotlink.jpg', photoCredit: { name: 'Ana', url: 'https://x.test', provider: 'openverse' } }),
+  );
+  repo.setRecipePhotoLocal('r1', '/api/kitchen/photos/r1');
+  const full = repo.getFull('r1');
+  assert.equal(full?.photo, '/api/kitchen/photos/r1');
+  assert.deepEqual(full?.photoCredit, { name: 'Ana', url: 'https://x.test', provider: 'openverse' }, 'credit is untouched by a backfill cache flip');
 });
 
 test('markPhotoTried records the timestamp without touching the photo field', () => {
@@ -353,21 +425,33 @@ test('markPhotoTried records the timestamp without touching the photo field', ()
   assert.equal(full?.photoTriedAt, '2026-03-01T00:00:00.000Z');
 });
 
-// ---- Schema v2 migration idempotence (docs/47 cross-cutting) --------------------------------
+// ---- Schema v2/v3 migration idempotence (docs/47 + docs/48 §4b cross-cutting) ----------------
 
 test('schema v2 (photo_credit_json / photo_tried_at) migration is idempotent — reopening the same db file is a no-op, not a crash', () => {
   const { dir } = freshEnv();
   repo.insertRecipe(recipe('r1', { photo: null }));
-  repo.setRecipePhoto('r1', 'https://example.com/x.jpg', { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+  repo.setRecipePhoto('r1', '/api/kitchen/photos/r1', { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
 
   // Simulate a restart: close the handle and reopen against the SAME file — migrate() runs
-  // again on the existing (already-v2) file. Must not throw "duplicate column name" and must
-  // preserve the data written before the "restart".
+  // again on the existing (already-migrated) file. Must not throw "duplicate column name" and
+  // must preserve the data written before the "restart".
   repo._resetForTests();
   process.env.RECIPES_DB_FILE = join(dir, 'recipes.db');
   process.env.KITCHEN_FILE = join(dir, 'kitchen.json');
 
   const full = repo.getFull('r1');
-  assert.equal(full?.photo, 'https://example.com/x.jpg');
+  assert.equal(full?.photo, '/api/kitchen/photos/r1');
   assert.deepEqual(full?.photoCredit, { name: 'Ana', url: 'https://x.test', provider: 'openverse' });
+});
+
+test('schema v3 (photo_cached): reopening an already-v3 db file is idempotent, and photoCoverage still reflects reality', () => {
+  const { dir } = freshEnv();
+  repo.insertRecipe(recipe('r1', { photo: '/recipes/r1.jpg' }));
+  repo.insertRecipe(recipe('r2', { photo: 'https://images.example.com/hotlink.jpg' }));
+
+  repo._resetForTests();
+  process.env.RECIPES_DB_FILE = join(dir, 'recipes.db');
+  process.env.KITCHEN_FILE = join(dir, 'kitchen.json');
+
+  assert.deepEqual(repo.photoCoverage(), { total: 2, cached: 1, linked: 1 });
 });

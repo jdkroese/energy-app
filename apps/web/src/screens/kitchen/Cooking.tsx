@@ -1035,9 +1035,12 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
           <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
             Photos{' '}
             <b style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>
-              {photos.withPhoto.toLocaleString()} / {photos.total.toLocaleString()}
-            </b>{' '}
-            · {photos.provider === 'pexels' ? 'Pexels · fast' : 'Openverse · free'}
+              {photos.cached.toLocaleString()} / {photos.total.toLocaleString()}
+            </b>
+            {photos.linked > 0 && (
+              <span style={{ color: 'var(--text-3)' }}> (+{photos.linked.toLocaleString()} linked)</span>
+            )}{' '}
+            · {photos.provider === 'pexels' ? 'Pexels · fast' : 'Commons + Openverse · free'}
           </div>
           {photos.pexelsWouldHelp && (
             <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
@@ -1127,7 +1130,7 @@ function LibraryCard({ isAdmin, libraryCount }: { isAdmin: boolean; libraryCount
 
       {photos && (
         <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 2 }}>
-          Photos via {photos.pexelsConfigured ? 'Openverse and Pexels' : 'Openverse'}
+          Photos via {photos.pexelsConfigured ? 'Commons, Openverse and Pexels' : 'Wikimedia Commons and Openverse'}
         </div>
       )}
     </Card>

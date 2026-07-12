@@ -15,6 +15,13 @@ export const CUISINE_LABEL: Record<KitchenCuisine, string> = {
   global: 'Global',
 };
 
+/** Display name for a photo credit's provider (docs/48 §4a — Commons joined the cascade). */
+function photoProviderLabel(provider: 'openverse' | 'pexels' | 'commons'): string {
+  if (provider === 'pexels') return 'Pexels';
+  if (provider === 'commons') return 'Wikimedia Commons';
+  return 'Openverse';
+}
+
 // ---- Nutrition guardrail scales (docs/46 §1a + design addendum §B) ----------------------
 // One shared number↔label mapping used by both the desktop and mobile rendering of the
 // PreferencesModal "Nutrition & sourcing" sliders (same component either way, but keeping
@@ -329,7 +336,8 @@ export function RecipeQuickView({
             rel="noreferrer"
             style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -8, textDecoration: 'none' }}
           >
-            Photo: {recipe.photoCredit.name} · {recipe.photoCredit.provider === 'pexels' ? 'Pexels' : 'Openverse'}
+            Photo: {recipe.photoCredit.name}
+            {recipe.photoCredit.license && <> · {recipe.photoCredit.license}</>} · {photoProviderLabel(recipe.photoCredit.provider)}
           </a>
         )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

@@ -2332,7 +2332,8 @@ function IntelligenceCard() {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14 }}>Pexels API key (photos)</div>
           <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>
-            Optional — free key, faster photo fetching. Openverse (no key needed) is used otherwise.
+            Optional — free key, faster photo fetching. Wikimedia Commons + Openverse (no key
+            needed) are used otherwise.
           </div>
         </div>
         {editingPexelsKey ? (

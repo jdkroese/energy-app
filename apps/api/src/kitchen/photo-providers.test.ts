@@ -1,6 +1,8 @@
-// Unit tests for the free stock-photo providers (docs/47 §3b): the query builder, the
-// throttle/backoff pure math (injected clock — no real timers), and both providers' response
-// parsing from fixture JSON via a fake fetch. NO live network call anywhere in this file.
+// Unit tests for the free stock-photo provider cascade (docs/47 §3b, hardened docs/48 §4a):
+// the query builder, the relevance guard (incl. the teriyaki/miso-cod fixture that must
+// REJECT), the throttle/backoff pure math (injected clock — no real timers), the Commons/
+// Pexels/Openverse response parsing from fixture JSON via a fake fetch, the cascade order,
+// and the persisted Openverse daily-budget rollover. NO live network call anywhere in this file.
 //   node --import tsx --test src/kitchen/photo-providers.test.ts
 
 import { test } from 'node:test';
@@ -9,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   backoffDelayMs,
   buildPhotoQueries,
+  candidateIsRelevant,
   canRequestNow,
   freshThrottleState,
   parseRetryAfterMs,
@@ -19,6 +22,7 @@ import {
   _setClockForTests,
   _setFetchForTests,
 } from './photo-providers';
+import { update as updateAppStore } from '../store';
 
 // ---- fake fetch / clock helpers -------------------------------------------------------------
 
@@ -39,7 +43,12 @@ function reset(): void {
   _resetThrottleForTests();
   _setClockForTests();
   _setFetchForTests();
+  updateAppStore((s) => {
+    s.kitchen.openverseBudget = { day: '', used: 0 };
+  });
 }
+
+const commonsNoHit = () => fakeResponse(200, { query: { pages: {} } });
 
 // ---- query builder ---------------------------------------------------------------------------
 
@@ -56,7 +65,7 @@ test('buildPhotoQueries: primary is the EN-ified title + "food dish"', () => {
   assert.equal(q.primary, 'Paella Valenciana food dish');
 });
 
-test('buildPhotoQueries: fallback is the first non-pantry ingredient + cuisine + "food"', () => {
+test('buildPhotoQueries: fallback + fallbackGuardText come from the first non-pantry ingredient', () => {
   const q = buildPhotoQueries({
     title: 'Anything',
     cuisine: 'japanese',
@@ -67,21 +76,90 @@ test('buildPhotoQueries: fallback is the first non-pantry ingredient + cuisine +
     ],
   });
   assert.equal(q.fallback, 'Salmon japanese food');
+  assert.equal(q.fallbackGuardText, 'Salmon', 'the guard text is the bare ingredient — no cuisine/food suffix noise');
 });
 
-test('buildPhotoQueries: fallback is null when every ingredient is a pantry staple', () => {
+test('buildPhotoQueries: fallback + fallbackGuardText are both null when every ingredient is a pantry staple', () => {
   const q = buildPhotoQueries({
     title: 'Anything',
     cuisine: 'dutch',
     ingredients: [{ name: 'Salt', pantryStaple: true }, { name: 'Pepper', pantryStaple: true }],
   });
   assert.equal(q.fallback, null);
+  assert.equal(q.fallbackGuardText, null);
 });
 
-test('preferredProvider: pexels when a key is present, openverse otherwise', () => {
+test('preferredProvider: pexels when a key is present, commons+openverse otherwise', () => {
   assert.equal(preferredProvider('some-key'), 'pexels');
-  assert.equal(preferredProvider(null), 'openverse');
-  assert.equal(preferredProvider(''), 'openverse');
+  assert.equal(preferredProvider(null), 'commons+openverse');
+  assert.equal(preferredProvider(''), 'commons+openverse');
+});
+
+// ---- relevance guard (docs/48 §4a) -------------------------------------------------------------
+
+test('candidateIsRelevant: REJECTS the miso-cod candidate for a teriyaki query (the live-probed failure case)', () => {
+  assert.equal(candidateIsRelevant('Amuse-bouche of miso cod', ['Chicken teriyaki']), false);
+});
+
+test('candidateIsRelevant: accepts a candidate whose title shares a significant word with the recipe title', () => {
+  assert.equal(candidateIsRelevant('Chicken teriyaki plate', ['Chicken teriyaki']), true);
+});
+
+test('candidateIsRelevant: also accepts via the fallback ingredient guard text', () => {
+  assert.equal(candidateIsRelevant('Fresh salmon fillet', ['Obscure Dish Name', 'Salmon']), true);
+});
+
+test('candidateIsRelevant: a candidate with no title (or no word over 3 chars) is always rejected', () => {
+  assert.equal(candidateIsRelevant('', ['Chicken teriyaki']), false);
+  assert.equal(candidateIsRelevant('Ok', ['Chicken teriyaki']), false);
+});
+
+test('candidateIsRelevant: is diacritic/case-insensitive and does a basic EN/ES plural strip', () => {
+  assert.equal(candidateIsRelevant('PAELLAS valencianas', ['paëlla valenciana']), true);
+});
+
+// ---- skipUrls (docs/48 W1 — dead-URL wedge guard) ------------------------------------------------
+
+test('skipUrls: a known-dead top candidate is passed over — the next relevant result is picked instead', async () => {
+  reset();
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) return commonsNoHit();
+    return fakeResponse(200, {
+      results: [
+        { url: 'https://example.com/dead.jpg', title: 'Chicken teriyaki closeup', width: 800, height: 600 },
+        { url: 'https://example.com/alive.jpg', title: 'Chicken teriyaki plate', creator: 'Ana', width: 800, height: 600 },
+      ],
+    });
+  });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+    skipUrls: new Set(['https://example.com/dead.jpg']),
+  });
+  assert.equal(outcome.kind, 'found');
+  if (outcome.kind === 'found') assert.equal(outcome.result.url, 'https://example.com/alive.jpg', 'the dead top hit was skipped');
+});
+
+test('skipUrls: when EVERY relevant candidate is known-dead the search is a no-hit, never a repeat pick', async () => {
+  reset();
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) return commonsNoHit();
+    return fakeResponse(200, {
+      results: [{ url: 'https://example.com/dead.jpg', title: 'Chicken teriyaki plate', width: 800, height: 600 }],
+    });
+  });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+    skipUrls: new Set(['https://example.com/dead.jpg']),
+  });
+  assert.equal(outcome.kind, 'no-hit');
 });
 
 // ---- throttle / backoff (pure, injected clock) -----------------------------------------------
@@ -125,109 +203,112 @@ test('backoffDelayMs: doubles each consecutive 429, capped at 10 minutes', () =>
   assert.equal(backoffDelayMs(10), 10 * 60 * 1000, 'capped, not 20s * 2^10');
 });
 
-// ---- searchFoodPhoto: Openverse fixture parsing -----------------------------------------------
+// ---- searchFoodPhoto: Commons response parsing (docs/48 §4a) -----------------------------------
 
-test('searchFoodPhoto (Openverse): parses a found result from fixture JSON', async () => {
+test('Commons: parses a found result — skips a GIF, strips HTML from Artist, captures LicenseShortName + descriptionurl', async () => {
   reset();
-  let calls = 0;
   _setFetchForTests(async (url) => {
-    calls++;
-    assert.match(url, /api\.openverse\.org/);
+    assert.match(url, /commons\.wikimedia\.org/);
     return fakeResponse(200, {
-      results: [
-        {
-          url: 'https://example.com/paella.jpg',
-          creator: 'Jane Doe',
-          creator_url: 'https://openverse.org/jane',
-          foreign_landing_url: 'https://flickr.com/photos/jane/123',
-          width: 800,
-          height: 600,
+      query: {
+        pages: {
+          '1': {
+            title: 'File:Teriyaki Chicken.gif',
+            imageinfo: [{ url: 'https://upload.wikimedia.org/teriyaki.gif', width: 900, height: 600 }],
+          },
+          '2': {
+            title: 'File:Teriyaki Chicken.jpg',
+            imageinfo: [
+              {
+                url: 'https://upload.wikimedia.org/teriyaki.jpg',
+                thumburl: 'https://upload.wikimedia.org/thumb/960px-teriyaki.jpg',
+                width: 3000,
+                height: 2000,
+                descriptionurl: 'https://commons.wikimedia.org/wiki/File:Teriyaki_Chicken.jpg',
+                extmetadata: {
+                  Artist: { value: '<a href="//commons.wikimedia.org/wiki/User:Someone">Someone</a>' },
+                  LicenseShortName: { value: 'CC BY-SA 4.0' },
+                },
+              },
+            ],
+          },
         },
-      ],
-    });
-  });
-
-  const outcome = await searchFoodPhoto({ primaryQuery: 'paella food dish', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(outcome.kind, 'found');
-  if (outcome.kind === 'found') {
-    assert.equal(outcome.result.url, 'https://example.com/paella.jpg');
-    assert.equal(outcome.result.credit, 'Jane Doe');
-    assert.equal(outcome.result.creditUrl, 'https://flickr.com/photos/jane/123');
-    assert.equal(outcome.result.provider, 'openverse');
-  }
-  assert.equal(calls, 1, 'primary query found a result — no fallback call needed');
-});
-
-test('searchFoodPhoto (Openverse): empty results on primary falls back to the second query', async () => {
-  reset();
-  const seen: string[] = [];
-  _setFetchForTests(async (url) => {
-    seen.push(url);
-    if (seen.length === 1) return fakeResponse(200, { results: [] });
-    return fakeResponse(200, {
-      results: [{ url: 'https://example.com/fallback.jpg', creator: 'Bob', width: 640, height: 480 }],
+      },
     });
   });
 
   const outcome = await searchFoodPhoto({
-    primaryQuery: 'obscure dish food dish',
-    fallbackQuery: 'chicken spanish food',
+    recipeTitle: 'Teriyaki Chicken',
+    primaryQuery: 'Teriyaki Chicken food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
     pexelsApiKey: null,
   });
   assert.equal(outcome.kind, 'found');
-  assert.equal(seen.length, 2, 'primary no-hit triggers exactly one fallback attempt');
-  if (outcome.kind === 'found') assert.equal(outcome.result.url, 'https://example.com/fallback.jpg');
+  if (outcome.kind === 'found') {
+    assert.equal(outcome.result.url, 'https://upload.wikimedia.org/thumb/960px-teriyaki.jpg', 'the GIF was skipped, the jpg thumb was picked');
+    assert.equal(outcome.result.credit, 'Someone', 'HTML stripped from the Artist field');
+    assert.equal(outcome.result.license, 'CC BY-SA 4.0');
+    assert.equal(outcome.result.creditUrl, 'https://commons.wikimedia.org/wiki/File:Teriyaki_Chicken.jpg');
+    assert.equal(outcome.result.provider, 'commons');
+  }
 });
 
-test('searchFoodPhoto: both primary and fallback empty -> no-hit (never a fake "found")', async () => {
-  reset();
-  _setFetchForTests(async () => fakeResponse(200, { results: [] }));
-  const outcome = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: 'b', pexelsApiKey: null });
-  assert.equal(outcome.kind, 'no-hit');
-});
-
-test('searchFoodPhoto: no fallback query configured -> only the primary is ever called', async () => {
-  reset();
-  let calls = 0;
-  _setFetchForTests(async () => {
-    calls++;
-    return fakeResponse(200, { results: [] });
-  });
-  const outcome = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(outcome.kind, 'no-hit');
-  assert.equal(calls, 1);
-});
-
-test('searchFoodPhoto: implausible image sizes are skipped in favour of a plausible one', async () => {
+test('Commons: an Artist-less/GIF-only page yields no-hit, not a crash', async () => {
   reset();
   _setFetchForTests(async () =>
     fakeResponse(200, {
-      results: [
-        { url: 'https://example.com/tiny.jpg', width: 40, height: 40 }, // too small
-        { url: 'https://example.com/banner.jpg', width: 2000, height: 100 }, // extreme ratio
-        { url: 'https://example.com/good.jpg', creator: 'Ok', width: 900, height: 600 },
-      ],
+      query: { pages: { '1': { title: 'File:Only.gif', imageinfo: [{ url: 'https://upload.wikimedia.org/only.gif', width: 900, height: 600 }] } } },
     }),
   );
-  const outcome = await searchFoodPhoto({ primaryQuery: 'x', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(outcome.kind, 'found');
-  if (outcome.kind === 'found') assert.equal(outcome.result.url, 'https://example.com/good.jpg');
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'x',
+    primaryQuery: 'x',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome.kind, 'no-hit');
 });
 
-// ---- searchFoodPhoto: Pexels fixture parsing (preferred when a key is present) ----------------
+// ---- searchFoodPhoto: cascade order (docs/48 §4a) -----------------------------------------------
 
-test('searchFoodPhoto (Pexels): used instead of Openverse when a key is present, parses fixture JSON', async () => {
+test('cascade: keyless search tries Commons before Openverse', async () => {
   reset();
-  let calls = 0;
+  const seen: string[] = [];
+  _setFetchForTests(async (url) => {
+    seen.push(url);
+    if (url.includes('commons.wikimedia.org')) return commonsNoHit();
+    return fakeResponse(200, {
+      results: [{ url: 'https://example.com/salmon.jpg', title: 'Grilled salmon teriyaki', creator: 'X', width: 900, height: 600 }],
+    });
+  });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Salmon teriyaki',
+    primaryQuery: 'Salmon teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome.kind, 'found');
+  assert.ok(seen[0].includes('commons.wikimedia.org'), 'Commons is queried first');
+  assert.ok(seen.some((u) => u.includes('api.openverse.org')), 'Openverse is queried after Commons comes back empty');
+  assert.ok(!seen.some((u) => u.includes('api.pexels.com')), 'no Pexels key configured — it is never called');
+});
+
+test('cascade: a configured Pexels key is tried FIRST — Commons/Openverse are never touched on a Pexels hit', async () => {
+  reset();
+  const seen: string[] = [];
   _setFetchForTests(async (url, init) => {
-    calls++;
+    seen.push(url);
     assert.match(url, /api\.pexels\.com/);
     assert.equal(init?.headers?.Authorization, 'test-pexels-key');
     return fakeResponse(200, {
       photos: [
         {
-          src: { large: 'https://images.pexels.com/photo1-large.jpg', medium: 'https://images.pexels.com/photo1-m.jpg' },
-          photographer: 'John Doe',
+          src: { large: 'https://images.pexels.com/paella-large.jpg' },
+          photographer: 'Jane Doe',
+          alt: 'Paella Valenciana dish',
           url: 'https://www.pexels.com/photo/123',
           width: 1200,
           height: 800,
@@ -235,151 +316,194 @@ test('searchFoodPhoto (Pexels): used instead of Openverse when a key is present,
       ],
     });
   });
-
-  const outcome = await searchFoodPhoto({ primaryQuery: 'salmon food dish', fallbackQuery: null, pexelsApiKey: 'test-pexels-key' });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Paella Valenciana',
+    primaryQuery: 'Paella Valenciana food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: 'test-pexels-key',
+  });
   assert.equal(outcome.kind, 'found');
   if (outcome.kind === 'found') {
-    assert.equal(outcome.result.url, 'https://images.pexels.com/photo1-large.jpg');
-    assert.equal(outcome.result.credit, 'John Doe');
     assert.equal(outcome.result.provider, 'pexels');
+    assert.equal(outcome.result.credit, 'Jane Doe');
   }
-  assert.equal(calls, 1);
+  assert.equal(seen.length, 1, 'the Pexels hit ended the cascade immediately');
 });
 
-// ---- throttle + backoff wired through searchFoodPhoto ------------------------------------------
-
-test('searchFoodPhoto: a second call inside the 20s window is throttled — no network call at all', async () => {
+test('relevance guard integrated into the cascade: an irrelevant Commons hit is rejected, Openverse supplies the real match', async () => {
   reset();
-  let now = 1_000_000;
-  _setClockForTests(() => now);
-  let calls = 0;
-  _setFetchForTests(async () => {
-    calls++;
-    return fakeResponse(200, { results: [{ url: 'https://example.com/a.jpg', width: 800, height: 600 }] });
-  });
-
-  const first = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(first.kind, 'found');
-  assert.equal(calls, 1);
-
-  now += 5_000; // well under the 20s minimum interval
-  const second = await searchFoodPhoto({ primaryQuery: 'b', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(second.kind, 'throttled');
-  assert.equal(calls, 1, 'the throttled call made no network request');
-
-  now += 20_000; // now past the window
-  const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(third.kind, 'found');
-  assert.equal(calls, 2);
-});
-
-test('searchFoodPhoto: a 429 with Retry-After backs off for exactly that long, then recovers', async () => {
-  reset();
-  let now = 0;
-  _setClockForTests(() => now);
-  let calls = 0;
-  _setFetchForTests(async () => {
-    calls++;
-    if (calls === 1) return fakeResponse(429, {}, { 'Retry-After': '60' });
-    return fakeResponse(200, { results: [{ url: 'https://example.com/a.jpg', width: 800, height: 600 }] });
-  });
-
-  const first = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(first.kind, 'error');
-  assert.equal(calls, 1);
-
-  now += 20_000; // past the plain throttle interval, but still inside the 60s Retry-After
-  const second = await searchFoodPhoto({ primaryQuery: 'b', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(second.kind, 'throttled', 'still backing off — no second network call yet');
-  assert.equal(calls, 1);
-
-  now += 60_000; // fully past the Retry-After window (80s total since the 429)
-  const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(third.kind, 'found');
-  assert.equal(calls, 2);
-});
-
-test('searchFoodPhoto: a 429 with no Retry-After falls back to exponential backoff', async () => {
-  reset();
-  let now = 0;
-  _setClockForTests(() => now);
-  _setFetchForTests(async () => fakeResponse(429, {}));
-
-  const first = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(first.kind, 'error');
-
-  now += 19_999; // just under the first backoff step (20s)
-  const second = await searchFoodPhoto({ primaryQuery: 'b', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(second.kind, 'throttled');
-
-  now += 1; // exactly at 20s
-  const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(third.kind, 'error', 'the 20s mark just clears backoff, then a fresh 429 doubles it again');
-});
-
-test('searchFoodPhoto: a success between 429s RESETS the streak — the next 429 backs off 20s, not 40s', async () => {
-  reset();
-  let now = 0;
-  _setClockForTests(() => now);
-  let calls = 0;
-  _setFetchForTests(async () => {
-    calls++;
-    if (calls === 2) {
-      return fakeResponse(200, { results: [{ url: 'https://example.com/a.jpg', width: 800, height: 600 }] });
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) {
+      // A plausible-looking but WRONG Commons result (the live-probed failure case).
+      return fakeResponse(200, {
+        query: {
+          pages: {
+            '1': {
+              title: 'File:Amuse-bouche of miso cod.jpg',
+              imageinfo: [
+                {
+                  url: 'https://upload.wikimedia.org/miso-cod.jpg',
+                  thumburl: 'https://upload.wikimedia.org/thumb/960px-miso-cod.jpg',
+                  width: 960,
+                  height: 640,
+                  descriptionurl: 'https://commons.wikimedia.org/wiki/File:Amuse-bouche_of_miso_cod.jpg',
+                  extmetadata: { LicenseShortName: { value: 'CC BY-SA 4.0' } },
+                },
+              ],
+            },
+          },
+        },
+      });
     }
-    return fakeResponse(429, {});
+    return fakeResponse(200, {
+      results: [{ url: 'https://example.com/teriyaki.jpg', title: 'Chicken teriyaki plate', creator: 'Ana', width: 900, height: 600 }],
+    });
   });
-
-  // Call 1 at t=0: 429 → first backoff step (20s), streak = 1.
-  const first = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(first.kind, 'error');
-
-  // Call 2 at t=20s: success — this must END the 429 streak.
-  now = 20_000;
-  const second = await searchFoodPhoto({ primaryQuery: 'b', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(second.kind, 'found');
-
-  // Call 3 at t=40s: a fresh 429. With the streak reset it backs off the FIRST step again
-  // (20s → clear at t=60s). Without the reset it would be the SECOND step (40s → t=80s).
-  now = 40_000;
-  const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(third.kind, 'error');
-
-  now = 59_999;
-  const inside = await searchFoodPhoto({ primaryQuery: 'd', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(inside.kind, 'throttled', 'still inside the 20s first-step backoff');
-
-  now = 60_000;
-  const after = await searchFoodPhoto({ primaryQuery: 'e', fallbackQuery: null, pexelsApiKey: null });
-  assert.notEqual(after.kind, 'throttled', 'a 20s (first-step) backoff cleared — the streak was reset by the success');
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome.kind, 'found');
+  if (outcome.kind === 'found') {
+    assert.equal(outcome.result.provider, 'openverse', 'Commons hit failed the guard (miso cod != teriyaki); Openverse supplied the real match');
+    assert.equal(outcome.result.url, 'https://example.com/teriyaki.jpg');
+  }
 });
 
-test('searchFoodPhoto: a two-request turn (primary no-hit → fallback) delays the next allowed request by a full interval from the SECOND request', async () => {
+test('cascade: a no-hit primary query tries the fallback query on the SAME provider before moving on', async () => {
+  reset();
+  const openverseCalls: string[] = [];
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) return commonsNoHit();
+    openverseCalls.push(url);
+    if (openverseCalls.length === 1) return fakeResponse(200, { results: [] }); // primary miss
+    return fakeResponse(200, { results: [{ url: 'https://example.com/salmon.jpg', title: 'Grilled salmon fillet', width: 900, height: 600 }] });
+  });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Mystery dish',
+    primaryQuery: 'Mystery dish food dish',
+    fallbackQuery: 'Salmon spanish food',
+    fallbackGuardText: 'Salmon',
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome.kind, 'found');
+  assert.equal(openverseCalls.length, 2, 'primary miss on Openverse triggered exactly one fallback attempt');
+  if (outcome.kind === 'found') assert.equal(outcome.result.url, 'https://example.com/salmon.jpg');
+});
+
+test('cascade: both primary and fallback empty on every provider -> no-hit (never a fake "found")', async () => {
+  reset();
+  _setFetchForTests(async (url) => (url.includes('commons.wikimedia.org') ? commonsNoHit() : fakeResponse(200, { results: [] })));
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'a',
+    primaryQuery: 'a',
+    fallbackQuery: 'b',
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome.kind, 'no-hit');
+});
+
+// ---- Openverse daily budget (docs/48 §4a) -------------------------------------------------------
+
+test('Openverse budget: hard-stops at 180/day — Openverse is skipped entirely once spent', async () => {
+  reset();
+  updateAppStore((s) => {
+    s.kitchen.openverseBudget = { day: '2026-07-12', used: 180 };
+  });
+  let now = Date.parse('2026-07-12T12:00:00.000Z');
+  _setClockForTests(() => now);
+  const seen: string[] = [];
+  _setFetchForTests(async (url) => {
+    seen.push(url);
+    if (url.includes('commons.wikimedia.org')) return commonsNoHit();
+    return fakeResponse(200, { results: [{ url: 'https://example.com/x.jpg', title: 'Chicken teriyaki bowl', width: 900, height: 600 }] });
+  });
+
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome.kind, 'no-hit', 'Commons missed and Openverse was skipped — the day\'s budget is already spent');
+  assert.ok(!seen.some((u) => u.includes('api.openverse.org')), 'Openverse was never even called');
+
+  now = Date.parse('2026-07-13T00:00:05.000Z'); // a new UTC day rolls the counter to 0
+  const outcome2 = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome2.kind, 'found', 'a new UTC day resets the Openverse budget');
+  if (outcome2.kind === 'found') assert.equal(outcome2.result.provider, 'openverse');
+});
+
+// ---- throttle + backoff wired through the cascade ------------------------------------------------
+
+test('throttle: a provider still inside its own pacing window is skipped, not retried', async () => {
   reset();
   let now = 0;
   _setClockForTests(() => now);
-  let calls = 0;
-  _setFetchForTests(async () => {
-    calls++;
-    now += 5_000; // each real request takes/advances 5s of clock
-    return fakeResponse(200, { results: [] }); // always empty → primary no-hit, fallback fires
+  let commonsCalls = 0;
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) {
+      commonsCalls++;
+      return commonsNoHit();
+    }
+    return fakeResponse(200, { results: [] });
   });
 
-  // Turn 1 starts at t=0: primary request ends at t=5s, fallback request ends at t=10s.
-  const first = await searchFoodPhoto({ primaryQuery: 'a', fallbackQuery: 'a-fallback', pexelsApiKey: null });
-  assert.equal(first.kind, 'no-hit');
-  assert.equal(calls, 2);
+  await searchFoodPhoto({ recipeTitle: 'x', primaryQuery: 'a', fallbackQuery: null, fallbackGuardText: null, pexelsApiKey: null });
+  assert.equal(commonsCalls, 1);
 
-  // t=20s: a full interval from the turn's START, but only 10s after the SECOND request —
-  // must still be throttled (otherwise a fallback-heavy stretch sustains 2 requests / window).
-  now = 20_000;
-  const second = await searchFoodPhoto({ primaryQuery: 'b', fallbackQuery: null, pexelsApiKey: null });
-  assert.equal(second.kind, 'throttled', 'the fallback request must also consume a throttle window');
-  assert.equal(calls, 2, 'no network call while throttled');
+  now += 5_000; // under Commons's 15s AND Openverse's 20s windows
+  const second = await searchFoodPhoto({ recipeTitle: 'x', primaryQuery: 'b', fallbackQuery: null, fallbackGuardText: null, pexelsApiKey: null });
+  assert.equal(second.kind, 'throttled', 'every provider is still inside its own window');
+  assert.equal(commonsCalls, 1, 'no new network call while throttled');
+});
 
-  // t=30s: a full 20s after the second request (which landed at t=10s) — now allowed.
-  now = 30_000;
-  const third = await searchFoodPhoto({ primaryQuery: 'c', fallbackQuery: null, pexelsApiKey: null });
-  assert.notEqual(third.kind, 'throttled');
-  assert.equal(calls, 3);
+test('throttle: a 429 from one provider backs off only that provider — the SAME call still reaches the next one', async () => {
+  reset();
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) return fakeResponse(429, {}, { 'Retry-After': '60' });
+    return fakeResponse(200, { results: [{ url: 'https://example.com/x.jpg', title: 'Chicken teriyaki bowl', width: 900, height: 600 }] });
+  });
+  const outcome = await searchFoodPhoto({
+    recipeTitle: 'Chicken teriyaki',
+    primaryQuery: 'Chicken teriyaki food dish',
+    fallbackQuery: null,
+    fallbackGuardText: null,
+    pexelsApiKey: null,
+  });
+  assert.equal(outcome.kind, 'found');
+  if (outcome.kind === 'found') assert.equal(outcome.result.provider, 'openverse', 'Commons 429d — Openverse still supplied the hit in this same call');
+});
+
+test('throttle: a provider still backing off from an earlier 429 is skipped on the next call', async () => {
+  reset();
+  let now = 0;
+  _setClockForTests(() => now);
+  let commonsCalls = 0;
+  _setFetchForTests(async (url) => {
+    if (url.includes('commons.wikimedia.org')) {
+      commonsCalls++;
+      return fakeResponse(429, {}, { 'Retry-After': '60' });
+    }
+    return fakeResponse(200, { results: [] });
+  });
+
+  await searchFoodPhoto({ recipeTitle: 'x', primaryQuery: 'a', fallbackQuery: null, fallbackGuardText: null, pexelsApiKey: null });
+  assert.equal(commonsCalls, 1);
+
+  now += 30_000; // past the plain 15s interval, but still inside the 60s Retry-After
+  await searchFoodPhoto({ recipeTitle: 'x', primaryQuery: 'a', fallbackQuery: null, fallbackGuardText: null, pexelsApiKey: null });
+  assert.equal(commonsCalls, 1, 'Commons is still backing off — skipped, not re-called');
 });

@@ -2249,9 +2249,9 @@ export interface Recipe {
   id: string;
   title: string;
   photo?: string | null;
-  /** Attribution for an enrichment-fetched photo (docs/47 §3b) — shown as a subtle credit
-   *  line in the quick-view; absent for seed/url photos. */
-  photoCredit?: { name: string; url: string; provider: 'openverse' | 'pexels' } | null;
+  /** Attribution for an enrichment-fetched photo (docs/47 §3b, docs/48 §4a) — shown as a
+   *  subtle credit line in the quick-view; absent for seed/url photos. */
+  photoCredit?: { name: string; url: string; provider: 'openverse' | 'pexels' | 'commons'; license?: string } | null;
   source: 'seed' | 'url' | 'manual' | 'ai';
   sourceUrl?: string;
   servingsBase: number;
@@ -2609,8 +2609,11 @@ export interface LibraryGenerationJob {
 
 export interface LibraryPhotoCoverage {
   total: number;
-  withPhoto: number;
-  provider: 'openverse' | 'pexels';
+  /** Durably cached (local, served from /api/kitchen/photos/:id, or a bundled seed). */
+  cached: number;
+  /** Has a photo, but it's still a remote hotlink (provider or og:image) not yet cached. */
+  linked: number;
+  provider: 'pexels' | 'commons+openverse';
   pexelsConfigured: boolean;
   pexelsWouldHelp: boolean;
 }
