@@ -44,6 +44,7 @@ import { mapRegulars } from '../kitchen/regulars';
 import * as recipesRepo from '../kitchen/recipes-repo';
 import * as libraryGen from '../kitchen/library-generate';
 import * as photoEnrich from '../kitchen/photo-enrich';
+import { readCachedPhoto } from '../kitchen/photo-cache';
 import type {
   Cuisine,
   Household,
@@ -561,6 +562,7 @@ function libraryStatusPayload() {
   const job = libraryGen.jobStatus();
   const coverage = recipesRepo.photoCoverage();
   const pexelsConfigured = Boolean(store.get().kitchen.intelligence.pexelsApiKey);
+  const missing = coverage.total - coverage.cached;
   return {
     ts: ts(),
     job,
@@ -569,15 +571,35 @@ function libraryStatusPayload() {
     autoIdleReason: libraryGen.autoIdleReasonNow(),
     photos: {
       total: coverage.total,
-      withPhoto: coverage.withPhoto,
+      cached: coverage.cached,
+      linked: coverage.linked,
       provider: photoEnrich.currentProvider(),
       pexelsConfigured,
       // A Pexels key would meaningfully speed things up once there's a real backlog — the
-      // Openverse throttle (>=20s/req) makes a few hundred photo-null recipes a slow grind.
-      pexelsWouldHelp: !pexelsConfigured && coverage.total - coverage.withPhoto > 200,
+      // Commons/Openverse throttle (15-20s/req) makes a few hundred still-missing recipes a
+      // slow grind.
+      pexelsWouldHelp: !pexelsConfigured && missing > 200,
     },
   };
 }
+
+// ---- Cached recipe photos (docs/48 §4b) ----------------------------------------------------
+// Streams the locally-downloaded copy of a recipe's photo. Any-authed like the rest of this
+// router's reads (the kiosk needs it for the Tonight/Cooking screens) — no requireAdmin. Long
+// cache headers since the file at this path never changes once written (a re-enrichment would
+// overwrite the same path, but that's rare enough that a stale browser cache for a few hours
+// is a fine trade for not re-fetching a multi-hundred-KB file on every screen visit).
+kitchenRouter.get('/photos/:recipeId', (req: Request, res: Response) => {
+  const file = readCachedPhoto(req.params.recipeId);
+  if (!file) {
+    res.status(404).json({ error: 'no cached photo for this recipe', code: 'NOT_FOUND' });
+    return;
+  }
+  res.setHeader('Content-Type', file.contentType);
+  res.setHeader('Content-Length', String(file.buffer.length));
+  res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+  res.end(file.buffer);
+});
 
 kitchenRouter.get('/library/generate/status', requireAdmin, wrap(() => libraryStatusPayload()));
 

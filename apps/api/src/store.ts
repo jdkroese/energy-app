@@ -1647,10 +1647,19 @@ export interface LibraryGenerationJob {
   monthlyBudgetEur: number;
 }
 
+/** Openverse's anonymous tier is 200 requests/day (live-probed, docs/48 finding #1). Persisted
+ *  so the cap survives a restart mid-day; `day` is a plain YYYY-MM-DD (UTC) and `used` resets
+ *  to 0 whenever the calendar day rolls over (photo-providers.ts owns the rollover logic). */
+export interface OpenverseBudget {
+  day: string;
+  used: number;
+}
+
 export interface KitchenSettings {
   mercadona: KitchenMercadonaConfig;
   intelligence: KitchenIntelligenceConfig;
   libraryGeneration: LibraryGenerationJob;
+  openverseBudget: OpenverseBudget;
 }
 
 export function defaultKitchen(): KitchenSettings {
@@ -1697,6 +1706,7 @@ export function defaultKitchen(): KitchenSettings {
       autoTarget: 2000,
       monthlyBudgetEur: 40,
     },
+    openverseBudget: { day: '', used: 0 },
   };
 }
 
@@ -1770,6 +1780,18 @@ function hydrateKitchen(p: unknown): KitchenSettings {
       },
     },
     libraryGeneration: hydrateLibraryGenerationJob(k.libraryGeneration, base.libraryGeneration),
+    openverseBudget: hydrateOpenverseBudget(k.openverseBudget),
+  };
+}
+
+/** Additive (docs/48 §4a): older state.json has no openverseBudget — default to an empty
+ *  (never-used) day so the first search of any real day starts the counter fresh. */
+function hydrateOpenverseBudget(p: unknown): OpenverseBudget {
+  if (!p || typeof p !== 'object') return { day: '', used: 0 };
+  const b = p as Partial<OpenverseBudget>;
+  return {
+    day: typeof b.day === 'string' ? b.day : '',
+    used: typeof b.used === 'number' && Number.isFinite(b.used) && b.used >= 0 ? Math.round(b.used) : 0,
   };
 }
 

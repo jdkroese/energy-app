@@ -48,6 +48,7 @@ interface Row {
   updated_at: string;
   photo_credit_json: string | null;
   photo_tried_at: string | null;
+  photo_cached: number;
 }
 
 function safeParse<T>(s: string | null | undefined, fallback: T): T {
@@ -91,6 +92,19 @@ function rowToSlim(row: Row): RecipeSlim {
   return rest;
 }
 
+/** True when `photo` is a durable, locally-served path — a bundled seed (/recipes/*.jpg) or
+ *  our own cache route (/api/kitchen/photos/:id) — as opposed to a remote http(s) hotlink
+ *  (provider stock photo or an og:image import) that can still rot or rate-limit at render
+ *  time. Every local path in this app is relative (starts with "/"); every remote one is an
+ *  absolute http(s) URL — so this one check cleanly separates the two (docs/48 §4b/§4c). */
+export function isDurablePhotoPath(photo: string | null | undefined): boolean {
+  return Boolean(photo) && photo!.startsWith('/');
+}
+
+function isRemotePhotoUrl(photo: string | null | undefined): boolean {
+  return Boolean(photo) && /^https?:\/\//i.test(photo!);
+}
+
 /** Flattened ES+EN searchable ingredient text for the FTS row. */
 function ingredientSearchText(r: Pick<Recipe, 'ingredients'>): string {
   return r.ingredients.map((i) => `${i.name} ${i.es}`).join(' ');
@@ -120,6 +134,7 @@ function toRow(r: Recipe): Row {
     updated_at: r.updatedAt,
     photo_credit_json: r.photoCredit ? JSON.stringify(r.photoCredit) : null,
     photo_tried_at: r.photoTriedAt ?? null,
+    photo_cached: isDurablePhotoPath(r.photo) ? 1 : 0,
   };
 }
 
@@ -127,7 +142,7 @@ const COLUMNS = [
   'id', 'title', 'cuisine', 'photo', 'source', 'source_url', 'servings_base', 'prep_min', 'cook_min',
   'tags_json', 'kid_score', 'season_json', 'nutrition_json', 'tools_json', 'ingredients_json', 'steps_json',
   'last_cooked_at', 'ratings_json', 'created_at', 'updated_at', 'is_fish', 'is_veggie', 'veg_rich',
-  'photo_credit_json', 'photo_tried_at',
+  'photo_credit_json', 'photo_tried_at', 'photo_cached',
 ] as const;
 
 // ---- Low-level SQLite CRUD (callers already gate on isRecipesDbEnabled()) -----------------
@@ -151,7 +166,7 @@ function dbInsertOrReplace(handle: RecipesDb, r: Recipe): void {
       row.id, row.title, row.cuisine, row.photo, row.source, row.source_url, row.servings_base, row.prep_min,
       row.cook_min, row.tags_json, row.kid_score, row.season_json, row.nutrition_json, row.tools_json,
       row.ingredients_json, row.steps_json, row.last_cooked_at, row.ratings_json, row.created_at, row.updated_at,
-      fish, veggie, rich, row.photo_credit_json, row.photo_tried_at,
+      fish, veggie, rich, row.photo_credit_json, row.photo_tried_at, row.photo_cached,
     );
   ftsUpsert(handle, r);
 }
@@ -302,50 +317,95 @@ export function countByCuisine(): Record<Cuisine, number> {
   return out;
 }
 
-// ---- Photo enrichment (docs/47 §3b) ---------------------------------------------------------
+// ---- Photo enrichment + local cache (docs/47 §3b, hardened docs/48 §4b) ----------------------
 // Works identically over sqlite or the JSON fallback — everything here reads/writes through
 // listAllSlim()/getFull()/updateRecipe(), same as the rest of this module.
 
 export interface PhotoCoverage {
   total: number;
-  withPhoto: number;
+  /** Durably cached — either a bundled seed or downloaded into recipe-photos/ (docs/48 §4b). */
+  cached: number;
+  /** Has a photo, but it's still a remote hotlink (provider stock photo or og:image import)
+   *  not yet pulled into the local cache. */
+  linked: number;
 }
 
-/** Library card "Photos 812 / 2,047" stat. */
+/** Library card "Photos 812 / 2,047 (+40 linked)" stat (docs/48 §4c — counts CACHED photos,
+ *  not just "has any photo at all", so the metric reflects what's actually durable). */
 export function photoCoverage(): PhotoCoverage {
   const all = listAllSlim();
-  return { total: all.length, withPhoto: all.filter((r) => Boolean(r.photo)).length };
+  let cached = 0;
+  let linked = 0;
+  for (const r of all) {
+    if (isDurablePhotoPath(r.photo)) cached++;
+    else if (isRemotePhotoUrl(r.photo)) linked++;
+  }
+  return { total: all.length, cached, linked };
 }
 
+export type PhotoWorkItem =
+  // photo is null — needs a full search → download cycle (photo-enrich.ts's searchFoodPhoto).
+  | { mode: 'search'; recipe: RecipeSlim }
+  // photo is already a remote URL (provider hotlink or og:image import) — just needs
+  // downloading into the local cache, no search required.
+  | { mode: 'cache-only'; recipe: RecipeSlim };
+
 /**
- * The next recipe the enrichment coordinator should try — ANY source, photo-null, skipping
- * ones tried in the last `retryAfterMs` (a definitive no-hit isn't retried forever). Stable
- * order (by title) so a restart mid-enrichment resumes predictably rather than jumping
- * around. The photo-null query IS the queue (docs/47 cross-cutting note) — no separate job
- * state to persist or resume.
+ * The next unit of photo work the enrichment coordinator should do, in priority order
+ * (docs/48 §4b): (1) photo-null recipes — skipping ones tried in the last `retryAfterMs` (a
+ * definitive no-hit isn't retried forever); (2) provider-hotlinked photos (P3-era
+ * enrichments) waiting to be pulled into the local cache; (3) og:image URL-import photos,
+ * lowest priority since they already render fine today, just not durably. Seeds
+ * (/recipes/*.jpg) are already local and never enter this queue. Stable order (by title)
+ * within each priority bucket so a restart resumes predictably. This query IS the queue
+ * (docs/47 cross-cutting note) — no separate job state to persist or resume.
  */
-export function nextPhotoEnrichmentCandidate(now: number, retryAfterMs: number): RecipeSlim | null {
+export function nextPhotoWorkItem(now: number, retryAfterMs: number): PhotoWorkItem | null {
   const all = [...listAllSlim()].sort((a, b) => a.title.localeCompare(b.title));
+
   for (const r of all) {
     if (r.photo) continue;
     if (r.photoTriedAt) {
       const triedAt = Date.parse(r.photoTriedAt);
       if (Number.isFinite(triedAt) && now - triedAt < retryAfterMs) continue;
     }
-    return r;
+    return { mode: 'search', recipe: r };
   }
+
+  for (const r of all) {
+    if (!isRemotePhotoUrl(r.photo) || !r.photoCredit?.provider) continue;
+    return { mode: 'cache-only', recipe: r };
+  }
+
+  for (const r of all) {
+    if (!isRemotePhotoUrl(r.photo) || r.photoCredit?.provider) continue; // priority 2 already covers credited ones
+    if (r.source !== 'url') continue; // only og:image imports land here — nothing else is ever a bare remote URL
+    return { mode: 'cache-only', recipe: r };
+  }
+
   return null;
 }
 
-/** Store a fetched photo + its attribution, and clear any stale "tried, no hit" marker. */
+/** Store a freshly downloaded+cached photo + its attribution, and clear any stale "tried, no
+ *  hit" marker. `localRoute` is the /api/kitchen/photos/:id path the file is now served at —
+ *  never the provider's own (fragile) URL (docs/48 §4b: no more hotlink-first). */
 export function setRecipePhoto(
   id: string,
-  photo: string,
-  credit: { name: string; url: string; provider: 'openverse' | 'pexels' },
+  localRoute: string,
+  credit: { name: string; url: string; provider: 'openverse' | 'pexels' | 'commons'; license?: string },
 ): void {
   const full = getFull(id);
   if (!full) return;
-  updateRecipe({ ...full, photo, photoCredit: credit, photoTriedAt: null, updatedAt: new Date().toISOString() });
+  updateRecipe({ ...full, photo: localRoute, photoCredit: credit, photoTriedAt: null, updatedAt: new Date().toISOString() });
+}
+
+/** Backfill path (docs/48 §4b priorities 2/3): flip an already-hotlinked/og-image photo over
+ *  to its freshly downloaded local copy, keeping whatever credit it already had (none, for a
+ *  bare og:image import). */
+export function setRecipePhotoLocal(id: string, localRoute: string): void {
+  const full = getFull(id);
+  if (!full) return;
+  updateRecipe({ ...full, photo: localRoute, updatedAt: new Date().toISOString() });
 }
 
 /** Mark a definitive no-hit so the next tick moves on to a different candidate instead of
