@@ -57,6 +57,15 @@ export interface Recipe {
   updatedAt: string;
 }
 
+/**
+ * Slim recipe shape for the planner/engine/search paths at scale (docs/46 §2a): every field
+ * EXCEPT `steps` (the bulkiest — cook-mode instruction text). Ingredients stay in because the
+ * engine's eligibility/scoring/classification (allergies, diet restrictions, fish/veggie,
+ * boost ingredients) all need ingredient names. The full Recipe (with steps) is fetched by id
+ * on demand (GET /recipes/:id) only when cooking/quick-viewing one specific recipe.
+ */
+export type RecipeSlim = Omit<Recipe, 'steps'>;
+
 /** The mapping memory: normalized ingredient key → the Mercadona product you buy. */
 export interface ProductMapEntry {
   productId: string;
