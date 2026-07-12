@@ -179,6 +179,7 @@ import { kitchenRouter } from "./routes/kitchen";
 import { startKitchenCoordinator } from "./control/kitchen-coordinator";
 import { runBootMigrationIfNeeded as runRecipesMigration } from "./kitchen/recipes-repo";
 import { startLibraryGenerationCoordinator } from "./kitchen/library-generate";
+import { startPhotoEnrichmentCoordinator } from "./kitchen/photo-enrich";
 import {
   getDiscovered,
   ignoreDiscovered,
@@ -1750,6 +1751,16 @@ try {
   startLibraryGenerationCoordinator();
 } catch (e) {
   console.error("[energy-api] library-generation coordinator failed to start:", (e as Error).message);
+}
+
+// Start photo enrichment (docs/47 §3b) — fills in a real hotlinked photo for every photo-null
+// recipe (any source), free stock providers (Openverse keyless default, Pexels optional fast
+// path). Stateless by construction: the photo-null query IS the queue, so a restart just
+// resumes wherever that query lands next — nothing to persist or migrate here.
+try {
+  startPhotoEnrichmentCoordinator();
+} catch (e) {
+  console.error("[energy-api] photo-enrichment coordinator failed to start:", (e as Error).message);
 }
 
 // Start circuit-breaker usage metering (additive + READ-ONLY: reads the Tuya

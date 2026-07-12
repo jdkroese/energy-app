@@ -43,6 +43,7 @@ import { importRecipeFromUrl } from '../kitchen/import';
 import { mapRegulars } from '../kitchen/regulars';
 import * as recipesRepo from '../kitchen/recipes-repo';
 import * as libraryGen from '../kitchen/library-generate';
+import * as photoEnrich from '../kitchen/photo-enrich';
 import type {
   Cuisine,
   Household,
@@ -558,11 +559,23 @@ kitchenRouter.post(
 
 function libraryStatusPayload() {
   const job = libraryGen.jobStatus();
+  const coverage = recipesRepo.photoCoverage();
+  const pexelsConfigured = Boolean(store.get().kitchen.intelligence.pexelsApiKey);
   return {
     ts: ts(),
     job,
     libraryCount: recipesRepo.count(),
     configured: claude.isConfigured(),
+    autoIdleReason: libraryGen.autoIdleReasonNow(),
+    photos: {
+      total: coverage.total,
+      withPhoto: coverage.withPhoto,
+      provider: photoEnrich.currentProvider(),
+      pexelsConfigured,
+      // A Pexels key would meaningfully speed things up once there's a real backlog — the
+      // Openverse throttle (>=20s/req) makes a few hundred photo-null recipes a slow grind.
+      pexelsWouldHelp: !pexelsConfigured && coverage.total - coverage.withPhoto > 200,
+    },
   };
 }
 
@@ -1464,6 +1477,7 @@ kitchenRouter.get(
         keyMasked: maskedKey(cfg.apiKey),
         envKey: Boolean(process.env.ANTHROPIC_API_KEY),
         configured: claude.isConfigured(),
+        pexelsKeyMasked: maskedKey(cfg.pexelsApiKey),
       },
     };
   }),
@@ -1476,12 +1490,14 @@ kitchenRouter.put(
     const b = (req.body ?? {}) as {
       enabled?: unknown;
       apiKey?: unknown;
+      pexelsApiKey?: unknown;
       features?: Partial<store.KitchenIntelligenceConfig['features']>;
     };
     const cfg = store.update((s) => {
       const i = s.kitchen.intelligence;
       if (typeof b.enabled === 'boolean') i.enabled = b.enabled;
       if (typeof b.apiKey === 'string') i.apiKey = b.apiKey.trim() || null;
+      if (typeof b.pexelsApiKey === 'string') i.pexelsApiKey = b.pexelsApiKey.trim() || null;
       if (b.features && typeof b.features === 'object') {
         for (const f of ['importParsing', 'cookingSuggestions', 'plannerRequestBox', 'weeklyPlanAssist', 'recipeGeneration'] as const) {
           if (typeof b.features[f] === 'boolean') i.features[f] = b.features[f];
@@ -1498,6 +1514,7 @@ kitchenRouter.put(
         keyMasked: maskedKey(cfg.apiKey),
         envKey: Boolean(process.env.ANTHROPIC_API_KEY),
         configured: claude.isConfigured(),
+        pexelsKeyMasked: maskedKey(cfg.pexelsApiKey),
       },
     };
   }),

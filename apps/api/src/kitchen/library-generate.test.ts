@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  autoIdleReasonFor,
   buildCoveragePlan,
   buildLibraryPrompt,
   cancelGeneration,
@@ -21,12 +22,15 @@ import {
   isDuplicateTitle,
   jobStatus,
   levenshtein,
+  maybeAutoStart,
   normalizeTitle,
   processResults,
   RECIPES_PER_REQUEST,
+  shouldAutoStart,
   startGeneration,
   tick,
   titleSimilarity,
+  type AutoStartContext,
   _setBatchApiForTests,
 } from './library-generate';
 import * as recipesRepo from './recipes-repo';
@@ -63,6 +67,8 @@ function freshEnv(): void {
       spentEur: 0,
       error: null,
       remainingJson: null,
+      autoTarget: 2000,
+      monthlyBudgetEur: 40,
     };
     s.kitchen.intelligence.apiKey = null;
     s.kitchen.intelligence.usage = { month: '', inputTokens: 0, outputTokens: 0, eur: 0 };
@@ -412,6 +418,144 @@ test('tick: normal (uncancelled) dispatch records batch ids and dequeues specs',
   } finally {
     cancelGeneration();
     _setBatchApiForTests();
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+// ---- Auto-generation (docs/47 §3a — no button) ---------------------------------------------
+
+function autoCtx(overrides: Partial<AutoStartContext> = {}): AutoStartContext {
+  return {
+    status: 'idle',
+    autoTarget: 2000,
+    currentCount: 500,
+    monthlyBudgetEur: 40,
+    monthUsageEur: 0,
+    configured: true,
+    ...overrides,
+  };
+}
+
+test('shouldAutoStart: decision matrix (status x count x budget x configured)', () => {
+  // Happy path — idle, below target, under budget, configured: start.
+  assert.equal(shouldAutoStart(autoCtx()), true);
+  // 'done' is just as eligible as 'idle' (a prior run finished and there's still room).
+  assert.equal(shouldAutoStart(autoCtx({ status: 'done' })), true);
+  // NEVER auto-start after cancelled or error — a human pressed Stop, or something broke.
+  assert.equal(shouldAutoStart(autoCtx({ status: 'cancelled' })), false);
+  assert.equal(shouldAutoStart(autoCtx({ status: 'error' })), false);
+  // Already running — nothing to do (startGeneration would refuse anyway, but the decision
+  // function itself must say no so the coordinator doesn't even try).
+  assert.equal(shouldAutoStart(autoCtx({ status: 'running' })), false);
+  // autoTarget 0 = auto-off, regardless of everything else.
+  assert.equal(shouldAutoStart(autoCtx({ autoTarget: 0 })), false);
+  // At or above target — nothing left to fill.
+  assert.equal(shouldAutoStart(autoCtx({ currentCount: 2000 })), false);
+  assert.equal(shouldAutoStart(autoCtx({ currentCount: 2500 })), false);
+  // No Anthropic key configured.
+  assert.equal(shouldAutoStart(autoCtx({ configured: false })), false);
+  // At or over the monthly budget.
+  assert.equal(shouldAutoStart(autoCtx({ monthUsageEur: 40 })), false);
+  assert.equal(shouldAutoStart(autoCtx({ monthUsageEur: 41 })), false);
+  // Comfortably under budget.
+  assert.equal(shouldAutoStart(autoCtx({ monthUsageEur: 39.99 })), true);
+});
+
+test('autoIdleReasonFor: explains why auto-fill is not running right now, or says nothing when there is nothing to explain', () => {
+  // Auto-off — no reason needed, there's no expectation of auto-filling at all.
+  assert.equal(autoIdleReasonFor(autoCtx({ autoTarget: 0 })), null);
+  // Already at/above target — nothing to explain.
+  assert.equal(autoIdleReasonFor(autoCtx({ currentCount: 2000 })), null);
+  // Already running — the progress UI covers it, no idle reason needed.
+  assert.equal(autoIdleReasonFor(autoCtx({ status: 'running' })), null);
+  // No key configured.
+  assert.match(autoIdleReasonFor(autoCtx({ configured: false })) ?? '', /Anthropic key/);
+  // Budget exhausted.
+  assert.match(autoIdleReasonFor(autoCtx({ monthUsageEur: 40 })) ?? '', /budget/i);
+  // Nothing blocking — about to start on the next tick, so no reason to show.
+  assert.equal(autoIdleReasonFor(autoCtx()), null);
+  // cancelled/error with room left and no other blocker — also nothing to "explain" (the
+  // status itself, visible elsewhere in the card, is the reason); autoIdleReasonFor only
+  // covers budget/key blockers, not the cancelled/error latch.
+  assert.equal(autoIdleReasonFor(autoCtx({ status: 'cancelled' })), null);
+});
+
+test('maybeAutoStart: starts a run when eligible, using the job\'s persisted autoTarget', () => {
+  freshEnv();
+  process.env.ANTHROPIC_API_KEY = 'sk-test-fixture-key-not-real';
+  try {
+    updateAppStore((s) => {
+      s.kitchen.libraryGeneration.autoTarget = 500;
+    });
+    assert.equal(jobStatus().status, 'idle');
+
+    maybeAutoStart();
+
+    const job = jobStatus();
+    assert.equal(job.status, 'running');
+    assert.equal(job.target, 500, 'auto-start uses the persisted autoTarget as the run target');
+  } finally {
+    cancelGeneration();
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test('maybeAutoStart: does nothing when not configured, already at target, or latched cancelled/error', () => {
+  freshEnv();
+  try {
+    // No key at all — never even tries.
+    maybeAutoStart();
+    assert.equal(jobStatus().status, 'idle');
+
+    process.env.ANTHROPIC_API_KEY = 'sk-test-fixture-key-not-real';
+    // Cancelled latch — must not silently resume.
+    updateAppStore((s) => {
+      s.kitchen.libraryGeneration.status = 'cancelled';
+      s.kitchen.libraryGeneration.autoTarget = 2000;
+    });
+    maybeAutoStart();
+    assert.equal(jobStatus().status, 'cancelled', 'cancelled must never auto-resume');
+
+    // Error latch — same story.
+    updateAppStore((s) => {
+      s.kitchen.libraryGeneration.status = 'error';
+    });
+    maybeAutoStart();
+    assert.equal(jobStatus().status, 'error', 'error must never auto-resume');
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test('startGeneration sets autoTarget to the chosen target (manual Generate also updates the self-fill target)', () => {
+  freshEnv();
+  process.env.ANTHROPIC_API_KEY = 'sk-test-fixture-key-not-real';
+  try {
+    updateAppStore((s) => {
+      s.kitchen.libraryGeneration.autoTarget = 2000;
+    });
+    assert.equal(startGeneration(750).ok, true);
+    assert.equal(jobStatus().autoTarget, 750, 'starting with a custom target re-points autoTarget at it');
+    assert.equal(jobStatus().monthlyBudgetEur, 40, 'monthlyBudgetEur is preserved, not reset');
+  } finally {
+    cancelGeneration();
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test('cancelGeneration sets autoTarget to the current library count — stop means stop, no silent resume', () => {
+  freshEnv();
+  process.env.ANTHROPIC_API_KEY = 'sk-test-fixture-key-not-real';
+  try {
+    assert.equal(startGeneration(2000).ok, true);
+    assert.equal(jobStatus().autoTarget, 2000);
+
+    const countAtStop = recipesRepo.count();
+    const cancelled = cancelGeneration();
+    assert.equal(cancelled.ok, true);
+    assert.equal(jobStatus().autoTarget, countAtStop, 'autoTarget drops to the current count so auto-start cannot re-trigger');
+    assert.equal(shouldAutoStart(autoCtx({ status: 'cancelled', autoTarget: jobStatus().autoTarget, currentCount: countAtStop })), false);
+  } finally {
     delete process.env.ANTHROPIC_API_KEY;
   }
 });
