@@ -25,7 +25,9 @@ import {
   processResults,
   RECIPES_PER_REQUEST,
   startGeneration,
+  tick,
   titleSimilarity,
+  _setBatchApiForTests,
 } from './library-generate';
 import * as recipesRepo from './recipes-repo';
 import { defaultHousehold } from './store';
@@ -313,6 +315,103 @@ test('startGeneration refuses when the library is already at/above every cuisine
     assert.equal(result.ok, false);
     assert.match(result.reason ?? '', /nothing left/);
   } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+// ---- Cancel race (review F2) — mocked batch API, zero live network -------------------------
+
+test('tick: a cancel landing DURING createBatch cancels the just-created batch instead of orphaning it', async () => {
+  freshEnv();
+  process.env.ANTHROPIC_API_KEY = 'sk-test-fixture-key-not-real';
+  const created: string[] = [];
+  const cancelled: string[] = [];
+  try {
+    _setBatchApiForTests({
+      // The cancel lands while createBatch is in flight — exactly the race window: the
+      // pre-dispatch status check already passed, the batch WILL be created server-side.
+      createBatch: async () => {
+        cancelGeneration();
+        const id = `batch_${created.length}`;
+        created.push(id);
+        return id;
+      },
+      getBatchStatus: async () => null,
+      getBatchResults: async () => null,
+      cancelBatch: async (id: string) => {
+        cancelled.push(id);
+        return true;
+      },
+    });
+
+    assert.equal(startGeneration(2000).ok, true);
+    await tick();
+
+    assert.equal(created.length, 1, 'exactly one batch was created before the cancel stopped dispatch');
+    assert.deepEqual(cancelled, created, 'the freshly-created batch was best-effort cancelled, not orphaned');
+    const job = jobStatus();
+    assert.equal(job.status, 'cancelled');
+    assert.deepEqual(job.batchIds, [], 'no orphaned batch id was recorded into job state');
+  } finally {
+    _setBatchApiForTests();
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test('tick: a cancel BEFORE the dispatch loop stops any batch from being created at all', async () => {
+  freshEnv();
+  process.env.ANTHROPIC_API_KEY = 'sk-test-fixture-key-not-real';
+  let createCalls = 0;
+  try {
+    _setBatchApiForTests({
+      createBatch: async () => {
+        createCalls++;
+        return `batch_${createCalls}`;
+      },
+      getBatchStatus: async () => null,
+      getBatchResults: async () => null,
+      cancelBatch: async () => true,
+    });
+
+    assert.equal(startGeneration(2000).ok, true);
+    cancelGeneration(); // lands before tick ever runs
+    await tick();
+
+    assert.equal(createCalls, 0, 'tick returned at the top-of-tick status check — nothing dispatched');
+    assert.equal(jobStatus().status, 'cancelled');
+  } finally {
+    _setBatchApiForTests();
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test('tick: normal (uncancelled) dispatch records batch ids and dequeues specs', async () => {
+  freshEnv();
+  process.env.ANTHROPIC_API_KEY = 'sk-test-fixture-key-not-real';
+  let createCalls = 0;
+  try {
+    _setBatchApiForTests({
+      createBatch: async () => {
+        createCalls++;
+        return `batch_${createCalls}`;
+      },
+      getBatchStatus: async () => null,
+      getBatchResults: async () => null,
+      cancelBatch: async () => true,
+    });
+
+    assert.equal(startGeneration(2000).ok, true);
+    const queuedBefore = jobStatus().queued;
+    await tick();
+
+    const job = jobStatus();
+    assert.equal(job.status, 'running');
+    assert.ok(createCalls >= 1, 'at least one batch dispatched');
+    assert.equal(job.batchIds.length, createCalls, 'every created batch id is recorded in job state');
+    assert.ok(job.queued < queuedBefore, 'dispatched specs were dequeued');
+  } finally {
+    cancelGeneration();
+    _setBatchApiForTests();
     delete process.env.ANTHROPIC_API_KEY;
   }
 });

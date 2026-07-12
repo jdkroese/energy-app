@@ -26,11 +26,23 @@ import * as appStore from '../store';
 import * as kitchenStore from './store';
 import * as recipesRepo from './recipes-repo';
 import * as claude from '../connectors/claude';
-import * as batchApi from '../connectors/claude-batch';
+import * as realBatchApi from '../connectors/claude-batch';
 import { GENERATE_SYSTEM, sanitizeGeneratedBatch } from './generate';
 import { forbiddenKeywords } from './engine';
 import type { LibraryGenerationJob } from '../store';
 import type { Cuisine, Household, Recipe, Season } from './types';
+
+/** The slice of the Batches connector tick() actually uses — swappable for tests. */
+type BatchApi = Pick<typeof realBatchApi, 'createBatch' | 'getBatchStatus' | 'getBatchResults' | 'cancelBatch'>;
+
+// Test seam (review F2): production always uses the real connector; library-generate.test.ts
+// swaps in a mock so the tick()/cancel race is testable with zero live network calls.
+let batchApi: BatchApi = realBatchApi;
+
+/** Test-only: swap the Batches connector (pass nothing to restore the real one). */
+export function _setBatchApiForTests(api?: BatchApi): void {
+  batchApi = api ?? realBatchApi;
+}
 
 // ---- Coverage plan (docs/46 §2c) -----------------------------------------------------------
 
@@ -171,7 +183,7 @@ export interface ProcessOutcome {
  * caught too, not just duplicates vs. the pre-existing library. Exported so
  * library-generate.test.ts can feed it fixture BatchResult[] with no network involved.
  */
-export function processResults(results: batchApi.BatchResult[], household: Household): ProcessOutcome {
+export function processResults(results: realBatchApi.BatchResult[], household: Household): ProcessOutcome {
   let inserted = 0;
   let duplicates = 0;
   let failed = 0;
@@ -336,7 +348,15 @@ export async function tick(): Promise<void> {
     batchIds = stillInFlight;
 
     // 2) Dispatch more from the queue, bounded by concurrency AND the hard € cap.
+    // Cancel race (review F2): cancelGeneration() can flip the persisted status while this
+    // loop awaits network calls. The final appStore.update below already refuses to write
+    // state over a cancel — but a batch created HERE after the cancel would then be recorded
+    // nowhere: it would run to completion on Anthropic's side (billed) with results never
+    // fetched. So (a) re-check the LIVE status right before each createBatch and stop
+    // dispatching once cancelled, and (b) if the cancel landed DURING the createBatch await,
+    // best-effort cancel the batch we just made so it doesn't run orphaned.
     while (batchIds.length < MAX_CONCURRENT_BATCHES && queuedSpecs.length > 0 && spent < job.capEur) {
+      if (jobStatus().status !== 'running') break; // cancelled mid-tick — stop dispatching
       const batchSpecs = queuedSpecs.slice(0, REQUESTS_PER_BATCH);
       const avoidTitles = titlesSampleForSpecs(batchSpecs);
       const requests = batchSpecs.map((spec, i) => ({
@@ -352,6 +372,12 @@ export async function tick(): Promise<void> {
 
       const batchId = await batchApi.createBatch(requests);
       if (!batchId) break; // key/network hiccup — leave batchSpecs queued, try again next tick
+      if (jobStatus().status !== 'running') {
+        // Cancelled while createBatch was in flight — this batch would otherwise be orphaned
+        // (state write below is discarded on cancel). Best-effort cancel it and stop.
+        void batchApi.cancelBatch(batchId).catch(() => false);
+        break;
+      }
       queuedSpecs = queuedSpecs.slice(batchSpecs.length);
       batchIds.push(batchId);
     }
