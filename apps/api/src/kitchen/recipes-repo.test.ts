@@ -13,6 +13,7 @@ import { join } from 'node:path';
 
 import * as repo from './recipes-repo';
 import { isRecipesDbEnabled } from './recipes-db';
+import { _resetCacheForTests as resetKitchenJsonCache } from './store';
 import type { Recipe } from './types';
 
 function freshEnv(): { dir: string } {
@@ -230,6 +231,43 @@ test('boot migration: idempotent — moves kitchen.json recipes into sqlite, bac
   const second = repo.runBootMigrationIfNeeded();
   assert.equal(second.migrated, false);
   assert.equal(repo.count(), 1, 'still exactly one recipe — the second run did not duplicate it');
+});
+
+test('boot migration MERGES fallback-era JSON recipes into an already-populated sqlite (the sqlite-flap case)', () => {
+  const { dir } = freshEnv();
+  const kitchenFile = join(dir, 'kitchen.json');
+
+  // Boot A: sqlite works — one recipe already lives in the db (previously migrated).
+  repo.insertRecipe(recipe('migrated-1', { title: 'Already In Sqlite' }));
+  assert.equal(repo.count(), 1);
+
+  // Boot B (simulated): the native sqlite module failed to load → the app ran in fallback
+  // JSON mode and the user saved a NEW recipe into kitchen.json. Reproduce the on-disk end
+  // state directly, then drop only the JSON cache so the store re-reads the file. The
+  // sqlite handle stays live — this is boot C, where the native module loads again.
+  writeFileSync(
+    kitchenFile,
+    JSON.stringify({
+      recipes: [recipe('fallback-1', { title: 'Saved During Fallback' })],
+      seededAt: '2026-01-01T00:00:00.000Z',
+    }),
+    'utf8',
+  );
+  resetKitchenJsonCache();
+
+  // Boot C: BOTH stores have rows. The migration must MERGE (INSERT OR REPLACE), never
+  // skip-then-strip — skipping here would lose fallback-1 to the .bak forever (F1).
+  const result = repo.runBootMigrationIfNeeded();
+  assert.equal(result.migrated, true);
+  assert.equal(repo.count(), 2, 'both the previously-migrated and the fallback-era recipe are in sqlite');
+  assert.equal(repo.getFull('fallback-1')!.title, 'Saved During Fallback', 'the fallback-era recipe is served');
+  assert.equal(repo.getFull('migrated-1')!.title, 'Already In Sqlite', 'the earlier recipe is untouched');
+  assert.ok(
+    repo.search({ q: 'fallback' }).items.some((r) => r.id === 'fallback-1'),
+    'the merged recipe is FTS-indexed too',
+  );
+  const afterParsed = JSON.parse(readFileSync(kitchenFile, 'utf8'));
+  assert.deepEqual(afterParsed.recipes, [], 'kitchen.json recipes array is emptied after the merge');
 });
 
 test('boot migration is a no-op once kitchen.json already has an empty recipes array (already migrated / already seeded+emptied)', () => {

@@ -427,11 +427,13 @@ export interface MigrationResult {
 
 /**
  * Idempotent, fail-safe boot migration: if kitchen.json still has recipes AND sqlite is
- * available, copy them into SQLite, back up kitchen.json → kitchen.json.pre-sqlite.bak, then
- * empty the JSON `recipes` array. Safe to call every boot — a no-op once migrated (JSON array
- * is empty) or when sqlite already holds recipes and JSON doesn't. On ANY error, the JSON
- * array is left untouched and this returns migrated:false with a reason — recipes keep working
- * off JSON (this module's fallback path) and the failure is logged loudly by the caller.
+ * available, MERGE them into SQLite (INSERT OR REPLACE — unconditional even when the db
+ * already has rows, so recipes saved during a sqlite-down fallback-JSON boot are picked up
+ * on the next sqlite boot instead of being stripped unseen), back up kitchen.json →
+ * kitchen.json.pre-sqlite.bak, then empty the JSON `recipes` array. Safe to call every
+ * boot — a no-op once the JSON array is empty. On ANY error, the JSON array is left
+ * untouched and this returns migrated:false with a reason — recipes keep working off JSON
+ * (this module's fallback path) and the failure is logged loudly by the caller.
  */
 export function runBootMigrationIfNeeded(): MigrationResult {
   const handle = db();
@@ -441,17 +443,18 @@ export function runBootMigrationIfNeeded(): MigrationResult {
   if (!jsonRecipes.length) return { migrated: false, count: 0, reason: 'kitchen.json has no recipes to migrate' };
 
   try {
-    const existingInDb = dbCount(handle);
-    // Idempotence guard: if sqlite already has recipes AND the JSON still has its own (a
-    // previous migration attempt that failed AFTER the sqlite writes but BEFORE the JSON
-    // strip+backup — extremely unlikely given the ordering below, but cheap to guard), don't
-    // double-insert; just finish the JSON-side cleanup.
-    if (existingInDb === 0) {
-      const txn = handle.transaction((rows: Recipe[]) => {
-        for (const r of rows) dbInsertOrReplace(handle, r);
-      });
-      txn(jsonRecipes);
-    }
+    // ALWAYS run the insert txn, even when sqlite already holds recipes — MERGE semantics.
+    // Why unconditional: sqlite can FLAP across boots (native module loads on boot A,
+    // fails on boot B, loads again on boot C). During a fallback-JSON boot, new recipes are
+    // saved into kitchen.json; on the next sqlite boot BOTH stores have rows. Skipping the
+    // txn "because the db already has recipes" would strip those fallback-era recipes from
+    // the JSON without ever copying them in — data loss (only the .bak would have them).
+    // dbInsertOrReplace is INSERT OR REPLACE, so re-running over already-migrated ids is an
+    // idempotent replace and new ids are simply added — unconditional is strictly safe.
+    const txn = handle.transaction((rows: Recipe[]) => {
+      for (const r of rows) dbInsertOrReplace(handle, r);
+    });
+    txn(jsonRecipes);
     invalidateSlimCache();
 
     // Back up kitchen.json BEFORE stripping — belt and braces so the raw recipes are always
