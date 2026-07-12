@@ -322,6 +322,16 @@ export function RecipeQuickView({
     <Modal open onClose={onClose} title={recipe.title} size="lg" placement={desktop ? 'center' : 'sheet'} wideViewport={desktop} icon="chef-hat">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '14px 18px 18px' }}>
         <RecipePhoto recipe={recipe} height={desktop ? 180 : 140} radius="var(--radius-md)" />
+        {recipe.photoCredit?.name && (
+          <a
+            href={recipe.photoCredit.url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -8, textDecoration: 'none' }}
+          >
+            Photo: {recipe.photoCredit.name} · {recipe.photoCredit.provider === 'pexels' ? 'Pexels' : 'Openverse'}
+          </a>
+        )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {planContext && <Badge tone="grid">{planContext}</Badge>}
           {statusBadge}

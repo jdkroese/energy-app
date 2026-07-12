@@ -1601,6 +1601,9 @@ export interface KitchenIntelligenceConfig {
   enabled: boolean;
   /** Stored key; env ANTHROPIC_API_KEY overrides when set. */
   apiKey: string | null;
+  /** Optional Pexels API key (docs/47 §3b) — a faster/nicer photo-enrichment fast path.
+   *  Write-only from the UI, same pattern as apiKey. Openverse (keyless) is the fallback. */
+  pexelsApiKey: string | null;
   features: {
     importParsing: boolean;
     cookingSuggestions: boolean;
@@ -1633,6 +1636,15 @@ export interface LibraryGenerationJob {
   spentEur: number;
   error: string | null;
   remainingJson: string | null;
+  /** Self-filling target (docs/47 §3a) — the coordinator auto-starts a run whenever the
+   *  library is below this and the run isn't latched off. 0 = auto-fill disabled. Manual
+   *  Generate sets this to the chosen target (clearing any cancelled/error latch); Stop sets
+   *  it back down to the current count (stop means stop — no silent resume). */
+  autoTarget: number;
+  /** Auto-fill won't self-start once the current calendar month's intelligence spend is at
+   *  or above this (docs/47 §3a) — bounds worst-case repeated-boot spend. Manual Generate is
+   *  unaffected (the existing €25/run hard cap still applies to it). */
+  monthlyBudgetEur: number;
 }
 
 export interface KitchenSettings {
@@ -1654,6 +1666,7 @@ export function defaultKitchen(): KitchenSettings {
     intelligence: {
       enabled: false,
       apiKey: null,
+      pexelsApiKey: null,
       features: {
         importParsing: true,
         cookingSuggestions: true,
@@ -1679,6 +1692,10 @@ export function defaultKitchen(): KitchenSettings {
       spentEur: 0,
       error: null,
       remainingJson: null,
+      // docs/47 §3a — self-filling by default; owner said "can you not preload the database
+      // with 2000 recipes? I want all with images" (no button press needed).
+      autoTarget: 2000,
+      monthlyBudgetEur: 40,
     },
   };
 }
@@ -1722,6 +1739,7 @@ function hydrateKitchen(p: unknown): KitchenSettings {
     intelligence: {
       enabled: typeof i.enabled === "boolean" ? i.enabled : base.intelligence.enabled,
       apiKey: typeof i.apiKey === "string" && i.apiKey ? i.apiKey : null,
+      pexelsApiKey: typeof i.pexelsApiKey === "string" && i.pexelsApiKey ? i.pexelsApiKey : null,
       features: {
         importParsing:
           typeof f.importParsing === "boolean"
@@ -1777,6 +1795,8 @@ function hydrateLibraryGenerationJob(p: unknown, base: LibraryGenerationJob): Li
     spentEur: num(j.spentEur, 0),
     error: typeof j.error === "string" ? j.error : null,
     remainingJson: typeof j.remainingJson === "string" ? j.remainingJson : null,
+    autoTarget: num(j.autoTarget, base.autoTarget),
+    monthlyBudgetEur: num(j.monthlyBudgetEur, base.monthlyBudgetEur),
   };
 }
 

@@ -35,8 +35,17 @@ export interface RecipeNutrition {
 export interface Recipe {
   id: string;
   title: string;
-  /** Photo URL — seed photos live under /recipes/, imports keep the og:image URL. */
+  /** Photo URL — seed photos live under /recipes/, imports keep the og:image URL, and
+   *  photo-null recipes of ANY source get hotlinked here by the enrichment coordinator
+   *  (docs/47 §3b). */
   photo?: string | null;
+  /** Attribution for an enrichment-fetched photo — required by both providers' terms.
+   *  Absent for seed/url photos (those aren't stock-photo hotlinks). */
+  photoCredit?: { name: string; url: string; provider: 'openverse' | 'pexels' } | null;
+  /** ISO timestamp of the last enrichment attempt that found nothing — re-tried after 30
+   *  days (docs/47 §3b) so a transiently-empty search doesn't block the recipe forever.
+   *  Cleared once a photo is actually found. Repo/sqlite bookkeeping only, not rendered. */
+  photoTriedAt?: string | null;
   source: 'seed' | 'url' | 'manual' | 'ai';
   sourceUrl?: string;
   servingsBase: number;

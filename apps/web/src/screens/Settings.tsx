@@ -2230,6 +2230,8 @@ function IntelligenceCard() {
   const [intel, setIntel] = useState<KitchenIntelligence | null>(null);
   const [keyDraft, setKeyDraft] = useState('');
   const [editingKey, setEditingKey] = useState(false);
+  const [pexelsKeyDraft, setPexelsKeyDraft] = useState('');
+  const [editingPexelsKey, setEditingPexelsKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -2321,6 +2323,49 @@ function IntelligenceCard() {
             {isAdmin && (
               <Button size="sm" variant="ghost" onClick={() => setEditingKey(true)}>
                 {intel.keyMasked ? 'Replace' : 'Add key'}
+              </Button>
+            )}
+          </span>
+        )}
+      </div>
+      <div style={{ ...row, padding: '11px 16px', borderTop: '1px solid var(--border-1)' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14 }}>Pexels API key (photos)</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>
+            Optional — free key, faster photo fetching. Openverse (no key needed) is used otherwise.
+          </div>
+        </div>
+        {editingPexelsKey ? (
+          <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Input
+              type="password"
+              placeholder="563...(pexels key)"
+              value={pexelsKeyDraft}
+              onChange={(e) => setPexelsKeyDraft(e.target.value)}
+              style={{ width: 190 }}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={busy}
+              onClick={() => {
+                void put({ pexelsApiKey: pexelsKeyDraft.trim() }).then(() => {
+                  setEditingPexelsKey(false);
+                  setPexelsKeyDraft('');
+                });
+              }}
+            >
+              Save
+            </Button>
+          </span>
+        ) : (
+          <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <code style={{ fontSize: 11.5, color: 'var(--text-2)', background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '6px 10px' }}>
+              {intel.pexelsKeyMasked ?? 'not set'}
+            </code>
+            {isAdmin && (
+              <Button size="sm" variant="ghost" onClick={() => setEditingPexelsKey(true)}>
+                {intel.pexelsKeyMasked ? 'Replace' : 'Add key'}
               </Button>
             )}
           </span>

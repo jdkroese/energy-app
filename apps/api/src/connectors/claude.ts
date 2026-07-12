@@ -57,6 +57,16 @@ export function isConfigured(): boolean {
   return Boolean(apiKey());
 }
 
+/** Current calendar month's € spend from the local usage counter — 0 for a month that
+ *  hasn't recorded anything yet (the counter only rolls over lazily, on the next recordUsage/
+ *  recordBatchUsage call, so a stale prior-month figure must never be read as "this month's
+ *  spend"). Used by the auto-fill monthly budget guard (docs/47 §3a). */
+export function currentMonthUsageEur(): number {
+  const month = new Date().toISOString().slice(0, 7);
+  const u = store.get().kitchen.intelligence.usage;
+  return u.month === month ? u.eur : 0;
+}
+
 function recordUsage(inputTokens: number, outputTokens: number): void {
   const month = new Date().toISOString().slice(0, 7); // YYYY-MM
   store.update((s) => {

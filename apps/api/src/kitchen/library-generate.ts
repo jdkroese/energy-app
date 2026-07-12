@@ -248,6 +248,11 @@ function titlesSampleForSpecs(specs: GenSpec[]): string[] {
  * plain state-mutation function, which is exactly what library-generate.test.ts must never
  * trigger. The route (POST /library/generate) kicks the coordinator with `void tick()` after
  * a successful start; the periodic coordinator timer would pick it up within POLL_MS anyway.
+ *
+ * Also sets `autoTarget = target` (docs/47 §3a) — a manual Generate press (or an auto-start,
+ * which always passes the current autoTarget right back) always brings the self-fill target in
+ * sync with whatever was just started, and — because status flips to 'running' here — clears
+ * any 'cancelled'/'error' latch that was blocking auto-start.
  */
 export function startGeneration(target: number, capEur = DEFAULT_CAP_EUR): { ok: boolean; reason?: string } {
   if (!claude.isConfigured()) {
@@ -279,6 +284,8 @@ export function startGeneration(target: number, capEur = DEFAULT_CAP_EUR): { ok:
       spentEur: 0,
       error: null,
       remainingJson: JSON.stringify(plan),
+      autoTarget: clampedTarget,
+      monthlyBudgetEur: current.monthlyBudgetEur,
     };
   });
   return { ok: true };
@@ -287,7 +294,12 @@ export function startGeneration(target: number, capEur = DEFAULT_CAP_EUR): { ok:
 /** Stop the run: best-effort cancel of any in-flight batches, mark cancelled, drop the queue
  *  (a later Generate press recomputes the shortfall fresh — nothing is lost). Fire-and-forget
  *  network cancels only run when there are actual batchIds to cancel — a job with none in
- *  flight (e.g. cancelled the instant after starting) makes no network call at all. */
+ *  flight (e.g. cancelled the instant after starting) makes no network call at all.
+ *
+ * Also sets `autoTarget = the current library count` (docs/47 §3a) — stop MEANS stop: without
+ * this, the very next auto-start check would just re-launch the same run the owner just
+ * cancelled. A later manual Generate (which sets autoTarget back to whatever target is chosen)
+ * is the only way to resume auto-fill. */
 export function cancelGeneration(): { ok: boolean } {
   const job = jobStatus();
   if (job.status !== 'running') return { ok: false };
@@ -297,6 +309,7 @@ export function cancelGeneration(): { ok: boolean } {
     s.kitchen.libraryGeneration.updatedAt = new Date().toISOString();
     s.kitchen.libraryGeneration.remainingJson = null;
     s.kitchen.libraryGeneration.batchIds = [];
+    s.kitchen.libraryGeneration.autoTarget = recipesRepo.count();
   });
   void Promise.all(ids.map((id) => batchApi.cancelBatch(id).catch(() => false)));
   return { ok: true };
@@ -413,17 +426,91 @@ export async function tick(): Promise<void> {
   }
 }
 
+// ---- Auto-generation (docs/47 §3a — no button) ----------------------------------------------
+// A self-fill target replaces the owner having to press Generate at all. The decision itself
+// (shouldAutoStart) is a pure function of a small context so the full status x count x budget
+// matrix is unit-testable without touching the store/network; maybeAutoStart() is the thin
+// side-effecting wrapper the coordinator actually calls.
+
+export interface AutoStartContext {
+  status: LibraryGenerationJob['status'];
+  autoTarget: number;
+  currentCount: number;
+  monthlyBudgetEur: number;
+  monthUsageEur: number;
+  configured: boolean;
+}
+
+/** Pure decision: should the coordinator start a run right now? Mirrors docs/47 §3a exactly —
+ *  configured, below target, idle-or-done (NEVER cancelled/error — a human pressed Stop or
+ *  something broke; auto-resuming either is hostile), and under the monthly € budget. */
+export function shouldAutoStart(ctx: AutoStartContext): boolean {
+  if (!ctx.configured) return false;
+  if (ctx.autoTarget <= 0) return false; // 0 = auto-off
+  if (ctx.status !== 'idle' && ctx.status !== 'done') return false;
+  if (ctx.currentCount >= ctx.autoTarget) return false;
+  if (ctx.monthUsageEur >= ctx.monthlyBudgetEur) return false;
+  return true;
+}
+
+/** Pure "why isn't it auto-filling right now" reason for the Library card, or null when
+ *  there's nothing to explain (auto-fill off, already at target, actively running, or about
+ *  to start on the next tick). */
+export function autoIdleReasonFor(ctx: AutoStartContext): string | null {
+  if (ctx.autoTarget <= 0) return null;
+  if (ctx.currentCount >= ctx.autoTarget) return null;
+  if (ctx.status === 'running') return null;
+  if (!ctx.configured) return 'Waiting for an Anthropic key — add one in Settings → Intelligence';
+  if (ctx.monthUsageEur >= ctx.monthlyBudgetEur) {
+    return `Monthly budget reached (€${ctx.monthlyBudgetEur.toFixed(0)}) — resumes next calendar month`;
+  }
+  return null;
+}
+
+function currentAutoStartContext(): AutoStartContext {
+  const job = jobStatus();
+  return {
+    status: job.status,
+    autoTarget: job.autoTarget,
+    currentCount: recipesRepo.count(),
+    monthlyBudgetEur: job.monthlyBudgetEur,
+    monthUsageEur: claude.currentMonthUsageEur(),
+    configured: claude.isConfigured(),
+  };
+}
+
+/** Side-effecting wrapper: reads live state, and starts a run when shouldAutoStart() agrees.
+ *  Safe to call on every coordinator tick — startGeneration() is itself idempotent-refusing
+ *  (won't double-start a running job) and this is a no-op the moment the target is reached. */
+export function maybeAutoStart(): void {
+  const ctx = currentAutoStartContext();
+  if (!shouldAutoStart(ctx)) return;
+  startGeneration(ctx.autoTarget);
+}
+
+/** Library card "why idle" line — live version of autoIdleReasonFor() for the status route. */
+export function autoIdleReasonNow(): string | null {
+  return autoIdleReasonFor(currentAutoStartContext());
+}
+
 let coordinatorHandle: ReturnType<typeof setInterval> | null = null;
 
 /** Boot wiring (index.ts): start the poll timer. State-driven, so it transparently resumes a
  *  run that was still `status: 'running'` when the process last stopped (batch ids + the
- *  remaining queue were persisted) — nothing special to do on resume beyond just ticking. */
+ *  remaining queue were persisted) — nothing special to do on resume beyond just ticking.
+ *  Also runs the auto-start check once shortly after boot, and again on every tick after
+ *  (docs/47 §3a: "on the existing coordinator timer, and once shortly after boot"). */
 export function startLibraryGenerationCoordinator(): void {
   if (coordinatorHandle) return;
-  coordinatorHandle = setInterval(() => void tick(), POLL_MS);
+  coordinatorHandle = setInterval(() => {
+    void tick();
+    maybeAutoStart();
+  }, POLL_MS);
   if (jobStatus().status === 'running') {
     console.log('[library-generate] resuming a library-generation run from a previous boot');
     void tick();
+  } else {
+    maybeAutoStart();
   }
 }
 

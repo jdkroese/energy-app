@@ -2249,6 +2249,9 @@ export interface Recipe {
   id: string;
   title: string;
   photo?: string | null;
+  /** Attribution for an enrichment-fetched photo (docs/47 §3b) — shown as a subtle credit
+   *  line in the quick-view; absent for seed/url photos. */
+  photoCredit?: { name: string; url: string; provider: 'openverse' | 'pexels' } | null;
   source: 'seed' | 'url' | 'manual' | 'ai';
   sourceUrl?: string;
   servingsBase: number;
@@ -2421,6 +2424,8 @@ export interface KitchenIntelligence {
   keyMasked: string | null;
   envKey: boolean;
   configured: boolean;
+  /** Optional Pexels key (docs/47 §3b) — write-only, same masking pattern as keyMasked. */
+  pexelsKeyMasked: string | null;
 }
 
 export interface MercadonaStatus {
@@ -2597,6 +2602,17 @@ export interface LibraryGenerationJob {
   failedCount: number;
   spentEur: number;
   error: string | null;
+  /** Self-filling target (docs/47 §3a) — 0 = auto-fill disabled. */
+  autoTarget: number;
+  monthlyBudgetEur: number;
+}
+
+export interface LibraryPhotoCoverage {
+  total: number;
+  withPhoto: number;
+  provider: 'openverse' | 'pexels';
+  pexelsConfigured: boolean;
+  pexelsWouldHelp: boolean;
 }
 
 export interface LibraryGenerateStatusResponse {
@@ -2604,6 +2620,8 @@ export interface LibraryGenerateStatusResponse {
   job: LibraryGenerationJob;
   libraryCount: number;
   configured: boolean;
+  autoIdleReason: string | null;
+  photos: LibraryPhotoCoverage;
 }
 
 export interface LibraryGenerateStartResponse extends LibraryGenerateStatusResponse {
