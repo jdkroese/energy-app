@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    "apps/api": {
+      "entry": ["src/index.ts", "build.mjs", "src/**/*.test.ts"],
+      "project": ["src/**/*.ts"],
+      "ignore": ["dist/**"]
+    },
+    "apps/web": {
+      "entry": ["index.html", "src/main.tsx", "vite.config.ts", "src/**/*.test.ts"],
+      "project": ["src/**/*.{ts,tsx}"],
+      "ignore": ["dist/**"]
+    }
+  },
+  "ignoreDependencies": ["better-sqlite3", "esbuild", "tsx", "typescript", "vite"]
+}

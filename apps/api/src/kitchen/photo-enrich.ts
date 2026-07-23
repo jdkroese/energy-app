@@ -187,9 +187,3 @@ export function startPhotoEnrichmentCoordinator(): void {
   coordinatorHandle = setInterval(() => void tick(), TICK_MS);
   void tick();
 }
-
-/** Test-only: stop the poll timer (avoids leaking an interval across test files). */
-export function _stopCoordinatorForTests(): void {
-  if (coordinatorHandle) clearInterval(coordinatorHandle);
-  coordinatorHandle = null;
-}
