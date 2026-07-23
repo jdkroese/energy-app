@@ -12,7 +12,6 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
-  readdirSync,
 } from "node:fs";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
