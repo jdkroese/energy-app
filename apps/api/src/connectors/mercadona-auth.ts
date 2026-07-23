@@ -431,8 +431,6 @@ async function getAddressesRaw(deps: AuthDeps = defaultDeps()): Promise<Mercadon
     .filter((a) => a.id);
 }
 
-export const getAddresses = getAddressesRaw;
-
 export interface MercadonaSlot {
   id: string;
   /** ISO start/end when derivable; otherwise the API's raw display strings. */

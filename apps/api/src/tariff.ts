@@ -62,10 +62,6 @@ export function bandFor(d: Date = new Date()): Band {
   return bandForHour(hour, weekday);
 }
 
-export function rateFor(d: Date = new Date()): number {
-  return RATES[bandFor(d)];
-}
-
 /**
  * Current band + the next *different* band and minutes until it starts.
  * Computed by scanning forward minute-coarse on the hour boundaries.
@@ -122,19 +118,6 @@ export function bandCodesForDay(d: Date = new Date()): number[] {
   const weekday = map[wdName] ?? 1;
   const code: Record<Band, number> = { P3: 0, P2: 1, P1: 2 };
   return Array.from({ length: 24 }, (_, h) => code[bandForHour(h, weekday)]);
-}
-
-/** Band code (0/1/2) array as Bands, useful for cost weighting. */
-export function bandsForDay(d: Date = new Date()): Band[] {
-  const wdName = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ,
-    weekday: 'short',
-  }).format(d);
-  const map: Record<string, number> = {
-    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
-  };
-  const weekday = map[wdName] ?? 1;
-  return Array.from({ length: 24 }, (_, h) => bandForHour(h, weekday));
 }
 
 /**

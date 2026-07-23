@@ -297,10 +297,3 @@ export function startAlertLoop(): void {
   timer = setInterval(() => void tick(), INTERVAL_MS);
   console.log(`[alert-loop] started (every ${INTERVAL_MS / 1000}s, shadow/read-only)`);
 }
-
-export function stopAlertLoop(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}

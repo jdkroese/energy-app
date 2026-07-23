@@ -251,12 +251,3 @@ export function resolveRoomId(deviceId: string): string | null {
   if (!roomId) return null;
   return store.get().rooms[roomId] ? roomId : null;
 }
-
-/** Resolve a device's room NAME for display: the assigned room's name, else the legacy
- *  deviceSettings.room string fallback, else null. */
-export function resolveRoomName(deviceId: string, fallback?: string | null): string | null {
-  const roomId = resolveRoomId(deviceId);
-  if (roomId) return store.get().rooms[roomId].name;
-  const legacy = store.get().deviceSettings[deviceId]?.room;
-  return legacy ?? fallback ?? null;
-}

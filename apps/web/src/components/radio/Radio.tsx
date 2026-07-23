@@ -763,6 +763,3 @@ export function RadioSchedulesSection({ speakers, canControl, wide }: {
     </Card>
   );
 }
-
-/** Friendlier alias — the section now covers radio + Spotify schedules. */
-export const MusicSchedulesSection = RadioSchedulesSection;

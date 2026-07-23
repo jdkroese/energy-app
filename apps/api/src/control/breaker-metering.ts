@@ -528,10 +528,5 @@ export function startBreakerMetering(): void {
   }
 }
 
-export function stopBreakerMetering(): void {
-  if (sampleTimer) { clearInterval(sampleTimer); sampleTimer = null; }
-  if (rollupTimer) { clearInterval(rollupTimer); rollupTimer = null; }
-}
-
 // Exposed for the query routes / tests.
 export { localDay as meteringLocalDay };

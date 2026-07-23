@@ -742,14 +742,6 @@ export function startIrrigationCoordinator(): void {
   );
 }
 
-export function stopIrrigationCoordinator(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-  observedRun = null;
-}
-
 // Exposed for tests (pure-ish helpers that need no real box).
 export const __test = {
   crossed,

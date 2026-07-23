@@ -698,11 +698,3 @@ export function startEnergyHistory(): void {
   }
 }
 
-export function stopEnergyHistory(): void {
-  if (rollupTimer) {
-    clearInterval(rollupTimer);
-    rollupTimer = null;
-  }
-}
-
-export { TZ as energyHistoryTz };

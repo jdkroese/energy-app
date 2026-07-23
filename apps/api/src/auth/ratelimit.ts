@@ -26,11 +26,6 @@ export function rateLimited(key: string, max: number, windowMs: number): boolean
   return false;
 }
 
-/** Test/diagnostic helper — clear all windows. */
-export function _resetRateLimits(): void {
-  buckets.clear();
-}
-
 // Generous thresholds — normal use sends 1 code / 1 reset; these only stop abuse.
 export const OTP_SEND_MAX = 5;
 export const OTP_SEND_WINDOW_MS = 15 * 60 * 1000; // 15 min, per user

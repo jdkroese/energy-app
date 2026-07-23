@@ -183,8 +183,3 @@ export function decodeSerialNumber(hex: string): string {
   const h = hex.toUpperCase();
   return h.substring(2, 2 + 16);
 }
-
-/** The command code (first byte) of a response hex string. */
-export function responseCode(hex: string): string {
-  return hex.substring(0, 2).toUpperCase();
-}

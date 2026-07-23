@@ -12,7 +12,7 @@
 import * as store from '../../store';
 import * as sungrow from '../../connectors/sungrow';
 import type { RichSnapshot } from '../snapshot';
-import { registerRule, tick, setRuleParams, _resetEngine } from './engine';
+import { registerRule, tick, setRuleParams } from './engine';
 import { buildReconciledSnapshot } from './reconciled-snapshot';
 import { compareAndRecord, type LegacyIssued } from './shadow-compare';
 import { soakExportRule } from './rules/soak-export';
@@ -25,12 +25,6 @@ function ensureRegistered(): void {
   if (registered) return;
   registerRule(soakExportRule);
   registered = true;
-}
-
-/** Test/diagnostic helper — clear the registry so registration re-runs. */
-export function _resetEngineOrchestration(): void {
-  _resetEngine();
-  registered = false;
 }
 
 /** Seed each rule's params from live config so the shadow decision reasons with the SAME

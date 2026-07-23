@@ -34,8 +34,6 @@ export const PRIORITY = {
   DEFAULT: 100,
 } as const;
 
-export type PriorityBand = (typeof PRIORITY)[keyof typeof PRIORITY];
-
 // ---- Actuators --------------------------------------------------------------
 // The set of things a claim can target in Phase 1a (battery domain only). Each is a
 // single-writer resource: exactly one claim wins per actuator per tick. The union is

@@ -12,7 +12,6 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
-  readdirSync,
 } from "node:fs";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -96,21 +95,6 @@ export function deletePhoto(photoId: string | undefined | null): void {
   if (!p) return;
   try {
     rmSync(p, { force: true });
-  } catch {
-    /* best-effort */
-  }
-}
-
-/** Garbage-collect orphan blobs not referenced by any zone (best-effort housekeeping). */
-export function pruneOrphans(referenced: Set<string>): void {
-  const d = dir();
-  if (!existsSync(d)) return;
-  try {
-    for (const f of readdirSync(d)) {
-      if (!referenced.has(f) && /^[a-f0-9]{16,}\.(jpg|png|webp)$/.test(f)) {
-        rmSync(resolve(d, f), { force: true });
-      }
-    }
   } catch {
     /* best-effort */
   }

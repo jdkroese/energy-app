@@ -224,11 +224,6 @@ function recordOpenverseUse(now: number): void {
   });
 }
 
-/** Inspection helper (status line / tests) — how many Openverse searches used up today. */
-export function openverseBudgetUsedToday(now = Date.now()): number {
-  return openverseUsedToday(now);
-}
-
 // ---- Size plausibility (shared by all three providers) ----------------------------------------
 
 /** Reject implausible aspect ratios/sizes when the provider reports them; when it doesn't,

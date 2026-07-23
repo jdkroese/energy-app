@@ -175,10 +175,3 @@ export function startControllerCoordinator(): void {
   timer = setInterval(() => void tick(), TICK_MS);
   console.log(`[scene-controller] coordinator started (every ${TICK_MS / 1000}s, gated on per-controller enabled)`);
 }
-
-export function stopControllerCoordinator(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}
