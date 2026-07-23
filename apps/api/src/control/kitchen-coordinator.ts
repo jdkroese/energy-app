@@ -137,7 +137,3 @@ export function startKitchenCoordinator(): void {
   setTimeout(() => void kitchenTick(), 30_000);
 }
 
-export function stopKitchenCoordinator(): void {
-  if (timer) clearInterval(timer);
-  timer = null;
-}

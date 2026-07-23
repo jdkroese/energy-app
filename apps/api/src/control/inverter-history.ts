@@ -288,9 +288,3 @@ export function startInverterHistory(): void {
   }
 }
 
-export function stopInverterHistory(): void {
-  if (rollupTimer) {
-    clearInterval(rollupTimer);
-    rollupTimer = null;
-  }
-}

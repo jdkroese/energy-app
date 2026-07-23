@@ -342,8 +342,6 @@ export interface EventQuery {
   limit?: number;
 }
 
-const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
-
 /** Retention windows by severity (ms). §7: critical/high 90d · medium 30d · low 7d. */
 const RETENTION_MS: Record<Severity, number> = {
   critical: 90 * 24 * 3600_000,
@@ -461,11 +459,6 @@ export function _resetEvents(): void {
   warnedOnce = false;
   lastMs = 0;
   lastRand = [];
-}
-
-/** Severity rank helper (exported for the "medium+" default filter, etc.). */
-export function severityRank(s: Severity): number {
-  return SEVERITY_RANK[s];
 }
 
 /** Snapshot of the ring size (diagnostics). */

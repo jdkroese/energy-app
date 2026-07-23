@@ -232,10 +232,3 @@ export function startDeviceScheduleCoordinator(): void {
   timer = setInterval(() => void tick(), TICK_MS);
   console.log(`[devices] schedule coordinator started (every ${TICK_MS / 1000}s)`);
 }
-
-export function stopDeviceScheduleCoordinator(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}

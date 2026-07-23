@@ -33,11 +33,6 @@ export function getLatestData(): Promise<unknown> {
   return get('/latestdata');
 }
 
-/** Per-channel powermeter: kwh_imported/kwh_exported, w_total, per-phase V/A. */
-export function getPowermeter(): Promise<unknown> {
-  return get('/powermeter');
-}
-
 // ---- Control / write (authenticated) ------------------------------------
 // All write paths require the Auth-Token. Callers MUST guardrail-check first;
 // these functions are dumb transports and do no clamping themselves.

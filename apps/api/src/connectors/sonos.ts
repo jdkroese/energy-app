@@ -302,29 +302,6 @@ export async function setVolume(uuid: string, pct: number): Promise<void> {
   lastFleetAt = 0; // force the next read to reflect it
 }
 
-/** Join every speaker into a single group (coordinated by the first device) so a
- *  notification plays in sync across the whole house. Best-effort; per-speaker errors
- *  are swallowed so one stubborn speaker doesn't abort the rest. Returns how many
- *  speakers were (attempted to be) joined. */
-export async function groupAll(): Promise<number> {
-  const m = await getManager();
-  if (!m) throw new Error(lastError || 'Sonos not available');
-  const devices = m.Devices;
-  if (devices.length <= 1) return devices.length;
-  const coordinator = devices[0];
-  let joined = 1;
-  for (const d of devices.slice(1)) {
-    try {
-      await d.JoinGroup(coordinator.Name);
-      joined++;
-    } catch {
-      /* leave this speaker where it is; the others still group */
-    }
-  }
-  lastFleetAt = 0;
-  return joined;
-}
-
 /**
  * Group the given speakers under ONE coordinator (the first id) so playback is synced across
  * them, and return that coordinator's Sonos id plus the full set of joined ids. Used by the

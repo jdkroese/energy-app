@@ -121,8 +121,3 @@ export function accrueArbitrageCharge(
     console.error('[arbitrage-log] charge accrual failed:', (e as Error).message);
   }
 }
-
-/** Test/diagnostic helper — drop the resolved-path memo so the next call re-resolves. */
-export function _resetArbitrageLogPath(): void {
-  path = null;
-}

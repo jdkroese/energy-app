@@ -139,21 +139,6 @@ export function sunriseSunsetMin(
   };
 }
 
-/**
- * 24-length hourly sun-intensity (%) for a day, from MEASURED shortwave radiation
- * vs the Haurwitz clear-sky reference. 0 below the horizon; clamped 0..100.
- */
-export function sunIntensityForDay(actualShortwave: number[], date: Date, lat: number): number[] {
-  const doy = madridDayOfYear(date);
-  return Array.from({ length: 24 }, (_, h) => {
-    const elev = solarElevationDeg(h, doy, lat);
-    const ghiC = haurwitzGHI(elev);
-    if (elev <= 0 || ghiC <= 0) return 0;
-    const actual = actualShortwave[h] ?? 0;
-    return Math.max(0, Math.min(100, Math.round((actual / ghiC) * 100)));
-  });
-}
-
 // ---- Persisted learned-PR model -------------------------------------------
 
 /** Per-hour learned roof shape is clamped into this band (>1 possible: reflection/edge gain). */

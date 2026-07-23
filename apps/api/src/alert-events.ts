@@ -136,8 +136,3 @@ export async function emitClearedForMissing(firing: Alert[]): Promise<void> {
 
 /** Which alert severities the mapper covers (re-export for callers/tests). */
 export type { AlertSeverity };
-
-/** Test/diagnostic reset. */
-export function _resetAlertEvents(): void {
-  activeByAlertId.clear();
-}

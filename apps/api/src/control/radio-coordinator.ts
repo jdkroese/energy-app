@@ -172,9 +172,3 @@ export function startRadioCoordinator(): void {
   console.log(`[music] schedule coordinator started (every ${TICK_MS / 1000}s)`);
 }
 
-export function stopRadioCoordinator(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}

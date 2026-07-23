@@ -299,17 +299,3 @@ export function setMeta(key: string, value: string): void {
     /* fail-soft */
   }
 }
-
-/** Close the handle (tests / shutdown). Safe to call when never opened. */
-export function closeMeteringDb(): void {
-  if (db_) {
-    try {
-      db_.close();
-    } catch {
-      /* ignore */
-    }
-  }
-  db_ = null;
-  initTried = false;
-  disabledReason = null;
-}

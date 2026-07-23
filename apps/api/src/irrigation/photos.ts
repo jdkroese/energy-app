@@ -100,18 +100,3 @@ export function deletePhoto(photoId: string | undefined | null): void {
     /* best-effort */
   }
 }
-
-/** Garbage-collect orphan blobs not referenced by any zone (best-effort housekeeping). */
-export function pruneOrphans(referenced: Set<string>): void {
-  const d = dir();
-  if (!existsSync(d)) return;
-  try {
-    for (const f of readdirSync(d)) {
-      if (!referenced.has(f) && /^[a-f0-9]{16,}\.(jpg|png|webp)$/.test(f)) {
-        rmSync(resolve(d, f), { force: true });
-      }
-    }
-  } catch {
-    /* best-effort */
-  }
-}

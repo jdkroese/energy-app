@@ -104,9 +104,3 @@ export function startLightCoordinator(): void {
   console.log(`[lights] schedule coordinator started (every ${TICK_MS / 1000}s)`);
 }
 
-export function stopLightCoordinator(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
-}

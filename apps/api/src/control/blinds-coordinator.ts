@@ -132,8 +132,3 @@ export async function evaluateBlindSchedules(): Promise<void> {
     });
   }
 }
-
-/** Clear the rate-limit memory (used by revert-to-safe / tests). */
-export function _resetBlindRateLimits(): void {
-  lastWriteAt.clear();
-}

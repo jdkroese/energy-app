@@ -55,17 +55,6 @@ export function registerRule(rule: RuleDef): void {
   if (!memories.has(rule.id)) memories.set(rule.id, {});
 }
 
-/** Drop all rules + memory (tests / diagnostics). */
-export function _resetEngine(): void {
-  rules.length = 0;
-  memories.clear();
-}
-
-/** The registered rules (read-only view, for diagnostics). */
-export function registeredRules(): readonly RuleDef[] {
-  return rules;
-}
-
 /**
  * Evaluate every rule over the reconciled snapshot, arbitrate, and return the would-issue
  * intent set. PURE w.r.t. devices (issues nothing). Per-rule fail-soft: a throwing rule
@@ -93,11 +82,6 @@ export function tick(snap: ReconciledSnapshot): EngineTickResult {
 
   const arbiter = arbitrate(allClaims, snap);
   return { ts: Date.now(), outcomes, arbiter };
-}
-
-/** The would-issue intent set from a tick result (convenience for the comparator). */
-export function intentsOf(result: EngineTickResult): Partial<Record<Actuator, Claim>> {
-  return result.arbiter.intents;
 }
 
 /** Overwrite a registered rule's params (the engine seeds these from live config each tick so

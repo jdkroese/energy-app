@@ -165,17 +165,6 @@ export function isRecipesDbEnabled(): boolean {
   return db() !== null;
 }
 
-export function recipesDbPath(): string {
-  return dbPath();
-}
-
-export const recipesSchemaVersion = SCHEMA_VERSION;
-
-export function recipesDbDisabledReason(): string | null {
-  db();
-  return disabledReason;
-}
-
 /** Close the handle (tests only). Safe to call when never opened. */
 export function closeRecipesDb(): void {
   if (db_) {

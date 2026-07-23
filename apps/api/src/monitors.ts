@@ -316,17 +316,3 @@ async function evalExpensiveImport(now: number): Promise<void> {
   }
 }
 
-/** Test/diagnostic reset of the edge state. */
-export function _resetMonitors(): void {
-  loadEdge.activeId = null;
-  loadEdge.aboveSince = 0;
-  currentEdge.activeId = null;
-  currentEdge.aboveSince = 0;
-  expensiveImportEdge.activeId = null;
-  expensiveImportEdge.aboveSince = 0;
-}
-
-/** Expose the active event ids (diagnostics). */
-export function activeMonitorEvents(): { load: string | null; current: string | null; expensiveImport: string | null } {
-  return { load: loadEdge.activeId, current: currentEdge.activeId, expensiveImport: expensiveImportEdge.activeId };
-}

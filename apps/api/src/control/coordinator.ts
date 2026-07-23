@@ -333,10 +333,6 @@ let lastArbActionState: ArbitrageEventType | null = null;
 // repeats until the divergence CLEARS (live re-converges to forecast) or the local hour rolls
 // over (a new forecast hour is a fresh comparison). Keyed on the hour the latch was set.
 let deviationLatchHour: number | null = null;
-/** Test/diagnostic helper — clear the deviation latch. */
-export function _resetDeviationLatch(): void {
-  deviationLatchHour = null;
-}
 
 /** The latest live solar/load forecast for the current hour (for deviation/event capture).
  *  Best-effort: 0/0 when the forecast isn't available. */
@@ -906,11 +902,4 @@ export function startCoordinator(): void {
   if (timer) return;
   timer = setInterval(() => void tick(), TICK_MS);
   console.log(`[control] coordinator started (every ${TICK_MS / 1000}s, self-gated on armed+auto)`);
-}
-
-export function stopCoordinator(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
 }
