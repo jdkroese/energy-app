@@ -20,11 +20,13 @@ removes the shared-filesystem coupling entirely — git becomes the only thing t
 scripts/new-worktree.sh <name>      # e.g. scripts/new-worktree.sh livechart
 ```
 
-This creates `../energy-app-<name>` on a fresh branch off the **latest** `origin/main`,
+This creates `../worktrees/energy-app/<name>` (all worktrees live under one dedicated
+`worktrees/` subfolder to keep the `E:/Claude` root clean — NOT scattered as
+`../energy-app-<name>` siblings) on a fresh branch off the **latest** `origin/main`,
 installs deps, and prints the next steps. Then:
 
 ```bash
-cd ../energy-app-<name>
+cd ../worktrees/energy-app/<name>
 claude            # this session is now isolated
 ```
 
@@ -32,7 +34,7 @@ Do it again in another terminal for a second agent. They cannot touch each other
 
 ## The loop
 
-1. **Branch off the latest origin/main** (the helper does this; or `git worktree add -b <name> ../energy-app-<name> origin/main`).
+1. **Branch off the latest origin/main** (the helper does this; or `git worktree add -b <name> ../worktrees/energy-app/<name> origin/main`).
 2. **Work, commit small and often.** Keep the worktree's tree clean between tasks.
 3. **Push your branch:** `git push -u origin <name>`.
 4. **Open a PR and merge** (or fast-forward `main` if you own the change). Merging to
@@ -61,8 +63,11 @@ Do it again in another terminal for a second agent. They cannot touch each other
   it stops stale deploys from clobbering newer work. If you hit it, you're on a stale tree:
   `git fetch && git rebase origin/main` (or work from a fresh worktree).
 - **`.claude/worktrees/` is git-ignored** so in-repo worktrees don't show up as noise.
-  Prefer **sibling** worktrees (`../energy-app-<name>`, what the helper makes) over in-repo
-  ones anyway.
+  Prefer the helper's worktrees under `../worktrees/energy-app/<name>` (kept out of the
+  `E:/Claude` root) over in-repo ones anyway.
+- **Windows cleanup gotcha:** `git worktree remove` de-registers the worktree but often
+  can't delete its `node_modules` (locked / long paths), leaving the directory behind. If
+  the dir survives removal, `rm -rf` it (or `cmd //c rmdir /s /q`) and `git worktree prune`.
 
 ## Keeping the main checkout sane
 

@@ -11,8 +11,9 @@
 #   scripts/new-worktree.sh <name>
 #   e.g.  scripts/new-worktree.sh airzone-tweaks
 #
-# Result: a sibling dir  ../<repo>-<name>  on a fresh branch  <name>, based on the
-# LATEST origin/main, with deps installed — ready for `claude` / `pnpm dev`.
+# Result: a worktree under  ../worktrees/<repo>/<name>  (kept OUT of the E:/Claude
+# root so it stays clean) on a fresh branch  <name>, based on the LATEST origin/main,
+# with deps installed — ready for `claude` / `pnpm dev`.
 #
 # From PowerShell:  bash scripts/new-worktree.sh <name>
 set -euo pipefail
@@ -29,7 +30,13 @@ slug="$(printf '%s' "$name" | tr ' /' '--' | tr -cd 'A-Za-z0-9._-')"
 
 repo_root="$(git rev-parse --show-toplevel)"
 repo_name="$(basename "$repo_root")"
-dest="$(dirname "$repo_root")/${repo_name}-${slug}"
+# Keep the E:/Claude root clean: all worktrees live under a single dedicated
+# ../worktrees/<repo>/ subfolder (namespaced per repo so multiple projects can
+# share the one worktrees/ root without slug collisions), NOT scattered as
+# ../<repo>-<name> siblings in the parent.
+worktrees_root="$(dirname "$repo_root")/worktrees/${repo_name}"
+dest="${worktrees_root}/${slug}"
+mkdir -p "$worktrees_root"
 
 if [[ -e "$dest" ]]; then
   echo "✗ $dest already exists — pick another name or remove it" >&2
@@ -65,6 +72,10 @@ Next:
     # work → commit → git push -u origin $slug → open a PR / merge to main (CI deploys)
 
 When finished (after it's merged):
-    git worktree remove "$dest"     # add --force if it holds build artifacts
+    git worktree remove "$dest" --force
     git branch -d $slug
+    # Windows gotcha: 'git worktree remove' often can't delete node_modules
+    # (locked / long paths) and leaves the dir behind. If \$dest still exists:
+    #   rm -rf "$dest"   ||   cmd //c "rmdir /s /q \$(cygpath -w "$dest")"
+    #   git worktree prune
 EOF

@@ -25,8 +25,11 @@ work, and broken deploys, every session MUST follow these. Detail: `docs/18-mult
 
 1. **One agent = one worktree = one branch.** Never run two sessions in the same checkout.
    Start an isolated worktree with `bash scripts/new-worktree.sh <name>` (creates
-   `../energy-app-<name>` off the latest `origin/main`). Do NOT do parallel work in the
-   primary checkout — treat it as a clean launch pad.
+   `../worktrees/energy-app/<name>` off the latest `origin/main` — all worktrees live under
+   the dedicated `../worktrees/` subfolder to keep the `E:/Claude` root clean, NOT as
+   `../energy-app-<name>` siblings). Do NOT do parallel work in the primary checkout — treat
+   it as a clean launch pad. On cleanup, `git worktree remove --force` then, on Windows,
+   `rm -rf` any leftover dir and `git worktree prune` (removal often can't delete node_modules).
 2. **Coordinate only through `origin`, never the filesystem.** Branch off the latest
    `origin/main`; `git fetch && git rebase origin/main` before every push so you land on
    others' work instead of diverging.
