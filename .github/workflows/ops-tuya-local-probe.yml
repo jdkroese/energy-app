@@ -13,6 +13,13 @@ name: Ops - Tuya Local (LAN) Probe
 # This is scripts/ + .github/ only, so deploy.yml's paths-ignore skips it entirely
 # — merging or running this never restarts the API or disarms control.
 on:
+  # TEMPORARY (throwaway run branch only): workflow_dispatch needs the workflow to
+  # exist on the DEFAULT branch, which it does not until PR #201 merges. A push
+  # trigger scoped to this one branch is the only way to exercise the probe on the
+  # mini runner before the merge decision. deploy.yml only fires on `main`, so a
+  # push here deploys nothing. Drop this trigger before merging.
+  push:
+    branches: [spike/tuya-local-probe-run]
   workflow_dispatch:
     inputs:
       write_test_device_id:
