@@ -1,0 +1,59 @@
+name: Ops - Tuya Local (LAN) Probe
+
+# Manually-triggered, READ-ONLY diagnostics (docs/44). Runs ON the mini (the only
+# host on the devices' LAN) via the self-hosted runner. It harvests {id,ip,localKey}
+# for the Tuya fleet (cloud, if quota allows — else cached) and then attempts a
+# LOCAL, read-only status read of each device over TCP 6668, auto-detecting the
+# protocol version. It reports how much of the fleet is locally controllable.
+#
+# Changes NOTHING on the host by default. It writes only .data/tuya-local.json
+# (a gitignored creds cache) and NEVER actuates a device unless the optional
+# write_test_device_id input is set to a single benign device id.
+#
+# This is scripts/ + .github/ only, so deploy.yml's paths-ignore skips it entirely
+# — merging or running this never restarts the API or disarms control.
+on:
+  workflow_dispatch:
+    inputs:
+      write_test_device_id:
+        description: 'OPTIONAL single device id (bf…) to toggle-and-restore as a benign write test. Leave EMPTY for read-only (default).'
+        required: false
+        default: ''
+
+jobs:
+  tuya-local-probe:
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tuyapi into a scratch dir (no repo/lockfile changes)
+        run: |
+          set -euo pipefail
+          # Keep the LAN library OUT of the pnpm workspace + lockfile: install it in
+          # a throwaway dir and expose it to Node via NODE_PATH. This leaves the repo
+          # tree and apps/api node_modules untouched.
+          TUYA_LIB="${RUNNER_TEMP}/tuya-local-lib"
+          rm -rf "$TUYA_LIB" && mkdir -p "$TUYA_LIB"
+          cd "$TUYA_LIB"
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund --silent tuyapi@7
+          echo "TUYA_LIB=$TUYA_LIB" >> "$GITHUB_ENV"
+
+      - name: Run the local probe (read-only unless a write-test id is given)
+        run: |
+          set -uo pipefail
+          # Expose the scratch-installed tuyapi to the standalone script.
+          export NODE_PATH="${TUYA_LIB}/node_modules"
+
+          WRITE_ID="${{ github.event.inputs.write_test_device_id }}"
+          if [ -n "$WRITE_ID" ]; then
+            echo "::warning::WRITE TEST enabled for device '$WRITE_ID' — will toggle & restore a boolean DP."
+            node scripts/tuya-local-probe.mjs --write-test "$WRITE_ID"
+          else
+            node scripts/tuya-local-probe.mjs
+          fi
+        env:
+          # Prod .data on the mini (state.json for cloud creds + device ids; the
+          # harvested tuya-local.json cache lives here too — gitignored).
+          DATA_DIR: /Users/joris/sites/energy/.data
