@@ -27,7 +27,11 @@ jobs:
           export PATH="/opt/homebrew/bin:$PATH"
 
           RUNNER_DIR="$HOME/actions-runner-procurement"
-          mkdir -p "$RUNNER_DIR"
+          LABEL="nl.hirobo.actions-runner-procurement"
+          PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+          LOG_DIR="$HOME/logs"
+
+          mkdir -p "$RUNNER_DIR" "$LOG_DIR"
           cd "$RUNNER_DIR"
 
           # --- 1. download the runner package if it is not there yet ----------
@@ -59,15 +63,54 @@ jobs:
               --unattended --replace
           fi
 
-          # --- 3. install + start the service --------------------------------
-          # On macOS svc.sh must NOT be run under sudo — it installs a
-          # LaunchAgent for the current user and refuses to run as root.
-          if ./svc.sh status 2>/dev/null | grep -q "is installed"; then
-            echo "service already installed"
-          else
-            ./svc.sh install
-          fi
-          ./svc.sh start || true
+          # --- 3. run it as a LaunchDaemon ------------------------------------
+          # svc.sh installs a per-user LaunchAgent, which cannot be loaded from
+          # this (daemon) context: "Load failed: 5: Input/output error". The
+          # other runners on this machine are LaunchDaemons for the same
+          # reason, so follow that pattern.
+          rm -f "$HOME/Library/LaunchAgents/actions.runner.jdkroese-spray-procurement."*.plist || true
+          rm -f ./.service || true
 
-          echo "--- service status ---"
-          ./svc.sh status || true
+          RUNSVC="${RUNNER_DIR}/runsvc.sh"
+          [ -x "$RUNSVC" ] || RUNSVC="${RUNNER_DIR}/bin/runsvc.sh"
+          [ -f "$RUNSVC" ] || { echo "::error::runsvc.sh not found in $RUNNER_DIR"; exit 1; }
+          chmod +x "$RUNSVC"
+
+          sudo tee "$PLIST" >/dev/null <<PLIST_EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key><string>${LABEL}</string>
+            <key>UserName</key><string>$(whoami)</string>
+            <key>WorkingDirectory</key><string>${RUNNER_DIR}</string>
+            <key>ProgramArguments</key>
+            <array>
+              <string>${RUNSVC}</string>
+            </array>
+            <key>EnvironmentVariables</key>
+            <dict>
+              <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+              <key>HOME</key><string>${HOME}</string>
+            </dict>
+            <key>RunAtLoad</key><true/>
+            <key>KeepAlive</key><true/>
+            <key>StandardOutPath</key><string>${LOG_DIR}/actions-runner-procurement.out.log</string>
+            <key>StandardErrorPath</key><string>${LOG_DIR}/actions-runner-procurement.err.log</string>
+          </dict>
+          </plist>
+          PLIST_EOF
+
+          sudo chown root:wheel "$PLIST"
+          sudo chmod 644 "$PLIST"
+
+          if sudo launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+            sudo launchctl bootout "system/${LABEL}" 2>/dev/null || true
+          fi
+          sudo launchctl bootstrap system "$PLIST"
+          sudo launchctl enable "system/${LABEL}"
+
+          echo "--- waiting for the runner to report online ---"
+          sleep 8
+          sudo launchctl print "system/${LABEL}" | head -20 || true
+          tail -20 "${LOG_DIR}/actions-runner-procurement.err.log" 2>/dev/null || true
