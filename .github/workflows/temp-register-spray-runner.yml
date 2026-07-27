@@ -1,0 +1,65 @@
+name: TEMP register spray-procurement runner
+
+# TEMPORARY — added by Claude on 2026-07-27 solely to register a self-hosted
+# runner for jdkroese/spray-procurement on the mini, because that machine is
+# unreachable from the operator's current network. It is manual-trigger only,
+# never runs on push, does not check out this repository and does not touch
+# anything belonging to the energy app. Delete once the runner exists.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "yes" to register the runner'
+        required: true
+        default: "no"
+
+jobs:
+  register:
+    if: github.event.inputs.confirm == 'yes'
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 15
+    steps:
+      - name: Register the runner for jdkroese/spray-procurement
+        env:
+          RUNNER_TOKEN: ${{ secrets.SPRAY_RUNNER_TOKEN }}
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+
+          RUNNER_DIR="$HOME/actions-runner-procurement"
+
+          if [ -f "$RUNNER_DIR/.runner" ]; then
+            echo "runner already registered at $RUNNER_DIR — nothing to do"
+            exit 0
+          fi
+          if [ -z "${RUNNER_TOKEN:-}" ]; then
+            echo "::error::SPRAY_RUNNER_TOKEN secret is not set"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_DIR"
+          cd "$RUNNER_DIR"
+
+          if [ ! -f ./config.sh ]; then
+            VERSION="$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest \
+              | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)"
+            [ -n "$VERSION" ] || { echo "::error::could not resolve runner version"; exit 1; }
+            echo "downloading actions runner ${VERSION} (osx-arm64)"
+            curl -fsSL -o runner.tar.gz \
+              "https://github.com/actions/runner/releases/download/v${VERSION}/actions-runner-osx-arm64-${VERSION}.tar.gz"
+            tar xzf runner.tar.gz
+            rm runner.tar.gz
+          fi
+
+          ./config.sh \
+            --url "https://github.com/jdkroese/spray-procurement" \
+            --token "$RUNNER_TOKEN" \
+            --name "mini-procurement" \
+            --labels "self-hosted,procurement" \
+            --work "_work" \
+            --unattended --replace
+
+          sudo ./svc.sh install "$(whoami)"
+          sudo ./svc.sh start
+
+          echo "runner registered and started"
