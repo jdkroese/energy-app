@@ -142,6 +142,7 @@ const CSS = `
 .pwr-iconbtn--solid:hover{ background:var(--surface-3); border-color:var(--border-3); }
 .pwr-iconbtn--accent{ background:var(--accent); color:var(--accent-contrast); box-shadow:var(--glow-soft); }
 .pwr-iconbtn--accent:hover{ background:var(--accent-bright); box-shadow:var(--glow-solar); }
+.pwr-iconbtn--circle{ border-radius:50%; }
 
 /* ---- Switch ---- */
 .pwr-switch{ display:inline-flex; align-items:center; gap:10px; cursor:pointer; user-select:none; }
