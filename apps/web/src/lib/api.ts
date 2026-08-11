@@ -1239,6 +1239,10 @@ export const auth = {
     postJSON<CreateUserResponse>("/api/auth/users", { email, name, role }),
   deleteUser: (id: string) =>
     delJSON<{ ok: boolean }>(`/api/auth/users/${enc(id)}`),
+  updateUserRole: (id: string, role: UserRole) =>
+    patchJSON<{ user: AuthUser }>(`/api/auth/users/${enc(id)}/role`, { role }),
+  getSetupLink: (id: string) =>
+    postJSON<CreateUserResponse>(`/api/auth/users/${enc(id)}/setup-link`),
 };
 
 // re-export for convenience

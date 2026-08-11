@@ -274,7 +274,7 @@ import {
   requireAdmin,
   requireKioskOrAdmin,
 } from "./auth/middleware";
-import { bootstrapAdmin } from "./auth/users";
+import { bootstrapAdmin, seedDiederikAdmin } from "./auth/users";
 import multer from "multer";
 import * as store from "./store";
 import type {
@@ -1649,6 +1649,13 @@ try {
   bootstrapAdmin();
 } catch (e) {
   console.error("[energy-api] auth bootstrap failed:", (e as Error).message);
+}
+
+// One-time owner-directed auth seeds (see auth/users.ts) — each applies at most once.
+try {
+  seedDiederikAdmin();
+} catch (e) {
+  console.error("[energy-api] auth seed failed:", (e as Error).message);
 }
 
 // Warm the event ring from the durable JSONL tail so the timeline survives a restart.

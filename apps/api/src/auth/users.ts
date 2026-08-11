@@ -100,6 +100,21 @@ export function ensureKioskUser(): AuthUser {
   return user;
 }
 
+/**
+ * Change an existing user's role. Only 'admin' | 'user' are settable here — 'kiosk'
+ * is a system-managed identity (see ensureKioskUser) and is never hand-assigned
+ * through this path, in either direction. Returns the updated user, or null if the
+ * id doesn't exist or currently belongs to the kiosk account.
+ */
+export function updateUserRole(id: string, role: 'admin' | 'user'): AuthUser | null {
+  return store.update((s) => {
+    const u = s.auth.users.find((x) => x.id === id);
+    if (!u || u.role === 'kiosk') return null;
+    u.role = role;
+    return u;
+  });
+}
+
 export function deleteUser(id: string): boolean {
   return store.update((s) => {
     const before = s.auth.users.length;
@@ -214,4 +229,41 @@ export function bootstrapAdmin(): void {
   console.log(
     `[auth] SETUP — set the admin password at: https://home.hirobo.nl/setup?token=${raw}`,
   );
+}
+
+// ---- One-time auth seeds -------------------------------------------------
+//
+// Small, owner-directed account changes applied exactly once at boot. Each is
+// keyed by a persisted seed key (store.auth.oneTimeSeedsApplied) rather than by
+// the target account's current state, so if the owner later reverses the change
+// through the Users screen, a subsequent restart won't silently re-apply it.
+
+function applySeedOnce(key: string, apply: () => void): void {
+  if (store.get().auth.oneTimeSeedsApplied.includes(key)) return;
+  apply();
+  store.update((s) => {
+    if (!s.auth.oneTimeSeedsApplied.includes(key)) s.auth.oneTimeSeedsApplied.push(key);
+  });
+}
+
+/**
+ * 2026-08-11, owner-directed: grant dk@itronix.es (Diederik) admin access. Runs
+ * once — creates the account (passwordHash null, setup link logged) if it doesn't
+ * exist yet, or promotes an existing account to admin. The setup link can also be
+ * fetched/regenerated later from the Users screen (admin-only "Setup link" action).
+ */
+export function seedDiederikAdmin(): void {
+  applySeedOnce('2026-08-11:diederik-admin', () => {
+    const email = normalizeEmail('dk@itronix.es');
+    const existing = findUserByEmail(email);
+    if (!existing) {
+      const user = createUser({ email, name: 'Diederik', role: 'admin' });
+      const raw = createSetupToken(user);
+      console.log(
+        `[auth] SEED — Diederik admin created, setup link: https://home.hirobo.nl/setup?token=${raw}`,
+      );
+      return;
+    }
+    if (existing.role !== 'admin') updateUserRole(existing.id, 'admin');
+  });
 }

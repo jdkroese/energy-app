@@ -223,6 +223,11 @@ export interface AuthState {
   resetTokens: AuthResetToken[];
   setupTokens: AuthSetupToken[];
   loginAttempts: Record<string, LoginAttempt>;
+  /** Keys of one-time owner-directed auth seeds already applied (e.g. a specific
+   *  account granted a role via a boot script) — keyed on the seed, not the target
+   *  user's current state, so a later manual reversal through the Users screen
+   *  sticks and isn't undone by a subsequent restart. */
+  oneTimeSeedsApplied: string[];
 }
 
 // ---- Battery control --------------------------------------------------------
@@ -2247,6 +2252,7 @@ export function defaultAuth(): AuthState {
     resetTokens: [],
     setupTokens: [],
     loginAttempts: {},
+    oneTimeSeedsApplied: [],
   };
 }
 
@@ -3629,6 +3635,9 @@ function hydrateAuth(
       p.loginAttempts && typeof p.loginAttempts === "object"
         ? p.loginAttempts
         : base.loginAttempts,
+    oneTimeSeedsApplied: Array.isArray(p.oneTimeSeedsApplied)
+      ? p.oneTimeSeedsApplied
+      : base.oneTimeSeedsApplied,
   };
 }
 

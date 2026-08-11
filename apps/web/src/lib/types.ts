@@ -619,13 +619,23 @@ export interface BatteriesResponse {
  * Auth contract (see prompt §backend). Cookies carry the session.
  * ==========================================================================*/
 
-export type UserRole = "admin" | "member" | "kiosk";
+/** Matches the API's UserRole exactly (apps/api/src/store.ts) — "user" is a
+ *  regular member; the UI labels it "Member". */
+export type UserRole = "admin" | "user" | "kiosk";
 
 export interface AuthUser {
   id: string;
   email: string;
   name: string;
   role: UserRole;
+}
+
+/** Row shape for the admin Users list (GET /api/auth/users) — a superset of
+ *  AuthUser with the fields only an admin needs to see. */
+export interface AdminUser extends AuthUser {
+  twoFactor: { enabled: boolean; channel: OtpChannel };
+  hasPassword: boolean;
+  createdAt: number;
 }
 
 export interface MeResponse {
@@ -670,7 +680,7 @@ export interface SessionsResponse {
 }
 
 export interface UsersResponse {
-  users: AuthUser[];
+  users: AdminUser[];
 }
 
 export interface CreateUserResponse {

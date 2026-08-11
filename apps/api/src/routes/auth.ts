@@ -43,6 +43,7 @@ import {
   publicUser,
   recordFailedLogin,
   setPasswordHash,
+  updateUserRole,
 } from '../auth/users';
 import {
   consumeResetToken,
@@ -68,6 +69,7 @@ import type { AuthUser, TwoFactorChannel } from '../store';
 export const authRouter = Router();
 
 const RESET_BASE = 'https://home.hirobo.nl/reset';
+const SETUP_BASE = 'https://home.hirobo.nl/setup';
 
 function ctx(req: Request) {
   return { ua: userAgent(req), ip: clientIp(req) };
@@ -376,7 +378,7 @@ authRouter.post('/users', requireAdmin, (req: Request, res: Response) => {
     res.json({
       user: publicUser(user),
       setupToken: token,
-      setupUrl: `https://home.hirobo.nl/setup?token=${token}`,
+      setupUrl: `${SETUP_BASE}?token=${token}`,
     });
   } catch (e) {
     const err = e as Error & { code?: string };
@@ -418,4 +420,45 @@ authRouter.delete('/users/:id', requireAdmin, (req: Request, res: Response) => {
     return;
   }
   res.json({ ok: true });
+});
+
+// ---- ADMIN: change an existing user's role ------------------------------
+
+authRouter.patch('/users/:id/role', requireAdmin, (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const self = req.user as AuthUser;
+  if (id === self.id) {
+    res.status(400).json({ error: 'Cannot change your own role', code: 'BAD_INPUT' });
+    return;
+  }
+  const body = (req.body ?? {}) as { role?: unknown };
+  if (body.role !== 'admin' && body.role !== 'user') {
+    res.status(400).json({ error: 'Role must be "admin" or "user"', code: 'BAD_INPUT' });
+    return;
+  }
+  const updated = updateUserRole(id, body.role);
+  if (!updated) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  res.json({ user: publicUser(updated) });
+});
+
+// ---- ADMIN: (re)issue a setup link for a passwordless user ---------------
+//
+// Covers a link that was closed before it was copied, or one whose TTL expired
+// before the invitee used it — without needing to delete + recreate the account.
+
+authRouter.post('/users/:id/setup-link', requireAdmin, (req: Request, res: Response) => {
+  const target = findUserById(String(req.params.id));
+  if (!target) {
+    res.status(404).json({ error: 'not found' });
+    return;
+  }
+  if (target.passwordHash !== null) {
+    res.status(400).json({ error: 'User already has a password set', code: 'BAD_INPUT' });
+    return;
+  }
+  const token = createSetupToken(target);
+  res.json({ setupUrl: `${SETUP_BASE}?token=${token}` });
 });

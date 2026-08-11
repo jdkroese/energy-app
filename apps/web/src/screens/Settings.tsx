@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaAccountStatus, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AuthUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaAccountStatus, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AdminUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
@@ -570,6 +570,80 @@ function RevokeBtn({ onClick, label = 'Revoke' }: { onClick: () => void; label?:
   );
 }
 
+/** RoleToggle — admin/member switch for one user row. Self and the kiosk account
+ *  never get this control (see UsersSection); everyone else can be promoted or
+ *  demoted in place, no delete+recreate needed. */
+function RoleToggle({ user, onChanged }: { user: AdminUser; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const setRole = async (role: UserRole) => {
+    if (role === user.role || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await auth.updateUserRole(user.id, role);
+      onChanged();
+    } catch {
+      setErr('Could not update role');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+      <SegmentedControl
+        size="sm"
+        value={user.role}
+        onChange={(v) => void setRole(v as UserRole)}
+        options={[
+          { value: 'user', label: 'Member' },
+          { value: 'admin', label: 'Admin' },
+        ]}
+      />
+      {err && <div style={{ fontSize: 10.5, color: 'var(--danger)' }}>{err}</div>}
+    </div>
+  );
+}
+
+/** CopyLinkBtn — (re)issue and copy a one-time setup link for a user who hasn't
+ *  set a password yet (covers a link closed before it was sent, or one whose
+ *  TTL expired before the invitee used it). */
+function CopyLinkBtn({ userId }: { userId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+      <Button
+        size="sm"
+        variant="ghost"
+        loading={busy}
+        iconLeft={<Icon name={copied ? 'check' : 'link'} size={14} />}
+        onClick={async () => {
+          setBusy(true);
+          setErr(null);
+          try {
+            const { setupUrl } = await auth.getSetupLink(userId);
+            await navigator.clipboard.writeText(setupUrl);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch {
+            setErr('Could not get link');
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {copied ? 'Copied' : 'Setup link'}
+      </Button>
+      {err && <div style={{ fontSize: 10.5, color: 'var(--danger)' }}>{err}</div>}
+    </div>
+  );
+}
+
 function TwoFactorRow() {
   const [enabled, setEnabled] = useState(false);
   const [channel, setChannel] = useState<OtpChannel>('email');
@@ -750,7 +824,7 @@ function AddUserForm({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<UserRole>('member');
+  const [role, setRole] = useState<UserRole>('user');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [setupUrl, setSetupUrl] = useState<string | null>(null);
@@ -768,7 +842,7 @@ function AddUserForm({ onCreated }: { onCreated: () => void }) {
       setSetupUrl(res.setupUrl);
       setEmail('');
       setName('');
-      setRole('member');
+      setRole('user');
       onCreated();
     } catch {
       setErr('Could not create user — try again');
@@ -826,7 +900,7 @@ function AddUserForm({ onCreated }: { onCreated: () => void }) {
         label="Role"
         value={role}
         options={[
-          { value: 'member', label: 'Member' },
+          { value: 'user', label: 'Member' },
           { value: 'admin', label: 'Admin' },
         ]}
         onChange={(e) => setRole(e.target.value as UserRole)}
@@ -842,7 +916,7 @@ function AddUserForm({ onCreated }: { onCreated: () => void }) {
 
 function UsersSection() {
   const { user: me } = useAuth();
-  const [users, setUsers] = useState<AuthUser[] | null>(null);
+  const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const load = async () => {
@@ -867,23 +941,34 @@ function UsersSection() {
     <Card title="Users" subtitle="People with access to this Power install" style={{ padding: 0 }}>
       {err && <div style={{ ...row, color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
       {users === null && !err && <div style={{ ...row, color: 'var(--text-3)', fontSize: 13 }}>Loading…</div>}
-      {users?.map((u, i) => (
-        <div key={u.id} style={{ ...row, borderTop: i === 0 ? 'none' : '1px solid var(--border-1)' }}>
-          <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: u.role === 'admin' ? 'var(--solar)' : 'var(--home)' }}>
-            <Icon name={u.role === 'admin' ? 'shield' : 'user'} size={17} />
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-              {u.name}
-              {u.id === me?.id && (
-                <span style={{ fontSize: 10.5, color: 'var(--text-2)', background: 'var(--surface-3)', borderRadius: 999, padding: '1px 8px', fontWeight: 600 }}>You</span>
-              )}
+      {users?.map((u, i) => {
+        const isSelf = u.id === me?.id;
+        const isKiosk = u.role === 'kiosk';
+        return (
+          <div key={u.id} style={{ ...row, borderTop: i === 0 ? 'none' : '1px solid var(--border-1)', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', flex: 'none', background: 'var(--surface-3)', color: u.role === 'admin' ? 'var(--solar)' : 'var(--home)' }}>
+              <Icon name={u.role === 'admin' ? 'shield' : 'user'} size={17} />
+            </span>
+            <div style={{ flex: 1, minWidth: 160 }}>
+              <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                {u.name}
+                {isSelf && (
+                  <span style={{ fontSize: 10.5, color: 'var(--text-2)', background: 'var(--surface-3)', borderRadius: 999, padding: '1px 8px', fontWeight: 600 }}>You</span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                {u.email}
+                {isKiosk ? ' · kiosk' : isSelf ? ` · ${u.role}` : ''}
+              </div>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>{u.email} · {u.role}</div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap', flex: 'none' }}>
+              {!isSelf && !isKiosk && <RoleToggle user={u} onChanged={() => void load()} />}
+              {!u.hasPassword && !isKiosk && <CopyLinkBtn userId={u.id} />}
+              {!isSelf && <RevokeBtn onClick={() => remove(u.id)} label="Remove" />}
+            </div>
           </div>
-          {u.id !== me?.id && <RevokeBtn onClick={() => remove(u.id)} label="Remove" />}
-        </div>
-      ))}
+        );
+      })}
       <AddUserForm onCreated={() => void load()} />
     </Card>
   );
