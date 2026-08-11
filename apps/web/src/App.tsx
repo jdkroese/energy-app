@@ -7,7 +7,6 @@ import { Reset } from './screens/auth/Reset';
 import { PowerMark } from './screens/auth/AuthShell';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { ThemeProvider } from './lib/ThemeProvider';
-import { EditModeProvider } from './lib/EditModeProvider';
 
 // Route screens are code-split: each loads its own chunk on first navigation so
 // the initial bundle stays small. Auth screens + the shell stay eager (critical
@@ -136,9 +135,7 @@ export default function App() {
     <BrowserRouter>
       <ThemeProvider>
         <AuthProvider>
-          <EditModeProvider>
-            <Gate />
-          </EditModeProvider>
+          <Gate />
         </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>

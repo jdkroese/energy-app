@@ -1,16 +1,16 @@
 import type { ReactNode } from 'react';
 import { ScreenHeader } from '../components/ui';
 import { ThemeToggle } from '../components/shell/ThemeToggle';
-import { EditToggle } from '../components/shell/EditToggle';
 
 /**
  * Mobile screen header (eyebrow + h1), matching the *-mobile mockups.
  * Thin wrapper over the shared <ScreenHeader> so titles are standardized
  * app-wide (Track C). Kept `md:hidden` so the desktop TopBar owns the title on
- * wide layouts. Carries the same circular edit/theme button pair as the
- * desktop TopBar, just before the screen-supplied `right` slot.
+ * wide layouts.
  */
 export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; title: string; right?: ReactNode }) {
+  // Integrate the theme-toggle PR's sun/moon control into the standardized
+  // header (it sits just before the screen-supplied `right` slot, as before).
   return (
     <ScreenHeader
       className="md:hidden"
@@ -18,7 +18,6 @@ export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; ti
       title={title}
       right={
         <>
-          <EditToggle />
           <ThemeToggle />
           {right}
         </>

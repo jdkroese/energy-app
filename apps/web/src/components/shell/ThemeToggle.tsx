@@ -15,9 +15,7 @@ export function ThemeToggle({ size = 'sm' }: { size?: 'sm' | 'md' | 'lg' }) {
   return (
     <IconButton
       size={size}
-      variant="solid"
       label={toLight ? 'Switch to light theme' : 'Switch to dark theme'}
-      className="pwr-iconbtn--circle"
       onClick={() => setTheme(toLight ? 'light' : 'dark')}
     >
       <Icon name={toLight ? 'sun' : 'moon'} />
