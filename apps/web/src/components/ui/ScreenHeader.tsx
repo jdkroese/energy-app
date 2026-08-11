@@ -60,11 +60,14 @@ export function ScreenHeader({
 }: ScreenHeaderProps) {
   const trailing = right ?? actions;
 
+  // overflow/textOverflow/whiteSpace keep a long title from wrapping the header
+  // onto a second line — it truncates instead, so the row always stays one line.
+  const truncate: CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   const h1Style: CSSProperties = compact
-    ? { fontSize: 21, fontWeight: 700, letterSpacing: '-.02em', margin: 0 }
+    ? { fontSize: 21, fontWeight: 700, letterSpacing: '-.02em', margin: 0, ...truncate }
     : asTopBar
-      ? { fontSize: 22, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0' }
-      : { fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0' };
+      ? { fontSize: 22, fontWeight: 600, letterSpacing: '-.01em', margin: '2px 0 0', ...truncate }
+      : { fontSize: 24, fontWeight: 700, letterSpacing: '-.02em', margin: '2px 0 0', ...truncate };
 
   const pad = padding ?? (asTopBar ? '18px 28px' : '12px 18px 12px');
 
