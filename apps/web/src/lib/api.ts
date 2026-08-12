@@ -27,6 +27,7 @@ import type {
   ControlMode,
   ControlStatus,
   CreateUserResponse,
+  CurrentWeatherResponse,
   DecisionsResponse,
   DeviceDetailResponse,
   DevicesResponse,
@@ -321,6 +322,7 @@ export const api = {
   alerts: () => getJSON<AlertsResponse>("/api/alerts"),
   settings: () => getJSON<SettingsResponse>("/api/settings"),
   brainPlan: () => getJSON<BrainPlanResponse>("/api/brain/plan"),
+  weatherCurrent: () => getJSON<CurrentWeatherResponse>("/api/weather/current"),
   scenarios: () => getJSON<ScenariosResponse>("/api/scenarios"),
 
   // settings + channels

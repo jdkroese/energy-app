@@ -221,3 +221,43 @@ export async function getForecast(): Promise<WeatherForecast | null> {
     return null;
   }
 }
+
+export interface CurrentConditions {
+  /** ISO timestamp this reading was fetched. */
+  ts: string;
+  /** °C */
+  temperatureC: number;
+  /** km/h at 10 m */
+  windSpeedKmh: number;
+}
+
+/**
+ * Fetch just the current-hour temperature + wind speed for the site — a cheap
+ * single-value read for UI chrome (e.g. the TopBar weather pill), as opposed to
+ * getForecast()'s full 24h hourly arrays. Returns null on any failure so callers
+ * can fail soft (never show a fake reading).
+ */
+export async function getCurrentConditions(): Promise<CurrentConditions | null> {
+  try {
+    const { lat, lon } = weatherCoords();
+    const url =
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&current=temperature_2m,wind_speed_10m&timezone=Europe%2FMadrid`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      current?: { temperature_2m?: number; wind_speed_10m?: number };
+    };
+    const c = json.current;
+    if (typeof c?.temperature_2m !== "number" || typeof c?.wind_speed_10m !== "number") {
+      return null;
+    }
+    return {
+      ts: new Date().toISOString(),
+      temperatureC: c.temperature_2m,
+      windSpeedKmh: Math.max(0, c.wind_speed_10m),
+    };
+  } catch {
+    return null;
+  }
+}
