@@ -38,6 +38,7 @@ import {
   type EnergyEvent,
 } from "./events";
 import { getVoltageHistory } from "./routes/voltage-history";
+import { getCurrentWeather } from "./routes/weather";
 import { getPlan } from "./routes/brain";
 import {
   getScenarios,
@@ -394,6 +395,13 @@ app.get(
 app.get(
   "/api/batteries",
   wrap(() => getBatteries()),
+);
+
+// Current-conditions read for UI chrome (TopBar weather pill) — cheap vs. the
+// full hourly forecast used internally by the solar/irrigation models.
+app.get(
+  "/api/weather/current",
+  wrap(() => getCurrentWeather()),
 );
 
 // ---- Solar inverters (Sungrow SG5.0RS ×2) — READ-ONLY ----

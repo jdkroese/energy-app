@@ -237,6 +237,15 @@ export interface VoltageHistoryResponse {
   breaker: { id: string; name: string } | null;
 }
 
+/** GET /api/weather/current — cheap current-conditions read for the TopBar weather
+ *  pill. Null fields mean the upstream fetch failed — fail soft, never show a fake
+ *  reading. */
+export interface CurrentWeatherResponse {
+  ts: string;
+  temperatureC: number | null;
+  windSpeedKmh: number | null;
+}
+
 // ---- Circuit-breaker usage metering (docs/28) ------------------------------
 
 export type BreakerUsageGranularity = "raw" | "hour" | "day";
