@@ -10,10 +10,11 @@
 //   • If the app/mini/LAN/deploy FAILS, the rain-delay lapses within ≤1 day and the
 //     controller's onboard program RESUMES on its own. Fail-safe — the garden never dries out.
 //
-// ⚠ SUPPRESSION IS CURRENTLY PAUSED (SUPPRESS_ONBOARD_PROGRAM=false, 2026-07-02, owner): while we
-//   verify that Home-App firing actually opens valves, the coordinator does NOT hold the rain-delay
-//   and CLEARS any it holds, so the onboard program keeps watering; it also does not fire its own
-//   scheduled plan. Manual Water-now still works. Re-enable the flag once watering is verified.
+// ✅ SUPPRESSION ENABLED (SUPPRESS_ONBOARD_PROGRAM=true, 2026-08-19, owner): app-issued watering was
+//   verified to physically open valves (after the ManuallyRunStation encoding fix, PR #235), so the
+//   coordinator now holds the rolling rain-delay to suppress the onboard program and fires its own
+//   weather-trimmed plan while healthy (mode=live + armed). If the app/mini/LAN fails the delay
+//   lapses within ≤1 day and the controller's onboard program resumes on its own (fail-safe).
 //
 // PRODUCTION: the live actuation path runs ONLY when irrigation.mode === 'live' AND the Devices
 // layer is armed (the same arm/admin gate as the other coordinators — enforced again inside
@@ -74,14 +75,14 @@ const APP_RUN_CLAIM_MS = 2 * TICK_MS;
 export const SUPPRESSION_DELAY_DAYS = 1;
 
 /**
- * MASTER SWITCH for onboard-program suppression. Set FALSE (2026-07-02, owner request) while we
- * verify that Home-App firing actually opens valves. While false the coordinator holds NO
- * suppression rain-delay and actively CLEARS any it previously set, so the Rain Bird's own weekly
- * program keeps watering the garden. It also does NOT fire the app's own scheduled plan (the
- * onboard program owns the schedule — no double-watering); manual Water-now still works for
- * verification. Flip back to TRUE once Home-App watering is confirmed end-to-end.
+ * MASTER SWITCH for onboard-program suppression. Set TRUE (2026-08-19, owner) now that Home-App
+ * firing is confirmed to physically open valves (ManuallyRunStation encoding fix, PR #235). While
+ * true the coordinator holds the rolling 1-day rain-delay to SUPPRESS the controller's onboard
+ * weekly program and fires the app's own weather-trimmed plan instead — but ONLY while healthy
+ * (mode=live + Devices armed). Handing back to the Rain Bird is the runtime ModeToggle: setting
+ * irrigation mode to 'off' releases the held delay so the onboard program resumes immediately.
  */
-export const SUPPRESS_ONBOARD_PROGRAM = false;
+export const SUPPRESS_ONBOARD_PROGRAM = true;
 
 /** Whether the coordinator is currently suppressing the onboard program and running its own plan
  *  (true) vs. deferring to the controller's own schedule (false). Surfaced to the UI. */
@@ -528,9 +529,12 @@ async function tick(): Promise<void> {
 
     const irr = store.get().irrigation;
     if (irr.mode === "off") {
-      // Even when off, don't leave the onboard program suppressed by a delay we set — clear it so
-      // the Rain Bird's own schedule runs (matters while suppression is paused, docs decision).
-      if (!SUPPRESS_ONBOARD_PROGRAM && rainbird.isConfigured()) {
+      // Even when off, don't leave the onboard program suppressed by a delay WE set — clear it so
+      // the Rain Bird's own schedule resumes immediately. This is how the owner hands control back
+      // to the controller via the ModeToggle (Home App → Rain Bird): without it, a suppression
+      // delay set while live would linger up to ≤1 day. (releaseSuppressionIfHeld leaves a longer
+      // owner-set rain delay untouched.)
+      if (rainbird.isConfigured()) {
         try {
           await releaseSuppressionIfHeld(await rainbird.getRainDelay());
         } catch {
