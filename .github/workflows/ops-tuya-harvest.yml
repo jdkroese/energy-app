@@ -1,0 +1,50 @@
+name: Ops - Tuya Harvest & Reconcile
+
+# Manually-triggered ops job (docs/44). Runs ON the mini via the self-hosted
+# runner, because that host holds the prod .data (state.json with the Tuya
+# credentials) and shares the devices' LAN.
+#
+# What it does, in order:
+#   1. Backs up state.json into .data/backups/ — the mini has no other backup of
+#      the app's rooms/scenes/schedules/onboarding config.
+#   2. Harvests {id, name, category, ip, local_key} for the whole Tuya fleet in
+#      one short burst (~40-100 cloud calls) and caches it to .data/tuya-local.json.
+#   3. Reconciles the cloud's device ids against the ids the app already has, so
+#      we know whether an account switch preserved them or orphaned the config.
+#
+# It NEVER actuates a device and never prints a local key (present/absent only).
+# scripts/ + .github/ only, and deploy.yml triggers on `main` alone — running or
+# merging this never restarts the API or disarms control.
+on:
+  # TEMPORARY (throwaway run branch): workflow_dispatch requires the workflow to
+  # exist on the default branch, which it does not until this lands on main. A
+  # push trigger scoped to this one branch is how we exercise it on the mini in
+  # the meantime. Drop this trigger when it merges.
+  push:
+    branches: [spike/tuya-lan-discover]
+  workflow_dispatch:
+    inputs:
+      no_harvest:
+        description: 'Set to "true" to skip the cloud harvest (backup + reconcile from cache only).'
+        required: false
+        default: ''
+
+jobs:
+  tuya-harvest:
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Backup state.json, harvest local keys, reconcile device ids
+        run: |
+          set -uo pipefail
+          if [ "${{ github.event.inputs.no_harvest }}" = "true" ]; then
+            node scripts/tuya-harvest.mjs --no-harvest
+          else
+            node scripts/tuya-harvest.mjs
+          fi
+        env:
+          # Prod .data on the mini: state.json (creds + device ids), the harvested
+          # tuya-local.json cache, and the new backups/ dir all live here.
+          DATA_DIR: /Users/joris/sites/energy/.data
