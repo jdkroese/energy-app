@@ -723,7 +723,13 @@ async function tick(): Promise<void> {
 
     store.update((s) => {
       s.irrigation.lastTickAt = new Date().toISOString();
-      if (reachable) s.irrigation.lastError = s.irrigation.lastError; // keep prior alert until cleared
+      // Self-heal: a reachable tick disproves any prior "unreachable" alert, so clear it (mirrors
+      // the Climate lastError self-heal, PR #171) — otherwise a transient single-connection blip
+      // sticks on the dashboard forever. Other errors (e.g. a failed run/write) are left visible
+      // until their own path clears them.
+      if (reachable && /unreachable/i.test(s.irrigation.lastError ?? "")) {
+        s.irrigation.lastError = null;
+      }
     });
     last = now;
   } catch (e) {
