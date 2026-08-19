@@ -47,7 +47,7 @@ export type RequestName = keyof typeof REQUESTS;
  *
  *   - AvailableStations(page)            → "03" + page(2 hex)            len 2
  *   - CurrentStationsActive(mask page=0) → "3F" + page(2 hex)            len 2
- *   - ManuallyRunStation(station, mins)  → "39" + station(2) + mins(4)   len 4
+ *   - ManuallyRunStation(station, mins)  → "39" + station(4) + mins(2)   len 4
  *   - RainDelaySet(days)                 → "37" + days(4 hex)            len 3
  *   - 1-byte commands take no args.
  *
@@ -81,10 +81,14 @@ function encodeFields(name: RequestName, args: number[]): string {
       return toHex(page, 2);
     }
     case "ManuallyRunStation": {
-      // station (1 byte) + minutes (2 bytes).
+      // pyrainbird's old-style encoder lays the two args into the 3-byte body giving ALL
+      // the slack to the FIRST arg: station occupies 2 bytes, minutes 1 byte →
+      // "39" + station(4 hex) + minutes(2 hex). e.g. (station 2, 10 min) → "3900020A".
+      // Our original station(2)+minutes(4) put the station in the WRONG byte (byte 2 vs
+      // byte 3), so the controller ran a bogus station and no valve ever opened.
       const station = req(args, 0, name);
       const minutes = req(args, 1, name);
-      return toHex(station, 2) + toHex(minutes, 4);
+      return toHex(station, 4) + toHex(minutes, 2);
     }
     case "RainDelaySet": {
       // days (2 bytes).

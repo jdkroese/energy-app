@@ -80,8 +80,13 @@ test("encode produces the documented request hex", () => {
   assert.equal(encode("CurrentStationsActive", [0]), "3F00");
   // RainDelaySet(14 days) — len 3 → "37" + days(4 hex) = "37000E".
   assert.equal(encode("RainDelaySet", [14]), "37000E");
-  // ManuallyRunStation(station 2, 10 min) — len 4 → "39" + station(2) + minutes(4).
-  assert.equal(encode("ManuallyRunStation", [2, 10]), "3902000A");
+  // ManuallyRunStation — pyrainbird layout: "39" + station(2 bytes) + minutes(1 byte).
+  // Verified against pyrainbird encode_command (old-style: slack → FIRST arg, so the
+  // station gets the wide field). The station MUST land in byte 3, not byte 2, or the
+  // controller runs a bogus station and no valve opens.
+  assert.equal(encode("ManuallyRunStation", [2, 10]), "3900020A");
+  assert.equal(encode("ManuallyRunStation", [6, 30]), "3900061E");
+  assert.equal(encode("ManuallyRunStation", [1, 255]), "390001FF");
 });
 
 // ---- Response decoding (pyrainbird test vectors) ----------------------------
