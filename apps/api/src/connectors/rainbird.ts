@@ -228,7 +228,9 @@ function bustReadCache(): void {
  *  read back via getActiveZone(). Minutes are clamped to the protocol's 1..2 byte range. */
 export async function startZone(id: string, minutes: number): Promise<void> {
   const station = stationFromId(id);
-  const mins = Math.max(1, Math.min(0xffff, Math.round(minutes)));
+  // ManuallyRunStation carries minutes in a SINGLE byte (0-255) — clamp so a long
+  // schedule can't overflow the field. 255 min (4.25h) exceeds any real watering run.
+  const mins = Math.max(1, Math.min(0xff, Math.round(minutes)));
   await sip("ManuallyRunStation", [station, mins]);
   bustReadCache();
 }
