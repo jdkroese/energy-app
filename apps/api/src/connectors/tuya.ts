@@ -23,6 +23,7 @@ import { cached, invalidate } from '../cache';
 import { logEvent } from '../events';
 import { tuyaConfig } from '../runtime-config';
 import * as store from '../store';
+import * as tuyaLocal from './tuya-local';
 
 // Datacenter → OpenAPI host. The region MUST match the data center your Tuya app
 // account is registered in (not just where you live). Spain is usually Central
@@ -417,8 +418,23 @@ export function getDeviceDirect(id: string): Promise<TuyaDevice | null> {
   );
 }
 
-/** Fresh per-device status (bypasses the fleet cache). */
-export function getStatus(id: string): Promise<TuyaStatusItem[]> {
+/** Fresh per-device status (bypasses the fleet cache). Tries LOCAL (LAN) first when
+ *  docs/44 Phase 2 local control is enabled and this device is locally capable — falls
+ *  back to the unchanged cloud read on ANY local failure (translation, timeout, offline),
+ *  so behaviour never regresses when local isn't available or the flag is off. */
+export async function getStatus(id: string): Promise<TuyaStatusItem[]> {
+  if (tuyaLocal.isLocalEnabled() && tuyaLocal.isLocalCapable(id)) {
+    try {
+      const { dpToCode } = await dpMapsFor(id);
+      if (dpToCode.size > 0) {
+        const dps = await tuyaLocal.readStatus(id);
+        const items = tuyaLocal.translateStatus(dps, dpToCode);
+        if (items.length > 0) return items;
+      }
+    } catch {
+      // Local unavailable/failed for any reason — fall through to the cloud read below.
+    }
+  }
   return request<TuyaStatusItem[]>('GET', `/v1.0/devices/${id}/status`);
 }
 
@@ -482,10 +498,28 @@ export function sendIot03Commands(id: string, commands: Array<{ code: string; va
  * thing-model or iot-03 path. Each command sets an ABSOLUTE value (e.g. switch_1=true),
  * so issuing them all is idempotent — the device lands in the same state whichever path
  * delivers. Best-effort per API; throws only when ALL fail. Returns which APIs accepted.
+ *
+ * docs/44 Phase 2: LOCAL (LAN) is tried FIRST when enabled (TUYA_LOCAL_ENABLED=1) and the
+ * device is locally capable. A local success returns immediately — the cloud fan-out below
+ * is skipped entirely, which is the whole point (zero cloud calls on the hot path). ANY
+ * local failure (untranslatable code, offline, timeout, cooldown) falls through to the
+ * cloud fan-out UNCHANGED, so behaviour never regresses; with the flag off this function
+ * is byte-for-byte what it was before (the local branch is skipped before touching
+ * anything, including the network — isLocalEnabled() short-circuits the `&&`).
  */
 export async function sendCommandsDual(
   id: string, commands: Array<{ code: string; value: unknown }>,
-): Promise<{ v1: boolean; iot03: boolean; thing: boolean }> {
+): Promise<{ v1: boolean; iot03: boolean; thing: boolean; local: boolean }> {
+  if (tuyaLocal.isLocalEnabled() && tuyaLocal.isLocalCapable(id)) {
+    try {
+      const { codeToDp } = await dpMapsFor(id);
+      await tuyaLocal.sendCommands(id, commands, codeToDp);
+      return { v1: false, iot03: false, thing: false, local: true };
+    } catch {
+      // Local unavailable/failed for any reason — fall through to the cloud fan-out below.
+    }
+  }
+
   const properties: Record<string, unknown> = {};
   for (const c of commands) properties[c.code] = c.value;
   let v1 = false;
@@ -496,7 +530,7 @@ export async function sendCommandsDual(
   try { await sendIot03Commands(id, commands); iot03 = true; } catch (e) { lastErr = e; }
   try { await sendThingCommands(id, properties); thing = true; } catch (e) { lastErr = e; }
   if (!v1 && !iot03 && !thing) throw lastErr instanceof Error ? lastErr : new Error('command rejected on all Tuya APIs');
-  return { v1, iot03, thing };
+  return { v1, iot03, thing, local: false };
 }
 
 // ---- Low-level signed request that returns the RAW envelope (never throws on a
@@ -548,8 +582,10 @@ export async function probeCommand(
 
 export interface TuyaSpec {
   category: string;
-  functions: Array<{ code: string; type: string; values: string }>;
-  status: Array<{ code: string; type: string; values: string }>;
+  // `dp_id` is optional because most existing callers never needed it (only the local-
+  // control DP translation below does) — the raw Tuya response always carries it.
+  functions: Array<{ code: string; type: string; values: string; dp_id?: number }>;
+  status: Array<{ code: string; type: string; values: string; dp_id?: number }>;
 }
 
 /** Device capability spec (DP ranges/types). Cached 1h — it never changes. */
@@ -557,6 +593,51 @@ export function getSpecifications(id: string): Promise<TuyaSpec> {
   return cached(`tuya.spec.${id}`, 3_600_000, () =>
     request<TuyaSpec>('GET', `/v1.0/devices/${id}/specifications`),
   );
+}
+
+// ---- Local (LAN) control wiring — docs/44 Phase 2 ---------------------------------
+// The cloud and local protocols name a device's datapoints differently (cloud: human
+// `code` strings; local: small numeric `dp` indices). getSpecifications()'s `dp_id` field
+// is the only source of that mapping, so it's built here (once per device, then cached for
+// as long as this process runs — the mapping never changes for a device) and handed to
+// tuya-local.ts, which never fetches anything cloud-side itself. This keeps tuya-local.ts
+// import-free of this file (avoids a circular import that could break the esbuild bundle)
+// while still amortizing the one-time cloud lookup against the SAME 1h spec cache every
+// other Tuya diagnostics/onboarding path already warms.
+
+interface DpMaps {
+  codeToDp: Map<string, number>;
+  dpToCode: Map<number, string>;
+}
+
+// Per-device, process-lifetime cache — the underlying getSpecifications() call already has
+// its own 1h TTL cache, but a DP layout never changes for a given device at all, so once
+// built here it's reused for as long as the process runs (cleared only on the (rare) error
+// path, so a device that failed to resolve isn't stuck retrying nothing forever).
+const dpMapCache = new Map<string, DpMaps>();
+
+async function dpMapsFor(id: string): Promise<DpMaps> {
+  const hit = dpMapCache.get(id);
+  if (hit) return hit;
+  const codeToDp = new Map<string, number>();
+  const dpToCode = new Map<number, string>();
+  try {
+    const spec = await getSpecifications(id);
+    for (const entry of [...spec.functions, ...spec.status]) {
+      if (typeof entry.dp_id === 'number') {
+        codeToDp.set(entry.code, entry.dp_id);
+        dpToCode.set(entry.dp_id, entry.code);
+      }
+    }
+  } catch {
+    // No spec available (offline, quota cool-off, etc.) — empty maps mean every local
+    // command/read attempt fails translation and the caller falls back to cloud. Not
+    // cached: the next call retries getSpecifications (itself cheaply cached/cooled-off).
+    return { codeToDp, dpToCode };
+  }
+  const result = { codeToDp, dpToCode };
+  dpMapCache.set(id, result);
+  return result;
 }
 
 // ---- Device identity / network (diagnostics) --------------------------------

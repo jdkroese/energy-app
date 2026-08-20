@@ -128,6 +128,7 @@ import {
   updateLightSchedule,
   deleteLightSchedule,
 } from "./routes/lights";
+import * as tuyaLocal from "./connectors/tuya-local";
 import { startLightCoordinator } from "./control/light-coordinator";
 import { startRadioCoordinator } from "./control/radio-coordinator";
 import { startDeviceScheduleCoordinator } from "./control/device-schedule-coordinator";
@@ -1281,6 +1282,13 @@ app.delete(
   "/api/integrations/tuya",
   requireAdmin,
   wrap(() => disconnectTuyaIntegration()),
+);
+// Read-only local (LAN) control diagnostics (docs/44 Phase 2) — per-device reachability +
+// health, never the local_key. Any-authed read, consistent with /api/integrations/tuya
+// and /api/devices/:id/diagnostics above (no requireAdmin on GET reads in this area).
+app.get(
+  "/api/integrations/tuya/local",
+  wrap(() => tuyaLocal.getDiagnostics()),
 );
 
 // ---- Configurable connections (Sonnen / Weather / Tesla) ----
