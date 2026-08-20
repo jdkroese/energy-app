@@ -65,6 +65,23 @@ function readJson(file) {
   }
 }
 
+/**
+ * Canonical MAC form: lowercase, colon-separated, every octet two digits.
+ * Tuya returns them unseparated ("382ce503cfc3") while macOS `arp` prints them
+ * with leading zeros stripped ("38:2c:e5:3:cf:c3"), so both sides must be
+ * normalized before they can be compared.
+ */
+export function normalizeMac(raw) {
+  const hex = String(raw ?? '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (hex.length !== 12) {
+    // Already-separated but odd-length octets (the macOS shape) — pad each part.
+    const parts = String(raw ?? '').toLowerCase().split(/[:\-]/);
+    if (parts.length === 6) return parts.map((p) => p.padStart(2, '0')).join(':');
+    return '';
+  }
+  return (hex.match(/.{2}/g) ?? []).join(':');
+}
+
 // ---- 1) Backup --------------------------------------------------------------
 
 function backupState() {
@@ -184,6 +201,25 @@ function makeCloud(creds) {
       const r = await signedGet(`/v1.0/devices/${id}`, true);
       return r.success ? r.result : null;
     },
+    /**
+     * Factory infos → each device's MAC. This is the key to locating devices on
+     * the LAN whose UDP broadcast never reaches us: MAC is a stable identifier we
+     * can match against the ARP table, so we never have to guess local_keys
+     * against open ports (which is slow and, because Tuya devices accept only one
+     * local session at a time, actively disruptive). Batched to keep calls cheap.
+     */
+    async factoryInfos(ids) {
+      const out = new Map();
+      for (let i = 0; i < ids.length; i += 20) {
+        const batch = ids.slice(i, i + 20);
+        const r = await signedGet(`/v1.0/devices/factory-infos?device_ids=${batch.join(',')}`, true);
+        if (!r.success) continue;
+        for (const f of r.result ?? []) {
+          if (f?.id && f?.mac) out.set(f.id, String(f.mac));
+        }
+      }
+      return out;
+    },
   };
 }
 
@@ -249,6 +285,15 @@ async function main() {
           if (detail?.ip) d.ip = detail.ip;
           if (!d.localKey && detail?.local_key) d.localKey = detail.local_key;
         }
+
+        // MACs for every non-sub device — how discovery locates the ones whose
+        // UDP broadcast never arrives.
+        const macs = await cloud.factoryInfos(harvested.filter((d) => !d.sub).map((d) => d.id));
+        for (const d of harvested) {
+          const mac = macs.get(d.id);
+          if (mac) d.mac = normalizeMac(mac);
+        }
+        console.log(`  MACs resolved: ${macs.size}/${harvested.filter((d) => !d.sub).length}`);
 
         // Carry forward anything discovery learned. The cloud's `ip` is the
         // device's PUBLIC/WAN address as seen by Tuya's servers — not its address

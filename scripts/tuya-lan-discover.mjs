@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const DATA_DIR = process.env.DATA_DIR || '/Users/joris/sites/energy/.data';
@@ -164,15 +165,65 @@ function listen(seconds) {
 // completes the handshake with its own device, so a successful read IS the
 // identification. Read-only throughout.
 
-/** Every /24 this host sits on (usually one). */
+/**
+ * Every private /24 this host sits on. CGNAT space (100.64/10) is excluded on
+ * purpose — that is the Tailscale interface on the mini, and sweeping it just
+ * doubles the work for addresses that can never host a Tuya device.
+ */
 function localSubnets() {
   const nets = new Set();
   for (const addrs of Object.values(os.networkInterfaces())) {
     for (const a of addrs || []) {
-      if (a.family === 'IPv4' && !a.internal) nets.add(a.address.split('.').slice(0, 3).join('.'));
+      if (a.family !== 'IPv4' || a.internal) continue;
+      const [o1, o2] = a.address.split('.').map(Number);
+      const isPrivate =
+        o1 === 10 || (o1 === 192 && o2 === 168) || (o1 === 172 && o2 >= 16 && o2 <= 31);
+      if (!isPrivate) continue;
+      nets.add(a.address.split('.').slice(0, 3).join('.'));
     }
   }
   return [...nets];
+}
+
+/**
+ * Canonical MAC form: lowercase, colon-separated, two digits per octet. Tuya
+ * returns them unseparated ("382ce503cfc3") while macOS `arp` strips leading
+ * zeros ("38:2c:e5:3:cf:c3"), so both sides must be normalized to compare.
+ * (Duplicated from tuya-harvest.mjs on purpose — these scripts are deliberately
+ * standalone and share no imports, like tuya-check.mjs before them.)
+ */
+function normalizeMac(raw) {
+  const hex = String(raw ?? '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (hex.length !== 12) {
+    const parts = String(raw ?? '').toLowerCase().split(/[:\-]/);
+    if (parts.length === 6) return parts.map((p) => p.padStart(2, '0')).join(':');
+    return '';
+  }
+  return (hex.match(/.{2}/g) ?? []).join(':');
+}
+
+/** Parse `arp -a` on either macOS/BSD or Windows into ip -> normalized mac. */
+function parseArpTable(text) {
+  const map = new Map();
+  for (const line of String(text).split(/\r?\n/)) {
+    // macOS/BSD: "? (192.168.1.6) at 38:2c:e5:3:cf:c3 on en0 ..."
+    let m = line.match(/\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]{11,17})/);
+    // Windows:   "  192.168.1.6           38-2c-e5-03-cf-c3     dynamic"
+    if (!m) m = line.match(/^\s*(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F-]{17})\s/);
+    if (!m) continue;
+    const mac = normalizeMac(m[2]);
+    if (mac) map.set(m[1], mac);
+  }
+  return map;
+}
+
+/** Read the host ARP table (populated by the preceding TCP sweep). */
+function readArpTable() {
+  try {
+    return parseArpTable(execFileSync('arp', ['-a'], { encoding: 'utf8', timeout: 15_000 }));
+  } catch {
+    return new Map();
+  }
 }
 
 function tcpOpen(ip, port, timeoutMs) {
@@ -218,40 +269,6 @@ async function sweepForOpenPorts(claimed) {
   console.log(`  sweeping ${candidates.length} address(es) across ${subnets.join(', ')}.0/24 for port 6668…`);
   const results = await pooled(candidates, 64, async (ip) => ((await tcpOpen(ip, 6668, 3000)) ? ip : null));
   return results.filter(Boolean);
-}
-
-/**
- * Match unidentified devices to unclaimed ips by attempting an authenticated
- * read: a local_key only completes the handshake with its own device, so a
- * successful read IS the identification.
- *
- * Addresses are tested CONCURRENTLY — serially this is ips x devices x versions
- * attempts, which for a real fleet overruns the CI job timeout. A device id is
- * claimed the instant it matches so two addresses can never adopt the same
- * device, and each attempt uses a short timeout since a wrong key fails fast.
- */
-async function identifyByKey(TuyAPI, ips, devices) {
-  const found = new Map(); // ip -> device
-  const claimed = new Set(); // device ids already matched
-  const ID_TIMEOUT_MS = Number(process.env.IDENTIFY_TIMEOUT_MS || 3500);
-
-  await pooled(ips, 8, async (ip) => {
-    for (const dev of devices) {
-      if (claimed.has(dev.id)) continue;
-      // The broadcast never reached us, so the protocol version is unknown —
-      // try both versions this fleet actually runs.
-      for (const version of ['3.4', '3.3']) {
-        if (claimed.has(dev.id)) break;
-        const r = await probeDevice(TuyAPI, { ...dev, lanIp: ip, version }, ID_TIMEOUT_MS);
-        if (r.ok) {
-          claimed.add(dev.id);
-          found.set(ip, { ...dev, lanIp: ip, version });
-          return;
-        }
-      }
-    }
-  });
-  return found;
 }
 
 // ---- 3) Read-only local probe ----------------------------------------------
@@ -356,30 +373,50 @@ async function main() {
 
   const TuyAPI = loadTuyapi();
 
-  // ---- 2b) Sweep for devices UDP never reached -----------------------------
+  // ---- 2b) Locate devices UDP never reached, by MAC ------------------------
+  //
+  // Preferred over guessing local_keys against open ports: MAC is a stable
+  // identifier the cloud already gave us, matching is instant, and it creates no
+  // connections — which matters because a Tuya device accepts only ONE local
+  // session at a time, so probing everything with everything actively locks
+  // devices out and produces false failures.
   const stillMissing = devices.filter((d) => d.localKey && !d.lanIp && !d.sub);
-  if (TuyAPI && stillMissing.length && process.env.SKIP_SWEEP !== '1') {
-    console.log(`\n${'='.repeat(72)}\nTCP SWEEP (devices UDP did not reach)\n${'='.repeat(72)}`);
-    const claimed = new Set(devices.map((d) => d.lanIp).filter(Boolean));
-    const openIps = await sweepForOpenPorts(claimed);
-    console.log(`  ${openIps.length} unclaimed host(s) with port 6668 open.`);
-    if (openIps.length) {
-      console.log(`  identifying by local_key against ${stillMissing.length} unlocated device(s)…`);
-      const identified = await identifyByKey(TuyAPI, openIps, stillMissing);
-      for (const [ip, dev] of identified) {
+  if (stillMissing.length && process.env.SKIP_SWEEP !== '1') {
+    console.log(`\n${'='.repeat(72)}\nLOCATE BY MAC (devices UDP did not reach)\n${'='.repeat(72)}`);
+    const withMac = stillMissing.filter((d) => d.mac);
+    if (!withMac.length) {
+      console.log('  No MACs in the cache — re-run the harvest to populate them.');
+    } else {
+      const claimed = new Set(devices.map((d) => d.lanIp).filter(Boolean));
+      // The TCP sweep is what populates the ARP table; the open-port list is a
+      // useful by-product but the MACs are the point.
+      const openIps = await sweepForOpenPorts(claimed);
+      console.log(`  ${openIps.length} unclaimed host(s) with port 6668 open.`);
+      const arp = readArpTable();
+      console.log(`  ARP table holds ${arp.size} entr(ies).`);
+
+      const macToIp = new Map();
+      for (const [ip, mac] of arp) if (!claimed.has(ip)) macToIp.set(mac, ip);
+
+      let located = 0;
+      for (const dev of withMac) {
+        const ip = macToIp.get(dev.mac);
+        if (!ip) continue;
         const target = byId.get(dev.id);
-        if (target) {
-          target.lanIp = ip;
-          target.version = dev.version;
-        }
-        console.log(`   ✓ ${pad(dev.name || dev.id, 32)} → ${pad(ip, 16)} v${dev.version}`);
+        if (target) target.lanIp = ip;
+        located += 1;
+        console.log(`   ✓ ${pad(dev.name || dev.id, 32)} → ${pad(ip, 16)} (mac ${dev.mac})`);
       }
-      console.log(`\n  identified ${identified.size}/${openIps.length} swept host(s).`);
+      console.log(`\n  located ${located}/${withMac.length} device(s) by MAC.`);
+      if (located < withMac.length) {
+        console.log('  The rest are genuinely absent from the LAN (powered off, or');
+        console.log('  paired to a Smart Life home that is not linked to this project).');
+      }
       fs.writeFileSync(
         CACHE_FILE,
         JSON.stringify({ ...cache, sweptAt: new Date().toISOString(), devices }, null, 2),
       );
-      console.log(`✓ Cache updated with swept ips → ${CACHE_FILE}`);
+      console.log(`✓ Cache updated → ${CACHE_FILE}`);
     }
   }
 
