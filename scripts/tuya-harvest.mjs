@@ -250,10 +250,27 @@ async function main() {
           if (!d.localKey && detail?.local_key) d.localKey = detail.local_key;
         }
 
+        // Carry forward anything discovery learned. The cloud's `ip` is the
+        // device's PUBLIC/WAN address as seen by Tuya's servers — not its address
+        // on our network — so `lanIp` (from UDP discovery) is the field local
+        // control actually uses, and a re-harvest must never clobber it.
+        const priorById = new Map(
+          (Array.isArray(cache.devices) ? cache.devices : []).map((d) => [d.id, d]),
+        );
+        for (const d of harvested) {
+          const prior = priorById.get(d.id);
+          if (prior?.lanIp) d.lanIp = prior.lanIp;
+          if (prior?.version) d.version = prior.version;
+        }
+
         fs.mkdirSync(DATA_DIR, { recursive: true });
         fs.writeFileSync(
           CACHE_FILE,
-          JSON.stringify({ harvestedAt: new Date().toISOString(), devices: harvested }, null, 2),
+          JSON.stringify(
+            { ...cache, harvestedAt: new Date().toISOString(), devices: harvested },
+            null,
+            2,
+          ),
         );
         harvestNote = `OK — ${harvested.length} device(s), ${cloud.callCount()} cloud call(s)`;
         console.log(`✓ Harvest ${harvestNote}`);
@@ -281,13 +298,18 @@ async function main() {
 
   if (harvested.length) {
     const withKey = harvested.filter((d) => d.localKey).length;
-    const withIp = harvested.filter((d) => d.ip).length;
-    const lanReady = harvested.filter((d) => d.localKey && d.ip && !d.sub).length;
+    const withLanIp = harvested.filter((d) => d.lanIp).length;
+    const lanReady = harvested.filter((d) => d.localKey && d.lanIp && !d.sub).length;
     const subs = harvested.filter((d) => d.sub).length;
-    console.log(`\n  local_key present     : ${withKey}/${harvested.length}`);
-    console.log(`  ip present            : ${withIp}/${harvested.length}`);
-    console.log(`  LAN-ready (key+ip)    : ${lanReady}`);
+    console.log(`\n  local_key present     : ${withKey}/${harvested.length}  ← the cloud-only secret`);
+    console.log(`  LAN ip known          : ${withLanIp}/${harvested.length}  ← from UDP discovery`);
+    console.log(`  LAN-ready (key+lanIp) : ${lanReady}`);
     console.log(`  gateway sub-devices   : ${subs}  → stay cloud-controlled by design`);
+    if (!withLanIp) {
+      console.log('\n  NOTE: the cloud\'s `ip` field is the device\'s PUBLIC/WAN address, not its');
+      console.log('        address on our network. Run scripts/tuya-lan-discover.mjs to learn');
+      console.log('        the real LAN ips over UDP — no cloud calls needed.');
+    }
   }
 
   if (orphaned.length) {
@@ -313,7 +335,13 @@ async function main() {
   if (matched.length) {
     console.log(`\n-- Matched devices (LAN readiness) --`);
     for (const d of matched) {
-      const status = d.sub ? 'gateway sub-device' : d.localKey && d.ip ? `LAN-ready @ ${d.ip}` : d.localKey ? 'key, no ip' : 'NO KEY';
+      const status = d.sub
+        ? 'gateway sub-device (cloud-only)'
+        : !d.localKey
+          ? 'NO KEY'
+          : d.lanIp
+            ? `LAN-ready @ ${d.lanIp}`
+            : 'key held — LAN ip pending discovery';
       console.log(`   ${pad(d.name || d.id, 34)} ${pad(d.category, 8)} ${status}`);
     }
   }

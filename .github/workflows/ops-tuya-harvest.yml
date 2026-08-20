@@ -1,20 +1,25 @@
-name: Ops - Tuya Harvest & Reconcile
+name: Ops - Tuya Harvest, Discover & Probe
 
 # Manually-triggered ops job (docs/44). Runs ON the mini via the self-hosted
 # runner, because that host holds the prod .data (state.json with the Tuya
-# credentials) and shares the devices' LAN.
+# credentials) AND is the only machine on the devices' LAN.
 #
-# What it does, in order:
-#   1. Backs up state.json into .data/backups/ — the mini has no other backup of
-#      the app's rooms/scenes/schedules/onboarding config.
-#   2. Harvests {id, name, category, ip, local_key} for the whole Tuya fleet in
-#      one short burst (~40-100 cloud calls) and caches it to .data/tuya-local.json.
-#   3. Reconciles the cloud's device ids against the ids the app already has, so
-#      we know whether an account switch preserved them or orphaned the config.
+# The two halves of local control come from different places, so both run here,
+# in this order (one job, so they can never race on the shared cache file):
 #
-# It NEVER actuates a device and never prints a local key (present/absent only).
-# scripts/ + .github/ only, and deploy.yml triggers on `main` alone — running or
-# merging this never restarts the API or disarms control.
+#   1. HARVEST  — back up state.json, then pull {id, name, category, local_key}
+#      for the whole fleet from the cloud in ~5 calls and reconcile the device
+#      ids against what the app already has configured. `local_key` is the one
+#      secret only the cloud can give us.
+#   2. DISCOVER — listen for the devices' own UDP broadcasts on 6666/6667 to
+#      learn their real LAN ips. This is necessary because the cloud's `ip` field
+#      is the PUBLIC/WAN address Tuya saw, not the address on our network.
+#   3. PROBE    — open a read-only local session to every device that now has
+#      both a key and a LAN ip, and read its datapoints.
+#
+# No device is ever written to. Local keys are never printed (present/absent
+# only). scripts/ + .github/ only, and deploy.yml triggers on `main` alone —
+# running or merging this never restarts the API or disarms control.
 on:
   # TEMPORARY (throwaway run branch): workflow_dispatch requires the workflow to
   # exist on the default branch, which it does not until this lands on main. A
@@ -25,14 +30,22 @@ on:
   workflow_dispatch:
     inputs:
       no_harvest:
-        description: 'Set to "true" to skip the cloud harvest (backup + reconcile from cache only).'
+        description: 'Set to "true" to skip the cloud harvest (backup + discovery + probe only, zero cloud calls).'
         required: false
         default: ''
+      listen_sec:
+        description: 'Seconds to listen for UDP discovery broadcasts (default 75).'
+        required: false
+        default: '75'
 
 jobs:
-  tuya-harvest:
+  tuya-local:
     runs-on: [self-hosted, mini]
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      # Prod .data on the mini: state.json (creds + device ids), the harvested
+      # tuya-local.json cache, and backups/ all live here.
+      DATA_DIR: /Users/joris/sites/energy/.data
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +57,26 @@ jobs:
           else
             node scripts/tuya-harvest.mjs
           fi
+
+      - name: Install tuyapi into a scratch dir (no repo/lockfile changes)
+        run: |
+          set -euo pipefail
+          # Keep the LAN library OUT of the pnpm workspace + lockfile: install it
+          # in a throwaway dir and expose it via NODE_PATH, leaving the repo tree
+          # and apps/api node_modules untouched.
+          TUYA_LIB="${RUNNER_TEMP}/tuya-local-lib"
+          rm -rf "$TUYA_LIB" && mkdir -p "$TUYA_LIB"
+          cd "$TUYA_LIB"
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund --silent tuyapi@7
+          echo "TUYA_LIB=$TUYA_LIB" >> "$GITHUB_ENV"
+
+      - name: Discover LAN ips over UDP, then read-only local probe
+        run: |
+          set -uo pipefail
+          # tuyapi is CommonJS in a scratch dir — NODE_PATH + createRequire is how
+          # the script picks it up (a bare ESM import would ignore NODE_PATH).
+          export NODE_PATH="${TUYA_LIB}/node_modules"
+          node scripts/tuya-lan-discover.mjs
         env:
-          # Prod .data on the mini: state.json (creds + device ids), the harvested
-          # tuya-local.json cache, and the new backups/ dir all live here.
-          DATA_DIR: /Users/joris/sites/energy/.data
+          LISTEN_SEC: ${{ github.event.inputs.listen_sec || '75' }}
