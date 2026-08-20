@@ -616,25 +616,81 @@ interface DpMaps {
 // path, so a device that failed to resolve isn't stuck retrying nothing forever).
 const dpMapCache = new Map<string, DpMaps>();
 
+/** Parse a Tuya thing-model JSON string into a code -> local-dp map. Each property carries
+ *  `abilityId`, which IS the numeric local datapoint the LAN protocol uses. Pure + tolerant
+ *  (bad JSON / missing fields -> empty map, never throws). Exported for tests. */
+export function parseThingModelDpMap(modelJson: string): Map<string, number> {
+  const map = new Map<string, number>();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(modelJson);
+  } catch {
+    return map;
+  }
+  const services =
+    (parsed as { services?: Array<{ properties?: Array<{ code?: unknown; abilityId?: unknown }> }> })
+      .services ?? [];
+  for (const svc of services) {
+    for (const prop of svc.properties ?? []) {
+      if (typeof prop.code === 'string' && typeof prop.abilityId === 'number') {
+        map.set(prop.code, prop.abilityId);
+      }
+    }
+  }
+  return map;
+}
+
+interface ThingModelResp {
+  model?: string;
+}
+
+/** Fetch the thing model and derive its code -> dp map. Cached 1h (a DP layout is immutable). */
+async function thingModelDpMap(id: string): Promise<Map<string, number>> {
+  const resp = await cached(`tuya.thingmodel.${id}`, 3_600_000, () =>
+    request<ThingModelResp>('GET', `/v2.0/cloud/thing/${id}/model`),
+  );
+  return resp?.model ? parseThingModelDpMap(resp.model) : new Map<string, number>();
+}
+
 async function dpMapsFor(id: string): Promise<DpMaps> {
   const hit = dpMapCache.get(id);
   if (hit) return hit;
   const codeToDp = new Map<string, number>();
   const dpToCode = new Map<number, string>();
+
+  // PRIMARY source: the thing model. Its `abilityId` is the local dp number, and it is
+  // present across projects/regions — unlike /specifications' `dp_id`, which some projects
+  // (ours) omit entirely, silently leaving this map empty so every local command/read failed
+  // translation and fell back to the cloud. See parseThingModelDpMap.
   try {
-    const spec = await getSpecifications(id);
-    for (const entry of [...spec.functions, ...spec.status]) {
-      if (typeof entry.dp_id === 'number') {
-        codeToDp.set(entry.code, entry.dp_id);
-        dpToCode.set(entry.dp_id, entry.code);
-      }
+    for (const [code, dp] of await thingModelDpMap(id)) {
+      codeToDp.set(code, dp);
+      dpToCode.set(dp, code);
     }
   } catch {
-    // No spec available (offline, quota cool-off, etc.) — empty maps mean every local
-    // command/read attempt fails translation and the caller falls back to cloud. Not
-    // cached: the next call retries getSpecifications (itself cheaply cached/cooled-off).
-    return { codeToDp, dpToCode };
+    // Thing model unavailable (offline / quota) — fall through to the /specifications path.
   }
+
+  // FALLBACK: /specifications' `dp_id`, for any device/region that does include it.
+  if (codeToDp.size === 0) {
+    try {
+      const spec = await getSpecifications(id);
+      for (const entry of [...spec.functions, ...spec.status]) {
+        if (typeof entry.dp_id === 'number') {
+          codeToDp.set(entry.code, entry.dp_id);
+          dpToCode.set(entry.dp_id, entry.code);
+        }
+      }
+    } catch {
+      // Nothing available — empty maps mean the caller falls back to cloud. Not cached, so
+      // the next call retries (both underlying fetches are themselves cheaply cached).
+      return { codeToDp, dpToCode };
+    }
+  }
+
+  // Never cache an empty map — a transient miss shouldn't wedge local control off for the
+  // whole process lifetime; retry on the next call instead.
+  if (codeToDp.size === 0) return { codeToDp, dpToCode };
   const result = { codeToDp, dpToCode };
   dpMapCache.set(id, result);
   return result;
