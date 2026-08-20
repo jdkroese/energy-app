@@ -429,13 +429,38 @@ async function main() {
     console.log('  SKIPPED — no device has both a local_key and a discovered LAN ip.');
   } else {
     let ok = 0;
+    let learned = 0;
     for (const d of probeable) {
-      const r = await probeDevice(TuyAPI, d);
+      // A device located by MAC never broadcast, so its protocol version is
+      // unknown. Try the versions this fleet actually runs, 3.4 first (the
+      // large majority) — defaulting to 3.3 makes every such device look dead.
+      const candidates = d.version ? [d.version] : ['3.4', '3.3'];
+      let r = { ok: false, error: 'not attempted' };
+      let usedVersion = d.version || '';
+      for (const version of candidates) {
+        r = await probeDevice(TuyAPI, { ...d, version });
+        if (r.ok) {
+          usedVersion = version;
+          // Remember it so later runs go straight to the right version.
+          if (!d.version) {
+            d.version = version;
+            learned += 1;
+          }
+          break;
+        }
+      }
       if (r.ok) ok += 1;
       const verdict = r.ok ? `OK   ${r.dpCount} datapoints` : `FAIL ${r.error}`;
-      console.log(`   ${pad(d.name || d.id, 30)} ${pad(d.lanIp, 16)} v${pad(d.version || '?', 4)} ${verdict}`);
+      console.log(`   ${pad(d.name || d.id, 30)} ${pad(d.lanIp, 16)} v${pad(usedVersion || '?', 4)} ${verdict}`);
     }
     console.log(`\n  locally readable: ${ok}/${probeable.length}`);
+    if (learned) {
+      fs.writeFileSync(
+        CACHE_FILE,
+        JSON.stringify({ ...cache, probedAt: new Date().toISOString(), devices }, null, 2),
+      );
+      console.log(`  learned the protocol version for ${learned} device(s) → cached`);
+    }
   }
 
   console.log(`\n${'='.repeat(72)}`);
