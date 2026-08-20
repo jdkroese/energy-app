@@ -41,4 +41,9 @@ jobs:
       - name: Echo-write one datapoint (no observable change)
         run: |
           set -euo pipefail
-          node --import tsx scripts/tuya-local-writetest.mjs "${{ github.event.inputs.device_id }}"
+          # tsx is a devDependency of apps/api, not the workspace root, so a bare
+          # `node --import tsx` from the repo root fails with ERR_MODULE_NOT_FOUND.
+          # Run from the package; the script's relative import resolves from its own
+          # file path, not cwd, so it still finds the connector.
+          cd apps/api
+          node --import tsx ../../scripts/tuya-local-writetest.mjs "${{ github.event.inputs.device_id }}"
