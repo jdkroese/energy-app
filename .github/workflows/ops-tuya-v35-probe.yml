@@ -34,4 +34,6 @@ jobs:
           echo "TUYA_PY=${RUNNER_TEMP}/tuya-py/bin/python" >> "$GITHUB_ENV"
 
       - name: Probe protocol versions (read-only)
-        run: "${TUYA_PY}" scripts/tuya-v35-probe.py
+        run: |
+          set -euo pipefail
+          "$TUYA_PY" scripts/tuya-v35-probe.py
