@@ -5,6 +5,7 @@
 // fans will follow the same shape on the shared `tuya.ts` foundation.
 
 import * as tuya from '../connectors/tuya';
+import * as tuyaLocal from '../connectors/tuya-local';
 import * as lights from '../connectors/tuya-lights';
 import { isBlind } from '../connectors/tuya-blinds';
 import type { LightLever, LightUnit } from '../connectors/tuya-lights';
@@ -257,6 +258,21 @@ export function disconnectTuyaIntegration(): unknown {
   });
   tuya.invalidateFleet();
   return { ts: new Date().toISOString(), connected: false };
+}
+
+/** PUT /api/integrations/tuya/local — reversible on/off for LOCAL (LAN) control
+ *  (docs/44 Phase 2), persisted in the store so it doesn't need the TUYA_LOCAL_ENABLED env
+ *  var (the production mini's launchd plist can't be edited remotely). See
+ *  isLocalEnabled() in tuya-local.ts for the full precedence (env kill-switch still wins).
+ *  Returns the same diagnostics shape as GET /api/integrations/tuya/local so the Settings
+ *  toggle can update its status line from the response without a second round-trip. */
+export function setTuyaLocalControl(enabledRaw: unknown): unknown {
+  if (typeof enabledRaw !== 'boolean') throw badInput('enabled must be a boolean');
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.tuya = { ...(s.integrations.tuya ?? {}), localControl: enabledRaw };
+  });
+  return tuyaLocal.getDiagnostics();
 }
 
 // ---- Scenes -----------------------------------------------------------------

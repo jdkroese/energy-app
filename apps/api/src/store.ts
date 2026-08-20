@@ -401,8 +401,13 @@ export interface IntegrationsState {
    *  known module IP; the password is REQUIRED and persisted here (never in the repo). */
   rainbird?: { host?: string; password?: string } | null;
   /** Tuya Cloud project (datacenter region + Access ID/Secret). Unlocks the
-   *  whole linked device fleet — lights first, more categories to come. */
-  tuya?: { region?: string; accessId?: string; accessSecret?: string };
+   *  whole linked device fleet — lights first, more categories to come.
+   *  `localControl` is the reversible Settings toggle for LOCAL (LAN) control
+   *  (docs/44 Phase 2, tuya-local.ts) — undefined/true = on (the default, now that
+   *  it's hardware-verified), explicit false = off. Lets local control be enabled on
+   *  the production mini without editing its launchd plist (TUYA_LOCAL_ENABLED env
+   *  var still overrides this on top — see isLocalEnabled() in tuya-local.ts). */
+  tuya?: { region?: string; accessId?: string; accessSecret?: string; localControl?: boolean };
   /** Sungrow solar inverters — the two WiNet-S dongles (one per SG5.0RS), keyed on
    *  dongle IP. Read-only LAN integration (docs/36); env is the fallback. */
   sungrow?: { dongles?: { ip: string; name?: string; ratedKw?: number }[] } | null;

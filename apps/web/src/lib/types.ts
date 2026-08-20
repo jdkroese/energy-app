@@ -1673,6 +1673,17 @@ export interface TuyaIntegrationStatus {
   needsSetupCount?: number;
 }
 
+/** GET/PUT /api/integrations/tuya/local — LOCAL (LAN) control diagnostics + the reversible
+ *  Settings toggle (docs/44 Phase 2). Never includes a device's local_key. */
+export interface TuyaLocalStatus {
+  /** Effective on/off right now (env kill-switch, then the persisted store setting —
+   *  see isLocalEnabled() in tuya-local.ts). */
+  enabled: boolean;
+  loadedAt: string | null;
+  totals: { devices: number; capable: number; healthy: number; unsupportedVersion: number };
+  v35SightingsUncorrelated: string[];
+}
+
 /* ============================================================================
  * Discovered devices (onboarding inbox — Devices → Needs setup). Phase 1 is
  * READ + TRIAGE: a device the Tuya fleet reports but no shipped screen renders.

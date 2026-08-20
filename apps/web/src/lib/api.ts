@@ -51,6 +51,7 @@ import type {
   ScenesResponse,
   LightSchedulesResponse,
   TuyaIntegrationStatus,
+  TuyaLocalStatus,
   SpeakersResponse,
   AlarmStatus,
   AlarmConfig,
@@ -1033,6 +1034,10 @@ export const api = {
         accessSecret,
       }),
     tuyaDisconnect: () => delJSON<{ ok: boolean }>("/api/integrations/tuya"),
+    // Local (LAN) control — reversible Settings toggle + diagnostics (docs/44 Phase 2).
+    tuyaLocalStatus: () => getJSON<TuyaLocalStatus>("/api/integrations/tuya/local"),
+    tuyaLocalSet: (enabled: boolean) =>
+      putJSON<TuyaLocalStatus>("/api/integrations/tuya/local", { enabled }),
 
     // Configurable connections (Sonnen / Weather / Tesla).
     config: () => getJSON<IntegrationsConfig>("/api/integrations/config"),

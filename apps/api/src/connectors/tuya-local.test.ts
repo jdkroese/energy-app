@@ -27,6 +27,15 @@ import path from 'node:path';
 
 const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuya-local-test-'));
 process.env.DATA_DIR = scratchDir;
+// isLocalEnabled() now also reads the persisted store (default-ON semantics — see
+// tuya-local.ts). Point the store at a scratch file BEFORE anything imports it, so this
+// suite never touches the real dev/prod state.json. Also hard-disable local via the env
+// kill-switch for the module's own import-time boot check (`if (isLocalEnabled())
+// startDiscoveryListener()`), so importing tuya-local below never opens real UDP sockets —
+// the env var is restored to "unset" right after that import completes; individual tests
+// below set/restore it again to exercise the real on/off semantics.
+process.env.STATE_FILE = path.join(scratchDir, 'state.json');
+process.env.TUYA_LOCAL_ENABLED = '0';
 
 const FIXTURE_DEVICES = [
   {
@@ -100,6 +109,10 @@ fs.writeFileSync(
 );
 
 const tuyaLocal = await import('./tuya-local');
+const store = await import('../store');
+// Boot decision is made; restore to "unset" so the rest of the suite (and the default-ON
+// test below) sees the same env shape a real deploy without the env var would.
+delete process.env.TUYA_LOCAL_ENABLED;
 
 // ---- Discovery frame parser --------------------------------------------------------
 
@@ -720,6 +733,68 @@ test('getDiagnostics: v35SightingsUncorrelated omits ips that already match a kn
   assert.deepEqual(diag.v35SightingsUncorrelated, []);
 });
 
-test('isLocalEnabled: default (no TUYA_LOCAL_ENABLED env) is OFF', () => {
-  assert.equal(tuyaLocal.isLocalEnabled(), false);
+// ---- isLocalEnabled: default-ON semantics + the store-backed reversible toggle ---------
+// docs/44 Phase 2 is hardware-verified, so local is now enabled by DEFAULT: the store
+// setting (Settings → Tuya → "Local LAN control") is the normal on/off switch, since the
+// production mini's launchd plist can't be edited remotely. TUYA_LOCAL_ENABLED remains a
+// hard override on top: '0' always wins (kill switch), '1' always wins (force-on); any
+// other/unset value defers to the store. Every case here saves/restores the env var and
+// resets the store's tuya.localControl afterward so it can't leak into other tests.
+
+function withEnv(value: string | undefined, fn: () => void): void {
+  const prev = process.env.TUYA_LOCAL_ENABLED;
+  if (value === undefined) delete process.env.TUYA_LOCAL_ENABLED;
+  else process.env.TUYA_LOCAL_ENABLED = value;
+  try {
+    fn();
+  } finally {
+    if (prev === undefined) delete process.env.TUYA_LOCAL_ENABLED;
+    else process.env.TUYA_LOCAL_ENABLED = prev;
+  }
+}
+
+function setStoreLocalControl(value: boolean | undefined): void {
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.tuya = { ...(s.integrations.tuya ?? {}), localControl: value };
+  });
+}
+
+test('isLocalEnabled: TUYA_LOCAL_ENABLED=0 is a hard kill switch, even if the store says on', () => {
+  setStoreLocalControl(true);
+  withEnv('0', () => {
+    assert.equal(tuyaLocal.isLocalEnabled(), false);
+  });
+  setStoreLocalControl(undefined);
+});
+
+test('isLocalEnabled: TUYA_LOCAL_ENABLED=1 forces on, even if the store says off', () => {
+  setStoreLocalControl(false);
+  withEnv('1', () => {
+    assert.equal(tuyaLocal.isLocalEnabled(), true);
+  });
+  setStoreLocalControl(undefined);
+});
+
+test('isLocalEnabled: env unset + no store setting yet defaults ON', () => {
+  setStoreLocalControl(undefined);
+  withEnv(undefined, () => {
+    assert.equal(tuyaLocal.isLocalEnabled(), true);
+  });
+});
+
+test('isLocalEnabled: env unset + store localControl=true is ON', () => {
+  setStoreLocalControl(true);
+  withEnv(undefined, () => {
+    assert.equal(tuyaLocal.isLocalEnabled(), true);
+  });
+  setStoreLocalControl(undefined);
+});
+
+test('isLocalEnabled: env unset + store localControl=false is OFF — the reversible toggle', () => {
+  setStoreLocalControl(false);
+  withEnv(undefined, () => {
+    assert.equal(tuyaLocal.isLocalEnabled(), false);
+  });
+  setStoreLocalControl(undefined);
 });

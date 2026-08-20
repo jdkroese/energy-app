@@ -117,6 +117,7 @@ import {
   getTuyaIntegration,
   setTuyaIntegration,
   disconnectTuyaIntegration,
+  setTuyaLocalControl,
   listScenes,
   createScene,
   updateScene,
@@ -1289,6 +1290,15 @@ app.delete(
 app.get(
   "/api/integrations/tuya/local",
   wrap(() => tuyaLocal.getDiagnostics()),
+);
+// Reversible on/off for local control (docs/44 Phase 2) — persisted in the store so it can
+// be enabled without editing the production mini's launchd plist. Admin-gated like every
+// other command/integration write in this area (see POST/DELETE /api/integrations/tuya
+// above).
+app.put(
+  "/api/integrations/tuya/local",
+  requireAdmin,
+  wrap((req) => setTuyaLocalControl((req.body as { enabled?: unknown } | undefined)?.enabled)),
 );
 
 // ---- Configurable connections (Sonnen / Weather / Tesla) ----

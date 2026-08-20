@@ -5,10 +5,15 @@
 // `./tuya` imports THIS module instead, one direction only, to avoid a circular import
 // that could break the esbuild CJS bundle.
 //
-// Feature-flagged OFF by default: TUYA_LOCAL_ENABLED=1 to enable. With the flag off this
-// module still loads (registry read from disk — cheap, synchronous, tolerant of a missing
-// file) but NEVER opens a socket and is never consulted by `./tuya` — behaviour is
-// byte-for-byte what it was before this file existed.
+// Enabled by DEFAULT (docs/44 Phase 2 is hardware-verified): a persisted store setting
+// (Settings → Tuya → "Local LAN control", store.ts integrations.tuya.localControl) is the
+// normal on/off switch, since the production mini's launchd plist can't be edited remotely.
+// TUYA_LOCAL_ENABLED remains a hard override on top of the store: '0' force-disables
+// (kill switch), '1' force-enables; any other/unset value defers to the store setting
+// (undefined/true = on, explicit false = off). See isLocalEnabled() below. With local
+// disabled (by either mechanism) this module still loads (registry read from disk — cheap,
+// synchronous, tolerant of a missing file) but never opens a socket and is never consulted
+// by `./tuya` — behaviour is byte-for-byte what it was before this file existed.
 //
 // Cloud vs local DP naming: the cloud API and the local LAN protocol both describe a
 // device's datapoints, but under different keys — the cloud uses human-readable `code`
@@ -51,6 +56,9 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import TuyaDevice from 'tuyapi';
+// One-directional: store.ts never imports this module, so importing it here (for the
+// localControl toggle) can't create a cycle. See the module banner above.
+import * as store from '../store';
 
 const DATA_DIR = process.env.DATA_DIR || '/Users/joris/sites/energy/.data';
 const CACHE_FILE = path.join(DATA_DIR, 'tuya-local.json');
@@ -61,12 +69,20 @@ const CACHE_FILE = path.join(DATA_DIR, 'tuya-local.json');
 // layout changing across patch releases. Hardware-validated in scripts/tuya-lan-discover.mjs.
 const UDP_KEY = crypto.createHash('md5').update('yGAdlopoPVldABfn').digest();
 
-const LOCAL_ENABLED = process.env.TUYA_LOCAL_ENABLED === '1';
-
 /** Whether local (LAN) control is switched on at all. Everything else in this module is
- *  inert when this is false — no socket is opened, and tuya.ts never calls in here. */
+ *  inert when this is false — no socket is opened, and tuya.ts never calls in here.
+ *  Precedence: TUYA_LOCAL_ENABLED='0' is a hard kill switch (always off, regardless of the
+ *  store setting) — TUYA_LOCAL_ENABLED='1' is a hard force-on. Any other value, including
+ *  unset, defers to the persisted store setting (see store.ts integrations.tuya.localControl),
+ *  which defaults ON (undefined/true) — only an explicit `false` turns it off. Reads the
+ *  store fresh on every call (cheap — store.get() is an in-memory cache, not file I/O after
+ *  the first load) so a runtime Settings toggle takes effect on the very next command/status
+ *  call, not just after a restart. */
 export function isLocalEnabled(): boolean {
-  return LOCAL_ENABLED;
+  const env = process.env.TUYA_LOCAL_ENABLED;
+  if (env === '0') return false;
+  if (env === '1') return true;
+  return store.get().integrations.tuya?.localControl !== false;
 }
 
 // ---- Registry -----------------------------------------------------------------------
@@ -1120,6 +1136,21 @@ export function getDiagnostics(): LocalDiagnostics {
 }
 
 // ---- Boot ------------------------------------------------------------------------------
+// isLocalEnabled() (not a raw env check) so the store's default-ON setting starts discovery
+// at boot too — the production mini restarts on every deploy (no env var needed there), so
+// this is what actually activates local control without touching the launchd plist.
+//
+// A later RUNTIME toggle (PUT /api/integrations/tuya/local, i.e. the Settings switch) flips
+// isLocalEnabled()'s return value immediately — sendCommands/readStatus re-check it on every
+// call, so disabling stops new local attempts right away. Re-enabling on a process that
+// booted with discovery already running (the common case: production boots enabled by
+// default) just resumes using the listener that's been running the whole time, no gap. The
+// one asymmetric case: a process that booted with local OFF (TUYA_LOCAL_ENABLED='0', or the
+// store already had localControl:false before this process's first boot) never called
+// startDiscoveryListener() here, so re-enabling later via the Settings toggle makes tuya.ts
+// start consulting this module again but WITHOUT a live discovery listener — already-known
+// devices (lanIp persisted in tuya-local.json from a prior run) still work, but a lanIp that
+// moved (DHCP) or a newly-harvested device won't be picked up until the process restarts.
 
 reloadRegistry();
-if (LOCAL_ENABLED) startDiscoveryListener();
+if (isLocalEnabled()) startDiscoveryListener();
