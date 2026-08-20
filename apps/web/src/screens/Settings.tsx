@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaAccountStatus, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AdminUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaAccountStatus, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, TuyaLocalStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AdminUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
@@ -1541,6 +1541,8 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [localStatus, setLocalStatus] = useState<TuyaLocalStatus | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -1551,9 +1553,28 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
       /* ignore — shows as not-connected */
     }
   };
+  const loadLocal = async () => {
+    try {
+      setLocalStatus(await api.integrations.tuyaLocalStatus());
+    } catch {
+      /* ignore — toggle just stays hidden/loading */
+    }
+  };
   useEffect(() => {
     void load();
+    void loadLocal();
   }, []);
+
+  const toggleLocal = async (enabled: boolean) => {
+    setLocalBusy(true);
+    try {
+      setLocalStatus(await api.integrations.tuyaLocalSet(enabled));
+    } catch {
+      /* leave the switch reflecting last-known state on failure */
+    } finally {
+      setLocalBusy(false);
+    }
+  };
 
   const connect = async () => {
     if (!accessId.trim() || !accessSecret.trim()) {
@@ -1639,6 +1660,24 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
         )}
 
         {status?.error && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{status.error}</div>}
+
+        {connected && localStatus && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderTop: '1px solid var(--border)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13 }}>Local LAN control</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-2)', lineHeight: 1.45 }}>
+                {localStatus.enabled
+                  ? `Active · ${localStatus.totals.capable} of ${localStatus.totals.devices} devices controllable on your LAN`
+                  : 'Off — commands go through the Tuya cloud only'}
+              </div>
+            </div>
+            <Switch
+              checked={localStatus.enabled}
+              disabled={!isAdmin || localBusy}
+              onChange={(e) => void toggleLocal(e.target.checked)}
+            />
+          </div>
+        )}
 
         {isAdmin && (!connected || editing) && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 360 }}>
