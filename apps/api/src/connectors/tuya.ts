@@ -470,9 +470,29 @@ export async function getDeviceLogs(
   );
 }
 
-/** Issue one or more datapoint commands to a device (legacy v1.0 command API). */
-export function sendCommands(id: string, commands: Array<{ code: string; value: unknown }>): Promise<boolean> {
+/** Cloud-only v1.0 command POST (no local branch) — the raw fallback used by both
+ *  sendCommands (after a local miss) and sendCommandsDual's fan-out. */
+function cloudSendCommands(id: string, commands: Array<{ code: string; value: unknown }>): Promise<boolean> {
   return request<boolean>('POST', `/v1.0/devices/${id}/commands`, { commands });
+}
+
+/** Issue one or more datapoint commands to a device. Tries LOCAL (LAN) first when local
+ *  control is enabled and the device is locally capable (docs/44), falling back to the cloud
+ *  v1.0 command API on ANY local failure. This is the single-API choke point that native
+ *  lights, blinds and the schedule/surplus coordinators call directly — routing local HERE
+ *  means those paths get LAN control too, not only the configured-device path that flows
+ *  through sendCommandsDual. With local off/incapable this is byte-for-byte the old cloud POST. */
+export async function sendCommands(id: string, commands: Array<{ code: string; value: unknown }>): Promise<boolean> {
+  if (tuyaLocal.isLocalEnabled() && tuyaLocal.isLocalCapable(id)) {
+    try {
+      const { codeToDp } = await dpMapsFor(id);
+      await tuyaLocal.sendCommands(id, commands, codeToDp);
+      return true;
+    } catch {
+      // Local unavailable/failed for any reason — fall through to the cloud command below.
+    }
+  }
+  return cloudSendCommands(id, commands);
 }
 
 /** Issue properties via the NEWER v2.0 "thing model" API. Some devices (often newer
@@ -526,7 +546,7 @@ export async function sendCommandsDual(
   let iot03 = false;
   let thing = false;
   let lastErr: unknown = null;
-  try { await sendCommands(id, commands); v1 = true; } catch (e) { lastErr = e; }
+  try { await cloudSendCommands(id, commands); v1 = true; } catch (e) { lastErr = e; }
   try { await sendIot03Commands(id, commands); iot03 = true; } catch (e) { lastErr = e; }
   try { await sendThingCommands(id, properties); thing = true; } catch (e) { lastErr = e; }
   if (!v1 && !iot03 && !thing) throw lastErr instanceof Error ? lastErr : new Error('command rejected on all Tuya APIs');
