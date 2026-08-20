@@ -17,7 +17,7 @@ process.env.DATA_DIR = scratchDir;
 process.env.STATE_FILE = path.join(scratchDir, 'state.json');
 process.env.TUYA_LOCAL_ENABLED = '0';
 
-const { parseThingModelDpMap } = await import('./tuya');
+const { parseThingModelDpMap, normCode } = await import('./tuya');
 
 // A real Tuya thing-model payload (trimmed) for a `cz` metering plug — the `model` field is
 // itself a JSON string, and each property carries `abilityId` (the local dp number).
@@ -79,4 +79,16 @@ test('parseThingModelDpMap skips properties missing code or a numeric abilityId'
   const map = parseThingModelDpMap(model);
   assert.equal(map.size, 1);
   assert.equal(map.get('switch_1'), 1);
+});
+
+test('normCode collapses transposed code spellings for the same datapoint', () => {
+  // The exact real-world mismatch: cloud spec says switch_led_1, thing model says led_switch_1.
+  assert.equal(normCode('switch_led_1'), normCode('led_switch_1'));
+  assert.equal(normCode('switch_led_1'), '1_led_switch');
+});
+
+test('normCode is case- and separator-insensitive but keeps distinct codes distinct', () => {
+  assert.equal(normCode('Bright_Value_1'), normCode('bright value 1'));
+  assert.notEqual(normCode('switch_1'), normCode('switch_2'));
+  assert.notEqual(normCode('switch_led_1'), normCode('bright_value_1'));
 });

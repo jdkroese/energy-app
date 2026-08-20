@@ -672,6 +672,18 @@ async function thingModelDpMap(id: string): Promise<Map<string, number>> {
   return resp?.model ? parseThingModelDpMap(resp.model) : new Map<string, number>();
 }
 
+/** Normalize a Tuya dp code to a token-set key so different spellings of the SAME datapoint
+ *  collapse together — e.g. a dimmer relay is `switch_led_1` in the cloud spec but
+ *  `led_switch_1` in the thing model; both normalize to `1_led_switch`. Exported for tests. */
+export function normCode(code: string): string {
+  return code
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .sort()
+    .join('_');
+}
+
 async function dpMapsFor(id: string): Promise<DpMaps> {
   const hit = dpMapCache.get(id);
   if (hit) return hit;
@@ -689,6 +701,32 @@ async function dpMapsFor(id: string): Promise<DpMaps> {
     }
   } catch {
     // Thing model unavailable (offline / quota) — fall through to the /specifications path.
+  }
+
+  // BRIDGE cloud/status code spellings to the thing-model dp numbers. Tuya can name the SAME
+  // datapoint differently across API surfaces (e.g. a dimmer relay is `switch_led_1` in the
+  // cloud spec but `led_switch_1` in the thing model). The app builds commands from the CLOUD
+  // codes, so without this alias their local write fails translation and — with cloud control
+  // now quota-limited (code 60001001) — the device becomes uncontrollable. Add only an
+  // UNAMBIGUOUS alias (normalized code that maps to exactly one dp); never override an exact code.
+  if (codeToDp.size > 0) {
+    try {
+      const spec = await getSpecifications(id);
+      const byNorm = new Map<string, number[]>();
+      for (const [code, dp] of codeToDp) {
+        const k = normCode(code);
+        const arr = byNorm.get(k);
+        if (arr) arr.push(dp);
+        else byNorm.set(k, [dp]);
+      }
+      for (const entry of [...spec.functions, ...spec.status]) {
+        if (codeToDp.has(entry.code)) continue;
+        const dps = byNorm.get(normCode(entry.code));
+        if (dps && dps.length === 1) codeToDp.set(entry.code, dps[0]);
+      }
+    } catch {
+      // Spec unavailable — the thing-model map alone still serves any exactly-matching code.
+    }
   }
 
   // FALLBACK: /specifications' `dp_id`, for any device/region that does include it.
