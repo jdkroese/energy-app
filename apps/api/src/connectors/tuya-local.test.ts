@@ -72,10 +72,22 @@ const FIXTURE_DEVICES = [
     ip: '203.0.113.11',
     localKey: 'abcdef0123456789',
     lanIp: '192.168.1.52',
-    version: '3.5', // AES-GCM — tuyapi cannot speak this; must fail closed to cloud
+    version: '3.5', // AES-GCM — tuyapi cannot speak this; the native GCM client handles it
     sub: false,
     online: true,
     productId: 'p4',
+  },
+  {
+    id: 'bf-futurever-1',
+    name: 'Test Future Version',
+    category: 'tdq',
+    ip: '203.0.113.12',
+    localKey: 'abcdef0123456789',
+    lanIp: '192.168.1.53',
+    version: '9.9', // deliberately bogus — proves the fail-closed guard survives adding 3.5
+    sub: false,
+    online: true,
+    productId: 'p5',
   },
 ];
 fs.writeFileSync(
@@ -394,26 +406,36 @@ test('sendCommands: no commands to send rejects', async () => {
   await assert.rejects(() => tuyaLocal.sendCommands('bf-switch-1', []), /no commands/);
 });
 
-test('sendCommands: an unsupported protocol version (v3.5) rejects — fails closed, never attempted', async () => {
+test('sendCommands: a genuinely unsupported protocol version rejects — fails closed, never attempted', async () => {
   await assert.rejects(
-    () => tuyaLocal.sendCommands('bf-v35-1', [{ code: 'switch_1', value: true }]),
-    /unsupported protocol version "3\.5"/,
+    () => tuyaLocal.sendCommands('bf-futurever-1', [{ code: 'switch_1', value: true }]),
+    /unsupported protocol version "9\.9"/,
   );
 });
 
-test('readStatus: an unsupported protocol version (v3.5) rejects', async () => {
-  await assert.rejects(() => tuyaLocal.readStatus('bf-v35-1'), /unsupported protocol version/);
+test('readStatus: a genuinely unsupported protocol version rejects', async () => {
+  await assert.rejects(() => tuyaLocal.readStatus('bf-futurever-1'), /unsupported protocol version/);
 });
 
 // ---- Unsupported protocol version (v3.5) is a first-class, non-retrying reason ----------
 
-test('capabilityBlockReason: a v3.5 device is blocked as "unsupported-version", not treated as offline/missing', () => {
+test('capabilityBlockReason: a v3.5 device is natively supported — capable, not blocked', () => {
   const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
   const v35 = entries.find((e) => e.id === 'bf-v35-1')!;
   assert.equal(v35.localKey.length, 16, 'has a valid key');
   assert.ok(v35.lanIp, 'has a LAN ip');
-  assert.equal(tuyaLocal.capabilityBlockReason(v35), 'unsupported-version');
-  assert.equal(tuyaLocal.computeLocalCapable(v35), false);
+  assert.equal(tuyaLocal.capabilityBlockReason(v35), null);
+  assert.equal(tuyaLocal.computeLocalCapable(v35), true);
+  assert.equal(tuyaLocal.pickLocalTransport(v35.version), 'native-gcm');
+});
+
+test('capabilityBlockReason: a genuinely unsupported (future) version still fails closed — the guard is narrowed, not removed', () => {
+  const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
+  const future = entries.find((e) => e.id === 'bf-futurever-1')!;
+  assert.equal(future.localKey.length, 16, 'has a valid key');
+  assert.ok(future.lanIp, 'has a LAN ip');
+  assert.equal(tuyaLocal.capabilityBlockReason(future), 'unsupported-version');
+  assert.equal(tuyaLocal.computeLocalCapable(future), false);
 });
 
 test('capabilityBlockReason: an entry with NO version yet recorded is not treated as unsupported (falls back to 3.3)', () => {
@@ -455,13 +477,206 @@ test('correlateV35Sighting: an entry already known as v3.5 is not re-flagged (id
   assert.deepEqual(tuyaLocal.correlateV35Sighting(entries, v35.lanIp), []);
 });
 
+// ---- Native v3.5 (AES-GCM) transport: framing + GCM round-trip ------------------------
+// All synthetic — no real device or socket anywhere below. packGcm35Frame/parseGcm35Frame/
+// decryptGcm35Frame are round-tripped against each other exactly as the real connect/read/
+// write path uses them (TuyaGcm35Device in tuya-local.ts), just without a socket in between.
+
+function testLocalKey(): Buffer {
+  return Buffer.from('0123456789abcdef', 'utf8'); // 16 bytes, same shape as a real local_key
+}
+
+test('packGcm35Frame/parseGcm35Frame/decryptGcm35Frame: round-trips a plaintext payload', () => {
+  const key = testLocalKey();
+  const plaintext = Buffer.from(JSON.stringify({ hello: 'world', n: 42 }), 'utf8');
+  const framed = tuyaLocal.packGcm35Frame(7, 16, plaintext, key);
+
+  assert.equal(framed.readUInt32BE(0), 0x00006699, 'frame starts with the v3.5 magic');
+  assert.equal(framed.readUInt32BE(framed.length - 4), 0x00009966, 'frame ends with the v3.5 suffix');
+
+  const parsed = tuyaLocal.parseGcm35Frame(framed);
+  assert.ok(parsed);
+  assert.equal(parsed!.seqno, 7);
+  assert.equal(parsed!.cmd, 16);
+  assert.equal(parsed!.consumed, framed.length);
+  assert.equal(parsed!.iv.length, 12);
+  assert.equal(parsed!.tag.length, 16);
+
+  const decrypted = tuyaLocal.decryptGcm35Frame(key, parsed!);
+  assert.deepEqual(decrypted, plaintext);
+});
+
+test('packGcm35Frame: uses a fresh random IV every call (never reused)', () => {
+  const key = testLocalKey();
+  const a = tuyaLocal.parseGcm35Frame(tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{}'), key))!;
+  const b = tuyaLocal.parseGcm35Frame(tuyaLocal.packGcm35Frame(2, 16, Buffer.from('{}'), key))!;
+  assert.notDeepEqual(a.iv, b.iv);
+});
+
+test('parseGcm35Frame: returns null (not throw) on a short/partial buffer — streaming-safe', () => {
+  const key = testLocalKey();
+  const framed = tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{"a":1}'), key);
+  assert.equal(tuyaLocal.parseGcm35Frame(framed.subarray(0, 10)), null, 'shorter than the header');
+  assert.equal(tuyaLocal.parseGcm35Frame(framed.subarray(0, framed.length - 1)), null, '1 byte short of the full frame');
+});
+
+test('parseGcm35Frame: two concatenated frames — the first parse consumes exactly one', () => {
+  const key = testLocalKey();
+  const first = tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{"a":1}'), key);
+  const second = tuyaLocal.packGcm35Frame(2, 13, Buffer.from('{"b":2}'), key);
+  const both = Buffer.concat([first, second]);
+
+  const parsed1 = tuyaLocal.parseGcm35Frame(both)!;
+  assert.equal(parsed1.consumed, first.length);
+  assert.equal(parsed1.seqno, 1);
+
+  const parsed2 = tuyaLocal.parseGcm35Frame(both.subarray(parsed1.consumed))!;
+  assert.equal(parsed2.seqno, 2);
+  assert.equal(parsed2.cmd, 13);
+});
+
+test('parseGcm35Frame: rejects a bad prefix', () => {
+  const key = testLocalKey();
+  const framed = tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{}'), key);
+  framed.writeUInt32BE(0x000055aa, 0); // legacy 3.3/3.4 magic, not v3.5
+  assert.throws(() => tuyaLocal.parseGcm35Frame(framed), /prefix/);
+});
+
+test('parseGcm35Frame: rejects a bad suffix', () => {
+  const key = testLocalKey();
+  const framed = tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{}'), key);
+  framed.writeUInt32BE(0xdeadbeef, framed.length - 4);
+  assert.throws(() => tuyaLocal.parseGcm35Frame(framed), /suffix/);
+});
+
+test('decryptGcm35Frame: a tampered ciphertext byte fails GCM authentication', () => {
+  const key = testLocalKey();
+  const framed = tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{"dps":{"1":true}}'), key);
+  // Flip a bit inside the ciphertext, which starts right after the 18-byte header + 12-byte IV.
+  framed[18 + 12] ^= 0xff;
+  const parsed = tuyaLocal.parseGcm35Frame(framed)!;
+  assert.throws(() => tuyaLocal.decryptGcm35Frame(key, parsed));
+});
+
+test('decryptGcm35Frame: the wrong key fails GCM authentication', () => {
+  const framed = tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{}'), testLocalKey());
+  const parsed = tuyaLocal.parseGcm35Frame(framed)!;
+  const wrongKey = Buffer.from('fedcba9876543210', 'utf8');
+  assert.throws(() => tuyaLocal.decryptGcm35Frame(wrongKey, parsed));
+});
+
+test('decryptGcm35Frame: a tampered AAD (header) byte fails GCM authentication', () => {
+  const key = testLocalKey();
+  const framed = tuyaLocal.packGcm35Frame(1, 16, Buffer.from('{}'), key);
+  const parsed = tuyaLocal.parseGcm35Frame(framed)!;
+  const tamperedAad = Buffer.from(parsed.aad);
+  tamperedAad[0] ^= 0xff;
+  assert.throws(() => tuyaLocal.decryptGcm35Frame(key, { ...parsed, aad: tamperedAad }));
+});
+
+test('stripV35Retcode: drops the leading 4 bytes', () => {
+  const body = Buffer.concat([Buffer.from([0, 0, 0, 0]), Buffer.from('{"dps":{}}')]);
+  assert.equal(tuyaLocal.stripV35Retcode(body).toString('utf8'), '{"dps":{}}');
+});
+
+test('stripV35Retcode: a buffer shorter than 4 bytes is returned as-is, never throws', () => {
+  const short = Buffer.from([1, 2]);
+  assert.doesNotThrow(() => tuyaLocal.stripV35Retcode(short));
+  assert.deepEqual(tuyaLocal.stripV35Retcode(short), short);
+});
+
+test('decodeGcm35Json: parses a plain JSON body', () => {
+  const body = Buffer.from('{"dps":{"1":true}}', 'utf8');
+  assert.deepEqual(tuyaLocal.decodeGcm35Json(body), { dps: { '1': true } });
+});
+
+test('decodeGcm35Json: strips a leading "3.5"+12-null version header before parsing', () => {
+  const header = Buffer.concat([Buffer.from('3.5', 'latin1'), Buffer.alloc(12)]);
+  const body = Buffer.concat([header, Buffer.from('{"ok":true}', 'utf8')]);
+  assert.deepEqual(tuyaLocal.decodeGcm35Json(body), { ok: true });
+});
+
+test('decodeGcm35Json: an empty body is null (ack-only frame), not an error', () => {
+  assert.equal(tuyaLocal.decodeGcm35Json(Buffer.alloc(0)), null);
+});
+
+test('decodeGcm35Json: non-JSON garbage throws (caller decides whether that is fatal)', () => {
+  assert.throws(() => tuyaLocal.decodeGcm35Json(Buffer.from('not json', 'utf8')));
+});
+
+// ---- Session key negotiation state machine (messages 0x03/0x04/0x05) ------------------
+
+test('session key handshake: a full simulated round trip agrees on the same session key from both sides', () => {
+  const localKey = testLocalKey(); // the shared local_key both "us" and the simulated device hold
+  const localNonce = crypto.randomBytes(16); // generated by us (the client)
+  const remoteNonce = crypto.randomBytes(16); // generated by the simulated device
+
+  assert.deepEqual(tuyaLocal.buildSessionNegStart(localNonce), localNonce, 'message 1 is just the raw nonce, no envelope');
+
+  // What a real device sends back as SESS_KEY_NEG_RESP: its own nonce plus proof (HMAC)
+  // that it holds the same local_key.
+  const deviceHmacOfClientNonce = crypto.createHmac('sha256', localKey).update(localNonce).digest();
+  const respPayload = Buffer.concat([remoteNonce, deviceHmacOfClientNonce]);
+
+  const gotRemoteNonce = tuyaLocal.verifySessionNegResp(respPayload, localKey, localNonce);
+  assert.deepEqual(gotRemoteNonce, remoteNonce);
+
+  // Message 3: our proof that we derived the same thing.
+  const finishPayload = tuyaLocal.buildSessionNegFinish(localKey, remoteNonce);
+  const deviceExpectedFinish = crypto.createHmac('sha256', localKey).update(remoteNonce).digest();
+  assert.deepEqual(finishPayload, deviceExpectedFinish);
+
+  // Both sides derive the session key from the SAME two nonces + local_key. Simulate the
+  // device side independently (mirroring tinytuya's documented formula, not calling our own
+  // function twice) and confirm they agree — that agreement is the actual point of the
+  // handshake.
+  const clientSessionKey = tuyaLocal.deriveSessionKey35(localKey, localNonce, remoteNonce);
+  const xored = Buffer.alloc(16);
+  for (let i = 0; i < 16; i++) xored[i] = localNonce[i] ^ remoteNonce[i];
+  const deviceCipher = crypto.createCipheriv('aes-128-gcm', localKey, localNonce.subarray(0, 12));
+  const deviceSessionKey = Buffer.concat([deviceCipher.update(xored), deviceCipher.final()]);
+  assert.deepEqual(clientSessionKey, deviceSessionKey);
+  assert.equal(clientSessionKey.length, 16);
+});
+
+test('verifySessionNegResp: rejects a too-short response', () => {
+  const localKey = testLocalKey();
+  assert.throws(() => tuyaLocal.verifySessionNegResp(Buffer.alloc(10), localKey, crypto.randomBytes(16)), /too short/);
+});
+
+test('verifySessionNegResp: rejects a wrong HMAC — wrong/rotated local_key or a foreign reply', () => {
+  const localKey = testLocalKey();
+  const localNonce = crypto.randomBytes(16);
+  const remoteNonce = crypto.randomBytes(16);
+  const wrongHmac = crypto.randomBytes(32); // not HMAC(localKey, localNonce)
+  const respPayload = Buffer.concat([remoteNonce, wrongHmac]);
+  assert.throws(() => tuyaLocal.verifySessionNegResp(respPayload, localKey, localNonce), /HMAC mismatch/);
+});
+
+test('deriveSessionKey35: different nonce pairs produce different session keys', () => {
+  const localKey = testLocalKey();
+  const a = tuyaLocal.deriveSessionKey35(localKey, Buffer.alloc(16, 1), Buffer.alloc(16, 2));
+  const b = tuyaLocal.deriveSessionKey35(localKey, Buffer.alloc(16, 3), Buffer.alloc(16, 4));
+  assert.equal(a.length, 16);
+  assert.notDeepEqual(a, b);
+});
+
+// ---- pickLocalTransport (routing between the two supported local clients) -------------
+
+test('pickLocalTransport: 3.3/3.4/unknown route to tuyapi, 3.5 routes to the native GCM client', () => {
+  assert.equal(tuyaLocal.pickLocalTransport('3.3'), 'tuyapi');
+  assert.equal(tuyaLocal.pickLocalTransport('3.4'), 'tuyapi');
+  assert.equal(tuyaLocal.pickLocalTransport(''), 'tuyapi');
+  assert.equal(tuyaLocal.pickLocalTransport('3.5'), 'native-gcm');
+});
+
 // ---- Diagnostics (never exposes local_key) ---------------------------------------------
 
 test('getDiagnostics: reports totals + per-device capability without ever including local_key', () => {
   const diag = tuyaLocal.getDiagnostics();
   assert.equal(diag.totals.devices, FIXTURE_DEVICES.length);
-  assert.equal(diag.totals.capable, 1, 'only bf-switch-1 has key+ip, is not a sub-device, and is a supported version');
-  assert.equal(diag.totals.unsupportedVersion, 1, 'bf-v35-1 is counted separately from "capable"');
+  assert.equal(diag.totals.capable, 2, 'bf-switch-1 (tuyapi) and bf-v35-1 (native-gcm) are both locally capable');
+  assert.equal(diag.totals.unsupportedVersion, 1, 'only the genuinely-unsupported future version is counted here now');
 
   const json = JSON.stringify(diag);
   assert.doesNotMatch(json, /abcdef0123456789/, 'the local_key value must never appear in diagnostics output');
@@ -472,11 +687,13 @@ test('getDiagnostics: reports totals + per-device capability without ever includ
   assert.equal(sw.localCapable, true);
   assert.equal(sw.reason, null);
   assert.equal(sw.lanIp, '192.168.1.50');
+  assert.equal(sw.transport, 'tuyapi');
 
   const sub = diag.devices.find((d) => d.id === 'bf-sub-1');
   assert.ok(sub);
   assert.equal(sub.localCapable, false);
   assert.equal(sub.reason, 'gateway-sub-device');
+  assert.equal(sub.transport, null, 'not locally capable at all — no transport applies');
 
   const nokey = diag.devices.find((d) => d.id === 'bf-nokey-1');
   assert.ok(nokey);
@@ -484,9 +701,16 @@ test('getDiagnostics: reports totals + per-device capability without ever includ
 
   const v35 = diag.devices.find((d) => d.id === 'bf-v35-1');
   assert.ok(v35);
-  assert.equal(v35.localCapable, false);
-  assert.equal(v35.reason, 'unsupported-version', 'a v3.5 device reads as a distinct, explicit reason — not just "not capable"');
+  assert.equal(v35.localCapable, true, 'v3.5 is natively supported now, not blocked');
+  assert.equal(v35.reason, null);
   assert.equal(v35.version, '3.5');
+  assert.equal(v35.transport, 'native-gcm');
+
+  const future = diag.devices.find((d) => d.id === 'bf-futurever-1');
+  assert.ok(future);
+  assert.equal(future.localCapable, false);
+  assert.equal(future.reason, 'unsupported-version', 'a genuinely unsupported version still reads as a distinct, explicit reason');
+  assert.equal(future.transport, null);
 });
 
 test('getDiagnostics: v35SightingsUncorrelated omits ips that already match a known device', () => {
