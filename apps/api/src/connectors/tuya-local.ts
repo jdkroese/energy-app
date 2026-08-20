@@ -32,18 +32,23 @@
 // so a `lanIp` loaded from the file (persisted by a past discovery run) is just as valid a
 // source as a live broadcast, and live discovery only ever ADDS to what was loaded.
 //
-// Protocol version support (coordinator-verified 2026-08-20 via a live UDP capture): this
-// fleet is NOT uniformly 3.3/3.4 — two breakers speak v3.5 (AES-GCM framing, magic
-// 0x00006699), which tuyapi@7 cannot decode at all. An unsupported version is a FIRST-CLASS,
-// non-retrying "no" — never attempted, never counted as a health failure, never allowed to
-// eat a connect/response timeout on the hot path — distinct from "device offline" or
-// "no LAN ip yet". See SUPPORTED_LOCAL_VERSIONS, capabilityBlockReason(), and
-// isV35DiscoveryFrame() below. A version that silently fails to parse used to look
-// indistinguishable from "device asleep/unplugged"; it no longer does.
+// Protocol version support: this fleet is NOT uniformly 3.3/3.4. A live tinytuya probe
+// (coordinator-verified 2026-08-20, see scripts/tuya-v35-probe.py) found the real split is
+// v3.3 x3, v3.4 x20, v3.5 x11 (AES-GCM framing, magic 0x00006699), unreachable x2. tuyapi@7
+// cannot decode v3.5 at all, so those 11 devices — including the car charger and the
+// "up WCD's"/"Bomba interruptor" breakers — get a hand-rolled native client instead (see
+// "Native v3.5 (AES-GCM) transport" below, ported from tinytuya's actual source). Any
+// version genuinely outside what EITHER client can speak still fails CLOSED exactly as
+// before: a FIRST-CLASS, non-retrying "no" — never attempted, never counted as a health
+// failure, never allowed to eat a connect/response timeout on the hot path — distinct from
+// "device offline" or "no LAN ip yet". See SUPPORTED_LOCAL_VERSIONS, capabilityBlockReason(),
+// pickLocalTransport(), and isV35DiscoveryFrame() below. A version that silently fails to
+// parse used to look indistinguishable from "device asleep/unplugged"; it still doesn't.
 
 import crypto from 'node:crypto';
 import dgram from 'node:dgram';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import TuyaDevice from 'tuyapi';
 
@@ -178,15 +183,15 @@ function noteFailure(id: string, err: unknown): void {
 
 // ---- Capability / preflight -----------------------------------------------------------
 
-/** Local protocol versions this transport can actually speak. tuyapi@7 handles 3.1-3.4;
- *  v3.5 encrypts end-to-end with AES-GCM, which tuyapi cannot decode at all. Kept as an
- *  explicit allowlist (not "whatever this fleet mostly is") so a v3.5 (or any future/older
- *  unsupported) device fails CLOSED — routed straight to cloud, never retried on the hot
- *  path — instead of being attempted and burning a connect/response timeout every time.
- *  Extending local support to a new version later is a one-line change here PLUS a
- *  transport that can actually speak it — adding the version alone would just make this
- *  module attempt (and fail) against devices it still can't talk to. */
-const SUPPORTED_LOCAL_VERSIONS = new Set(['3.3', '3.4']);
+/** Local protocol versions this transport can actually speak: tuyapi@7 handles 3.1-3.4,
+ *  and the hand-rolled AES-GCM client (see "Native v3.5" below) handles 3.5. Kept as an
+ *  explicit allowlist (not "whatever this fleet mostly is") so any future/older version
+ *  neither client can speak still fails CLOSED — routed straight to cloud, never retried on
+ *  the hot path — instead of being attempted and burning a connect/response timeout every
+ *  time. Extending local support to a new version later is a one-line change here PLUS a
+ *  transport that can actually speak it (see pickLocalTransport) — adding the version alone
+ *  would just make this module attempt (and fail) against devices it still can't talk to. */
+const SUPPORTED_LOCAL_VERSIONS = new Set(['3.3', '3.4', '3.5']);
 
 /** Why (if at all) a registry entry is not CAPABLE of local control, independent of
  *  current health/cooldown — that's a separate, transient axis (see computeCanAttempt).
@@ -305,13 +310,26 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
   });
 }
 
-/** Drop a pooled connection (e.g. after any error) so the next attempt starts fresh. */
+/** Drop a pooled connection (e.g. after any error) so the next attempt starts fresh.
+ *  Clears BOTH pools unconditionally (tuyapi's `pool` and the native v3.5 `poolV35`
+ *  declared further below) — a given id only ever lives in one of them, so this is cheap
+ *  and it means every existing call site (already calling `evict()` on any failure) needs
+ *  no change to also cover the new v3.5 path. */
 function evict(id: string): void {
   const dev = pool.get(id);
   pool.delete(id);
   if (dev) {
     try {
       dev.disconnect();
+    } catch {
+      /* already down */
+    }
+  }
+  const sess = poolV35.get(id);
+  poolV35.delete(id);
+  if (sess) {
+    try {
+      sess.disconnect();
     } catch {
       /* already down */
     }
@@ -344,6 +362,416 @@ async function getConnection(entry: LocalDeviceEntry): Promise<TuyaDevice> {
   return dev;
 }
 
+// ---- Native v3.5 (AES-GCM) transport ---------------------------------------------------
+// tuyapi@7 (used for 3.3/3.4 above) has no AES-GCM support at all, so v3.5 devices need a
+// purpose-built client. Ported from tinytuya (jasonacox/tinytuya, read from source
+// 2026-08-20 — specifically core/{header,command_types,message_helper,crypto_helper,
+// XenonDevice}.py — not guessed) — the same library whose live probe against this exact
+// fleet (scripts/tuya-v35-probe.py) proved these 11 devices' keys/ips are good and their
+// local_key-based session handshake works. Frame shape:
+//
+//   prefix(4)=0x00006699 | reserved(2)=0x0000 | seqno(4) | cmd(4) | length(4) |
+//   IV(12) | ciphertext(length-28) | GCM tag(16) | suffix(4)=0x00009966
+//
+// `length` covers IV+ciphertext+tag but NOT the 4-byte suffix (confirmed against tinytuya's
+// message_helper.py pack_message()/parse_header()). The GCM AAD is the 14 bytes between the
+// prefix and the IV (reserved+seqno+cmd+length) — the prefix itself is authenticated by
+// neither the tag nor anything else, matching tinytuya exactly. A fresh random 12-byte IV
+// is generated per frame — GCM with a reused (key, IV) pair leaks the authentication key.
+//
+// Session key negotiation (cmd bytes 3/4/5 — "SESS_KEY_NEG_START/RESP/FINISH") happens once
+// per TCP connection, encrypted with the device's real local_key, before any command can be
+// sent: the client sends a random 16-byte nonce, the device replies with its own nonce plus
+// an HMAC proving it holds the same local_key, the client replies with its own HMAC of the
+// device's nonce, and both sides derive a per-session AES key from the two nonces (see
+// deriveSessionKey35). Every later frame is encrypted with that session key, never the raw
+// local_key — losing the connection means renegotiating from scratch, never a resume.
+
+// @types/node (v22+) makes Buffer generic over its backing ArrayBuffer type: Buffer.alloc()/
+// Buffer.from() return the narrower Buffer<ArrayBuffer>, but Buffer.concat()/.subarray()
+// return the wider Buffer<ArrayBufferLike> — assignable FROM the narrow one but not the
+// other way around. Frames in this section flow through both (fresh allocations AND
+// concatenation/slicing), so every Buffer here is typed via this alias, not bare `Buffer`,
+// to avoid a spurious mismatch between the two.
+type Bytes = Buffer<ArrayBufferLike>;
+
+const V35_SUFFIX = 0x00009966;
+const GCM_IV_LEN = 12;
+const GCM_TAG_LEN = 16;
+const V35_HEADER_LEN = 18; // prefix(4) + reserved(2) + seqno(4) + cmd(4) + length(4)
+
+const CMD_SESS_KEY_NEG_START = 3;
+const CMD_SESS_KEY_NEG_RESP = 4;
+const CMD_SESS_KEY_NEG_FINISH = 5;
+const CMD_CONTROL_NEW = 13;
+const CMD_DP_QUERY_NEW = 16;
+
+// '<version>' + 12 null bytes. tinytuya prepends this to CONTROL_NEW payloads (but NOT to
+// DP_QUERY_NEW or the session-negotiation messages — see NO_PROTOCOL_HEADER_CMDS in
+// tinytuya's header.py) before encryption, and strips it back off (if present) when
+// decoding a response. Ported verbatim for the one command this transport sends that needs
+// it (CONTROL_NEW — see TuyaGcm35Device.setDps() below); decodeGcm35Json() is what strips
+// it back off on the way in.
+const V35_VERSION_HEADER = Buffer.concat([Buffer.from('3.5', 'latin1'), Buffer.alloc(12)]);
+
+// NOTE: V35_MAGIC (the 0x00006699 frame prefix, shared with packGcm35Frame/parseGcm35Frame
+// below) is declared further down in the existing "v3.5 (AES-GCM) sighting detection"
+// section, which predates this one and already owns it — a plain top-level `const` is
+// visible to every function in this module regardless of declaration order, so this is
+// just a pointer for readers, not a forward-reference problem.
+
+export interface Gcm35Frame {
+  seqno: number;
+  cmd: number;
+  iv: Bytes;
+  ciphertext: Bytes;
+  tag: Bytes;
+  /** The 14 authenticated-but-unencrypted header bytes (reserved+seqno+cmd+length) — the
+   *  GCM Additional Authenticated Data. */
+  aad: Bytes;
+  /** Bytes consumed from the front of the input buffer — for streaming reassembly. */
+  consumed: number;
+}
+
+/** Pure: encrypt+frame one v3.5 (AES-GCM) message. `key` is the raw local_key during
+ *  session negotiation, the derived session key for every message after. Exported for
+ *  tests (round-tripped against parseGcm35Frame/decryptGcm35Frame with synthetic data). */
+export function packGcm35Frame(seqno: number, cmd: number, plaintext: Bytes, key: Bytes): Bytes {
+  const iv = crypto.randomBytes(GCM_IV_LEN);
+  const length = GCM_IV_LEN + plaintext.length + GCM_TAG_LEN;
+  const header = Buffer.alloc(V35_HEADER_LEN);
+  header.writeUInt32BE(V35_MAGIC, 0);
+  header.writeUInt16BE(0, 4);
+  header.writeUInt32BE(seqno >>> 0, 6);
+  header.writeUInt32BE(cmd >>> 0, 10);
+  header.writeUInt32BE(length, 14);
+  const aad = header.subarray(4);
+
+  const cipher = crypto.createCipheriv('aes-128-gcm', key, iv, { authTagLength: GCM_TAG_LEN });
+  cipher.setAAD(aad);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  const suffix = Buffer.alloc(4);
+  suffix.writeUInt32BE(V35_SUFFIX, 0);
+  return Buffer.concat([header, iv, ciphertext, tag, suffix]);
+}
+
+/** Pure: extract ONE v3.5 frame from the front of `buf`, if a complete one is present.
+ *  Returns null (never throws) when more bytes are needed — TCP can deliver a frame split
+ *  across reads, or several frames in one read. Throws only for a structurally malformed
+ *  frame (bad prefix/suffix/length); never inspects — let alone decrypts — the ciphertext,
+ *  so a wrong key or corrupted body is reported by decryptGcm35Frame(), not here. Exported
+ *  for tests. */
+export function parseGcm35Frame(buf: Bytes): Gcm35Frame | null {
+  if (buf.length < V35_HEADER_LEN) return null;
+  if (buf.readUInt32BE(0) !== V35_MAGIC) throw new Error('tuya-local(v3.5): bad frame prefix');
+  const length = buf.readUInt32BE(14);
+  if (length < GCM_IV_LEN + GCM_TAG_LEN) throw new Error('tuya-local(v3.5): frame length too short for iv+tag');
+  const total = V35_HEADER_LEN + length + 4;
+  if (buf.length < total) return null;
+  const suffix = buf.readUInt32BE(V35_HEADER_LEN + length);
+  if (suffix !== V35_SUFFIX) throw new Error('tuya-local(v3.5): bad frame suffix');
+
+  return {
+    seqno: buf.readUInt32BE(6),
+    cmd: buf.readUInt32BE(10),
+    aad: buf.subarray(4, V35_HEADER_LEN),
+    iv: buf.subarray(V35_HEADER_LEN, V35_HEADER_LEN + GCM_IV_LEN),
+    ciphertext: buf.subarray(V35_HEADER_LEN + GCM_IV_LEN, V35_HEADER_LEN + length - GCM_TAG_LEN),
+    tag: buf.subarray(V35_HEADER_LEN + length - GCM_TAG_LEN, V35_HEADER_LEN + length),
+    consumed: total,
+  };
+}
+
+/** Pure: decrypt+authenticate one already-parsed frame. Throws if the GCM tag doesn't
+ *  verify — a tampered frame, the wrong key (e.g. a stale session key after a device
+ *  reboot), or a desynced stream. Callers must treat that as a hard failure, never fall
+ *  back to treating the ciphertext as plaintext. Exported for tests. */
+export function decryptGcm35Frame(key: Bytes, frame: Gcm35Frame): Bytes {
+  const decipher = crypto.createDecipheriv('aes-128-gcm', key, frame.iv, { authTagLength: GCM_TAG_LEN });
+  decipher.setAAD(frame.aad);
+  decipher.setAuthTag(frame.tag);
+  return Buffer.concat([decipher.update(frame.ciphertext), decipher.final()]);
+}
+
+/** Pure: every DEVICE -> CLIENT v3.5 payload carries a leading 4-byte return code (0 =
+ *  success) ahead of the real body. tinytuya hardcodes this assumption rather than sniffing
+ *  for it (its own `no_retcode` auto-detect path is dead code in the current release), so
+ *  this does the same. Exported for tests. */
+export function stripV35Retcode(plaintext: Bytes): Bytes {
+  return plaintext.length >= 4 ? plaintext.subarray(4) : plaintext;
+}
+
+/** Pure: decode a retcode-stripped v3.5 JSON command response. Some responses echo the
+ *  version header (see V35_VERSION_HEADER) — stripped if present. Returns null for an empty
+ *  (ack-only) payload rather than throwing, so the caller can keep reading the next frame
+ *  instead of treating a keepalive as a parse failure. Exported for tests. */
+export function decodeGcm35Json(body: Bytes): unknown {
+  let b = body;
+  if (b.length >= V35_VERSION_HEADER.length && b.subarray(0, 3).toString('latin1') === '3.5') {
+    b = b.subarray(V35_VERSION_HEADER.length);
+  }
+  if (b.length === 0) return null;
+  return JSON.parse(b.toString('utf8'));
+}
+
+/** Pure: message 1 of the session-key handshake (SESS_KEY_NEG_START) — just the random
+ *  client nonce, no envelope. Exported for tests/documentation of the wire shape. */
+export function buildSessionNegStart(localNonce: Bytes): Bytes {
+  return localNonce;
+}
+
+/** Pure: validate message 2 (SESS_KEY_NEG_RESP) and extract the device's nonce. `payload`
+ *  is the ALREADY decrypted+retcode-stripped response: a 16-byte device nonce followed by a
+ *  32-byte HMAC-SHA256(local_key, client_nonce) that proves the device holds the same
+ *  local_key we do. Throws on a short payload or an HMAC mismatch — both must hard-fail the
+ *  negotiation rather than proceed with an unverified nonce (a mismatch here means either a
+ *  wrong/rotated local_key or a reply from the wrong device). Exported for tests. */
+export function verifySessionNegResp(payload: Bytes, localKey: Bytes, localNonce: Bytes): Bytes {
+  if (payload.length < 48) throw new Error('tuya-local(v3.5): session key negotiation response too short');
+  const remoteNonce = payload.subarray(0, 16);
+  const gotHmac = payload.subarray(16, 48);
+  const wantHmac = crypto.createHmac('sha256', localKey).update(localNonce).digest();
+  if (!crypto.timingSafeEqual(gotHmac, wantHmac)) {
+    throw new Error('tuya-local(v3.5): session key negotiation HMAC mismatch');
+  }
+  return remoteNonce;
+}
+
+/** Pure: message 3 (SESS_KEY_NEG_FINISH) — HMAC-SHA256(local_key, device_nonce), proving
+ *  back to the device that the client derived the same shared secret. Exported for tests. */
+export function buildSessionNegFinish(localKey: Bytes, remoteNonce: Bytes): Bytes {
+  return crypto.createHmac('sha256', localKey).update(remoteNonce).digest();
+}
+
+/** Pure: derive the AES-GCM session key, ported from tinytuya's
+ *  `_negotiate_session_key_generate_finalize` (version >= 3.5 branch): XOR the two 16-byte
+ *  nonces, AES-128-GCM-encrypt the result with the REAL (static) local_key using the first
+ *  12 bytes of the LOCAL nonce as the IV, and keep only the 16-byte ciphertext — the GCM
+ *  auth tag this produces is intentionally discarded (never sent or checked anywhere; GCM
+ *  is being reused here purely as a keyed PRF, not as a transport frame). Exported for
+ *  tests. */
+export function deriveSessionKey35(localKey: Bytes, localNonce: Bytes, remoteNonce: Bytes): Bytes {
+  const xored = Buffer.alloc(16);
+  for (let i = 0; i < 16; i++) xored[i] = localNonce[i] ^ remoteNonce[i];
+  const iv = localNonce.subarray(0, GCM_IV_LEN);
+  const cipher = crypto.createCipheriv('aes-128-gcm', localKey, iv, { authTagLength: GCM_TAG_LEN });
+  return Buffer.concat([cipher.update(xored), cipher.final()]);
+}
+
+/** Which internal client speaks a device's local protocol version — pure so the dispatch
+ *  itself is unit-testable without a socket. Only distinguishes between the two SUPPORTED
+ *  paths; capabilityBlockReason() is what actually gates a genuinely-unsupported version
+ *  out before this is ever consulted on the hot path. Exported for tests. */
+export function pickLocalTransport(version: string): 'tuyapi' | 'native-gcm' {
+  return version === '3.5' ? 'native-gcm' : 'tuyapi';
+}
+
+const TCP_PORT_V35 = 6668;
+
+/** A hand-rolled client for exactly the v3.5 (AES-GCM) subset this fleet needs: connect,
+ *  negotiate a session key, read status, send commands. One instance per device, pooled
+ *  below exactly like tuyapi's TuyaDevice is for 3.3/3.4 — including the single-in-flight-
+ *  request assumption the rest of this module already relies on (see the pool comment above
+ *  getConnection()). Never logs `localKey` or the derived session key; every error message
+ *  below is deliberately generic. */
+class TuyaGcm35Device {
+  private readonly lanIp: string;
+  private readonly localKey: Bytes;
+  private socket: net.Socket | null = null;
+  private sessionKey: Bytes | null = null;
+  private seqno = 1;
+  private recvBuf: Bytes = Buffer.alloc(0);
+  private pending: { resolve: (f: Gcm35Frame) => void; reject: (e: Error) => void } | null = null;
+  private dead = false;
+
+  constructor(lanIp: string, localKey: string) {
+    this.lanIp = lanIp;
+    this.localKey = Buffer.from(localKey, 'utf8');
+  }
+
+  isConnected(): boolean {
+    return !this.dead && this.socket !== null && this.sessionKey !== null;
+  }
+
+  disconnect(): void {
+    this.dead = true;
+    this.failPending(new Error('tuya-local(v3.5): disconnected'));
+    if (this.socket) {
+      try {
+        this.socket.destroy();
+      } catch {
+        /* already down */
+      }
+    }
+    this.socket = null;
+    this.sessionKey = null;
+    this.recvBuf = Buffer.alloc(0);
+  }
+
+  private failPending(err: Error): void {
+    const p = this.pending;
+    this.pending = null;
+    if (p) p.reject(err);
+  }
+
+  private nextSeqno(): number {
+    const s = this.seqno;
+    this.seqno += 1;
+    return s;
+  }
+
+  private onData(chunk: Bytes): void {
+    this.recvBuf = this.recvBuf.length ? Buffer.concat([this.recvBuf, chunk]) : chunk;
+    if (!this.pending) return; // nothing waiting yet — keep bytes buffered for the next awaitFrame()
+    let frame: Gcm35Frame | null;
+    try {
+      frame = parseGcm35Frame(this.recvBuf);
+    } catch (e) {
+      this.recvBuf = Buffer.alloc(0);
+      this.failPending(e instanceof Error ? e : new Error(String(e)));
+      return;
+    }
+    if (!frame) return; // need more bytes
+    this.recvBuf = this.recvBuf.subarray(frame.consumed);
+    const p = this.pending;
+    this.pending = null;
+    p.resolve(frame);
+  }
+
+  /** Write one frame. Never waits for a reply — see awaitFrame(). */
+  private send(cmd: number, plaintext: Bytes, key: Bytes): Promise<void> {
+    if (!this.socket) return Promise.reject(new Error('tuya-local(v3.5): not connected'));
+    const frame = packGcm35Frame(this.nextSeqno(), cmd, plaintext, key);
+    return new Promise((resolve, reject) => {
+      this.socket!.write(frame, (err) => (err ? reject(err) : resolve()));
+    });
+  }
+
+  /** Wait for the next inbound frame. v3.5 devices reply with their own
+   *  globally-incrementing seqno rather than echoing ours (mirrors tinytuya's
+   *  `_get_retcode` comment on why it skips the seqno check for >= 3.5), so this never
+   *  tries to match a specific request — it relies on the pool's single-in-flight-request
+   *  rule, same as tuyapi's connection is relied on above. */
+  private awaitFrame(): Promise<Gcm35Frame> {
+    if (this.dead) return Promise.reject(new Error('tuya-local(v3.5): connection closed'));
+    if (this.pending) return Promise.reject(new Error('tuya-local(v3.5): a request is already in flight'));
+    return new Promise((resolve, reject) => {
+      this.pending = { resolve, reject };
+      this.onData(Buffer.alloc(0)); // deliver immediately if a full frame is already buffered
+    });
+  }
+
+  async connect(): Promise<void> {
+    this.dead = false;
+    this.recvBuf = Buffer.alloc(0);
+    this.seqno = 1;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const sock = net.createConnection({ host: this.lanIp, port: TCP_PORT_V35 });
+        let settled = false;
+        sock.on('connect', () => {
+          this.socket = sock;
+          settled = true;
+          resolve();
+        });
+        sock.on('data', (chunk: Bytes) => this.onData(chunk));
+        sock.on('error', (err: Error) => {
+          this.dead = true;
+          this.failPending(err);
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
+        sock.on('close', () => {
+          this.dead = true;
+          this.failPending(new Error('tuya-local(v3.5): connection closed'));
+        });
+      });
+
+      // Session key negotiation (messages 0x03/0x04/0x05) — see the module banner above.
+      const localNonce = crypto.randomBytes(16);
+      await this.send(CMD_SESS_KEY_NEG_START, buildSessionNegStart(localNonce), this.localKey);
+      const respFrame = await this.awaitFrame();
+      if (respFrame.cmd !== CMD_SESS_KEY_NEG_RESP) {
+        throw new Error(`tuya-local(v3.5): unexpected reply (cmd ${respFrame.cmd}) during session key negotiation`);
+      }
+      const plain = decryptGcm35Frame(this.localKey, respFrame);
+      const remoteNonce = verifySessionNegResp(stripV35Retcode(plain), this.localKey, localNonce);
+      // Finish is fire-and-forget — tinytuya does not wait for (or expect) a reply to it.
+      await this.send(CMD_SESS_KEY_NEG_FINISH, buildSessionNegFinish(this.localKey, remoteNonce), this.localKey);
+      this.sessionKey = deriveSessionKey35(this.localKey, localNonce, remoteNonce);
+    } catch (e) {
+      this.disconnect();
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+  }
+
+  /** Send one JSON command and return its decoded response body, transparently skipping any
+   *  empty ack-only frame(s) the device sends before the real answer (mirrors tinytuya's
+   *  null-payload retry in `_send_receive`). `allowNonJson` is for CONTROL_NEW, whose
+   *  response body this transport does not need to parse — a successfully decrypted and
+   *  authenticated frame already proves the device received the command. */
+  private async requestJson(cmd: number, plaintext: Bytes, allowNonJson: boolean): Promise<unknown> {
+    if (!this.sessionKey) throw new Error('tuya-local(v3.5): not connected');
+    const key = this.sessionKey;
+    await this.send(cmd, plaintext, key);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const frame = await this.awaitFrame();
+      const plain = decryptGcm35Frame(key, frame);
+      const stripped = stripV35Retcode(plain);
+      let body: unknown;
+      try {
+        body = decodeGcm35Json(stripped);
+      } catch (e) {
+        if (allowNonJson) return null;
+        throw e instanceof Error ? e : new Error(String(e));
+      }
+      if (body === null) continue; // ack-only frame — keep waiting for the real one
+      return body;
+    }
+    throw new Error('tuya-local(v3.5): no data response after ack frame(s)');
+  }
+
+  /** Raw numeric-keyed dps, same shape readStatus() returns for the tuyapi path. */
+  async getStatus(): Promise<Record<string, unknown>> {
+    const body = await this.requestJson(CMD_DP_QUERY_NEW, Buffer.from('{}', 'utf8'), false);
+    if (!body || typeof body !== 'object') {
+      throw new Error('tuya-local(v3.5): empty or non-JSON status response');
+    }
+    const rec = body as Record<string, unknown>;
+    const nested = rec.data as Record<string, unknown> | undefined;
+    const dps = (rec.dps as Record<string, unknown> | undefined) ?? nested?.dps;
+    return (dps as Record<string, unknown> | undefined) ?? {};
+  }
+
+  /** `data` is already-translated raw numeric-keyed dps (same shape sendCommands() builds
+   *  for the tuyapi path via translateCommands()). */
+  async setDps(data: Record<string, unknown>): Promise<void> {
+    const envelope = { protocol: 5, t: Math.floor(Date.now() / 1000), data: { dps: data } };
+    const plaintext = Buffer.concat([V35_VERSION_HEADER, Buffer.from(JSON.stringify(envelope), 'utf8')]);
+    await this.requestJson(CMD_CONTROL_NEW, plaintext, true);
+  }
+}
+
+const poolV35 = new Map<string, TuyaGcm35Device>();
+
+/** Mirrors getConnection() above (including the synchronous pool-slot claim — see that
+ *  function's comment for why the ordering matters) for the native v3.5 client. */
+async function getConnectionV35(entry: LocalDeviceEntry): Promise<TuyaGcm35Device> {
+  let sess = poolV35.get(entry.id);
+  if (!sess) {
+    sess = new TuyaGcm35Device(entry.lanIp, entry.localKey);
+    poolV35.set(entry.id, sess);
+  }
+  if (!sess.isConnected()) {
+    await withTimeout(sess.connect(), CONNECT_TIMEOUT_MS, 'tuya-local: connect timeout');
+  }
+  return sess;
+}
+
 // ---- Public transport: read / write ---------------------------------------------------
 
 /** Send DP commands to a device over the LAN. `dpForCode` maps cloud codes (e.g.
@@ -362,15 +790,20 @@ export async function sendCommands(
   const data = translateCommands(commands, dpForCode);
 
   try {
-    const dev = await getConnection(entry);
-    // tuyapi's own .d.ts types `data` as a narrower `Object` (string|number|boolean|...)
-    // than our `value: unknown` command shape — cast at this 3rd-party boundary only;
-    // translateCommands() itself stays precisely typed.
-    await withTimeout(
-      dev.set({ multiple: true, data: data as Record<string, string | number | boolean> }),
-      RESPONSE_TIMEOUT_MS,
-      'tuya-local: set timeout',
-    );
+    if (pickLocalTransport(entry.version) === 'native-gcm') {
+      const sess = await getConnectionV35(entry);
+      await withTimeout(sess.setDps(data), RESPONSE_TIMEOUT_MS, 'tuya-local: set timeout');
+    } else {
+      const dev = await getConnection(entry);
+      // tuyapi's own .d.ts types `data` as a narrower `Object` (string|number|boolean|...)
+      // than our `value: unknown` command shape — cast at this 3rd-party boundary only;
+      // translateCommands() itself stays precisely typed.
+      await withTimeout(
+        dev.set({ multiple: true, data: data as Record<string, string | number | boolean> }),
+        RESPONSE_TIMEOUT_MS,
+        'tuya-local: set timeout',
+      );
+    }
     noteSuccess(id);
   } catch (e) {
     noteFailure(id, e);
@@ -388,13 +821,19 @@ export async function readStatus(id: string): Promise<Record<string, unknown>> {
   if (reason || !entry) throw new Error(`tuya-local: ${id} — ${reason ?? 'unknown device'}`);
 
   try {
-    const dev = await getConnection(entry);
-    const data = await withTimeout(dev.get({ schema: true }), RESPONSE_TIMEOUT_MS, 'tuya-local: read timeout');
+    let dps: Record<string, unknown>;
+    if (pickLocalTransport(entry.version) === 'native-gcm') {
+      const sess = await getConnectionV35(entry);
+      dps = await withTimeout(sess.getStatus(), RESPONSE_TIMEOUT_MS, 'tuya-local: read timeout');
+    } else {
+      const dev = await getConnection(entry);
+      const data = await withTimeout(dev.get({ schema: true }), RESPONSE_TIMEOUT_MS, 'tuya-local: read timeout');
+      dps =
+        data && typeof data === 'object' && 'dps' in (data as object)
+          ? (((data as { dps?: unknown }).dps as Record<string, unknown> | undefined) ?? {})
+          : {};
+    }
     noteSuccess(id);
-    const dps =
-      data && typeof data === 'object' && 'dps' in (data as object)
-        ? (((data as { dps?: unknown }).dps as Record<string, unknown> | undefined) ?? {})
-        : {};
     return dps;
   } catch (e) {
     noteFailure(id, e);
@@ -623,6 +1062,9 @@ export interface LocalDiagnosticsDevice {
   reason: LocalBlockReason | null;
   lanIp: string;
   version: string;
+  /** Which internal client handles this device locally — null when it is not locally
+   *  capable at all (see `reason`); 'tuyapi' for 3.1-3.4, 'native-gcm' for 3.5. */
+  transport: 'tuyapi' | 'native-gcm' | null;
   lastOk: string | null;
   failures: number;
 }
@@ -645,13 +1087,15 @@ export function getDiagnostics(): LocalDiagnostics {
   const devices: LocalDiagnosticsDevice[] = [...registry.values()]
     .map((d) => {
       const h = health.get(d.id);
+      const capable = computeLocalCapable(d);
       return {
         id: d.id,
         name: d.name,
-        localCapable: computeLocalCapable(d),
+        localCapable: capable,
         reason: capabilityBlockReason(d),
         lanIp: d.lanIp,
         version: d.version,
+        transport: capable ? pickLocalTransport(d.version) : null,
         lastOk: h?.lastOkAt ? new Date(h.lastOkAt).toISOString() : null,
         failures: h?.consecutiveFailures ?? 0,
       };
