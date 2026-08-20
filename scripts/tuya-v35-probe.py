@@ -60,6 +60,23 @@ for d in candidates:
     else:
         print(f"  {name:<34} {d['lanIp']:<16} --    no version answered")
 
+# Persist what we learned. A device located by MAC never broadcast, so discovery
+# could not record its protocol version - and without a version the transport
+# dispatcher falls back to tuyapi, which cannot speak 3.5, so the read times out.
+# Writing the probed version back is what makes these devices routable at all.
+written = 0
+for d in devices:
+    ver = results.get(d["id"])
+    if ver and str(ver) != d.get("version"):
+        d["version"] = str(ver)
+        written += 1
+if written:
+    cache["devices"] = devices
+    with open(CACHE, "w", encoding="utf-8") as fh:
+        json.dump(cache, fh, indent=2)
+    print("")
+    print("  wrote protocol version for " + str(written) + " device(s) back to the cache")
+
 print("=" * 76)
 by_ver = {}
 for dev_id, ver in results.items():
