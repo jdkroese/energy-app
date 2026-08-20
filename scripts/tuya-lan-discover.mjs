@@ -69,6 +69,15 @@ function pad(s, n) {
  * plaintext read first, then both header offsets for the encrypted case.
  */
 function parseDiscovery(buf) {
+  // v3.5 frames carry magic 0x00006699 and encrypt with AES-GCM, not the ECB we
+  // handle below. Decoding them needs a different cipher AND a 3.5-capable local
+  // client (tuyapi has neither), so flag rather than decode: knowing a device is
+  // v3.5 is what stops it being mistaken for "powered off" — which is exactly the
+  // trap the CB car charger and CB - up WCD's breakers fell into.
+  if (buf.length >= 4 && buf.readUInt32BE(0) === 0x00006699) {
+    return { __v35: true, version: '3.5' };
+  }
+
   // (a) Plaintext JSON somewhere in the frame (older v3.1 broadcasts).
   const open = buf.indexOf(0x7b); // '{'
   const close = buf.lastIndexOf(0x7d); // '}'
@@ -101,6 +110,7 @@ function parseDiscovery(buf) {
 function listen(seconds) {
   return new Promise((resolve) => {
     const found = new Map(); // id -> { lanIp, version, active, encrypt, productKey, hits }
+    const v35Hosts = new Set(); // ips heard speaking v3.5 (AES-GCM, unsupported)
     const sockets = [];
 
     for (const port of [6666, 6667]) {
@@ -113,8 +123,17 @@ function listen(seconds) {
           /* already closed */
         }
       });
-      sock.on('message', (msg) => {
+      sock.on('message', (msg, rinfo) => {
         const info = parseDiscovery(msg);
+        // A v3.5 frame carries no decodable id (GCM), but its source address is
+        // still worth recording — the ip is how we tie it back to a known device.
+        if (info?.__v35) {
+          if (!v35Hosts.has(rinfo.address)) {
+            v35Hosts.add(rinfo.address);
+            console.log(`  ! ${pad(rinfo.address, 16)} speaks v3.5 (AES-GCM) — not locally controllable`);
+          }
+          return;
+        }
         const id = info?.gwId || info?.devId;
         if (!info || !id) return;
         const prev = found.get(id);
@@ -150,7 +169,7 @@ function listen(seconds) {
           /* already closed */
         }
       }
-      resolve(found);
+      resolve({ found, v35Hosts });
     }, seconds * 1000).unref?.();
   });
 }
@@ -330,10 +349,13 @@ async function main() {
   console.log(`  ${devices.length} harvested device(s); ${devices.filter((d) => d.localKey).length} with a local_key.`);
   console.log(`\nListening on UDP 6666 + 6667 for ${LISTEN_SEC}s (receive-only)…\n`);
 
-  const found = await listen(LISTEN_SEC);
+  const { found, v35Hosts } = await listen(LISTEN_SEC);
 
   console.log(`\n${'='.repeat(72)}\nDISCOVERY\n${'='.repeat(72)}`);
   console.log(`  devices heard on the LAN : ${found.size}`);
+  if (v35Hosts.size) {
+    console.log(`  v3.5 hosts (unsupported) : ${v35Hosts.size} → ${[...v35Hosts].join(', ')}`);
+  }
 
   // ---- 2) Merge back into the cache ---------------------------------------
   let enriched = 0;
@@ -420,8 +442,25 @@ async function main() {
     }
   }
 
+  // Tag anything sitting at a v3.5 address so it is reported as unsupported
+  // rather than probed — otherwise each one burns two timeouts and is written
+  // off as offline, which is precisely how the breakers were misdiagnosed.
+  for (const d of devices) {
+    if (d.lanIp && v35Hosts.has(d.lanIp)) d.version = '3.5';
+  }
+
   // ---- 3) Probe ------------------------------------------------------------
-  const probeable = devices.filter((d) => d.localKey && d.lanIp && !d.sub);
+  const SUPPORTED = ['3.1', '3.2', '3.3', '3.4'];
+  const unsupported = devices.filter((d) => d.localKey && d.lanIp && !d.sub && d.version === '3.5');
+  const probeable = devices.filter(
+    (d) => d.localKey && d.lanIp && !d.sub && (!d.version || SUPPORTED.includes(d.version)),
+  );
+  if (unsupported.length) {
+    console.log(`\n-- v3.5, not locally controllable by tuyapi (${unsupported.length}) --`);
+    for (const d of unsupported) {
+      console.log(`   ${pad(d.name || d.id, 34)} ${pad(d.category, 8)} ${d.lanIp}`);
+    }
+  }
   console.log(`\n${'='.repeat(72)}\nLOCAL READ PROBE (read-only)\n${'='.repeat(72)}`);
   if (!TuyAPI) {
     console.log('  SKIPPED — tuyapi not on NODE_PATH. Discovery + merge completed above.');

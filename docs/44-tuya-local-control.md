@@ -6,6 +6,46 @@ full datapoint reads over the LAN with zero cloud calls. Phase 2 (local-first co
 flag-gated, cloud fallback) is in build. See "Phase 1 results" below for what actually
 happened — two findings materially change the design and supersede assumptions above.
 
+## Phase 1 results (2026-08-20) — measured, not assumed
+
+Cloud access was restored with a **new developer account** (the free base-pack block is
+account-level, so a fresh account gets its own ~54k-call trial pack; the existing Smart Life
+account was linked to it, so **device ids were preserved** and app config reattached).
+
+| Measure | Result |
+|---|---|
+| `local_key` harvested | **43 / 43** (8 cloud calls) |
+| Devices with key + LAN ip | **36 / 43** |
+| Locally readable (read-only probe) | **24** |
+| Gateway sub-devices (cloud-only by design) | 2 |
+
+### Three findings that change the design
+
+1. **The cloud's `ip` field is the PUBLIC/WAN address, not the LAN address.** Ours came back
+   as five different historical ISP addresses. It is useless for local control. The LAN ip
+   must come from **UDP discovery** (6666/6667), whose broadcast is encrypted with a
+   **well-known STATIC key** (`md5("yGAdlopoPVldABfn")`), not the per-device `local_key` —
+   so it costs nothing and self-heals on DHCP drift. Keep `ip` and `lanIp` as separate fields.
+
+2. **UDP discovery under-reports on a mesh network.** A subnet scan found 38 hosts with 6668
+   open while only 28 had ever broadcast to us — roughly ten devices are AP-isolated
+   (broadcast swallowed, TCP fine). "Silent on UDP" ≠ "powered off". Locate them by **MAC**:
+   the cloud supplies it via `factory-infos`, and matching against the ARP table costs no
+   connections. Do NOT identify by guessing `local_key`s against open ports — a Tuya device
+   accepts only **one local session at a time**, so mass probing locks devices out and
+   produces false failures (it identified 0/15 and broke reads that had worked minutes before).
+
+3. **⚠ The fleet contains protocol v3.5, and `tuyapi` cannot speak it.** Confirmed live: frame
+   magic `0x00006699` (v3.5, AES-GCM) from `192.168.1.183` and `192.168.1.40` — the
+   **CB car charger** and **CB - up WCD's** breakers — versus `0x000055AA` (v3.1–3.4, AES-ECB)
+   from the other 28 hosts. Because v3.5 encrypts discovery under a different magic, an
+   ECB-only decoder fails silently and the device merely looks "silent"; it then also times
+   out against tuyapi on every version. Phase 2 therefore treats **unsupported-version as a
+   first-class, non-retrying state** that routes straight to cloud, rather than eating an
+   8s timeout per command. Adding real 3.5 support (AES-GCM + session negotiation, as
+   `tinytuya` implements) is a follow-up — it matters because the breakers are among the
+   most valuable devices to control.
+
 ## Problem — the cloud free tier is a dead end for polling
 
 Our Tuya integration is 100% cloud today: every status read and every command signs an HTTP call to
