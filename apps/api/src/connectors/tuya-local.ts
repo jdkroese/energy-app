@@ -31,6 +31,15 @@
 // devices are local-reachable over TCP but never answer the UDP broadcast (AP isolation),
 // so a `lanIp` loaded from the file (persisted by a past discovery run) is just as valid a
 // source as a live broadcast, and live discovery only ever ADDS to what was loaded.
+//
+// Protocol version support (coordinator-verified 2026-08-20 via a live UDP capture): this
+// fleet is NOT uniformly 3.3/3.4 — two breakers speak v3.5 (AES-GCM framing, magic
+// 0x00006699), which tuyapi@7 cannot decode at all. An unsupported version is a FIRST-CLASS,
+// non-retrying "no" — never attempted, never counted as a health failure, never allowed to
+// eat a connect/response timeout on the hot path — distinct from "device offline" or
+// "no LAN ip yet". See SUPPORTED_LOCAL_VERSIONS, capabilityBlockReason(), and
+// isV35DiscoveryFrame() below. A version that silently fails to parse used to look
+// indistinguishable from "device asleep/unplugged"; it no longer does.
 
 import crypto from 'node:crypto';
 import dgram from 'node:dgram';
@@ -169,10 +178,35 @@ function noteFailure(id: string, err: unknown): void {
 
 // ---- Capability / preflight -----------------------------------------------------------
 
+/** Local protocol versions this transport can actually speak. tuyapi@7 handles 3.1-3.4;
+ *  v3.5 encrypts end-to-end with AES-GCM, which tuyapi cannot decode at all. Kept as an
+ *  explicit allowlist (not "whatever this fleet mostly is") so a v3.5 (or any future/older
+ *  unsupported) device fails CLOSED — routed straight to cloud, never retried on the hot
+ *  path — instead of being attempted and burning a connect/response timeout every time.
+ *  Extending local support to a new version later is a one-line change here PLUS a
+ *  transport that can actually speak it — adding the version alone would just make this
+ *  module attempt (and fail) against devices it still can't talk to. */
+const SUPPORTED_LOCAL_VERSIONS = new Set(['3.3', '3.4']);
+
+/** Why (if at all) a registry entry is not CAPABLE of local control, independent of
+ *  current health/cooldown — that's a separate, transient axis (see computeCanAttempt).
+ *  null means fully capable. An entry with no version recorded yet is NOT treated as
+ *  unsupported (falls through to the '3.3' default at connect time) — only a version we
+ *  positively know is unsupported blocks here. */
+export type LocalBlockReason = 'gateway-sub-device' | 'no-key' | 'no-lan-ip' | 'unsupported-version';
+
+export function capabilityBlockReason(entry: LocalDeviceEntry): LocalBlockReason | null {
+  if (entry.sub) return 'gateway-sub-device';
+  if (!entry.localKey || entry.localKey.length !== 16) return 'no-key';
+  if (!entry.lanIp) return 'no-lan-ip';
+  if (entry.version && !SUPPORTED_LOCAL_VERSIONS.has(entry.version)) return 'unsupported-version';
+  return null;
+}
+
 /** Pure: does this registry entry describe a device that is, IN PRINCIPLE, locally
- *  reachable (key + LAN ip known, not a gateway sub-device)? Exported for tests. */
+ *  reachable? Exported for tests. */
 export function computeLocalCapable(entry: LocalDeviceEntry | undefined): boolean {
-  return !!entry && !entry.sub && !!entry.localKey && entry.localKey.length === 16 && !!entry.lanIp;
+  return !!entry && capabilityBlockReason(entry) === null;
 }
 
 /** Whether device `id` is locally reachable in principle (static — ignores current
@@ -180,6 +214,13 @@ export function computeLocalCapable(entry: LocalDeviceEntry | undefined): boolea
 export function isLocalCapable(id: string): boolean {
   return computeLocalCapable(registry.get(id));
 }
+
+const BLOCK_REASON_TEXT: Record<LocalBlockReason, string> = {
+  'gateway-sub-device': 'gateway sub-device — never LAN-reachable',
+  'no-key': 'no (valid) local_key',
+  'no-lan-ip': 'no LAN ip discovered yet',
+  'unsupported-version': 'unsupported protocol version',
+};
 
 /**
  * Pure preflight check shared by sendCommands/readStatus: why (if at all) a local attempt
@@ -193,9 +234,11 @@ export function localAttemptBlockedReason(
   now = Date.now(),
 ): string | null {
   if (!entry) return 'unknown device';
-  if (entry.sub) return 'gateway sub-device — never LAN-reachable';
-  if (!entry.localKey || entry.localKey.length !== 16) return 'no (valid) local_key';
-  if (!entry.lanIp) return 'no LAN ip discovered yet';
+  const cap = capabilityBlockReason(entry);
+  if (cap === 'unsupported-version') {
+    return `unsupported protocol version "${entry.version}" (this transport speaks ${[...SUPPORTED_LOCAL_VERSIONS].join('/')})`;
+  }
+  if (cap) return BLOCK_REASON_TEXT[cap];
   if (!computeCanAttempt(h, now)) return 'in cooldown after repeated local failures';
   return null;
 }
@@ -237,6 +280,16 @@ export function translateStatus(
 }
 
 // ---- Connection pool ------------------------------------------------------------------
+// A Tuya device accepts only ONE local session at a time — a second concurrent connection
+// attempt doesn't queue, it makes BOTH look like failures (coordinator field report,
+// 2026-08-20: probing one device with several held keys at once produced flaky timeouts
+// that had nothing to do with the device being unreachable). One pooled TuyaDevice instance
+// per id, reused for every read/write, is what prevents that: getConnection() below does
+// `pool.get` -> (miss) `new TuyaDevice` + `pool.set` -> `await connect()` with NO await in
+// between the get and the set, so two calls that both find the pool empty can't each create
+// a competing connection — whichever runs first synchronously claims the pool slot before
+// either yields, and the second reuses that SAME instance (and tuyapi's own `connect()`
+// coalesces a concurrent call into the first one's in-flight promise on top of that).
 
 const pool = new Map<string, TuyaDevice>();
 const CONNECT_TIMEOUT_MS = 7_000;
@@ -428,6 +481,45 @@ function onDiscovered(info: DiscoveryInfo): void {
   schedulePersist();
 }
 
+// ---- v3.5 (AES-GCM) sighting detection ------------------------------------------------
+// v3.5 discovery broadcasts are encrypted end-to-end and start with a different frame
+// magic than the v3.1-3.4 frames parseDiscoveryFrame() handles — 0x00006699 vs the legacy
+// 0x000055AA. Without GCM support we cannot decrypt the body to learn the device id, but
+// recognizing the magic still turns "this broadcast silently failed to parse" (which used
+// to be indistinguishable from "no device there at all") into a positive, visible signal:
+// something IS alive at this source ip, it's just speaking a version this transport can't
+// use yet. Coordinator-verified 2026-08-20 via a live UDP capture.
+
+const V35_MAGIC = 0x00006699;
+
+/** Pure: does this buffer start with the v3.5 discovery frame magic? Exported for tests. */
+export function isV35DiscoveryFrame(buf: Buffer): boolean {
+  return buf.length >= 4 && buf.readUInt32BE(0) === V35_MAGIC;
+}
+
+/** Source ips heard broadcasting a v3.5-shaped frame, and when we last heard one. */
+const v35SightingsByIp = new Map<string, number>();
+
+/** Pure: which registry entries (if any) should be tagged version='3.5' because their
+ *  lanIp matches a source just seen broadcasting a v3.5-shaped frame. We can't decrypt the
+ *  payload to learn the id ourselves, but if some entry's lanIp ALREADY matches this
+ *  broadcast's source (e.g. identified by the ops harvest workflow's MAC-based TCP sweep —
+ *  see the ops(tuya) commits on this branch), correlating by ip upgrades isLocalCapable()
+ *  from "no LAN ip discovered yet" to the more useful, permanent "unsupported-version".
+ *  Exported for tests. */
+export function correlateV35Sighting(entries: LocalDeviceEntry[], ip: string): LocalDeviceEntry[] {
+  return entries.filter((e) => e.lanIp === ip && e.version !== '3.5').map((e) => ({ ...e, version: '3.5' }));
+}
+
+function onV35Sighting(ip: string): void {
+  if (!ip) return;
+  v35SightingsByIp.set(ip, Date.now());
+  const updated = correlateV35Sighting([...registry.values()], ip);
+  if (!updated.length) return;
+  for (const e of updated) registry.set(e.id, e);
+  schedulePersist();
+}
+
 /** Best-effort, debounced write-back of the live registry to CACHE_FILE, so a restart
  *  starts warm instead of dark until the next broadcast. Never throws — DATA_DIR may not
  *  be writable from this process even when the ops harvest workflow could write it (it
@@ -480,7 +572,11 @@ export function startDiscoveryListener(): void {
         /* already closed */
       }
     });
-    sock.on('message', (msg) => {
+    sock.on('message', (msg, rinfo) => {
+      if (isV35DiscoveryFrame(msg)) {
+        onV35Sighting(rinfo.address);
+        return;
+      }
       const info = parseDiscoveryFrame(msg);
       if (info) onDiscovered(info);
     });
@@ -521,6 +617,10 @@ export interface LocalDiagnosticsDevice {
   id: string;
   name: string;
   localCapable: boolean;
+  /** Why it's not capable (null when it is) — e.g. 'unsupported-version' for the fleet's
+   *  v3.5 breakers, so it's obvious AT A GLANCE why a device is still cloud-only instead of
+   *  it looking like an unexplained "silent"/dead device. */
+  reason: LocalBlockReason | null;
   lanIp: string;
   version: string;
   lastOk: string | null;
@@ -530,7 +630,11 @@ export interface LocalDiagnosticsDevice {
 export interface LocalDiagnostics {
   enabled: boolean;
   loadedAt: string | null;
-  totals: { devices: number; capable: number; healthy: number };
+  totals: { devices: number; capable: number; healthy: number; unsupportedVersion: number };
+  /** Source ips heard broadcasting a v3.5-shaped (AES-GCM) discovery frame that don't
+   *  (yet) match any known device's lanIp — i.e. "something is alive here" even though the
+   *  payload can't be decrypted to learn which device it is. */
+  v35SightingsUncorrelated: string[];
   devices: LocalDiagnosticsDevice[];
 }
 
@@ -545,6 +649,7 @@ export function getDiagnostics(): LocalDiagnostics {
         id: d.id,
         name: d.name,
         localCapable: computeLocalCapable(d),
+        reason: capabilityBlockReason(d),
         lanIp: d.lanIp,
         version: d.version,
         lastOk: h?.lastOkAt ? new Date(h.lastOkAt).toISOString() : null,
@@ -557,11 +662,15 @@ export function getDiagnostics(): LocalDiagnostics {
   const healthy = [...registry.values()].filter(
     (d) => computeLocalCapable(d) && computeCanAttempt(health.get(d.id), now),
   ).length;
+  const unsupportedVersion = devices.filter((d) => d.reason === 'unsupported-version').length;
+  const knownLanIps = new Set([...registry.values()].map((d) => d.lanIp).filter(Boolean));
+  const v35SightingsUncorrelated = [...v35SightingsByIp.keys()].filter((ip) => !knownLanIps.has(ip));
 
   return {
     enabled: isLocalEnabled(),
     loadedAt: registryLoadedAt ? new Date(registryLoadedAt).toISOString() : null,
-    totals: { devices: devices.length, capable, healthy },
+    totals: { devices: devices.length, capable, healthy, unsupportedVersion },
+    v35SightingsUncorrelated,
     devices,
   };
 }

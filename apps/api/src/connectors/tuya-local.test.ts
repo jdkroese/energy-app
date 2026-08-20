@@ -65,6 +65,18 @@ const FIXTURE_DEVICES = [
     online: true,
     productId: 'p3',
   },
+  {
+    id: 'bf-v35-1',
+    name: 'CB Test Breaker',
+    category: 'tdq',
+    ip: '203.0.113.11',
+    localKey: 'abcdef0123456789',
+    lanIp: '192.168.1.52',
+    version: '3.5', // AES-GCM — tuyapi cannot speak this; must fail closed to cloud
+    sub: false,
+    online: true,
+    productId: 'p4',
+  },
 ];
 fs.writeFileSync(
   path.join(scratchDir, 'tuya-local.json'),
@@ -181,7 +193,7 @@ test('loadRegistryFromFile: entries without an id are skipped; others get field 
 
 test('loadRegistryFromFile: the real fixture used to boot the module round-trips cleanly', () => {
   const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
-  assert.equal(entries.length, 3);
+  assert.equal(entries.length, FIXTURE_DEVICES.length);
   const sw = entries.find((e) => e.id === 'bf-switch-1');
   assert.ok(sw);
   assert.equal(sw.lanIp, '192.168.1.50');
@@ -382,12 +394,74 @@ test('sendCommands: no commands to send rejects', async () => {
   await assert.rejects(() => tuyaLocal.sendCommands('bf-switch-1', []), /no commands/);
 });
 
+test('sendCommands: an unsupported protocol version (v3.5) rejects — fails closed, never attempted', async () => {
+  await assert.rejects(
+    () => tuyaLocal.sendCommands('bf-v35-1', [{ code: 'switch_1', value: true }]),
+    /unsupported protocol version "3\.5"/,
+  );
+});
+
+test('readStatus: an unsupported protocol version (v3.5) rejects', async () => {
+  await assert.rejects(() => tuyaLocal.readStatus('bf-v35-1'), /unsupported protocol version/);
+});
+
+// ---- Unsupported protocol version (v3.5) is a first-class, non-retrying reason ----------
+
+test('capabilityBlockReason: a v3.5 device is blocked as "unsupported-version", not treated as offline/missing', () => {
+  const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
+  const v35 = entries.find((e) => e.id === 'bf-v35-1')!;
+  assert.equal(v35.localKey.length, 16, 'has a valid key');
+  assert.ok(v35.lanIp, 'has a LAN ip');
+  assert.equal(tuyaLocal.capabilityBlockReason(v35), 'unsupported-version');
+  assert.equal(tuyaLocal.computeLocalCapable(v35), false);
+});
+
+test('capabilityBlockReason: an entry with NO version yet recorded is not treated as unsupported (falls back to 3.3)', () => {
+  const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
+  const sw = { ...entries.find((e) => e.id === 'bf-switch-1')!, version: '' };
+  assert.equal(tuyaLocal.capabilityBlockReason(sw), null);
+});
+
+test('isV35DiscoveryFrame: recognizes the v3.5 magic (0x00006699) and rejects everything else', () => {
+  const v35 = Buffer.alloc(24);
+  v35.writeUInt32BE(0x00006699, 0);
+  assert.equal(tuyaLocal.isV35DiscoveryFrame(v35), true);
+
+  const legacy = Buffer.alloc(24);
+  legacy.writeUInt32BE(0x000055aa, 0);
+  assert.equal(tuyaLocal.isV35DiscoveryFrame(legacy), false);
+
+  assert.equal(tuyaLocal.isV35DiscoveryFrame(Buffer.alloc(2)), false, 'too short to hold a magic — never throws');
+});
+
+test('correlateV35Sighting: tags the matching-lanIp entry as v3.5, leaves others untouched', () => {
+  const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
+  const sw = entries.find((e) => e.id === 'bf-switch-1')!; // version '3.3', lanIp 192.168.1.50
+  const updated = tuyaLocal.correlateV35Sighting(entries, sw.lanIp);
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].id, 'bf-switch-1');
+  assert.equal(updated[0].version, '3.5');
+  assert.equal(sw.version, '3.3', 'the input entry is never mutated');
+});
+
+test('correlateV35Sighting: an ip matching no known device correlates to nothing', () => {
+  const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
+  assert.deepEqual(tuyaLocal.correlateV35Sighting(entries, '192.168.1.250'), []);
+});
+
+test('correlateV35Sighting: an entry already known as v3.5 is not re-flagged (idempotent)', () => {
+  const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
+  const v35 = entries.find((e) => e.id === 'bf-v35-1')!;
+  assert.deepEqual(tuyaLocal.correlateV35Sighting(entries, v35.lanIp), []);
+});
+
 // ---- Diagnostics (never exposes local_key) ---------------------------------------------
 
 test('getDiagnostics: reports totals + per-device capability without ever including local_key', () => {
   const diag = tuyaLocal.getDiagnostics();
-  assert.equal(diag.totals.devices, 3);
-  assert.equal(diag.totals.capable, 1, 'only bf-switch-1 has key+ip and is not a sub-device');
+  assert.equal(diag.totals.devices, FIXTURE_DEVICES.length);
+  assert.equal(diag.totals.capable, 1, 'only bf-switch-1 has key+ip, is not a sub-device, and is a supported version');
+  assert.equal(diag.totals.unsupportedVersion, 1, 'bf-v35-1 is counted separately from "capable"');
 
   const json = JSON.stringify(diag);
   assert.doesNotMatch(json, /abcdef0123456789/, 'the local_key value must never appear in diagnostics output');
@@ -396,11 +470,30 @@ test('getDiagnostics: reports totals + per-device capability without ever includ
   const sw = diag.devices.find((d) => d.id === 'bf-switch-1');
   assert.ok(sw);
   assert.equal(sw.localCapable, true);
+  assert.equal(sw.reason, null);
   assert.equal(sw.lanIp, '192.168.1.50');
 
   const sub = diag.devices.find((d) => d.id === 'bf-sub-1');
   assert.ok(sub);
   assert.equal(sub.localCapable, false);
+  assert.equal(sub.reason, 'gateway-sub-device');
+
+  const nokey = diag.devices.find((d) => d.id === 'bf-nokey-1');
+  assert.ok(nokey);
+  assert.equal(nokey.reason, 'no-key');
+
+  const v35 = diag.devices.find((d) => d.id === 'bf-v35-1');
+  assert.ok(v35);
+  assert.equal(v35.localCapable, false);
+  assert.equal(v35.reason, 'unsupported-version', 'a v3.5 device reads as a distinct, explicit reason — not just "not capable"');
+  assert.equal(v35.version, '3.5');
+});
+
+test('getDiagnostics: v35SightingsUncorrelated omits ips that already match a known device', () => {
+  // No live sightings were fed in during this test run (no real UDP), so the list is empty
+  // — this just proves the field exists and is well-formed, not a false positive.
+  const diag = tuyaLocal.getDiagnostics();
+  assert.deepEqual(diag.v35SightingsUncorrelated, []);
 });
 
 test('isLocalEnabled: default (no TUYA_LOCAL_ENABLED env) is OFF', () => {
