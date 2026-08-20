@@ -955,7 +955,18 @@ function onV35Sighting(ip: string): void {
   v35SightingsByIp.set(ip, Date.now());
   const updated = correlateV35Sighting([...registry.values()], ip);
   if (!updated.length) return;
-  for (const e of updated) registry.set(e.id, e);
+  for (const e of updated) {
+    registry.set(e.id, e);
+    // Mirrors onDiscovered() above: the version just changed (now '3.5', so
+    // pickLocalTransport() routes it to the native client instead of tuyapi), so any
+    // pooled connection from BEFORE this correlation belongs to the wrong transport and
+    // must not be reused. Before this transport existed evicting here was optional
+    // (nothing could ever succeed against a v3.5 device either way); now it matters —
+    // without it, a device that had already accumulated tuyapi failures pre-correlation
+    // would sit out its cooldown before ever getting a first real attempt on the path
+    // that can actually reach it.
+    evict(e.id);
+  }
   schedulePersist();
 }
 
