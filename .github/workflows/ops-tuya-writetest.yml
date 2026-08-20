@@ -1,0 +1,44 @@
+name: Ops - Tuya Local Write Test
+
+# Proves the LOCAL WRITE path against real hardware without actuating anything.
+#
+# Reads and the v3.5 crypto are already proven (live tinytuya probe + 544 unit
+# tests), but the CONTROL_NEW write envelope was ported by hand-tracing tinytuya's
+# Python and has never touched a device. This exercises it by writing a datapoint
+# back with the value it ALREADY HAS: a real round trip, no observable change.
+#
+# Circuit breakers ('dlq') are refused by the script outright — any lamp answers
+# the same question without de-energising a circuit.
+#
+# Requires an explicit device id, so it can never run by accident on a push.
+on:
+  workflow_dispatch:
+    inputs:
+      device_id:
+        description: 'Device id (bf...) to echo-write. Must NOT be a breaker.'
+        required: true
+
+jobs:
+  write-test:
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 10
+    env:
+      DATA_DIR: /Users/joris/sites/energy/.data
+      # The transport is flag-gated; this standalone process opts in for itself
+      # only. It does not touch the running API's configuration.
+      TUYA_LOCAL_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install workspace deps (tsx + tuyapi)
+        run: pnpm install --frozen-lockfile
+
+      - name: Echo-write one datapoint (no observable change)
+        run: |
+          set -euo pipefail
+          node --import tsx scripts/tuya-local-writetest.mjs "${{ github.event.inputs.device_id }}"
