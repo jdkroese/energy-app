@@ -32,6 +32,8 @@
 import crypto from 'node:crypto';
 import dgram from 'node:dgram';
 import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -152,6 +154,106 @@ function listen(seconds) {
   });
 }
 
+// ---- 2b) TCP sweep + key identification -------------------------------------
+//
+// UDP discovery misses devices whose broadcast never reaches us — common on
+// mesh/multi-AP networks, where the AP does not forward the device's broadcast
+// to our segment even though TCP routes fine. Those devices look identical to
+// "powered off" from discovery alone, so we sweep the subnet for open 6668 and
+// then identify each responder by trying the local_keys we hold: a key only
+// completes the handshake with its own device, so a successful read IS the
+// identification. Read-only throughout.
+
+/** Every /24 this host sits on (usually one). */
+function localSubnets() {
+  const nets = new Set();
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a.family === 'IPv4' && !a.internal) nets.add(a.address.split('.').slice(0, 3).join('.'));
+    }
+  }
+  return [...nets];
+}
+
+function tcpOpen(ip, port, timeoutMs) {
+  return new Promise((resolve) => {
+    const s = new net.Socket();
+    s.setTimeout(timeoutMs);
+    const done = (v) => {
+      s.destroy();
+      resolve(v);
+    };
+    s.on('connect', () => done(true));
+    s.on('timeout', () => done(false));
+    s.on('error', () => done(false));
+    s.connect(port, ip);
+  });
+}
+
+/** Run tasks with bounded concurrency so a /24 sweep stays fast but polite. */
+async function pooled(items, limit, worker) {
+  const out = [];
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (i < items.length) {
+        const idx = i++;
+        out[idx] = await worker(items[idx], idx);
+      }
+    }),
+  );
+  return out;
+}
+
+async function sweepForOpenPorts(claimed) {
+  const subnets = localSubnets();
+  if (!subnets.length) return [];
+  const candidates = [];
+  for (const base of subnets) {
+    for (let h = 1; h <= 254; h++) {
+      const ip = `${base}.${h}`;
+      if (!claimed.has(ip)) candidates.push(ip);
+    }
+  }
+  console.log(`  sweeping ${candidates.length} address(es) across ${subnets.join(', ')}.0/24 for port 6668…`);
+  const results = await pooled(candidates, 64, async (ip) => ((await tcpOpen(ip, 6668, 3000)) ? ip : null));
+  return results.filter(Boolean);
+}
+
+/**
+ * Match unidentified devices to unclaimed ips by attempting an authenticated
+ * read: a local_key only completes the handshake with its own device, so a
+ * successful read IS the identification.
+ *
+ * Addresses are tested CONCURRENTLY — serially this is ips x devices x versions
+ * attempts, which for a real fleet overruns the CI job timeout. A device id is
+ * claimed the instant it matches so two addresses can never adopt the same
+ * device, and each attempt uses a short timeout since a wrong key fails fast.
+ */
+async function identifyByKey(TuyAPI, ips, devices) {
+  const found = new Map(); // ip -> device
+  const claimed = new Set(); // device ids already matched
+  const ID_TIMEOUT_MS = Number(process.env.IDENTIFY_TIMEOUT_MS || 3500);
+
+  await pooled(ips, 8, async (ip) => {
+    for (const dev of devices) {
+      if (claimed.has(dev.id)) continue;
+      // The broadcast never reached us, so the protocol version is unknown —
+      // try both versions this fleet actually runs.
+      for (const version of ['3.4', '3.3']) {
+        if (claimed.has(dev.id)) break;
+        const r = await probeDevice(TuyAPI, { ...dev, lanIp: ip, version }, ID_TIMEOUT_MS);
+        if (r.ok) {
+          claimed.add(dev.id);
+          found.set(ip, { ...dev, lanIp: ip, version });
+          return;
+        }
+      }
+    }
+  });
+  return found;
+}
+
 // ---- 3) Read-only local probe ----------------------------------------------
 
 function loadTuyapi() {
@@ -165,7 +267,7 @@ function loadTuyapi() {
   }
 }
 
-async function probeDevice(TuyAPI, dev) {
+async function probeDevice(TuyAPI, dev, timeoutMs = PROBE_TIMEOUT_MS) {
   const device = new TuyAPI({
     id: dev.id,
     key: dev.localKey,
@@ -177,7 +279,7 @@ async function probeDevice(TuyAPI, dev) {
   device.on('error', () => {});
 
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('timeout')), PROBE_TIMEOUT_MS),
+    setTimeout(() => reject(new Error('timeout')), timeoutMs),
   );
   try {
     await Promise.race([device.connect(), timeout]);
@@ -252,8 +354,36 @@ async function main() {
     for (const d of silent) console.log(`   ${pad(d.name || d.id, 34)} ${pad(d.category, 8)} ${d.id}`);
   }
 
-  // ---- 3) Probe ------------------------------------------------------------
   const TuyAPI = loadTuyapi();
+
+  // ---- 2b) Sweep for devices UDP never reached -----------------------------
+  const stillMissing = devices.filter((d) => d.localKey && !d.lanIp && !d.sub);
+  if (TuyAPI && stillMissing.length && process.env.SKIP_SWEEP !== '1') {
+    console.log(`\n${'='.repeat(72)}\nTCP SWEEP (devices UDP did not reach)\n${'='.repeat(72)}`);
+    const claimed = new Set(devices.map((d) => d.lanIp).filter(Boolean));
+    const openIps = await sweepForOpenPorts(claimed);
+    console.log(`  ${openIps.length} unclaimed host(s) with port 6668 open.`);
+    if (openIps.length) {
+      console.log(`  identifying by local_key against ${stillMissing.length} unlocated device(s)…`);
+      const identified = await identifyByKey(TuyAPI, openIps, stillMissing);
+      for (const [ip, dev] of identified) {
+        const target = byId.get(dev.id);
+        if (target) {
+          target.lanIp = ip;
+          target.version = dev.version;
+        }
+        console.log(`   ✓ ${pad(dev.name || dev.id, 32)} → ${pad(ip, 16)} v${dev.version}`);
+      }
+      console.log(`\n  identified ${identified.size}/${openIps.length} swept host(s).`);
+      fs.writeFileSync(
+        CACHE_FILE,
+        JSON.stringify({ ...cache, sweptAt: new Date().toISOString(), devices }, null, 2),
+      );
+      console.log(`✓ Cache updated with swept ips → ${CACHE_FILE}`);
+    }
+  }
+
+  // ---- 3) Probe ------------------------------------------------------------
   const probeable = devices.filter((d) => d.localKey && d.lanIp && !d.sub);
   console.log(`\n${'='.repeat(72)}\nLOCAL READ PROBE (read-only)\n${'='.repeat(72)}`);
   if (!TuyAPI) {
