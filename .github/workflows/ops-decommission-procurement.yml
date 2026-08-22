@@ -1,0 +1,218 @@
+name: Ops - decommission procurement.hirobo.nl
+
+# One-off teardown of the SprayHub / Mpalanga Farmers Collective deployment.
+# Runs on THIS repo's runner deliberately, not spray-procurement's own runner
+# — deregistering and deleting a runner from inside a job running on that same
+# runner is a race condition waiting to happen. Every self-hosted runner on
+# the mini has full host access regardless of which repo it belongs to, so
+# borrowing energy-app's is safe and avoids that.
+#
+# This workflow is meant to be deleted again once it has run once.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "decommission" to proceed'
+        required: true
+
+jobs:
+  decommission:
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 15
+    steps:
+      - name: Guard
+        run: |
+          if [ "${{ inputs.confirm }}" != "decommission" ]; then
+            echo "::error::confirm input must be exactly 'decommission'"
+            exit 1
+          fi
+
+      - name: Back up the database and credentials before touching anything
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          BACKUP_DIR="$HOME/procurement-decommission-backup-$(date +%Y%m%d-%H%M%S)"
+          mkdir -p "$BACKUP_DIR"
+          for f in app.db app.db-wal app.db-shm; do
+            [ -f "$HOME/data/procurement/$f" ] && cp "$HOME/data/procurement/$f" "$BACKUP_DIR/" || true
+          done
+          [ -f "$HOME/procurement-credentials.txt" ] && cp "$HOME/procurement-credentials.txt" "$BACKUP_DIR/" || true
+          echo "BACKUP_DIR=$BACKUP_DIR" >> "$GITHUB_ENV"
+          echo "--- backed up to $BACKUP_DIR ---"
+          ls -la "$BACKUP_DIR" || echo "(nothing existed to back up)"
+
+      - name: Stop and remove the launchd service
+        run: |
+          set -euo pipefail
+          SERVICE="nl.hirobo.procurement"
+          PLIST="/Library/LaunchDaemons/${SERVICE}.plist"
+          if sudo launchctl print "system/${SERVICE}" >/dev/null 2>&1; then
+            sudo launchctl bootout "system/${SERVICE}" 2>/dev/null || true
+            echo "service stopped"
+          else
+            echo "service was not running"
+          fi
+          if [ -f "$PLIST" ]; then
+            sudo rm -f "$PLIST"
+            echo "plist removed"
+          fi
+
+      - name: Deregister the GitHub Actions runner, then remove it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          RUNNER_DIR="$HOME/actions-runner-procurement"
+          if [ -d "$RUNNER_DIR" ]; then
+            if [ -f "$RUNNER_DIR/svc.sh" ]; then
+              (cd "$RUNNER_DIR" && sudo ./svc.sh uninstall) 2>&1 || echo "svc.sh uninstall failed (continuing)"
+            fi
+            if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+              TOKEN=$(gh api -X POST "repos/jdkroese/spray-procurement/actions/runners/remove-token" --jq .token 2>&1) || TOKEN=""
+              if [ -n "$TOKEN" ]; then
+                (cd "$RUNNER_DIR" && ./config.sh remove --token "$TOKEN") 2>&1 || echo "config.sh remove failed (continuing — will force-delete the directory)"
+              else
+                echo "could not get a removal token — will force-delete the directory"
+              fi
+            fi
+            rm -rf "$RUNNER_DIR"
+            echo "runner directory removed"
+          else
+            echo "no actions-runner-procurement directory found"
+          fi
+
+      - name: Revert the Caddy vhost (backed up and validated before restart)
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          CADDYFILE="/opt/homebrew/etc/Caddyfile"
+          STAMP="$(date +%Y%m%d-%H%M%S)"
+          if ! grep -q "procurement.hirobo.nl" "$CADDYFILE"; then
+            echo "no procurement block found in $CADDYFILE — nothing to revert"
+            exit 0
+          fi
+          sudo cp "$CADDYFILE" "${CADDYFILE}.bak-remove-${STAMP}"
+          echo "backed up to ${CADDYFILE}.bak-remove-${STAMP}"
+
+          sudo python3 - "$CADDYFILE" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+lines = open(path).read().splitlines(True)
+start = next((i for i, l in enumerate(lines) if 'procurement.hirobo.nl' in l), None)
+if start is None:
+    print("MARKER_NOT_FOUND")
+    sys.exit(0)
+begin = start
+if begin > 0 and lines[begin - 1].strip() == '':
+    begin -= 1
+end = None
+for i in range(start, len(lines)):
+    if lines[i].strip() == '}':
+        end = i
+        break
+if end is None:
+    print("BLOCK_END_NOT_FOUND — leaving the file untouched")
+    sys.exit(1)
+new_lines = lines[:begin] + lines[end + 1:]
+open(path, 'w').write(''.join(new_lines))
+print(f"removed lines {begin + 1}-{end + 1}")
+PY_EOF
+
+          if ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+            echo "::error::Caddyfile failed validation after edit — restoring backup"
+            sudo cp "${CADDYFILE}.bak-remove-${STAMP}" "$CADDYFILE"
+            exit 1
+          fi
+          echo "Caddyfile validated OK"
+          sudo launchctl kickstart -k system/homebrew.mxcl.caddy
+          echo "Caddy restarted"
+
+      - name: Revert the cloudflared tunnel ingress (backed up and validated before restart)
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          CONF="/etc/cloudflared/config.yml"
+          STAMP="$(date +%Y%m%d-%H%M%S)"
+          if ! grep -q "procurement.hirobo.nl" "$CONF"; then
+            echo "no procurement ingress found in $CONF — nothing to revert"
+            exit 0
+          fi
+          sudo cp "$CONF" "${CONF}.bak-remove-${STAMP}"
+          echo "backed up to ${CONF}.bak-remove-${STAMP}"
+
+          sudo python3 - "$CONF" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+lines = open(path).read().splitlines(True)
+start = next((i for i, l in enumerate(lines) if 'procurement.hirobo.nl' in l), None)
+if start is None:
+    print("MARKER_NOT_FOUND")
+    sys.exit(0)
+end = start
+if start + 1 < len(lines) and 'service:' in lines[start + 1]:
+    end = start + 1
+new_lines = lines[:start] + lines[end + 1:]
+open(path, 'w').write(''.join(new_lines))
+print(f"removed lines {start + 1}-{end + 1}")
+PY_EOF
+
+          if ! cloudflared tunnel ingress validate --config "$CONF" >/dev/null 2>&1; then
+            echo "::error::cloudflared ingress failed validation after edit — restoring backup"
+            sudo cp "${CONF}.bak-remove-${STAMP}" "$CONF"
+            exit 1
+          fi
+          echo "cloudflared config validated OK"
+
+          CF_LABEL=""
+          for label in com.cloudflare.cloudflared homebrew.mxcl.cloudflared; do
+            if sudo launchctl print "system/${label}" >/dev/null 2>&1; then CF_LABEL="$label"; break; fi
+          done
+          if [ -n "$CF_LABEL" ]; then
+            sudo launchctl kickstart -k "system/${CF_LABEL}"
+            echo "restarted ${CF_LABEL}"
+          else
+            echo "::warning::could not find the cloudflared launchd service to restart"
+          fi
+
+      - name: Delete the site, data and log files
+        run: |
+          set -euo pipefail
+          rm -rf "$HOME/sites/procurement"
+          rm -rf "$HOME/data/procurement"
+          rm -f "$HOME/logs/procurement.out.log" "$HOME/logs/procurement.err.log"
+          echo "removed ~/sites/procurement, ~/data/procurement, ~/logs/procurement.*.log"
+
+      - name: Confirm nothing procurement-related is left, and other sites still work
+        run: |
+          set -euo pipefail
+          echo "--- home directory top level (procurement-related only) ---"
+          ls -la "$HOME" | grep -i procurement || echo "(none found — clean)"
+          echo ""
+          echo "--- backup preserved at ---"
+          echo "$BACKUP_DIR"
+          ls -la "$BACKUP_DIR" 2>/dev/null || true
+          echo ""
+          echo "--- sibling sites still answering (proves the shared Caddy/cloudflared edit did not break anything) ---"
+          for h in hirobo.nl energy.hirobo.nl ilse.hirobo.nl wm.hirobo.nl home.hirobo.nl; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://$h/" 2>/dev/null) || code=000
+            echo "  $h -> $code"
+          done
+          echo ""
+          echo "--- procurement.hirobo.nl (should now fail to reach an origin) ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "https://procurement.hirobo.nl/" 2>/dev/null) || code=000
+          echo "  procurement.hirobo.nl -> $code"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Procurement decommission"
+            echo ""
+            echo "- database + credentials backup: \`$BACKUP_DIR\`"
+            echo "- launchd service, deployed site, data dir, logs: removed"
+            echo "- GitHub Actions runner: deregistered and removed"
+            echo "- Caddy vhost and cloudflared ingress: reverted (backups kept alongside the live config files)"
+            echo ""
+            echo "Still to do by hand: remove the DNS CNAME for procurement.hirobo.nl in the Cloudflare dashboard."
+          } >> "$GITHUB_STEP_SUMMARY"
