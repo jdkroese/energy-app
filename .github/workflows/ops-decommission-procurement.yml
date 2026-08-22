@@ -9,6 +9,13 @@ name: Ops - decommission procurement.hirobo.nl
 #
 # This workflow is meant to be deleted again once it has run once.
 on:
+  # TEMPORARY (throwaway run branch): workflow_dispatch requires the workflow to
+  # exist on the default branch, which it does not until this lands on main. A
+  # push trigger scoped to this one branch is how we exercise it on the mini in
+  # the meantime (same pattern as ops-tuya-harvest.yml). Drop this trigger if it
+  # ever merges — it never will, this branch is deleted after one run.
+  push:
+    branches: [ops/procurement-decommission]
   workflow_dispatch:
     inputs:
       confirm:
@@ -22,10 +29,14 @@ jobs:
     steps:
       - name: Guard
         run: |
-          if [ "${{ inputs.confirm }}" != "decommission" ]; then
+          # workflow_dispatch requires the explicit confirm phrase; the temporary
+          # push trigger only fires on the dedicated ops/procurement-decommission
+          # branch, which is itself the confirmation for this one-off run.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.confirm }}" != "decommission" ]; then
             echo "::error::confirm input must be exactly 'decommission'"
             exit 1
           fi
+          echo "proceeding (event: ${{ github.event_name }})"
 
       - name: Back up the database and credentials before touching anything
         run: |
