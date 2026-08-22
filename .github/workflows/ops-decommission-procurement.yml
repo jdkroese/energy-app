@@ -106,29 +106,12 @@ jobs:
           sudo cp "$CADDYFILE" "${CADDYFILE}.bak-remove-${STAMP}"
           echo "backed up to ${CADDYFILE}.bak-remove-${STAMP}"
 
-          sudo python3 - "$CADDYFILE" <<'PY_EOF'
-import sys
-path = sys.argv[1]
-lines = open(path).read().splitlines(True)
-start = next((i for i, l in enumerate(lines) if 'procurement.hirobo.nl' in l), None)
-if start is None:
-    print("MARKER_NOT_FOUND")
-    sys.exit(0)
-begin = start
-if begin > 0 and lines[begin - 1].strip() == '':
-    begin -= 1
-end = None
-for i in range(start, len(lines)):
-    if lines[i].strip() == '}':
-        end = i
-        break
-if end is None:
-    print("BLOCK_END_NOT_FOUND — leaving the file untouched")
-    sys.exit(1)
-new_lines = lines[:begin] + lines[end + 1:]
-open(path, 'w').write(''.join(new_lines))
-print(f"removed lines {begin + 1}-{end + 1}")
-PY_EOF
+          # Remove from the "procurement.hirobo.nl" comment marker through the
+          # next line that is exactly "}" (the block's closing brace) — no
+          # heredoc, so this stays a normal indented line inside the YAML block.
+          awk 'BEGIN{skip=0}{if(skip){if($0=="}")skip=0;next}if($0~/procurement\.hirobo\.nl/){skip=1;next}print}' "$CADDYFILE" > /tmp/caddyfile.decommissioned
+          sudo mv /tmp/caddyfile.decommissioned "$CADDYFILE"
+          echo "removed the procurement block from $CADDYFILE"
 
           if ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
             echo "::error::Caddyfile failed validation after edit — restoring backup"
@@ -152,21 +135,11 @@ PY_EOF
           sudo cp "$CONF" "${CONF}.bak-remove-${STAMP}"
           echo "backed up to ${CONF}.bak-remove-${STAMP}"
 
-          sudo python3 - "$CONF" <<'PY_EOF'
-import sys
-path = sys.argv[1]
-lines = open(path).read().splitlines(True)
-start = next((i for i, l in enumerate(lines) if 'procurement.hirobo.nl' in l), None)
-if start is None:
-    print("MARKER_NOT_FOUND")
-    sys.exit(0)
-end = start
-if start + 1 < len(lines) and 'service:' in lines[start + 1]:
-    end = start + 1
-new_lines = lines[:start] + lines[end + 1:]
-open(path, 'w').write(''.join(new_lines))
-print(f"removed lines {start + 1}-{end + 1}")
-PY_EOF
+          # Remove the "hostname: procurement.hirobo.nl" line and the "service:"
+          # line immediately after it. No heredoc, same reason as the Caddy step.
+          awk 'BEGIN{skip=0}{if(skip){skip=0;next}if($0~/procurement\.hirobo\.nl/){skip=1;next}print}' "$CONF" > /tmp/cloudflared.decommissioned
+          sudo mv /tmp/cloudflared.decommissioned "$CONF"
+          echo "removed the procurement ingress from $CONF"
 
           if ! cloudflared tunnel ingress validate --config "$CONF" >/dev/null 2>&1; then
             echo "::error::cloudflared ingress failed validation after edit — restoring backup"
