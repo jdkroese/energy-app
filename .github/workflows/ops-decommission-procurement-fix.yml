@@ -1,0 +1,78 @@
+name: Ops - fix orphaned procurement runner service
+
+# Follow-up to ops-decommission-procurement.yml: that run deleted the runner's
+# directory before its launchd service was stopped ("Must not run with sudo" —
+# svc.sh refuses to run under an outer sudo, since it elevates internally
+# itself), so the runner process kept running and polling GitHub from a
+# directory that no longer exists, and still shows "online" in the repo.
+on:
+  push:
+    branches: [ops/procurement-decommission]
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: [self-hosted, mini]
+    timeout-minutes: 10
+    steps:
+      - name: Find the runner's launchd service, whatever it is actually called
+        run: |
+          set -euo pipefail
+          echo "--- launchctl list | grep runner ---"
+          sudo launchctl list 2>/dev/null | grep -i runner || echo "(none found in launchctl list)"
+          echo ""
+          echo "--- matching plists under /Library/LaunchDaemons ---"
+          sudo find /Library/LaunchDaemons -iname "*runner*" -o -iname "*procurement*" 2>/dev/null || true
+          echo ""
+          echo "--- matching plists under ~/Library/LaunchAgents ---"
+          find "$HOME/Library/LaunchAgents" -iname "*runner*" -o -iname "*procurement*" 2>/dev/null || true
+          echo ""
+          echo "--- any live Runner.Listener / Runner.Worker processes ---"
+          pgrep -fl "Runner.Listener|Runner.Worker" || echo "(none running)"
+
+      - name: Stop and remove whatever service was found
+        run: |
+          set -euo pipefail
+          FOUND=0
+          for label in $(sudo launchctl list 2>/dev/null | awk '{print $3}' | grep -i "actions.runner" || true); do
+            FOUND=1
+            echo "stopping system/$label"
+            sudo launchctl bootout "system/$label" 2>&1 || true
+          done
+          for plist in $(sudo find /Library/LaunchDaemons -iname "*actions.runner*" 2>/dev/null); do
+            FOUND=1
+            echo "removing $plist"
+            sudo rm -f "$plist"
+          done
+          for plist in $(find "$HOME/Library/LaunchAgents" -iname "*actions.runner*" 2>/dev/null); do
+            FOUND=1
+            echo "removing $plist"
+            launchctl unload "$plist" 2>&1 || true
+            rm -f "$plist"
+          done
+          if [ "$FOUND" = "0" ]; then
+            echo "no launchd service found for the runner — it may already be gone, or was never a launchd service"
+          fi
+          echo "--- any Runner.Listener process still alive after that ---"
+          pgrep -fl "Runner.Listener" || echo "(none — clean)"
+          echo "--- if any survive, kill them directly ---"
+          pkill -f "Runner.Listener" 2>&1 || true
+          pkill -f "Runner.Worker" 2>&1 || true
+          sleep 2
+          pgrep -fl "Runner.Listener|Runner.Worker" || echo "(confirmed: nothing running)"
+
+      - name: Force-remove the ghost registration from GitHub directly
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          echo "--- runners registered on spray-procurement before ---"
+          gh api repos/jdkroese/spray-procurement/actions/runners
+          RUNNER_ID=$(gh api repos/jdkroese/spray-procurement/actions/runners --jq '.runners[] | select(.name=="mini-procurement") | .id')
+          if [ -n "$RUNNER_ID" ]; then
+            echo "deleting runner id $RUNNER_ID"
+            gh api -X DELETE "repos/jdkroese/spray-procurement/actions/runners/$RUNNER_ID"
+          else
+            echo "no runner named mini-procurement found — already gone"
+          fi
+          echo "--- runners registered on spray-procurement after ---"
+          gh api repos/jdkroese/spray-procurement/actions/runners
