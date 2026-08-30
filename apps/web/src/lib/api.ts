@@ -52,6 +52,7 @@ import type {
   LightSchedulesResponse,
   TuyaIntegrationStatus,
   TuyaLocalStatus,
+  TuyaCaptureDpMapsResult,
   SpeakersResponse,
   AlarmStatus,
   AlarmConfig,
@@ -1038,6 +1039,13 @@ export const api = {
     tuyaLocalStatus: () => getJSON<TuyaLocalStatus>("/api/integrations/tuya/local"),
     tuyaLocalSet: (enabled: boolean) =>
       putJSON<TuyaLocalStatus>("/api/integrations/tuya/local", { enabled }),
+    // One-shot dp-map capture (docs/49 Change 4) — front-loads local-control coverage while
+    // cloud is briefly alive.
+    tuyaCaptureDpMaps: () =>
+      postJSON<TuyaCaptureDpMapsResult>(
+        "/api/integrations/tuya/local/capture-dpmaps",
+        {},
+      ),
 
     // Configurable connections (Sonnen / Weather / Tesla).
     config: () => getJSON<IntegrationsConfig>("/api/integrations/config"),

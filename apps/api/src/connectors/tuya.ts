@@ -376,20 +376,113 @@ function noteFleetDropout(missing: string[], recovered: TuyaDevice[]): void {
   });
 }
 
-const FLEET_KEY = 'tuya.devices';
+// ---- Local fleet fallback (docs/49 Change 2/3) -------------------------------------------
+// The fleet listing was the LAST hidden cloud dependency: even with local-first
+// getStatus/sendCommands, the device LIST itself only ever came from listDevices() (the
+// cloud's associated-users/devices call) — see docs/49 "Problem" #1. Once a device's dp-map
+// is persisted (Change 1), its LAN status can be read directly, so a whole fleet snapshot can
+// be assembled with zero cloud calls. getDevices() below reaches for this the moment cloud is
+// unusable (quota-blocked, unconfigured, or listDevices() itself throwing).
 
-/** Cached fleet snapshot (20s). Returns [] when no project is connected. */
+const LOCAL_FLEET_CONCURRENCY = 6;
+
+/** Run `fn` over `items` with at most `limit` in flight at once — LAN sockets, unlike cloud
+ *  HTTP calls, must not be opened 40-at-once (each Tuya device accepts only one local session
+ *  at a time; see tuya-local.ts's connection-pool comment). Exported for tests. */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+/** Build a fleet snapshot entirely from the LOCAL registry + LAN reads — zero cloud calls.
+ *  Only includes devices that are BOTH locally capable (key + LAN ip + a supported protocol
+ *  version — tuya-local.ts's isLocalCapable) AND already have a persisted dp-map (Change 1)
+ *  to translate raw dps with; every other registry device (no key/ip yet, an unsupported
+ *  version, or a Zigbee/BLE sub-device that is never LAN-reachable at all) simply doesn't
+ *  appear — acceptable during a blackout (docs/49 "Goal": sub-devices may degrade). A
+ *  per-device LAN read failure degrades that ONE entry to `online:false, status:[]` rather
+ *  than dropping it from the list or failing the whole snapshot. Exported for tests. */
+export async function localFleetSnapshot(): Promise<TuyaDevice[]> {
+  const entries = tuyaLocal
+    .listRegistry()
+    .filter((e) => tuyaLocal.isLocalCapable(e.id) && tuyaLocal.getDpMap(e.id) !== null);
+
+  return mapWithConcurrency(entries, LOCAL_FLEET_CONCURRENCY, async (entry): Promise<TuyaDevice> => {
+    const maps = tuyaLocal.getDpMap(entry.id); // pure map read, no I/O — safe to call again per-device
+    try {
+      const dps = await tuyaLocal.readStatus(entry.id);
+      const status = maps ? tuyaLocal.translateStatus(dps, maps.dpToCode) : [];
+      return { id: entry.id, name: entry.name, category: entry.category, online: true, status, localKey: entry.localKey };
+    } catch {
+      return { id: entry.id, name: entry.name, category: entry.category, online: false, status: [], localKey: entry.localKey };
+    }
+  });
+}
+
+const FLEET_KEY = 'tuya.devices';
+const LOCAL_FLEET_KEY = 'tuya.devices.local';
+const FLEET_TTL_MS = 20_000;
+// docs/49 Change 3: once local control is proven out, the interactive hot paths
+// (getStatus/sendCommands — both already local-first) no longer need the FLEET listing
+// refreshed every 20s; that 20s cloud poll is exactly what exhausted a fresh dev account's
+// monthly quota in ~10 days (docs/49 "Problem"). Conservative choice per the brief: cloud
+// stays PRIMARY for the full fleet whenever it's healthy — so sub-devices (Zigbee/BLE, never
+// locally reachable, the app's only INPUT devices) keep appearing exactly as before;
+// localFleetSnapshot() above never lists them. Only the REFRESH CADENCE changes: 5 minutes
+// instead of 20s while local control is enabled. Local is reached for only on an outright
+// cloud failure (not configured, quota-blocked, or listDevices() itself throwing) — that's
+// what turns a blackout into a non-event without risking a sub-device regression during
+// normal operation. This cadence (20s -> 5min) is the exact number to verify on the mini.
+const FLEET_TTL_LOCAL_HEALTHY_MS = 300_000;
+
+function localFleetSnapshotCached(): Promise<TuyaDevice[]> {
+  // Distinct 20s-TTL key from FLEET_KEY (the cloud snapshot) — a blackout falling back here
+  // must never clobber whatever cloud snapshot is still sitting in the cache under FLEET_KEY,
+  // so cloud recovery can resume serving it immediately without a cold refetch.
+  return cached(LOCAL_FLEET_KEY, 20_000, localFleetSnapshot);
+}
+
+/** Cached fleet snapshot. Cloud-primary whenever a project is configured and not
+ *  quota-blocked (refresh cadence depends on whether local control is enabled — see
+ *  FLEET_TTL_LOCAL_HEALTHY_MS above); falls back to the LOCAL LAN snapshot (docs/49 Change 2)
+ *  on any cloud failure, or when no project is configured at all but local control is on.
+ *  With local control OFF this is byte-for-byte the pre-docs/49 cloud-only behaviour —
+ *  isLocalEnabled() short-circuits every local branch before it does anything. */
 export function getDevices(): Promise<TuyaDevice[]> {
-  if (!isConfigured()) return Promise.resolve([]);
+  const localOn = tuyaLocal.isLocalEnabled();
+  if (!isConfigured()) {
+    return localOn ? localFleetSnapshotCached() : Promise.resolve([]);
+  }
+  // During a quota cooldown, don't even attempt cloud when local can serve. When local is
+  // OFF, fall through to the cloud cache below instead — so this path stays byte-for-byte the
+  // pre-docs/49 behaviour (stale-while-revalidate grace, then the quota error), never [].
+  if (localOn && Date.now() < quotaBlockedUntil) {
+    return localFleetSnapshotCached();
+  }
   // Serve an expired-but-recent snapshot instantly and refresh in the background, so a
   // slow Tuya Cloud response never blocks the Devices page. Writes call invalidateFleet,
   // so control-action freshness is preserved. (Mirrors the climate connectors.)
-  return cached(FLEET_KEY, 20_000, listDevices, { staleMs: 300_000 });
+  const cloud = cached(FLEET_KEY, localOn ? FLEET_TTL_LOCAL_HEALTHY_MS : FLEET_TTL_MS, listDevices, { staleMs: 300_000 });
+  return localOn ? cloud.catch(() => localFleetSnapshotCached()) : cloud;
 }
 
 /** Force the next getDevices() to refetch — call right after a successful write. */
 export function invalidateFleet(): void {
   invalidate(FLEET_KEY);
+  invalidate(LOCAL_FLEET_KEY);
   invalidateSupplement();
 }
 
@@ -684,9 +777,24 @@ export function normCode(code: string): string {
     .join('_');
 }
 
-async function dpMapsFor(id: string): Promise<DpMaps> {
+/** Exported for docs/49 Change 4 (captureDpMaps) and tests — everywhere else in this file
+ *  still just calls it directly. */
+export async function dpMapsFor(id: string): Promise<DpMaps> {
   const hit = dpMapCache.get(id);
   if (hit) return hit;
+
+  // docs/49 Change 1: a dp-map persisted to tuya-local.json (captured on a PAST successful
+  // cloud fetch — see the bottom of this function) needs zero cloud calls to reuse. This is
+  // what removes the second hidden cloud dependency a quota blackout used to hit — before
+  // this, an expired dpMapCache entry (process restart, or simply this being the first call
+  // this process lifetime) always re-fetched the thing model from the cloud, which fails
+  // during a blackout exactly like the fleet listing does.
+  const persisted = tuyaLocal.getDpMap(id);
+  if (persisted) {
+    dpMapCache.set(id, persisted);
+    return persisted;
+  }
+
   const codeToDp = new Map<string, number>();
   const dpToCode = new Map<number, string>();
 
@@ -751,7 +859,67 @@ async function dpMapsFor(id: string): Promise<DpMaps> {
   if (codeToDp.size === 0) return { codeToDp, dpToCode };
   const result = { codeToDp, dpToCode };
   dpMapCache.set(id, result);
+  // Persist for next time (docs/49 Change 1) — the DP layout is immutable per device, so
+  // this cloud fetch (and every one after it, forever) is the LAST one this device will
+  // ever need. Best-effort/no-op-safe (see setDpMap); never blocks the caller.
+  tuyaLocal.setDpMap(id, codeToDp);
   return result;
+}
+
+// ---- One-shot dp-map capture (docs/49 Change 4) ------------------------------------------
+// The chicken-and-egg docs/49 calls out: capturing a device's dp-map needs one successful
+// cloud thing-model fetch, so this front-loads it for the whole fleet while cloud is briefly
+// alive (e.g. right after the owner extends the IoT-Core trial), guaranteeing local-only
+// coverage BEFORE the next blackout instead of hoping every device happened to get a normal
+// getStatus/sendCommands call (and therefore a dpMapsFor lookup) during the healthy window.
+
+export interface CaptureDpMapsResult {
+  total: number;
+  captured: number;
+  alreadyHad: number;
+  failed: number;
+  /** Ids that could not resolve a non-empty dp-map this run — for admin troubleshooting;
+   *  never includes localKey or any other sensitive field. */
+  failedIds: string[];
+}
+
+/** Iterate the registry (docs/44's harvested fleet — tuya-local.json), calling dpMapsFor()
+ *  for every device EXCEPT Zigbee/BLE gateway sub-devices, to force a cloud fetch + persist
+ *  for any that don't already have one. Deliberately broader than "currently locally
+ *  capable" (key + LAN ip + supported version — tuya-local.ts's isLocalCapable): a device
+ *  that's missing its LAN ip today (not discovered yet) or even its key (pending a
+ *  re-harvest) can still become locally capable LATER, and capturing its dp-map NOW — while
+ *  cloud is briefly alive — means it needs zero cloud calls the moment it does. Sub-devices
+ *  are the one permanent exclusion: they are never LAN-reachable at all, so a dp-map for one
+ *  could never be used locally regardless of what else changes. Bounded concurrency; a
+ *  single device's failure never aborts the run (each device's fetch already fails closed on
+ *  its own — see dpMapsFor's try/catch chain — this just also catches anything dpMapsFor
+ *  itself might throw, e.g. no Tuya project configured at all). */
+export async function captureDpMaps(): Promise<CaptureDpMapsResult> {
+  const entries = tuyaLocal.listRegistry().filter((e) => !e.sub);
+  let captured = 0;
+  let alreadyHad = 0;
+  let failed = 0;
+  const failedIds: string[] = [];
+
+  await mapWithConcurrency(entries, LOCAL_FLEET_CONCURRENCY, async (entry) => {
+    const hadBefore = tuyaLocal.getDpMap(entry.id) !== null;
+    try {
+      const { codeToDp } = await dpMapsFor(entry.id);
+      if (codeToDp.size === 0) {
+        failed++;
+        failedIds.push(entry.id);
+        return;
+      }
+      if (hadBefore) alreadyHad++;
+      else captured++;
+    } catch {
+      failed++;
+      failedIds.push(entry.id);
+    }
+  });
+
+  return { total: entries.length, captured, alreadyHad, failed, failedIds };
 }
 
 // ---- Device identity / network (diagnostics) --------------------------------

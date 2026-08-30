@@ -1680,8 +1680,26 @@ export interface TuyaLocalStatus {
    *  see isLocalEnabled() in tuya-local.ts). */
   enabled: boolean;
   loadedAt: string | null;
-  totals: { devices: number; capable: number; healthy: number; unsupportedVersion: number };
+  totals: {
+    devices: number;
+    capable: number;
+    healthy: number;
+    unsupportedVersion: number;
+    /** Devices with a persisted cloud/local dp-map (docs/49 Change 1/4) — what Settings
+     *  → Tuya's "dp-maps captured: N / M devices" line shows. */
+    dpMapsCaptured: number;
+  };
   v35SightingsUncorrelated: string[];
+}
+
+/** POST /api/integrations/tuya/local/capture-dpmaps — docs/49 Change 4 one-shot capture. */
+export interface TuyaCaptureDpMapsResult {
+  ts: string;
+  total: number;
+  captured: number;
+  alreadyHad: number;
+  failed: number;
+  failedIds: string[];
 }
 
 /* ============================================================================

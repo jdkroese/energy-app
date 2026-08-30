@@ -798,3 +798,107 @@ test('isLocalEnabled: env unset + store localControl=false is OFF — the revers
   });
   setStoreLocalControl(undefined);
 });
+
+// ---- listRegistry ----------------------------------------------------------------------
+
+test('listRegistry: snapshots every loaded entry (server-internal only — carries localKey)', () => {
+  const all = tuyaLocal.listRegistry();
+  assert.equal(all.length, FIXTURE_DEVICES.length);
+  assert.ok(all.some((e) => e.id === 'bf-switch-1'));
+});
+
+// ---- Persisted dp-map (docs/49 Change 1) ------------------------------------------------
+// `getDpMap`/`setDpMap` operate on the SAME module-level registry the rest of this suite
+// boots from (loaded once at import from the fixture file above) — tests below pick ids not
+// asserted on by earlier sections so mutating their dpMap here can't affect those.
+
+test('parseDpMap: an object of string->finite-number round-trips through loadRegistryFromFile', () => {
+  const file = path.join(scratchDir, 'dpmap-good.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ devices: [{ id: 'bf-dpmap-1', dpMap: { switch_1: 1, cur_power: 19 } }] }),
+  );
+  const entries = tuyaLocal.loadRegistryFromFile(file);
+  assert.deepEqual(entries[0].dpMap, { switch_1: 1, cur_power: 19 });
+});
+
+test('parseDpMap: numeric-string values coerce to numbers; non-finite entries are dropped, never throw', () => {
+  const file = path.join(scratchDir, 'dpmap-mixed.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      devices: [
+        { id: 'bf-dpmap-2', dpMap: { switch_1: '1', cur_power: 19, bad: 'not-a-number', worse: null } },
+      ],
+    }),
+  );
+  const entries = tuyaLocal.loadRegistryFromFile(file);
+  assert.deepEqual(entries[0].dpMap, { switch_1: 1, cur_power: 19 });
+});
+
+test('parseDpMap: missing/malformed dpMap (absent, array, string, empty object) all degrade to undefined', () => {
+  const file = path.join(scratchDir, 'dpmap-bad.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      devices: [
+        { id: 'bf-dpmap-none' }, // absent entirely
+        { id: 'bf-dpmap-arr', dpMap: [1, 2, 3] },
+        { id: 'bf-dpmap-str', dpMap: 'nope' },
+        { id: 'bf-dpmap-empty', dpMap: {} },
+        { id: 'bf-dpmap-allbad', dpMap: { a: 'x', b: null } },
+      ],
+    }),
+  );
+  const entries = tuyaLocal.loadRegistryFromFile(file);
+  for (const e of entries) assert.equal(e.dpMap, undefined, `${e.id} should have no dpMap`);
+});
+
+test('getDpMap: null when nothing has been captured for a known device', () => {
+  const entries = tuyaLocal.loadRegistryFromFile(path.join(scratchDir, 'tuya-local.json'));
+  const sw = entries.find((e) => e.id === 'bf-nokey-1')!;
+  assert.equal(sw.dpMap, undefined, 'the fixture file itself carries no dpMap');
+  assert.equal(tuyaLocal.getDpMap('bf-nokey-1'), null);
+});
+
+test('getDpMap: null for an unknown device id', () => {
+  assert.equal(tuyaLocal.getDpMap('no-such-device-at-all'), null);
+});
+
+test('setDpMap/getDpMap: round-trips a code->dp map in both directions', () => {
+  const codeToDp = new Map([['switch_1', 1], ['cur_power', 19]]);
+  tuyaLocal.setDpMap('bf-switch-1', codeToDp);
+  const got = tuyaLocal.getDpMap('bf-switch-1');
+  assert.ok(got);
+  assert.equal(got!.codeToDp.get('switch_1'), 1);
+  assert.equal(got!.codeToDp.get('cur_power'), 19);
+  assert.equal(got!.dpToCode.get(1), 'switch_1');
+  assert.equal(got!.dpToCode.get(19), 'cur_power');
+});
+
+test('setDpMap: a no-op on an unknown device id (never throws, never grows the registry)', () => {
+  const before = tuyaLocal.listRegistry().length;
+  assert.doesNotThrow(() => tuyaLocal.setDpMap('totally-unknown-device', new Map([['switch_1', 1]])));
+  assert.equal(tuyaLocal.listRegistry().length, before);
+  assert.equal(tuyaLocal.getDpMap('totally-unknown-device'), null);
+});
+
+test('setDpMap: an empty map is a no-op — never wipes a previously-captured dpMap', () => {
+  tuyaLocal.setDpMap('bf-futurever-1', new Map([['switch_1', 1]]));
+  assert.ok(tuyaLocal.getDpMap('bf-futurever-1'));
+  tuyaLocal.setDpMap('bf-futurever-1', new Map());
+  const got = tuyaLocal.getDpMap('bf-futurever-1');
+  assert.ok(got, 'the previously-set map must still be there — an empty map never overwrites it');
+  assert.equal(got!.codeToDp.get('switch_1'), 1);
+});
+
+test('getDiagnostics: dpMapCaptured/dpMapsCaptured reflect setDpMap without ever leaking the map contents', () => {
+  tuyaLocal.setDpMap('bf-v35-1', new Map([['switch_1', 1]]));
+  const diag = tuyaLocal.getDiagnostics();
+  const v35 = diag.devices.find((d) => d.id === 'bf-v35-1');
+  assert.ok(v35);
+  assert.equal(v35!.dpMapCaptured, true);
+  assert.ok(diag.totals.dpMapsCaptured >= 1);
+  const json = JSON.stringify(diag);
+  assert.ok(!json.includes('switch_1'), 'dp-map contents (cloud codes) must never appear in diagnostics output');
+});

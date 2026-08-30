@@ -275,6 +275,16 @@ export function setTuyaLocalControl(enabledRaw: unknown): unknown {
   return tuyaLocal.getDiagnostics();
 }
 
+/** POST /api/integrations/tuya/local/capture-dpmaps — docs/49 Change 4: front-load every
+ *  locally-capable device's cloud/local dp-map in one pass while the Tuya project's cloud
+ *  quota is briefly alive, so a later IoT-Core blackout needs zero cloud calls to keep
+ *  controlling the LAN-capable fleet. Admin-gated at the route (index.ts), like every other
+ *  Tuya integration write. Returns the capture tally; never throws on one device's failure. */
+export async function captureTuyaLocalDpMaps(): Promise<unknown> {
+  const result = await tuya.captureDpMaps();
+  return { ts: new Date().toISOString(), ...result };
+}
+
 // ---- Scenes -----------------------------------------------------------------
 // A scene = a named set of per-light targets (on/off + optional brightness).
 // Applying a scene sends the matching Tuya commands to each member light.

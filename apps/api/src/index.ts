@@ -118,6 +118,7 @@ import {
   setTuyaIntegration,
   disconnectTuyaIntegration,
   setTuyaLocalControl,
+  captureTuyaLocalDpMaps,
   listScenes,
   createScene,
   updateScene,
@@ -1299,6 +1300,14 @@ app.put(
   "/api/integrations/tuya/local",
   requireAdmin,
   wrap((req) => setTuyaLocalControl((req.body as { enabled?: unknown } | undefined)?.enabled)),
+);
+// One-shot dp-map capture (docs/49 Change 4) — front-loads every locally-capable device's
+// cloud/local dp-map in one pass while cloud is briefly alive. Admin-gated like every other
+// Tuya integration write above.
+app.post(
+  "/api/integrations/tuya/local/capture-dpmaps",
+  requireAdmin,
+  wrap(() => captureTuyaLocalDpMaps()),
 );
 
 // ---- Configurable connections (Sonnen / Weather / Tesla) ----
