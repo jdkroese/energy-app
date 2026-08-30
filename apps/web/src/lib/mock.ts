@@ -526,7 +526,13 @@ export const MOCK_WATER_SETTINGS: WaterSettingsResponse = {
   tariff: {
     periodMonths: 2,
     supplyFixedEurPeriod: 27.34,
-    supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+    blockMode: 'all-at-last',
+    supplyBlocks: [
+      { upToM3: 10, eurM3: 0.15 },
+      { upToM3: 40, eurM3: 0.63 },
+      { upToM3: 70, eurM3: 1.37 },
+      { upToM3: null, eurM3: 1.86 },
+    ],
     sanitationFixedEurPeriod: 7.3,
     sanitationEurM3: 0.412,
     ivaPct: 10,

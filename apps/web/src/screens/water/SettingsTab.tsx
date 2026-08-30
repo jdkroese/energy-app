@@ -36,44 +36,55 @@ function calcBill(t: WaterTariff, m3: number, months = 1) {
   const fixedShare = months / (t.periodMonths > 0 ? t.periodMonths : 1);
   const blocks = t.supplyBlocks?.length ? t.supplyBlocks : [{ upToM3: null, eurM3: 0 }];
 
+  const bandOf = (v: number) => blocks.find((b) => b.upToM3 === null || v <= b.upToM3) ?? blocks[blocks.length - 1];
+
   const parts: { label: string; m3: number; eur: number }[] = [];
-  let lower = 0;
-  let remaining = vol;
-  for (const b of blocks) {
-    if (remaining <= 0) break;
-    const span = b.upToM3 === null ? Infinity : Math.max(0, b.upToM3 - lower);
-    const take = Math.min(remaining, span);
-    if (take > 0) {
-      const label =
-        blocks.length === 1
-          ? 'Water consumed'
-          : b.upToM3 === null
-            ? `Water consumed (above ${lower} m³)`
-            : `Water consumed (${lower}–${b.upToM3} m³)`;
-      parts.push({ label, m3: take, eur: take * b.eurM3 });
-      remaining -= take;
+  if (vol > 0) {
+    if (t.blockMode === 'all-at-last') {
+      // AMJASA: every m³ at the price of the last m³ consumed.
+      const b = bandOf(vol);
+      parts.push({
+        label: b.upToM3 === null ? 'Water consumed — top band' : `Water consumed — ≤${b.upToM3} m³ band`,
+        m3: vol,
+        eur: vol * b.eurM3,
+      });
+    } else {
+      let lower = 0;
+      let remaining = vol;
+      for (const b of blocks) {
+        if (remaining <= 0) break;
+        const span = b.upToM3 === null ? Infinity : Math.max(0, b.upToM3 - lower);
+        const take = Math.min(remaining, span);
+        if (take > 0) {
+          parts.push({
+            label: b.upToM3 === null ? `Water consumed (above ${lower} m³)` : `Water consumed (${lower}–${b.upToM3} m³)`,
+            m3: take,
+            eur: take * b.eurM3,
+          });
+          remaining -= take;
+        }
+        if (b.upToM3 === null) break;
+        lower = b.upToM3;
+      }
     }
-    if (b.upToM3 === null) break;
-    lower = b.upToM3;
   }
 
   const supplyFixed = t.supplyFixedEurPeriod * fixedShare;
-  const supplyVolume = parts.reduce((a, x) => a + x.eur, 0);
-  const supplyBase = supplyFixed + supplyVolume;
+  const supplyBase = supplyFixed + parts.reduce((a, x) => a + x.eur, 0);
   const iva = supplyBase * (t.ivaPct / 100);
   const sanitationFixed = t.sanitationFixedEurPeriod * fixedShare;
   const sanitationVolume = vol * t.sanitationEurM3;
-  const sanitationBase = sanitationFixed + sanitationVolume;
 
   return {
     parts,
+    band: bandOf(vol),
     supplyFixed,
     supplyBase,
     iva,
     sanitationFixed,
     sanitationVolume,
-    sanitationBase,
-    total: supplyBase + iva + sanitationBase,
+    sanitationBase: sanitationFixed + sanitationVolume,
+    total: supplyBase + iva + sanitationFixed + sanitationVolume,
   };
 }
 
@@ -377,11 +388,71 @@ function TariffCard({ settings, isAdmin, monthM3, onSaved }: { settings: WaterSe
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <Input label={`Water standing charge (€ / ${t.periodMonths} months)`} type="number" min={0} step={0.01} disabled={!isAdmin} value={t.supplyFixedEurPeriod} onChange={(e) => set({ supplyFixedEurPeriod: Number(e.target.value) })} />
-        <Input label="Water rate (€/m³)" type="number" min={0} step={0.001} disabled={!isAdmin} value={t.supplyBlocks[0]?.eurM3 ?? 0} onChange={(e) => set({ supplyBlocks: [{ upToM3: null, eurM3: Number(e.target.value) }] })} />
         <Input label={`EPSAR standing charge (€ / ${t.periodMonths} months)`} type="number" min={0} step={0.01} disabled={!isAdmin} value={t.sanitationFixedEurPeriod} onChange={(e) => set({ sanitationFixedEurPeriod: Number(e.target.value) })} />
         <Input label="EPSAR rate (€/m³)" type="number" min={0} step={0.001} disabled={!isAdmin} value={t.sanitationEurM3} onChange={(e) => set({ sanitationEurM3: Number(e.target.value) })} />
         <Input label="Billing period (months)" type="number" min={1} max={12} step={1} disabled={!isAdmin} value={t.periodMonths} onChange={(e) => set({ periodMonths: Number(e.target.value) })} />
         <Input label="IVA on water (%)" type="number" min={0} step={1} disabled={!isAdmin} value={t.ivaPct} onChange={(e) => set({ ivaPct: Number(e.target.value) })} />
+      </div>
+
+      {/* Consumption bands. AMJASA prices EVERY m³ at the band the total reaches, so
+          the boundaries are cliffs, not gentle steps — worth showing explicitly. */}
+      <div style={{ marginTop: 14 }}>
+        <Eyebrow>Consumption bands · per {t.periodMonths}-month period</Eyebrow>
+        <div style={{ fontSize: 11.5, color: 'var(--text-2)', margin: '6px 0 10px' }}>
+          {t.blockMode === 'all-at-last'
+            ? 'Every m³ is billed at the rate of the band your total reaches — so crossing a boundary re-prices the whole period.'
+            : 'Each m³ is billed at its own band’s rate.'}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {t.supplyBlocks.map((b, i) => {
+            const lower = i === 0 ? 0 : ((t.supplyBlocks[i - 1].upToM3 ?? 0) + 1);
+            const active = bill.band === b;
+            return (
+              <div
+                key={i}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 110px 110px',
+                  gap: 8,
+                  alignItems: 'center',
+                  padding: '7px 9px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: active ? 'var(--water-wash)' : 'transparent',
+                  border: `1px solid ${active ? 'var(--border-water)' : 'var(--border-1)'}`,
+                }}
+              >
+                <div style={{ fontSize: 12.5, color: active ? 'var(--water)' : 'var(--text-2)', fontWeight: active ? 600 : 400 }}>
+                  {b.upToM3 === null ? `Over ${lower - 1} m³` : `${lower}–${b.upToM3} m³`}
+                  {active && <span style={{ fontSize: 10.5, marginLeft: 7, opacity: 0.85 }}>you are here</span>}
+                </div>
+                <Input
+                  aria-label={`Band ${i + 1} upper bound in cubic metres`}
+                  type="number"
+                  min={0}
+                  disabled={!isAdmin || b.upToM3 === null}
+                  value={b.upToM3 ?? ''}
+                  placeholder="no limit"
+                  onChange={(e) => {
+                    const next = t.supplyBlocks.map((x, k) => (k === i ? { ...x, upToM3: Number(e.target.value) } : x));
+                    set({ supplyBlocks: next });
+                  }}
+                />
+                <Input
+                  aria-label={`Band ${i + 1} rate in euros per cubic metre`}
+                  type="number"
+                  min={0}
+                  step={0.001}
+                  disabled={!isAdmin}
+                  value={b.eurM3}
+                  onChange={(e) => {
+                    const next = t.supplyBlocks.map((x, k) => (k === i ? { ...x, eurM3: Number(e.target.value) } : x));
+                    set({ supplyBlocks: next });
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 10 }}>{err}</div>}

@@ -490,6 +490,7 @@ export function setWaterSettings(body: unknown): unknown {
       const tf = b.tariff;
       const c = s.water.tariff;
       if (isNum(tf.periodMonths)) c.periodMonths = clamp(tf.periodMonths, 1, 12);
+      if (tf.blockMode === 'all-at-last' || tf.blockMode === 'progressive') c.blockMode = tf.blockMode;
       if (isNum(tf.supplyFixedEurPeriod)) c.supplyFixedEurPeriod = clamp(tf.supplyFixedEurPeriod, 0, 1000);
       if (isNum(tf.sanitationFixedEurPeriod)) c.sanitationFixedEurPeriod = clamp(tf.sanitationFixedEurPeriod, 0, 1000);
       if (isNum(tf.sanitationEurM3)) c.sanitationEurM3 = clamp(tf.sanitationEurM3, 0, 100);

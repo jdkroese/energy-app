@@ -2872,7 +2872,12 @@ export interface WaterTariff {
   /** Months per billing period (AMJASA: 2). Standing charges are per period. */
   periodMonths: number;
   supplyFixedEurPeriod: number;
-  /** Progressive; a single open-ended entry means a flat rate. */
+  /**
+   * 'all-at-last' = every m³ billed at the band the total reaches (AMJASA's rule:
+   * "Se facturarán todos los m³ al mismo precio que el último m³ consumido").
+   * 'progressive' = each m³ at its own band's rate. At 25 m³ these differ by 195%.
+   */
+  blockMode: 'all-at-last' | 'progressive';
   supplyBlocks: WaterTariffBlock[];
   sanitationFixedEurPeriod: number;
   sanitationEurM3: number;

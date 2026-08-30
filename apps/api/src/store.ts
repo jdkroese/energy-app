@@ -161,7 +161,19 @@ export interface WaterTariff {
   periodMonths: number;
   /** Supply standing charge per billing period, set by meter calibre. */
   supplyFixedEurPeriod: number;
-  /** Supply volumetric rate(s), progressive. A single open-ended entry = a flat rate. */
+  /**
+   * How the bands price consumption.
+   *
+   *  'all-at-last'  — EVERY m³ is billed at the rate of the band the total reaches.
+   *                   This is AMJASA's rule, stated verbatim in their tariff:
+   *                   "Se facturarán todos los m³ al mismo precio que el último m³
+   *                   consumido." It creates hard cliffs at each boundary.
+   *  'progressive'  — the usual utility model: each m³ billed at its own band's rate.
+   *
+   * Getting this wrong is not a rounding error. At 25 m³ the two differ by 195%.
+   */
+  blockMode: 'all-at-last' | 'progressive';
+  /** Consumption bands, ascending, final band open-ended (upToM3 null). */
   supplyBlocks: WaterTariffBlock[];
   /** EPSAR sanitation standing charge per billing period. */
   sanitationFixedEurPeriod: number;
@@ -170,6 +182,7 @@ export interface WaterTariff {
   /** IVA %, applied to the SUPPLY portion only — sanitation is exempt. */
   ivaPct: number;
 }
+
 
 /**
  * REAL AMJASA rates, from factura 3/1836657 (period JULIO–AGOSTO 2026, 152 m³,
@@ -189,13 +202,20 @@ export interface WaterTariff {
 export function defaultWaterTariff(): WaterTariff {
   return {
     periodMonths: 2,
-    supplyFixedEurPeriod: 27.34,
-    supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+    supplyFixedEurPeriod: 27.34, // calibre "> 13 ≤ 15" mm
+    blockMode: 'all-at-last',
+    supplyBlocks: [
+      { upToM3: 10, eurM3: 0.15 },
+      { upToM3: 40, eurM3: 0.63 },
+      { upToM3: 70, eurM3: 1.37 },
+      { upToM3: null, eurM3: 1.86 },
+    ],
     sanitationFixedEurPeriod: 7.3,
     sanitationEurM3: 0.412,
     ivaPct: 10,
   };
 }
+
 
 /** Water section settings (docs/52): detector thresholds + tariff + per-zone manual
  *  flow-rate overrides (L/min) used until a zone's learned flow is trusted. */
@@ -2985,6 +3005,7 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
   }
   const tariff: WaterTariff = {
     periodMonths: clampNum(tar.periodMonths, base.tariff.periodMonths, 1, 12),
+    blockMode: tar.blockMode === 'progressive' || tar.blockMode === 'all-at-last' ? tar.blockMode : base.tariff.blockMode,
     supplyFixedEurPeriod: clampNum(tar.supplyFixedEurPeriod, base.tariff.supplyFixedEurPeriod, 0, 1000),
     supplyBlocks,
     sanitationFixedEurPeriod: clampNum(tar.sanitationFixedEurPeriod, base.tariff.sanitationFixedEurPeriod, 0, 1000),
