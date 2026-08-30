@@ -47,7 +47,7 @@ export async function listSceneControllers(): Promise<unknown> {
   const ids = Object.keys(controllers);
   const byId = new Map<string, TuyaDevice>();
   if (tuya.isConfigured() && ids.length > 0) {
-    // docs/51 Change 2 drops the wxkg scene switch from the bulk tuya.getDevices() listing
+    // docs/52 Change 2 drops the wxkg scene switch from the bulk tuya.getDevices() listing
     // unconditionally, so it would never resolve via the bulk map any more — this admin page
     // is the one place that's WRONG for (it's the binding UI for a device the app otherwise
     // hides). Resolve each controller id directly instead — getDeviceDirect() is per-id and
@@ -163,7 +163,7 @@ export function removeSceneController(deviceId: string): void {
   });
 }
 
-/** PUT /api/integrations/tuya/scene-controllers — docs/51 Change 3: reversible on/off for the
+/** PUT /api/integrations/tuya/scene-controllers — docs/52 Change 3: reversible on/off for the
  *  scene-controller coordinator's cloud device-logs poll. Persisted, default OFF. Starts/stops
  *  the coordinator's interval immediately (idempotent either way) so the toggle takes effect
  *  without an app restart — see sceneControlEnabled()/startControllerCoordinator() in

@@ -4,6 +4,8 @@ export type { Accent } from './Card';
 export { StatTile } from './StatTile';
 export type { Tone } from './StatTile';
 export { RadialGauge } from './RadialGauge';
+export { Sparkline } from './Sparkline';
+export type { SparklineProps } from './Sparkline';
 export { ProgressBar } from './ProgressBar';
 export type { Segment } from './ProgressBar';
 export { Badge } from './Badge';

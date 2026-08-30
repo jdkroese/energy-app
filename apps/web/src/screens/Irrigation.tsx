@@ -40,7 +40,7 @@ import {
   StatTile,
   StatusDot,
 } from "../components/ui";
-import { MobileHeader, Avatar, StaleBanner } from "./_shared";
+import { StaleBanner } from "./_shared";
 
 const DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 /** Weekly plan renders Monday-first. */
@@ -147,7 +147,15 @@ function buildWeeklyPlan(
   });
 }
 
-export function Irrigation({ ctx }: { ctx: ShellContext }) {
+/**
+ * IrrigationPanel — the Rain Bird smart-watering screen, extracted as a panel so
+ * the Water hub (/water, docs/52) can host it as its "Irrigation" tab alongside
+ * Overview/History/Alerts/Settings. Kept in this file (not rebuilt) since it's
+ * large, working, and hard-won; the only change from the old standalone
+ * /irrigation screen is that the MobileHeader now lives in the Water hub instead
+ * of here, so it isn't rendered twice when this panel is one of several tabs.
+ */
+export function IrrigationPanel({ ctx }: { ctx: ShellContext }) {
   const wide = ctx.desktop;
   const nav = useNavigate();
   const { user } = useAuth();
@@ -393,9 +401,6 @@ export function Irrigation({ ctx }: { ctx: ShellContext }) {
 
   return (
     <>
-      {!wide && (
-        <MobileHeader eyebrow="Home" title="Irrigation" right={<Avatar />} />
-      )}
       <div
         style={{
           display: "flex",

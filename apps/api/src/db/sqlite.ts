@@ -57,7 +57,7 @@ export type MeteringDb = {
   close: () => void;
 };
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 let initTried = false;
 let disabledReason: string | null = null;
@@ -219,6 +219,43 @@ function migrate(handle: MeteringDb): void {
       ac_kwh        REAL,               -- production over the day (kWh)
       samples       INTEGER NOT NULL,
       PRIMARY KEY (inverter_id, day)
+    );
+
+    -- ---- Water meter history + attribution (docs/52, schema v4) ------------
+    -- Source is the Contazara meter's own HOURLY reads (no local 5-min sampling — the
+    -- meter itself is hourly-read/daily-upload, not a live feed). All litres. ADDITIVE +
+    -- READ-ONLY + FAIL-SOFT: shares this same fail-soft handle; a fault here can never
+    -- touch the armed control loop.
+    CREATE TABLE IF NOT EXISTS water_hourly (
+      bucket_ts   INTEGER PRIMARY KEY,   -- hour start (unix seconds, Madrid-hour-aligned)
+      litres      REAL,                  -- measured litres over the hour (meter's cmh)
+      index_vol   REAL,                  -- lifetime meter index at/after this hour, if known
+      source      TEXT                   -- provenance, e.g. 'contazara' or 'contazara-backfill'
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS water_daily (
+      day         TEXT PRIMARY KEY,      -- Madrid YYYY-MM-DD
+      litres      REAL,                  -- measured litres over the day (meter's cmd)
+      index_vol   REAL
+    );
+
+    -- Per-hour attribution split (docs/52 P2) — irrigation / household / unexplained.
+    -- zones = JSON array of zone ids that contributed irrigation litres this hour.
+    CREATE TABLE IF NOT EXISTS water_attribution (
+      bucket_ts       INTEGER PRIMARY KEY,
+      irrigation_l    REAL,
+      household_l     REAL,
+      unexplained_l   REAL,
+      zones           TEXT
+    ) WITHOUT ROWID;
+
+    -- Learned per-zone flow rate (L/min), a running average over samples from hours where
+    -- exactly ONE zone ran and no other zone overlapped (see control/water-attribution.ts).
+    CREATE TABLE IF NOT EXISTS water_zone_flow (
+      zone_id     TEXT PRIMARY KEY,
+      lpm         REAL,
+      samples     INTEGER NOT NULL,
+      updated_ts  INTEGER
     );
   `);
   handle

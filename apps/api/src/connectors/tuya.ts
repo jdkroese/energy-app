@@ -276,7 +276,7 @@ function normalizeRaw(d: TuyaRawDevice): TuyaDevice {
   };
 }
 
-// ---- Sub-device / gateway exclusion (docs/51 Change 2) -----------------------------------
+// ---- Sub-device / gateway exclusion (docs/52 Change 2) -----------------------------------
 // Owner decision (2026-08-30): the scene switch (a Zigbee sub-device behind the gateway) and
 // the gateway itself stay in the Tuya app only — they never appear anywhere in the Home app
 // (Devices, onboarding "needs setup", rooms). Applied ONCE here at the fleet boundary
@@ -296,7 +296,7 @@ function subDeviceIds(): Set<string> {
   return new Set(tuyaLocal.listRegistry().filter((e) => e.sub).map((e) => e.id));
 }
 
-/** True when `d` must be dropped from every Home-app surface (docs/51 Change 2): a Zigbee/BLE
+/** True when `d` must be dropped from every Home-app surface (docs/52 Change 2): a Zigbee/BLE
  *  sub-device (cross-referenced by id via `subIds`) or a gateway/hub category. Exported for
  *  tests. */
 export function isExcludedSubOrGateway(d: TuyaDevice, subIds: Set<string>): boolean {
@@ -465,7 +465,7 @@ export async function mapWithConcurrency<T, R>(
 export async function localFleetSnapshot(): Promise<TuyaDevice[]> {
   const entries = tuyaLocal
     .listRegistry()
-    // docs/51 Change 2: sub-devices are already excluded via isLocalCapable (a Zigbee/BLE
+    // docs/52 Change 2: sub-devices are already excluded via isLocalCapable (a Zigbee/BLE
     // sub-device is never locally capable — see tuya-local.ts's capabilityBlockReason), but
     // the explicit `!e.sub` mirrors dropSubAndGateway's predicate for clarity/defense; the
     // gateway category check is NOT otherwise implied by isLocalCapable (a gateway that
@@ -501,7 +501,7 @@ const FLEET_TTL_MS = 20_000;
 // 5 minutes instead of 20s while local control is enabled. Local is reached for only on an
 // outright cloud failure (not configured, quota-blocked, or listDevices() itself throwing) —
 // that's what turns a blackout into a non-event. This cadence (20s -> 5min) is the exact
-// number to verify on the mini. (docs/51 Change 1 adds a THIRD mode on top of this — see
+// number to verify on the mini. (docs/52 Change 1 adds a THIRD mode on top of this — see
 // fleetManualEnabled()/getDevices() below — where local is served unconditionally, never on
 // a cadence at all.)
 const FLEET_TTL_LOCAL_HEALTHY_MS = 300_000;
@@ -513,7 +513,7 @@ function localFleetSnapshotCached(): Promise<TuyaDevice[]> {
   return cached(LOCAL_FLEET_KEY, 20_000, localFleetSnapshot);
 }
 
-// docs/51 Change 1: manual (LAN-only) fleet — a persisted, reversible Settings toggle. DEFAULT
+// docs/52 Change 1: manual (LAN-only) fleet — a persisted, reversible Settings toggle. DEFAULT
 // ON (the owner's explicit 2026-08-30 request: the Home app should make no ROUTINE cloud
 // calls at all). Same undefined/true-is-on convention as tuya-local.ts's isLocalEnabled():
 // only an explicit `false` turns it off. Read fresh from the store on every call (cheap —
@@ -523,7 +523,7 @@ function fleetManualEnabled(): boolean {
 }
 
 /** Cached fleet snapshot. THREE modes, checked in order:
- *  1. docs/51 Change 1 — fleetManual ON + local control ON: ALWAYS serve the local LAN
+ *  1. docs/52 Change 1 — fleetManual ON + local control ON: ALWAYS serve the local LAN
  *     snapshot, never touching cloud automatically (routine cloud usage becomes zero; the only
  *     cloud fleet call left is the explicit POST /api/integrations/tuya/sync below). Manual
  *     with local OFF is contradictory — falls through to the unchanged cloud path instead of
@@ -571,7 +571,7 @@ export interface FleetSyncResult {
 }
 
 /**
- * POST /api/integrations/tuya/sync (docs/51 Change 1) — the ONLY routine cloud fleet call left
+ * POST /api/integrations/tuya/sync (docs/52 Change 1) — the ONLY routine cloud fleet call left
  * once fleetManual is ON: invalidates every cached fleet snapshot, then performs exactly ONE
  * fresh cloud listDevices() call (via the same cached() call getDevices()'s cloud branch uses,
  * so it warms FLEET_KEY too — any surface reading through getDevices() next on a cloud-primary

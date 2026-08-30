@@ -20,6 +20,7 @@ const CSS = `
 .pwr-card[data-accent="grid"]{ --_rail:var(--grid); }
 .pwr-card[data-accent="home"]{ --_rail:var(--home); }
 .pwr-card[data-accent="ev"]{ --_rail:var(--ev); }
+.pwr-card[data-accent="water"]{ --_rail:var(--water); }
 .pwr-card[data-accent="danger"]{ --_rail:var(--danger); }
 .pwr-card__head{ display:flex; align-items:center; gap:var(--space-3); padding:var(--space-4) var(--space-5); border-bottom:1px solid var(--border-1); }
 .pwr-card__title{ font-size:var(--fs-h4); font-weight:var(--fw-semibold); letter-spacing:var(--ls-heading); color:var(--text-1); margin:0; }
@@ -80,12 +81,14 @@ const CSS = `
 .pwr-badge[data-tone="battery"].pwr-badge--soft{ background:var(--battery-wash); color:var(--battery); }
 .pwr-badge[data-tone="grid"].pwr-badge--soft{ background:var(--grid-wash); color:var(--grid); }
 .pwr-badge[data-tone="home"].pwr-badge--soft{ background:var(--home-wash); color:var(--home); }
+.pwr-badge[data-tone="water"].pwr-badge--soft{ background:var(--water-wash); color:var(--water); }
 .pwr-badge[data-tone="danger"].pwr-badge--soft{ background:var(--danger-wash); color:var(--danger); }
 .pwr-badge[data-tone="neutral"].pwr-badge--soft{ background:var(--surface-3); color:var(--text-2); }
 .pwr-badge[data-tone="solar"].pwr-badge--solid{ background:var(--solar); }
 .pwr-badge[data-tone="battery"].pwr-badge--solid{ background:var(--battery); }
 .pwr-badge[data-tone="grid"].pwr-badge--solid{ background:var(--grid); }
 .pwr-badge[data-tone="home"].pwr-badge--solid{ background:var(--home); }
+.pwr-badge[data-tone="water"].pwr-badge--solid{ background:var(--water); }
 .pwr-badge[data-tone="danger"].pwr-badge--solid{ background:var(--danger); color:#fff; }
 .pwr-badge[data-tone="neutral"].pwr-badge--solid{ background:var(--surface-4); color:var(--text-1); }
 
@@ -96,6 +99,7 @@ const CSS = `
 .pwr-status[data-tone="battery"]{ --_c:var(--battery); }
 .pwr-status[data-tone="grid"]{ --_c:var(--grid); }
 .pwr-status[data-tone="home"]{ --_c:var(--home); }
+.pwr-status[data-tone="water"]{ --_c:var(--water); }
 .pwr-status[data-tone="danger"]{ --_c:var(--danger); }
 .pwr-status[data-tone="offline"]{ --_c:var(--text-3); }
 .pwr-status--live .pwr-status__dot::after{ content:""; position:absolute; inset:-3px; border-radius:50%; background:var(--_c); opacity:0.5; animation:pwr-pulse 1.8s var(--ease-out) infinite; }

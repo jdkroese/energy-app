@@ -99,6 +99,83 @@ export function defaultEventsConfig(): EventsConfig {
   };
 }
 
+/**
+ * Water detector thresholds (docs/52 §3/P2) — the "what counts as a leak/anomaly" knobs
+ * for the water attribution + observation detectors. Editable in Settings ▸ Water.
+ */
+export interface WaterThresholds {
+  /** Hourly litres floor below which a house counts as "quiet" at least once a night. */
+  quietHourFloorLph: number;
+  /** Consecutive hours the floor must stay UNCROSSED for the continuous-flow (leak) alert. */
+  continuousFlowHours: number;
+  /** Night-slot (00:00–05:59) litres above which — AFTER subtracting attributed irrigation
+   *  — the night-use alert fires. */
+  nightToleranceL: number;
+  /** Monthly budget (m³) the projected-month-total alert warns against. */
+  monthlyBudgetM3: number;
+  /** A day's unattributed litres above this × the 30-day median fires the daily-spike alert. */
+  dailySpikeFactor: number;
+  /** Hours without a new meter reading before the meter-silent (connector health) alert fires. */
+  meterSilentHours: number;
+}
+
+/** Water detector defaults (docs/52 §3 "Thresholds live in store.ts"). */
+export function defaultWaterThresholds(): WaterThresholds {
+  return {
+    quietHourFloorLph: 5,
+    continuousFlowHours: 24,
+    nightToleranceL: 60,
+    monthlyBudgetM3: 80,
+    dailySpikeFactor: 3,
+    meterSilentHours: 36,
+  };
+}
+
+/**
+ * Spain/AMJASA water tariff (docs/52 P3). Every default here is a PLACEHOLDER, NOT a
+ * published AMJASA rate — the owner must supply a real bill to populate these (docs/52
+ * D5). Cost figures derived from these defaults must be labelled as estimates in the UI.
+ */
+export interface WaterTariff {
+  fixedEurMonth: number;
+  block1: { upToM3: number; eurM3: number };
+  block2: { upToM3: number; eurM3: number };
+  block3: { eurM3: number };
+  sewerEurM3: number;
+  canonEurM3: number;
+  ivaPct: number;
+}
+
+/** PLACEHOLDER tariff defaults (docs/52 D5) — not real AMJASA rates. */
+export function defaultWaterTariff(): WaterTariff {
+  return {
+    fixedEurMonth: 7.2,
+    block1: { upToM3: 15, eurM3: 0.62 },
+    block2: { upToM3: 30, eurM3: 1.08 },
+    block3: { eurM3: 1.86 },
+    sewerEurM3: 0.28,
+    canonEurM3: 0.35,
+    ivaPct: 10,
+  };
+}
+
+/** Water section settings (docs/52): detector thresholds + tariff + per-zone manual
+ *  flow-rate overrides (L/min) used until a zone's learned flow is trusted. */
+export interface WaterState {
+  thresholds: WaterThresholds;
+  tariff: WaterTariff;
+  /** zoneId -> manual L/min override (docs/52 "fall back to a manual per-zone L/min entry"). */
+  zoneFlowOverrides: Record<string, number>;
+}
+
+export function defaultWaterState(): WaterState {
+  return {
+    thresholds: defaultWaterThresholds(),
+    tariff: defaultWaterTariff(),
+    zoneFlowOverrides: {},
+  };
+}
+
 export interface ScenarioWeights {
   save: number;
   self: number;
@@ -407,11 +484,11 @@ export interface IntegrationsState {
    *  it's hardware-verified), explicit false = off. Lets local control be enabled on
    *  the production mini without editing its launchd plist (TUYA_LOCAL_ENABLED env
    *  var still overrides this on top — see isLocalEnabled() in tuya-local.ts).
-   *  `fleetManual` (docs/51 Change 1) — undefined/true = on (the owner's explicit
+   *  `fleetManual` (docs/52 Change 1) — undefined/true = on (the owner's explicit
    *  default): the fleet LIST is served from the local LAN snapshot only, never
    *  auto-polling cloud; explicit false = off (docs/49 cloud-primary behaviour). See
    *  fleetManualEnabled()/getDevices() in tuya.ts.
-   *  `sceneControllersEnabled` (docs/51 Change 3) — undefined/false = OFF (the new
+   *  `sceneControllersEnabled` (docs/52 Change 3) — undefined/false = OFF (the new
    *  default): the scene-controller coordinator's 5s cloud device-logs poll never
    *  runs; explicit true = on (the old always-polling behaviour). See
    *  controller-coordinator.ts. */
@@ -450,6 +527,10 @@ export interface IntegrationsState {
    *  auto-refreshed. NONE of these secrets are ever sent to the client (see routes/spotify.ts).
    *  Playback targets are the owner's Sonos rooms exposed as Spotify Connect devices. */
   spotify?: SpotifyIntegration | null;
+  /** Contazara CZ3000 water-meter (AMJASA telelectura, docs/52). Password is REQUIRED and
+   *  persisted here (same posture as the other connectors — no secrets vault exists yet,
+   *  docs/52 D1). GATED: the connector no-ops until email+password+serial are all set. */
+  contazara?: { email?: string; password?: string; serial?: string; pollHours?: number } | null;
 }
 
 /** Persisted Spotify OAuth state. Secrets never leave the server. */
@@ -1584,6 +1665,8 @@ export interface StoreSchema {
   /** Kitchen Hub connector settings (docs/38 + docs/39). Only the small config lives
    *  here — the bulky content (recipes, plans, drafts) lives in .data/kitchen.json. */
   kitchen: KitchenSettings;
+  /** Water section settings (docs/52): detector thresholds + tariff + zone-flow overrides. */
+  water: WaterState;
 }
 
 // ---- Kitchen Hub (docs/38 + docs/39) — connector settings -------------------
@@ -2240,6 +2323,7 @@ function defaults(): StoreSchema {
     radioNowPlaying: null,
     irrigation: defaultIrrigation(),
     kitchen: defaultKitchen(),
+    water: defaultWaterState(),
   };
 }
 
@@ -2774,6 +2858,11 @@ function hydrate(raw: unknown): StoreSchema {
       ...(p.integrations?.spotify
         ? { spotify: hydrateSpotify(p.integrations.spotify) }
         : {}),
+      // Carry over the Contazara water-meter credentials (docs/52) so a connected
+      // account survives a restart/deploy.
+      ...(p.integrations?.contazara
+        ? { contazara: p.integrations.contazara }
+        : {}),
     },
     deviceSettings: hydrateDeviceSettings(
       p.deviceSettings,
@@ -2824,7 +2913,48 @@ function hydrate(raw: unknown): StoreSchema {
     radioNowPlaying: hydrateRadioNowPlaying(p.radioNowPlaying),
     irrigation: hydrateIrrigation(p.irrigation),
     kitchen: hydrateKitchen(p.kitchen),
+    water: hydrateWater(p.water, base.water),
   };
+}
+
+/** Coerce persisted water-section config, clamping thresholds/tariff to sane ranges. */
+function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): WaterState {
+  if (!p || typeof p !== 'object') return structuredClone(base);
+  const t = p.thresholds ?? ({} as Partial<WaterThresholds>);
+  const tar = p.tariff ?? ({} as Partial<WaterTariff>);
+  const thresholds: WaterThresholds = {
+    quietHourFloorLph: clampNum(t.quietHourFloorLph, base.thresholds.quietHourFloorLph, 0, 200),
+    continuousFlowHours: clampNum(t.continuousFlowHours, base.thresholds.continuousFlowHours, 1, 168),
+    nightToleranceL: clampNum(t.nightToleranceL, base.thresholds.nightToleranceL, 0, 5000),
+    monthlyBudgetM3: clampNum(t.monthlyBudgetM3, base.thresholds.monthlyBudgetM3, 1, 2000),
+    dailySpikeFactor: clampNum(t.dailySpikeFactor, base.thresholds.dailySpikeFactor, 1, 20),
+    meterSilentHours: clampNum(t.meterSilentHours, base.thresholds.meterSilentHours, 1, 720),
+  };
+  const b1 = tar.block1 ?? ({} as Partial<WaterTariff['block1']>);
+  const b2 = tar.block2 ?? ({} as Partial<WaterTariff['block2']>);
+  const b3 = tar.block3 ?? ({} as Partial<WaterTariff['block3']>);
+  const tariff: WaterTariff = {
+    fixedEurMonth: clampNum(tar.fixedEurMonth, base.tariff.fixedEurMonth, 0, 1000),
+    block1: {
+      upToM3: clampNum(b1.upToM3, base.tariff.block1.upToM3, 0, 10000),
+      eurM3: clampNum(b1.eurM3, base.tariff.block1.eurM3, 0, 100),
+    },
+    block2: {
+      upToM3: clampNum(b2.upToM3, base.tariff.block2.upToM3, 0, 10000),
+      eurM3: clampNum(b2.eurM3, base.tariff.block2.eurM3, 0, 100),
+    },
+    block3: { eurM3: clampNum(b3.eurM3, base.tariff.block3.eurM3, 0, 100) },
+    sewerEurM3: clampNum(tar.sewerEurM3, base.tariff.sewerEurM3, 0, 100),
+    canonEurM3: clampNum(tar.canonEurM3, base.tariff.canonEurM3, 0, 100),
+    ivaPct: clampNum(tar.ivaPct, base.tariff.ivaPct, 0, 100),
+  };
+  const zoneFlowOverrides: Record<string, number> = {};
+  if (p.zoneFlowOverrides && typeof p.zoneFlowOverrides === 'object') {
+    for (const [id, v] of Object.entries(p.zoneFlowOverrides)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) zoneFlowOverrides[id] = v;
+    }
+  }
+  return { thresholds, tariff, zoneFlowOverrides };
 }
 
 /** Coerce + migrate persisted irrigation state onto fresh defaults. Defensive: an on-disk

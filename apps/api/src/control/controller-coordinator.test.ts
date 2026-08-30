@@ -1,4 +1,4 @@
-// Unit tests for the scene-controller coordinator's docs/51 Change 3 gating. Run from
+// Unit tests for the scene-controller coordinator's docs/52 Change 3 gating. Run from
 // apps/api:
 //   node --import tsx --test src/control/controller-coordinator.test.ts
 //
@@ -50,7 +50,7 @@ function installFetchSpy(): { calls: string[]; restore: () => void } {
   return { calls, restore: () => { globalThis.fetch = original; } };
 }
 
-test('sceneControlEnabled(): defaults to false (store unset) — the new docs/51 default', () => {
+test('sceneControlEnabled(): defaults to false (store unset) — the new docs/52 default', () => {
   setSceneControlEnabled(undefined);
   assert.equal(sceneControlEnabled(), false);
 });
@@ -98,7 +98,7 @@ test('tick(): scene control ON resolves each enabled controller via a per-device
     }
     if (u.includes('/v1.0/iot-01/associated-users/devices')) {
       // If tick() ever falls back to the bulk fleet listing again, fail loudly here instead
-      // of silently "working" — docs/51 Change 2 excludes wxkg from that listing, so relying
+      // of silently "working" — docs/52 Change 2 excludes wxkg from that listing, so relying
       // on it would silently break scene control the moment it's re-enabled.
       assert.fail('tick() must not call the bulk fleet endpoint — it is filtered and would never resolve a wxkg device');
     }

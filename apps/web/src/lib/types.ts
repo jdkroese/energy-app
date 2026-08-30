@@ -1671,12 +1671,12 @@ export interface TuyaIntegrationStatus {
   error: string | null;
   /** Count of paired devices not yet surfaced by a shipped category screen. */
   needsSetupCount?: number;
-  /** docs/51 Change 1 — manual (LAN-only) fleet listing: default ON, undefined/true = on,
+  /** docs/52 Change 1 — manual (LAN-only) fleet listing: default ON, undefined/true = on,
    *  explicit false = off (cloud-primary, docs/49 behaviour). */
   fleetManual?: boolean;
 }
 
-/** POST /api/integrations/tuya/sync — docs/51 Change 1's "Sync from Tuya cloud" button: one
+/** POST /api/integrations/tuya/sync — docs/52 Change 1's "Sync from Tuya cloud" button: one
  *  explicit cloud fleet refresh. */
 export interface TuyaFleetSyncResult {
   ts: string;
@@ -2196,6 +2196,7 @@ export type EventCategory =
   | 'blinds'
   | 'ev'
   | 'irrigation'
+  | 'water'
   | 'arbitrage'
   | 'grid'
   | 'solar'
@@ -2691,4 +2692,219 @@ export interface LibraryGenerateStatusResponse {
 export interface LibraryGenerateStartResponse extends LibraryGenerateStatusResponse {
   ok: boolean;
   reason?: string;
+}
+
+/* ============================================================================
+ * Water (docs/52) — BI-WATER / Contazara CZ3000 NB-IoT meter. Attribution-first:
+ * every litre the meter measures is split into irrigation (reconciled against
+ * logged Rain Bird zone sessions) / household / unexplained — unexplained litres
+ * are the product. Reads any-authed; Settings writes are admin. Mirrors the
+ * contract in apps/api/src/routes/water.ts (built by a separate agent — the
+ * inner shapes of `thresholds`/`tariff` aren't spelled out in the contract, so
+ * they're defined here to the shape the Settings/Alerts tabs need).
+ * ==========================================================================*/
+
+export interface WaterMeter {
+  serial: string;
+  model: string;
+  address: string;
+  indexL: number;
+  lastReadingIso: string | null;
+  /** Hours since the meter last reported — the connector is a ~daily-upload feed,
+   *  not live, so this (not a green dot) is the honest freshness signal. */
+  staleHours: number | null;
+}
+
+/** One hour of GET /api/water `today.hours` — the meter's own hourly buckets. */
+export interface WaterHourBucket {
+  h: number; // 0–23
+  totalL: number;
+  householdL: number;
+  irrigationL: number;
+  unexplainedL: number;
+  /** False for hours the meter hasn't uploaded yet (hourly-read, ~daily-upload cadence). */
+  reported: boolean;
+}
+
+export interface WaterToday {
+  dateIso: string;
+  totalL: number;
+  householdL: number;
+  irrigationL: number;
+  unexplainedL: number;
+  hours: WaterHourBucket[];
+}
+
+/** The leak detector's core signal (docs/52 §1): the lowest single-hour reading
+ *  in the rolling 24h window. A healthy house hits ~0 at some point every night;
+ *  a leaking one has a floor that never clears. */
+export interface WaterQuietHour {
+  lowestLph: number;
+  atHour: number | null;
+  hoursSinceBelowFloor: number | null;
+  floorLph: number;
+  ok: boolean;
+}
+
+export interface WaterMonth {
+  m3: number;
+  householdM3: number;
+  irrigationM3: number;
+  unexplainedM3: number;
+  expectedM3: number;
+  costEur: number;
+  budgetM3: number;
+  projectedM3: number;
+}
+
+/** A Rain Bird zone's learned flow rate, from hours where exactly one zone ran
+ *  alone (docs/52 §3 P2). `learned=false` means it's still the configured default. */
+export interface WaterZoneAttribution {
+  id: string;
+  name: string;
+  lpm: number;
+  samples: number;
+  learned: boolean;
+}
+
+export type WaterAlertSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export interface WaterActiveAlert {
+  id: string;
+  rule: string;
+  severity: WaterAlertSeverity;
+  title: string;
+  sub: string;
+  sinceIso: string;
+}
+
+export interface WaterResponse {
+  ts: string;
+  /** False until credentials are saved in Settings — the owner hasn't connected
+   *  yet, so this is the state the app is actually in on first deploy. */
+  configured: boolean;
+  connected: boolean;
+  lastError: string | null;
+  meter: WaterMeter | null;
+  today: WaterToday;
+  quietHour: WaterQuietHour;
+  month: WaterMonth;
+  zones: WaterZoneAttribution[];
+  activeAlerts: WaterActiveAlert[];
+}
+
+export type WaterHistoryRange = 'day' | 'week' | 'month' | 'year';
+
+/** Fixed stack order irrigation -> household -> unexplained (index.css comment) —
+ *  keep every consumer of this series in that order. */
+export interface WaterHistorySeries {
+  total: number[];
+  household: number[];
+  irrigation: number[];
+  unexplained: number[];
+}
+
+/** Cumulative "measured vs accounted for" curve for the Overview chart. */
+export interface WaterCumulative {
+  actual: number[];
+  expected: number[];
+}
+
+export interface WaterDayparts {
+  night: number[];
+  morning: number[];
+  afternoon: number[];
+  evening: number[];
+}
+
+export interface WaterHistoryTotals {
+  totalL: number;
+  householdL: number;
+  irrigationL: number;
+  unexplainedL: number;
+  costEur: number;
+}
+
+export interface WaterHistoryResponse {
+  ts: string;
+  range: WaterHistoryRange;
+  offset: number;
+  label: string;
+  labels: string[];
+  series: WaterHistorySeries;
+  cumulative: WaterCumulative;
+  dayparts: WaterDayparts;
+  nightBaseline: number[];
+  totals: WaterHistoryTotals;
+}
+
+/** Detection-rule thresholds (docs/52 §3 P2's five detectors), each independently
+ *  enable-able — the Alerts tab's per-rule switches read/write this object. */
+/* Mirrors WaterThresholds in apps/api/src/store.ts — keep the two in step.
+ * Flat, with no per-detector `enabled` flag: enable/disable already lives in the
+ * `rule-water-*` entries in RULE_META (routes/alerts.ts), so duplicating it here
+ * would give one switch two sources of truth. */
+export interface WaterThresholds {
+  /** Hourly litres floor below which a house counts as "quiet" at least once a night. */
+  quietHourFloorLph: number;
+  /** Consecutive hours the floor must stay uncrossed before the leak alert fires. */
+  continuousFlowHours: number;
+  /** Night-slot (00:00–05:59) litres, AFTER subtracting attributed irrigation. */
+  nightToleranceL: number;
+  monthlyBudgetM3: number;
+  dailySpikeFactor: number;
+  meterSilentHours: number;
+}
+
+/** Spain/AMJASA tariff (docs/52 §3 P3) — every default is a placeholder pending
+ *  a real bill (docs/52 D5); the Settings tab labels cost figures as estimates. */
+export interface WaterTariff {
+  fixedEurMonth: number;
+  block1: { upToM3: number; eurM3: number };
+  block2: { upToM3: number; eurM3: number };
+  /** The top/marginal block — what a leak actually costs. */
+  block3: { eurM3: number };
+  sewerEurM3: number;
+  canonEurM3: number;
+  ivaPct: number;
+}
+
+export interface WaterSettingsResponse {
+  ts: string;
+  configured: boolean;
+  connected: boolean;
+  hasPassword: boolean;
+  email: string;
+  serial: string;
+  pollHours: number;
+  thresholds: WaterThresholds;
+  tariff: WaterTariff;
+}
+
+/** PATCH-style save body — all fields optional, password omitted keeps the
+ *  stored one (same convention as RainbirdConnection/setSonnen/etc). */
+export type WaterSettingsPatch = Partial<{
+  email: string;
+  password: string;
+  serial: string;
+  pollHours: number;
+  thresholds: Partial<WaterThresholds>;
+  tariff: Partial<Omit<WaterTariff, 'block1' | 'block2' | 'block3'>> & {
+    block1?: Partial<WaterTariff['block1']>;
+    block2?: Partial<WaterTariff['block2']>;
+    block3?: Partial<WaterTariff['block3']>;
+  };
+}>;
+
+export interface WaterSettingsSaveResponse {
+  ok: boolean;
+  detail: string;
+}
+
+/** POST /api/integrations/water(/test) — same ProbeResult shape as every other
+ *  connector, plus an optional meter probe echo on success. */
+export interface WaterIntegrationTestResponse {
+  ok: boolean;
+  detail: string;
+  meter?: { serial: string; indexL: number } | null;
 }

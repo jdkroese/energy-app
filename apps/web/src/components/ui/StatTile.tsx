@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { ensureDsStyles } from './dsStyles';
 
-export type Tone = 'solar' | 'battery' | 'grid' | 'home' | 'ev' | 'neutral';
+export type Tone = 'solar' | 'battery' | 'grid' | 'home' | 'ev' | 'water' | 'neutral';
 
 const TONE: Record<Tone, [string | null, string | null]> = {
   solar: ['var(--solar)', 'var(--solar-wash)'],
@@ -9,6 +9,7 @@ const TONE: Record<Tone, [string | null, string | null]> = {
   grid: ['var(--grid)', 'var(--grid-wash)'],
   home: ['var(--home)', 'var(--home-wash)'],
   ev: ['var(--ev)', 'var(--ev-wash)'],
+  water: ['var(--water)', 'var(--water-wash)'],
   neutral: [null, null],
 };
 

@@ -21,7 +21,7 @@ const tuya = await import('./tuya');
 const tuyaLocal = await import('./tuya-local');
 const store = await import('../store');
 // Boot decision (module-import-time `if (isLocalEnabled()) startDiscoveryListener()`) is made
-// with local hard-disabled above — restore to "unset" so the docs/51 getDevices() tests below
+// with local hard-disabled above — restore to "unset" so the docs/52 getDevices() tests below
 // can exercise real on/off semantics via the store, same pattern as tuya-local.test.ts.
 delete process.env.TUYA_LOCAL_ENABLED;
 const {
@@ -38,7 +38,7 @@ const {
   invalidateFleet,
 } = tuya;
 
-/** docs/51 test helper: set local (LAN) control on/off via the store (the env kill-switch is
+/** docs/52 test helper: set local (LAN) control on/off via the store (the env kill-switch is
  *  deleted above so this takes effect). */
 function setLocalControl(enabled: boolean): void {
   store.update((s) => {
@@ -47,7 +47,7 @@ function setLocalControl(enabled: boolean): void {
   });
 }
 
-/** docs/51 test helper: set the manual (LAN-only) fleet toggle via the store.
+/** docs/52 test helper: set the manual (LAN-only) fleet toggle via the store.
  *  `undefined` restores the default (ON). */
 function setFleetManual(enabled: boolean | undefined): void {
   store.update((s) => {
@@ -376,10 +376,10 @@ test('captureDpMaps: a device the cloud has no thing-model for counts as failed,
   }
 });
 
-// ---- docs/51: manual (LAN-only) fleet + sub-device/gateway exclusion --------------------
+// ---- docs/52: manual (LAN-only) fleet + sub-device/gateway exclusion --------------------
 // Mocks global.fetch to stand in for BOTH the token endpoint and the cloud fleet endpoints
 // (bulk associated-users listing + the per-device direct read) so every assertion below can
-// see EXACTLY which URLs (if any) were hit — the whole point of docs/51 Change 1 is that a
+// see EXACTLY which URLs (if any) were hit — the whole point of docs/52 Change 1 is that a
 // manual+local-on getDevices() call must hit none of them at all.
 
 function installFleetFetchMock(opts: {
@@ -436,7 +436,7 @@ test('isKnownExcludedId: true for a registry sub-device or gateway id (zero clou
   assert.equal(isKnownExcludedId('bf-totally-unknown-1'), false, 'unclassifiable ids are never excluded by guess');
 });
 
-test('getDevices(): cloud path drops the gateway (wg2) + a registry-flagged sub-device, keeps a normal device (docs/51 Change 2)', async () => {
+test('getDevices(): cloud path drops the gateway (wg2) + a registry-flagged sub-device, keeps a normal device (docs/52 Change 2)', async () => {
   setTuyaCreds();
   setFleetManual(false); // exercise the cloud path directly
   setLocalControl(false);
@@ -503,7 +503,7 @@ test('getDevices(): fleetManual ON + local OFF is contradictory — falls throug
   }
 });
 
-test('getDevices(): fleetManual OFF preserves the pre-docs/51 cloud-primary behaviour regardless of local (acceptance #6)', async () => {
+test('getDevices(): fleetManual OFF preserves the pre-docs/52 cloud-primary behaviour regardless of local (acceptance #6)', async () => {
   setTuyaCreds();
   setFleetManual(false);
   setLocalControl(true);

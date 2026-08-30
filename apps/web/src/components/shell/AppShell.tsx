@@ -22,7 +22,7 @@ const META: Record<string, { eyebrow: string; title: string }> = {
   '/reports': { eyebrow: 'Reports', title: 'Reports' },
   '/batteries': { eyebrow: 'Energy', title: 'Solar & batteries' },
   '/devices': { eyebrow: 'Home', title: 'Devices' },
-  '/irrigation': { eyebrow: 'Home', title: 'Irrigation' },
+  '/water': { eyebrow: 'Water', title: 'Every litre, accounted for' },
   '/rooms': { eyebrow: 'Home', title: 'Rooms' },
   '/alerts': { eyebrow: 'Alerts', title: 'Notifications' },
   // /settings title is dynamic — the TopBar shows the active Settings tab (Reports-style).
