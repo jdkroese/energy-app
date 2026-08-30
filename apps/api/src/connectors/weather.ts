@@ -229,7 +229,15 @@ export interface CurrentConditions {
   temperatureC: number;
   /** km/h at 10 m */
   windSpeedKmh: number;
+  /** Extras for the expanded weather panel; each independently nullable. */
+  apparentC?: number | null;
+  humidityPct?: number | null;
+  cloudPct?: number | null;
+  precipMm?: number | null;
+  isDay?: boolean | null;
+  weatherCode?: number | null;
 }
+
 
 /**
  * Fetch just the current-hour temperature + wind speed for the site — a cheap
@@ -242,20 +250,39 @@ export async function getCurrentConditions(): Promise<CurrentConditions | null> 
     const { lat, lon } = weatherCoords();
     const url =
       `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-      `&current=temperature_2m,wind_speed_10m&timezone=Europe%2FMadrid`;
+      `&current=temperature_2m,wind_speed_10m,relative_humidity_2m,cloud_cover,precipitation,apparent_temperature,is_day,weather_code` +
+      `&timezone=Europe%2FMadrid`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
     const json = (await res.json()) as {
-      current?: { temperature_2m?: number; wind_speed_10m?: number };
+      current?: {
+        temperature_2m?: number;
+        wind_speed_10m?: number;
+        relative_humidity_2m?: number;
+        cloud_cover?: number;
+        precipitation?: number;
+        apparent_temperature?: number;
+        is_day?: number;
+        weather_code?: number;
+      };
     };
     const c = json.current;
     if (typeof c?.temperature_2m !== "number" || typeof c?.wind_speed_10m !== "number") {
       return null;
     }
+    const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
     return {
       ts: new Date().toISOString(),
       temperatureC: c.temperature_2m,
       windSpeedKmh: Math.max(0, c.wind_speed_10m),
+      // Extras for the expanded weather panel. Each is independently nullable —
+      // Open-Meteo can drop a field, and a missing humidity must not blank the pill.
+      apparentC: num(c.apparent_temperature),
+      humidityPct: num(c.relative_humidity_2m),
+      cloudPct: num(c.cloud_cover),
+      precipMm: num(c.precipitation),
+      isDay: c.is_day === undefined ? null : c.is_day === 1,
+      weatherCode: num(c.weather_code),
     };
   } catch {
     return null;
