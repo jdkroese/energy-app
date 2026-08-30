@@ -1787,6 +1787,12 @@ setEventForwarder((ev: EnergyEvent) => {
   return fired ? (["threshold"] as EnergyEvent["notified"]) : undefined;
 });
 
+// Start the Tuya LAN discovery listener (receive-only UDP on 6666/6667), if local control
+// is enabled. This used to run as an import side effect inside tuya-local.ts; it lives here
+// now so that merely importing that module — which anything touching Tuya, lights, climate
+// or /api/live does transitively — never opens a socket. See docs/53.
+tuyaLocal.bootLocalDiscovery();
+
 // Start the background alert loop (shadow/read-only — notifications only).
 startAlertLoop();
 

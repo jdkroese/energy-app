@@ -1132,11 +1132,50 @@ export function startDiscoveryListener(): void {
           /* not fatal — we only ever receive */
         }
       });
+      // Receive-only: this listener must never be the reason the process stays alive. In
+      // production the HTTP server holds the event loop open, so unref() changes nothing
+      // there; it only means a short-lived process (a test, an ops one-shot) that happened
+      // to start discovery can still exit on its own.
+      sock.unref?.();
       sockets.push(sock);
     } catch {
       /* port unavailable — degrade silently, receive-only so nothing else depends on it */
     }
   }
+}
+
+/** Whether the UDP discovery listener has been started in this process. Read-only; the
+ *  only thing that flips it is startDiscoveryListener(). Exists so a test can assert that
+ *  merely IMPORTING this module never starts it — see tuya-local-boot.test.ts and docs/53.
+ *  (An active-handle check can't answer that: the sockets are unref'd, and unref'd handles
+ *  are invisible to process.getActiveResourcesInfo().) */
+export function isDiscoveryRunning(): boolean {
+  return discoveryStarted;
+}
+
+// ---- Boot ------------------------------------------------------------------------------
+// Called explicitly from index.ts at startup — NOT as an import side effect. Importing this
+// module (which anything touching Tuya, lights, climate or /api/live does, transitively)
+// must not open sockets or start loops: that used to keep the event loop alive forever and
+// hung seven `node --test` files that never got anywhere near Tuya. See docs/53.
+//
+// isLocalEnabled() (not a raw env check) so the store's default-ON setting starts discovery
+// at boot too — the production mini restarts on every deploy (no env var needed there), so
+// this is what actually activates local control without touching the launchd plist.
+//
+// A later RUNTIME toggle (PUT /api/integrations/tuya/local, i.e. the Settings switch) flips
+// isLocalEnabled()'s return value immediately — sendCommands/readStatus re-check it on every
+// call, so disabling stops new local attempts right away. Re-enabling on a process that
+// booted with discovery already running (the common case: production boots enabled by
+// default) just resumes using the listener that's been running the whole time, no gap. The
+// one asymmetric case: a process that booted with local OFF (TUYA_LOCAL_ENABLED='0', or the
+// store already had localControl:false before this process's first boot) never called
+// startDiscoveryListener() here, so re-enabling later via the Settings toggle makes tuya.ts
+// start consulting this module again but WITHOUT a live discovery listener — already-known
+// devices (lanIp persisted in tuya-local.json from a prior run) still work, but a lanIp that
+// moved (DHCP) or a newly-harvested device won't be picked up until the process restarts.
+export function bootLocalDiscovery(): void {
+  if (isLocalEnabled()) startDiscoveryListener();
 }
 
 /** Stop the discovery listener and release its sockets (tests / graceful shutdown). */
@@ -1239,22 +1278,4 @@ export function getDiagnostics(): LocalDiagnostics {
   };
 }
 
-// ---- Boot ------------------------------------------------------------------------------
-// isLocalEnabled() (not a raw env check) so the store's default-ON setting starts discovery
-// at boot too — the production mini restarts on every deploy (no env var needed there), so
-// this is what actually activates local control without touching the launchd plist.
-//
-// A later RUNTIME toggle (PUT /api/integrations/tuya/local, i.e. the Settings switch) flips
-// isLocalEnabled()'s return value immediately — sendCommands/readStatus re-check it on every
-// call, so disabling stops new local attempts right away. Re-enabling on a process that
-// booted with discovery already running (the common case: production boots enabled by
-// default) just resumes using the listener that's been running the whole time, no gap. The
-// one asymmetric case: a process that booted with local OFF (TUYA_LOCAL_ENABLED='0', or the
-// store already had localControl:false before this process's first boot) never called
-// startDiscoveryListener() here, so re-enabling later via the Settings toggle makes tuya.ts
-// start consulting this module again but WITHOUT a live discovery listener — already-known
-// devices (lanIp persisted in tuya-local.json from a prior run) still work, but a lanIp that
-// moved (DHCP) or a newly-harvested device won't be picked up until the process restarts.
-
 reloadRegistry();
-if (isLocalEnabled()) startDiscoveryListener();
