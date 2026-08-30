@@ -1,4 +1,4 @@
-// Water section routes (docs/51). GATED: GET /api/water always returns a well-shaped
+// Water section routes (docs/52). GATED: GET /api/water always returns a well-shaped
 // payload (configured:false + empty-but-shaped data) when Contazara isn't configured —
 // never a 500 — so the web onboarding screen has something to render immediately.
 
@@ -183,7 +183,7 @@ export async function getWater(): Promise<unknown> {
   const todaySplit = splitFor(todayFromSec, nowSec, todayTotalL);
 
   // Quiet hour — scan the trailing 7 days for the lowest hourly reading + how long ago the
-  // house last dropped to/below the floor (the leak signal's own raw numbers, docs/51 §1).
+  // house last dropped to/below the floor (the leak signal's own raw numbers, docs/52 §1).
   const trailing = readHourly(nowSec - 7 * 86_400, nowSec);
   let lowestLph: number | null = null;
   let atHour: number | null = null;

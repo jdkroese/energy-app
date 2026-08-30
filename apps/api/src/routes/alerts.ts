@@ -571,7 +571,7 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
     }
   }
 
-  // ---- Water detectors (docs/51 P2) -------------------------------------------
+  // ---- Water detectors (docs/52 P2) -------------------------------------------
   // The detectors themselves run on the water poll cadence (control/water-detectors.ts,
   // hourly-ish data — no point re-evaluating every 60s alert-loop tick); here we just
   // surface their CURRENT edge state as classic Alert entries, honouring the per-rule

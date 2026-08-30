@@ -1,7 +1,7 @@
-// Water attribution engine (docs/51 P2) — the heart of the Water feature. For every
+// Water attribution engine (docs/52 P2) — the heart of the Water feature. For every
 // hourly meter bucket, splits measured litres into irrigation / household / unexplained,
 // so "unexplained litres" becomes the leak/anomaly signal instead of raw volume (which
-// is dominated by irrigation — ~77% of the house's August 2026 draw, docs/51 §1).
+// is dominated by irrigation — ~77% of the house's August 2026 draw, docs/52 §1).
 //
 // Pure functions (attributedIrrigationL, attributeBucket, learnZoneFlow, ...) are
 // unit-testable in isolation. The orchestrator (runWaterAttribution) wires them to the
@@ -275,7 +275,7 @@ export function runWaterAttribution(now: number = Date.now()): void {
     }));
     if (flowRows.length > 0) writeZoneFlow(flowRows);
 
-    // Manual overrides (docs/51 "expose a manual override") take precedence over learned.
+    // Manual overrides (docs/52 "expose a manual override") take precedence over learned.
     const overrides = store.get().water?.zoneFlowOverrides ?? {};
 
     const attributionRows = attribHourly.map((h) => {

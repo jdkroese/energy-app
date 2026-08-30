@@ -31,8 +31,8 @@ const TICK_MS = 5_000;
 const LOG_LOOKBACK_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 
-// docs/51 Change 3: the scene switch is a Zigbee sub-device dropped from the rest of the Home
-// app (docs/51 Change 2) — its whole-fleet cloud device-logs poll must stop by default too, so
+// docs/52 Change 3: the scene switch is a Zigbee sub-device dropped from the rest of the Home
+// app (docs/52 Change 2) — its whole-fleet cloud device-logs poll must stop by default too, so
 // steady-state cloud usage is zero. `integrations.tuya.sceneControllersEnabled` is the
 // reversible Settings toggle: undefined/false = OFF (the new default — zero device-logs
 // calls), explicit true = the old always-on behaviour. Checked BOTH here (so an already-armed
@@ -161,14 +161,14 @@ async function processController(deviceId: string, online: boolean): Promise<voi
 /** Exported for tests. */
 export async function tick(): Promise<void> {
   try {
-    if (!sceneControlEnabled()) return; // docs/51 Change 3 — off by default, zero cloud calls
+    if (!sceneControlEnabled()) return; // docs/52 Change 3 — off by default, zero cloud calls
     if (!tuya.isConfigured()) return;
     const ids = Object.keys(store.get().sceneControllers).filter(
       (id) => store.get().sceneControllers[id]?.enabled,
     );
     if (ids.length === 0) return;
 
-    // Per-controller direct reads (NOT the bulk tuya.getDevices() fleet listing): docs/51
+    // Per-controller direct reads (NOT the bulk tuya.getDevices() fleet listing): docs/52
     // Change 2 drops sub-devices/gateway from that listing unconditionally at the fleet
     // boundary, so a wxkg scene switch would never be found there any more. getDeviceDirect()
     // is a single-device cloud read (its own 20s/300s cache) untouched by that filter — the
@@ -188,7 +188,7 @@ export async function tick(): Promise<void> {
 export function startControllerCoordinator(): void {
   if (timer) return;
   if (!sceneControlEnabled()) {
-    // docs/51 Change 3: don't even arm the interval when scene control is off — the scene
+    // docs/52 Change 3: don't even arm the interval when scene control is off — the scene
     // switch left the app by owner decision, so this is the "zero device-logs calls" state
     // by default, not just an idle no-op every 5s.
     console.log('[scene-controller] coordinator disabled (integrations.tuya.sceneControllersEnabled is not true) — no interval armed');

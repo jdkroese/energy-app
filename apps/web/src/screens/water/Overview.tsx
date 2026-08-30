@@ -9,7 +9,7 @@ import { WaterCumulativeChart } from '../../components/water/WaterCumulativeChar
 import type { ShellContext } from '../../components/shell/AppShell';
 
 /* ============================================================================
- * Water hub — Overview tab (docs/51). "Now": today's attribution split, the
+ * Water hub — Overview tab (docs/52). "Now": today's attribution split, the
  * cumulative measured-vs-accounted-for story, the quiet-hour leak signal, and a
  * compact link into tonight's watering. The critical continuous-flow banner is
  * rendered once by the hub (Water.tsx) above every tab, so it isn't duplicated

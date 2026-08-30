@@ -1,6 +1,6 @@
-// Water tariff + cost maths (docs/51 P3). Pure functions — no I/O, no store reads (the
+// Water tariff + cost maths (docs/52 P3). Pure functions — no I/O, no store reads (the
 // caller passes the tariff from store.get().water.tariff). Every default in store.ts's
-// defaultWaterTariff() is a PLACEHOLDER, not a real AMJASA rate (docs/51 D5) — the UI
+// defaultWaterTariff() is a PLACEHOLDER, not a real AMJASA rate (docs/52 D5) — the UI
 // must label cost figures derived from an un-confirmed tariff as estimates.
 
 import type { WaterTariff } from '../store';

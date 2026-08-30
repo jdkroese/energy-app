@@ -8,12 +8,12 @@ import { Card, Icon, Button, Input, Select, Switch, Eyebrow, Badge } from '../..
 import type { ShellContext } from '../../components/shell/AppShell';
 
 /* ============================================================================
- * Water hub — Settings tab (docs/51). "How it's set up": the BI-WATER
+ * Water hub — Settings tab (docs/52). "How it's set up": the BI-WATER
  * connection (follows RainbirdConnection in screens/Settings.tsx — admin-gated,
  * password write-only, never re-displayed), a read-only meter card, the five
  * detection-rule thresholds, the shared alert channels, and a tariff editor
  * with a live-recalculating bill breakdown (every default is a placeholder —
- * docs/51 D5 — so figures are labelled estimates throughout).
+ * docs/52 D5 — so figures are labelled estimates throughout).
  * ==========================================================================*/
 
 const POLL_OPTIONS = [

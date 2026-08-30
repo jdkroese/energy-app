@@ -168,7 +168,7 @@ export function isolarcloudConfig(): IsolarcloudConfig | null {
 }
 
 /**
- * Contazara CZ3000 water-meter config (docs/51). Read from the Settings store
+ * Contazara CZ3000 water-meter config (docs/52). Read from the Settings store
  * (store.integrations.contazara) with an env fallback. Returns `null` when
  * incomplete so the connector no-ops (disabled/gated until the owner enters
  * credentials). The password is never returned by the config route.
@@ -177,7 +177,7 @@ export interface ContazaraConfig {
   email: string;
   password: string;
   serial: string;
-  /** How often the backfill/poll coordinator re-fetches (hours). Default 6 (docs/51 D6). */
+  /** How often the backfill/poll coordinator re-fetches (hours). Default 6 (docs/52 D6). */
   pollHours: number;
 }
 

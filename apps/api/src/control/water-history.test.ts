@@ -1,4 +1,4 @@
-// Unit tests for the water history SQLite store (docs/51). Uses a throwaway temp DB
+// Unit tests for the water history SQLite store (docs/52). Uses a throwaway temp DB
 // file (METERING_DB_FILE) so nothing touches the real .data/metering.db. Run with:
 //   node --import tsx --test src/control/water-history.test.ts
 

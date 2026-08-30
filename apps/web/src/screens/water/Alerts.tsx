@@ -9,8 +9,8 @@ import { Card, Icon, Button, Switch, Badge, Eyebrow, EmptyState } from '../../co
 import type { ShellContext } from '../../components/shell/AppShell';
 
 /* ============================================================================
- * Water hub — Alerts tab (docs/51). "What's wrong": the active-alert list with
- * acknowledge/mute/Event-Viewer actions, the detection-rule switches (docs/51
+ * Water hub — Alerts tab (docs/52). "What's wrong": the active-alert list with
+ * acknowledge/mute/Event-Viewer actions, the detection-rule switches (docs/52
  * §3 P2's five detectors), and the headline feature — a big irrigation night
  * that correctly did NOT alert, because the app can tell the difference
  * between "the garden ran" and "something is leaking" (the Rain Bird

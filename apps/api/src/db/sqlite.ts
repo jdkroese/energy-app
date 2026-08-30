@@ -221,7 +221,7 @@ function migrate(handle: MeteringDb): void {
       PRIMARY KEY (inverter_id, day)
     );
 
-    -- ---- Water meter history + attribution (docs/51, schema v4) ------------
+    -- ---- Water meter history + attribution (docs/52, schema v4) ------------
     -- Source is the Contazara meter's own HOURLY reads (no local 5-min sampling — the
     -- meter itself is hourly-read/daily-upload, not a live feed). All litres. ADDITIVE +
     -- READ-ONLY + FAIL-SOFT: shares this same fail-soft handle; a fault here can never
@@ -239,7 +239,7 @@ function migrate(handle: MeteringDb): void {
       index_vol   REAL
     );
 
-    -- Per-hour attribution split (docs/51 P2) — irrigation / household / unexplained.
+    -- Per-hour attribution split (docs/52 P2) — irrigation / household / unexplained.
     -- zones = JSON array of zone ids that contributed irrigation litres this hour.
     CREATE TABLE IF NOT EXISTS water_attribution (
       bucket_ts       INTEGER PRIMARY KEY,

@@ -1,4 +1,4 @@
-// Water observation detectors (docs/51 P2) — follows the monitors.ts edge-state pattern:
+// Water observation detectors (docs/52 P2) — follows the monitors.ts edge-state pattern:
 // hysteresis-free but MIN-DWELL-free too here, because each condition already encodes its
 // own persistence requirement (a trailing-N-hours window, a full night, a full month-to-
 // date) — see the pure condition functions below. Active/cleared events are paired by
@@ -15,7 +15,7 @@ import { madridDayKey, madridLocalToEpochSec } from '../connectors/contazara';
 // ---- Pure conditions (unit-testable) -----------------------------------------
 
 /** True when NONE of the trailing hourly readings dropped to/below the quiet-hour floor —
- *  i.e. the house never went quiet, the leak detector's flagship signal (docs/51 §1). */
+ *  i.e. the house never went quiet, the leak detector's flagship signal (docs/52 §1). */
 export function continuousFlowCondition(trailingHourlyLitres: number[], floorLph: number): boolean {
   if (trailingHourlyLitres.length === 0) return false;
   return trailingHourlyLitres.every((l) => l > floorLph);
@@ -24,7 +24,7 @@ export function continuousFlowCondition(trailingHourlyLitres: number[], floorLph
 /** Night-use condition: night-slot litres AFTER subtracting attributed irrigation exceed
  *  tolerance. A watering night has nightAttributedIrrigationL ≈ nightMeasuredL, so the
  *  residual stays low and this does NOT fire — the false-positive suppression the owner
- *  asked for (docs/51). An equivalent UNattributed night (irrigation = 0) fires. */
+ *  asked for (docs/52). An equivalent UNattributed night (irrigation = 0) fires. */
 export function nightUseCondition(nightMeasuredL: number, nightAttributedIrrigationL: number, toleranceL: number): boolean {
   return Math.max(0, nightMeasuredL - nightAttributedIrrigationL) > toleranceL;
 }

@@ -1671,12 +1671,12 @@ export interface TuyaIntegrationStatus {
   error: string | null;
   /** Count of paired devices not yet surfaced by a shipped category screen. */
   needsSetupCount?: number;
-  /** docs/51 Change 1 — manual (LAN-only) fleet listing: default ON, undefined/true = on,
+  /** docs/52 Change 1 — manual (LAN-only) fleet listing: default ON, undefined/true = on,
    *  explicit false = off (cloud-primary, docs/49 behaviour). */
   fleetManual?: boolean;
 }
 
-/** POST /api/integrations/tuya/sync — docs/51 Change 1's "Sync from Tuya cloud" button: one
+/** POST /api/integrations/tuya/sync — docs/52 Change 1's "Sync from Tuya cloud" button: one
  *  explicit cloud fleet refresh. */
 export interface TuyaFleetSyncResult {
   ts: string;
@@ -2695,7 +2695,7 @@ export interface LibraryGenerateStartResponse extends LibraryGenerateStatusRespo
 }
 
 /* ============================================================================
- * Water (docs/51) — BI-WATER / Contazara CZ3000 NB-IoT meter. Attribution-first:
+ * Water (docs/52) — BI-WATER / Contazara CZ3000 NB-IoT meter. Attribution-first:
  * every litre the meter measures is split into irrigation (reconciled against
  * logged Rain Bird zone sessions) / household / unexplained — unexplained litres
  * are the product. Reads any-authed; Settings writes are admin. Mirrors the
@@ -2735,7 +2735,7 @@ export interface WaterToday {
   hours: WaterHourBucket[];
 }
 
-/** The leak detector's core signal (docs/51 §1): the lowest single-hour reading
+/** The leak detector's core signal (docs/52 §1): the lowest single-hour reading
  *  in the rolling 24h window. A healthy house hits ~0 at some point every night;
  *  a leaking one has a floor that never clears. */
 export interface WaterQuietHour {
@@ -2758,7 +2758,7 @@ export interface WaterMonth {
 }
 
 /** A Rain Bird zone's learned flow rate, from hours where exactly one zone ran
- *  alone (docs/51 §3 P2). `learned=false` means it's still the configured default. */
+ *  alone (docs/52 §3 P2). `learned=false` means it's still the configured default. */
 export interface WaterZoneAttribution {
   id: string;
   name: string;
@@ -2838,7 +2838,7 @@ export interface WaterHistoryResponse {
   totals: WaterHistoryTotals;
 }
 
-/** Detection-rule thresholds (docs/51 §3 P2's five detectors), each independently
+/** Detection-rule thresholds (docs/52 §3 P2's five detectors), each independently
  *  enable-able — the Alerts tab's per-rule switches read/write this object. */
 /* Mirrors WaterThresholds in apps/api/src/store.ts — keep the two in step.
  * Flat, with no per-detector `enabled` flag: enable/disable already lives in the
@@ -2856,8 +2856,8 @@ export interface WaterThresholds {
   meterSilentHours: number;
 }
 
-/** Spain/AMJASA tariff (docs/51 §3 P3) — every default is a placeholder pending
- *  a real bill (docs/51 D5); the Settings tab labels cost figures as estimates. */
+/** Spain/AMJASA tariff (docs/52 §3 P3) — every default is a placeholder pending
+ *  a real bill (docs/52 D5); the Settings tab labels cost figures as estimates. */
 export interface WaterTariff {
   fixedEurMonth: number;
   block1: { upToM3: number; eurM3: number };

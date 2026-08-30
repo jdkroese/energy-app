@@ -1,4 +1,4 @@
-// Unit tests for the Water routes' not-configured shape (docs/51). Run with:
+// Unit tests for the Water routes' not-configured shape (docs/52). Run with:
 //   node --import tsx --test src/routes/water.test.ts
 
 // Isolate persistence to a throwaway file so the test never touches the dev .data/state.json,

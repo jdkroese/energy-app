@@ -19,7 +19,7 @@ const Batteries = lazy(() => import('./screens/Batteries').then((m) => ({ defaul
 const BatteryDetail = lazy(() => import('./screens/BatteryDetail').then((m) => ({ default: m.BatteryDetail })));
 const Devices = lazy(() => import('./screens/Devices').then((m) => ({ default: m.Devices })));
 const DeviceDetail = lazy(() => import('./screens/DeviceDetail').then((m) => ({ default: m.DeviceDetail })));
-// Irrigation merged into the Water hub (docs/51) as its own tab — see /water below.
+// Irrigation merged into the Water hub (docs/52) as its own tab — see /water below.
 const Water = lazy(() => import('./screens/Water').then((m) => ({ default: m.Water })));
 const GenericDeviceDetail = lazy(() =>
   import('./screens/GenericDeviceDetail').then((m) => ({ default: m.GenericDeviceDetail })),
@@ -81,7 +81,7 @@ function AppRoutes() {
           <Route path="/devices" element={<Devices ctx={ctx} />} />
           <Route path="/water" element={<Water ctx={ctx} />} />
           {/* Irrigation merged into the Water hub (/water) as its own tab; keep the
-              path as a deep-linkable redirect (docs/51, same pattern as PR #170's
+              path as a deep-linkable redirect (docs/52, same pattern as PR #170's
               /solar-inverters -> /batteries). */}
           <Route path="/irrigation" element={<Navigate to="/water?tab=irrigation" replace />} />
           <Route path="/rooms" element={<RoomsManage ctx={ctx} />} />

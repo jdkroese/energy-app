@@ -2,7 +2,7 @@ import { useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react
 import { useTheme } from '../../lib/ThemeProvider';
 
 /* ============================================================================
- * WaterNightBaselineChart — the leak detector's core signal, per docs/51 §1:
+ * WaterNightBaselineChart — the leak detector's core signal, per docs/52 §1:
  * the night-hour floor over the selected period, with the continuous-flow
  * alert threshold marked as a dashed reference line. A point above the
  * threshold line is a night the floor never cleared.

@@ -13,14 +13,14 @@ import { WaterSettingsTab } from './water/SettingsTab';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * Water hub (/water, docs/51) — the BI-WATER/Contazara meter + Irrigation
+ * Water hub (/water, docs/52) — the BI-WATER/Contazara meter + Irrigation
  * merged into one resource hub, same pattern as Solar Inverters -> Energy
  * (/batteries, PR #170). Five tabs in a "now -> biggest consumer -> the past ->
  * what's wrong -> how it's set up" order: Overview · Irrigation · History ·
  * Alerts · Settings. Tabs are deep-linkable via ?tab= (Automations.tsx pattern)
  * — /irrigation now redirects to /water?tab=irrigation, so that value MUST work.
  *
- * The organizing idea (docs/51 §1): every litre the meter measures is either
+ * The organizing idea (docs/52 §1): every litre the meter measures is either
  * explained (a logged Rain Bird zone, or normal household rhythm) or it isn't.
  * Unexplained litres are the product — see WaterOverview / WaterAlerts.
  * ==========================================================================*/

@@ -1,4 +1,4 @@
-// Unit tests for the water tariff/cost maths (docs/51 P3). Run with:
+// Unit tests for the water tariff/cost maths (docs/52 P3). Run with:
 //   node --import tsx --test src/control/water-tariff.test.ts
 
 import { test } from 'node:test';

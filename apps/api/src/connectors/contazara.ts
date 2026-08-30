@@ -1,4 +1,4 @@
-// Contazara CZ3000 NB-IoT water-meter connector (AMJASA telelectura network, docs/51).
+// Contazara CZ3000 NB-IoT water-meter connector (AMJASA telelectura network, docs/52).
 // Unofficial, reverse-engineered API captured 2026-08-30 (mitmproxy, no cert pinning,
 // capture files destroyed). Base https://api.contazara.es/api/2019-06-01/, Keycloak
 // password-grant auth (public client, no secret, no CAPTCHA).
@@ -26,7 +26,7 @@ const TOKEN_URL = 'https://api.contazara.es/auth/realms/cz-iot-platform/protocol
 const API_BASE = 'https://api.contazara.es/api/2019-06-01';
 const CLIENT_ID = 'service-iot-api';
 const HTTP_TIMEOUT_MS = 12_000;
-// Cadence is hourly-read/daily-upload (docs/51) — poll gently. The actual poll interval
+// Cadence is hourly-read/daily-upload (docs/52) — poll gently. The actual poll interval
 // is owner-configurable (ContazaraConfig.pollHours); this TTL just bounds the in-process
 // snapshot cache between callers within one poll window.
 const SNAPSHOT_TTL_MS = 30 * 60_000;
@@ -284,7 +284,7 @@ export function parseHourly(json: unknown): HourlyPoint[] {
 }
 
 /** Litres drawn in the 00:00–05:59 Madrid night slot from a day's hourly points
- *  (VERIFIED alignment with the timeslot endpoint's "night" value, docs/51). */
+ *  (VERIFIED alignment with the timeslot endpoint's "night" value, docs/52). */
 export function nightLitresFromHourly(hours: HourlyPoint[]): number {
   return hours.filter((h) => h.hour >= 0 && h.hour <= 5).reduce((s, h) => s + h.litres, 0);
 }

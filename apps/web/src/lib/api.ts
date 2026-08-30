@@ -1055,7 +1055,7 @@ export const api = {
         {},
       ),
     // Manual (LAN-only) fleet listing — reversible Settings toggle + the explicit one-shot
-    // cloud refresh (docs/51 Change 1).
+    // cloud refresh (docs/52 Change 1).
     tuyaFleetManualSet: (enabled: boolean) =>
       putJSON<TuyaIntegrationStatus>("/api/integrations/tuya/fleet-manual", {
         enabled,
@@ -1130,9 +1130,9 @@ export const api = {
     disconnectRainbird: () =>
       delJSON<{ ok: boolean }>("/api/integrations/rainbird"),
 
-    // BI-WATER / Contazara water meter (docs/51). Admin-only; password is
+    // BI-WATER / Contazara water meter (docs/52). Admin-only; password is
     // write-only (omit to keep the stored one, same convention as Rain Bird).
-    // Both are POST per the API contract (docs/51 §2), not PUT like most other
+    // Both are POST per the API contract (docs/52 §2), not PUT like most other
     // connectors — matched exactly since the API side is built by another agent.
     testWater: (body: { email?: string; password?: string; serial?: string }) =>
       postJSON<WaterIntegrationTestResponse>("/api/integrations/water/test", body),
@@ -1246,7 +1246,7 @@ export const api = {
       postJSON<RoomAllOffResponse>(`/api/rooms/${enc(id)}/all-off`, { scope }),
   },
 
-  /* ---- Water (BI-WATER / Contazara meter, docs/51); reads any-authed, Settings admin ---- */
+  /* ---- Water (BI-WATER / Contazara meter, docs/52); reads any-authed, Settings admin ---- */
   water: {
     snapshot: () => getJSON<WaterResponse>("/api/water"),
     history: (range: WaterHistoryRange | string, offset = 0) =>

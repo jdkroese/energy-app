@@ -3,7 +3,7 @@ import { useId, useMemo } from 'react';
 /* ============================================================================
  * Sparkline — a small inline trend line/bars for a single series (no axes, no
  * legend, no tooltip — those belong to a full chart). Built for the Water
- * hub's "quiet hour" 14-day strip and day-part small multiples (docs/51 §5
+ * hub's "quiet hour" 14-day strip and day-part small multiples (docs/52 §5
  * notes there is no Sparkline primitive yet), but general enough for any
  * compact trend. Hand-rolled SVG per house convention (no chart library).
  * ==========================================================================*/

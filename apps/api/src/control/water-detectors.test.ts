@@ -1,4 +1,4 @@
-// Unit tests for the water observation detectors' PURE conditions (docs/51 P2). Run with:
+// Unit tests for the water observation detectors' PURE conditions (docs/52 P2). Run with:
 //   node --import tsx --test src/control/water-detectors.test.ts
 //
 // The KEY behavioural test is `night-use ignores a watering night`: irrigation

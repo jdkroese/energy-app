@@ -11,7 +11,7 @@ import { StaleBanner } from '../_shared';
 import type { ShellContext } from '../../components/shell/AppShell';
 
 /* ============================================================================
- * Water hub — History tab (docs/51). "The past": meter-index / month / bill
+ * Water hub — History tab (docs/52). "The past": meter-index / month / bill
  * tiles, the period's stacked daily bars, four day-part small multiples
  * (Night/Morning/Afternoon/Evening — the night row is the leak tell), and the
  * night-baseline floor against the alert threshold.
@@ -56,7 +56,7 @@ export function WaterHistory({ ctx }: { ctx: ShellContext }) {
   // Night-with-irrigation-removed — the daypart small multiples need the "is
   // this night actually clean" read, not raw night volume (a big irrigation
   // night looks identical to a leak in raw litres). Approximation: irrigation
-  // mostly runs at night (docs/51 §1), so subtract that day's total logged
+  // mostly runs at night (docs/52 §1), so subtract that day's total logged
   // irrigation from the night daypart bucket.
   const nightRemoved = h.dayparts.night.map((v, i) => Math.max(0, v - (h.series.irrigation[i] ?? 0)));
   const nightFlagged = nightRemoved.map((v) => v > nightToleranceL);

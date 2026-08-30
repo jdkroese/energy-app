@@ -1,4 +1,4 @@
-// Unit tests for the water attribution engine's PURE functions (docs/51 P2). Run with:
+// Unit tests for the water attribution engine's PURE functions (docs/52 P2). Run with:
 //   node --import tsx --test src/control/water-attribution.test.ts
 
 import { test } from 'node:test';

@@ -397,7 +397,7 @@ export const MOCK_SCENARIOS: ScenariosResponse = {
   ],
 };
 
-/* ---- Water (docs/51) — attribution-first mock, shaped by the real captured
+/* ---- Water (docs/52) — attribution-first mock, shaped by the real captured
  * August 2026 pattern: irrigation dominates (~77% of the month), a healthy quiet
  * hour clears near-zero every night, and unexplained litres stay a small residual
  * rather than a headline number. Used only until the owner connects the meter
@@ -442,7 +442,7 @@ function waterHistoryLabels(range: string, n: number): string[] {
 
 /** Builds a plausible 30-ish-day mock series: mostly modest household use, a
  *  handful of big irrigation nights (every 3rd day), and a persistently-small
- *  unexplained residual (the "healthy house" case — see docs/51 §1). */
+ *  unexplained residual (the "healthy house" case — see docs/52 §1). */
 function mockWaterSeries(n: number): { total: number[]; household: number[]; irrigation: number[]; unexplained: number[] } {
   const household: number[] = [];
   const irrigation: number[] = [];
@@ -521,7 +521,7 @@ export const MOCK_WATER_SETTINGS: WaterSettingsResponse = {
     dailySpikeFactor: 3,
     meterSilentHours: 36,
   },
-  // PLACEHOLDER rates (docs/51 D5) — not real AMJASA figures.
+  // PLACEHOLDER rates (docs/52 D5) — not real AMJASA figures.
   tariff: {
     fixedEurMonth: 7.2,
     block1: { upToM3: 15, eurM3: 0.62 },

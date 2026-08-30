@@ -6,7 +6,7 @@ import { useTheme } from '../../lib/ThemeProvider';
  * running total (solid, water-hue, filled area) against what irrigation +
  * typical household rhythm would predict (dashed, neutral). The gap between
  * them is the unexplained running total — shaded, with an explicit labelled
- * bracket at the endpoint, because docs/51's real numbers put that gap at only
+ * bracket at the endpoint, because docs/52's real numbers put that gap at only
  * ~6% of the axis height: without a callout it reads as chart noise, not a
  * finding. Same DayChart conventions as the other Water charts.
  * ==========================================================================*/

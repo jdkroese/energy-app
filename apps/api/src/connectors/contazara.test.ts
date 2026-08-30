@@ -1,4 +1,4 @@
-// Unit tests for the Contazara water-meter connector (docs/51). Hermetic — a mock
+// Unit tests for the Contazara water-meter connector (docs/52). Hermetic — a mock
 // fetch injected via setFetchForTest(), nothing hits the network. Run with:
 //   node --import tsx --test src/connectors/contazara.test.ts
 
@@ -78,7 +78,7 @@ test('probe() fails soft (ok:false) on an HTTP error, never throws', async () =>
   setFetchForTest(fetch);
 });
 
-// ---- Night-slot alignment (docs/51 §2 "verified 2026-08-30") -------------------
+// ---- Night-slot alignment (docs/52 §2 "verified 2026-08-30") -------------------
 // 29 Aug hourly: 121 + 1717 + 1271 + 1500 + 1428 (hours 00..04) — the brief's captured
 // figures sum with hour 05 to ~6,037 L, matching the timeslot endpoint's 6,036 L night
 // value (a ~1L rounding difference). This nails down which hours belong to "night".

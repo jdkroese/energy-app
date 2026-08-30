@@ -1,4 +1,4 @@
-# 51 — Water section
+# 52 — Water section
 
 Design brief and scope for a new **Water** hub in the Energy app, fed by the house's
 Contazara CZ3000 NB-IoT meter on the AMJASA telelectura network.

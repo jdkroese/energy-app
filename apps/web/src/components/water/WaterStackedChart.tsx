@@ -12,7 +12,7 @@ import { useTheme } from '../../lib/ThemeProvider';
  * Reused for both the Overview tab's today-by-hour chart (24 buckets) and the
  * History tab's per-period bars (7/12/28-31 buckets) — same shape, different n.
  *
- * SERIES STACK ORDER IS LOAD-BEARING (docs/51 §5): irrigation -> household ->
+ * SERIES STACK ORDER IS LOAD-BEARING (docs/52 §5): irrigation -> household ->
  * unexplained. An earlier ordering put irrigation-green next to danger-red,
  * ΔE 1.3 under deuteranopia (indistinguishable). Do not reorder.
  * ==========================================================================*/

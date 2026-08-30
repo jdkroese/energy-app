@@ -100,7 +100,7 @@ export function defaultEventsConfig(): EventsConfig {
 }
 
 /**
- * Water detector thresholds (docs/51 §3/P2) — the "what counts as a leak/anomaly" knobs
+ * Water detector thresholds (docs/52 §3/P2) — the "what counts as a leak/anomaly" knobs
  * for the water attribution + observation detectors. Editable in Settings ▸ Water.
  */
 export interface WaterThresholds {
@@ -119,7 +119,7 @@ export interface WaterThresholds {
   meterSilentHours: number;
 }
 
-/** Water detector defaults (docs/51 §3 "Thresholds live in store.ts"). */
+/** Water detector defaults (docs/52 §3 "Thresholds live in store.ts"). */
 export function defaultWaterThresholds(): WaterThresholds {
   return {
     quietHourFloorLph: 5,
@@ -132,8 +132,8 @@ export function defaultWaterThresholds(): WaterThresholds {
 }
 
 /**
- * Spain/AMJASA water tariff (docs/51 P3). Every default here is a PLACEHOLDER, NOT a
- * published AMJASA rate — the owner must supply a real bill to populate these (docs/51
+ * Spain/AMJASA water tariff (docs/52 P3). Every default here is a PLACEHOLDER, NOT a
+ * published AMJASA rate — the owner must supply a real bill to populate these (docs/52
  * D5). Cost figures derived from these defaults must be labelled as estimates in the UI.
  */
 export interface WaterTariff {
@@ -146,7 +146,7 @@ export interface WaterTariff {
   ivaPct: number;
 }
 
-/** PLACEHOLDER tariff defaults (docs/51 D5) — not real AMJASA rates. */
+/** PLACEHOLDER tariff defaults (docs/52 D5) — not real AMJASA rates. */
 export function defaultWaterTariff(): WaterTariff {
   return {
     fixedEurMonth: 7.2,
@@ -159,12 +159,12 @@ export function defaultWaterTariff(): WaterTariff {
   };
 }
 
-/** Water section settings (docs/51): detector thresholds + tariff + per-zone manual
+/** Water section settings (docs/52): detector thresholds + tariff + per-zone manual
  *  flow-rate overrides (L/min) used until a zone's learned flow is trusted. */
 export interface WaterState {
   thresholds: WaterThresholds;
   tariff: WaterTariff;
-  /** zoneId -> manual L/min override (docs/51 "fall back to a manual per-zone L/min entry"). */
+  /** zoneId -> manual L/min override (docs/52 "fall back to a manual per-zone L/min entry"). */
   zoneFlowOverrides: Record<string, number>;
 }
 
@@ -484,11 +484,11 @@ export interface IntegrationsState {
    *  it's hardware-verified), explicit false = off. Lets local control be enabled on
    *  the production mini without editing its launchd plist (TUYA_LOCAL_ENABLED env
    *  var still overrides this on top — see isLocalEnabled() in tuya-local.ts).
-   *  `fleetManual` (docs/51 Change 1) — undefined/true = on (the owner's explicit
+   *  `fleetManual` (docs/52 Change 1) — undefined/true = on (the owner's explicit
    *  default): the fleet LIST is served from the local LAN snapshot only, never
    *  auto-polling cloud; explicit false = off (docs/49 cloud-primary behaviour). See
    *  fleetManualEnabled()/getDevices() in tuya.ts.
-   *  `sceneControllersEnabled` (docs/51 Change 3) — undefined/false = OFF (the new
+   *  `sceneControllersEnabled` (docs/52 Change 3) — undefined/false = OFF (the new
    *  default): the scene-controller coordinator's 5s cloud device-logs poll never
    *  runs; explicit true = on (the old always-polling behaviour). See
    *  controller-coordinator.ts. */
@@ -527,9 +527,9 @@ export interface IntegrationsState {
    *  auto-refreshed. NONE of these secrets are ever sent to the client (see routes/spotify.ts).
    *  Playback targets are the owner's Sonos rooms exposed as Spotify Connect devices. */
   spotify?: SpotifyIntegration | null;
-  /** Contazara CZ3000 water-meter (AMJASA telelectura, docs/51). Password is REQUIRED and
+  /** Contazara CZ3000 water-meter (AMJASA telelectura, docs/52). Password is REQUIRED and
    *  persisted here (same posture as the other connectors — no secrets vault exists yet,
-   *  docs/51 D1). GATED: the connector no-ops until email+password+serial are all set. */
+   *  docs/52 D1). GATED: the connector no-ops until email+password+serial are all set. */
   contazara?: { email?: string; password?: string; serial?: string; pollHours?: number } | null;
 }
 
@@ -1665,7 +1665,7 @@ export interface StoreSchema {
   /** Kitchen Hub connector settings (docs/38 + docs/39). Only the small config lives
    *  here — the bulky content (recipes, plans, drafts) lives in .data/kitchen.json. */
   kitchen: KitchenSettings;
-  /** Water section settings (docs/51): detector thresholds + tariff + zone-flow overrides. */
+  /** Water section settings (docs/52): detector thresholds + tariff + zone-flow overrides. */
   water: WaterState;
 }
 
@@ -2858,7 +2858,7 @@ function hydrate(raw: unknown): StoreSchema {
       ...(p.integrations?.spotify
         ? { spotify: hydrateSpotify(p.integrations.spotify) }
         : {}),
-      // Carry over the Contazara water-meter credentials (docs/51) so a connected
+      // Carry over the Contazara water-meter credentials (docs/52) so a connected
       // account survives a restart/deploy.
       ...(p.integrations?.contazara
         ? { contazara: p.integrations.contazara }

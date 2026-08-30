@@ -1,4 +1,4 @@
-// Water-meter history — durable tiered store (docs/51). Mirrors inverter-history.ts's
+// Water-meter history — durable tiered store (docs/52). Mirrors inverter-history.ts's
 // shape, but the SOURCE here is the Contazara meter's own hourly reads (not a local
 // 5-minute sampler) — the meter is hourly-read/~daily-upload, not a live feed, so
 // there is no raw/5m tier: water_hourly IS the finest tier we have.

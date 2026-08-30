@@ -432,7 +432,7 @@ app.get(
   wrap(() => getInverters()),
 );
 
-// ---- Water (Contazara meter, docs/51) — READ-ONLY reads; admin-gated settings/connect ----
+// ---- Water (Contazara meter, docs/52) — READ-ONLY reads; admin-gated settings/connect ----
 // Literal sub-paths registered before the bare index so they're never shadowed.
 app.get(
   "/api/water/history",
@@ -1353,21 +1353,21 @@ app.post(
   requireAdmin,
   wrap(() => captureTuyaLocalDpMaps()),
 );
-// docs/51 Change 1 — reversible on/off for the manual (LAN-only) fleet listing (default ON).
+// docs/52 Change 1 — reversible on/off for the manual (LAN-only) fleet listing (default ON).
 // Admin-gated like every other Tuya integration write above.
 app.put(
   "/api/integrations/tuya/fleet-manual",
   requireAdmin,
   wrap((req) => setTuyaFleetManual((req.body as { enabled?: unknown } | undefined)?.enabled)),
 );
-// docs/51 Change 1 — the "Sync from Tuya cloud" button: one explicit cloud fleet refresh, the
+// docs/52 Change 1 — the "Sync from Tuya cloud" button: one explicit cloud fleet refresh, the
 // ONLY routine cloud fleet call once fleet-manual is on. Admin-gated (it spends cloud quota).
 app.post(
   "/api/integrations/tuya/sync",
   requireAdmin,
   wrap(() => syncTuyaFleet()),
 );
-// docs/51 Change 3 — reversible on/off for the scene-controller coordinator's cloud
+// docs/52 Change 3 — reversible on/off for the scene-controller coordinator's cloud
 // device-logs poll (default OFF). Admin-gated like every other Tuya integration write above.
 app.put(
   "/api/integrations/tuya/scene-controllers",
@@ -1911,7 +1911,7 @@ try {
   );
 }
 
-// Start the water-meter (Contazara, docs/51) poll/backfill/prune loop. Additive +
+// Start the water-meter (Contazara, docs/52) poll/backfill/prune loop. Additive +
 // READ-ONLY, shares the same fail-soft SQLite store. GATED: a no-op until the owner
 // enters credentials in Settings. Wired so a successful poll (new hourly data) kicks
 // the attribution pass then the observation detectors — both fail-soft, never thrown
