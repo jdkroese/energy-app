@@ -23,9 +23,9 @@ export interface SystemHealthBannerProps {
 const VERDICT: Record<HealthState, { label: string; icon: string }> = {
   ok: { label: 'All systems nominal', icon: 'shield-check' },
   nosetup: { label: 'All systems nominal', icon: 'shield-check' },
-  warning: { label: 'Warnings active', icon: 'alert-triangle' },
+  warning: { label: 'Warnings active', icon: 'triangle-alert' },
   offline: { label: 'Devices offline', icon: 'wifi-off' },
-  error: { label: 'Errors active', icon: 'alert-octagon' },
+  error: { label: 'Errors active', icon: 'octagon-alert' },
 };
 
 export function SystemHealthBanner({
@@ -97,13 +97,13 @@ export function SystemHealthBanner({
             className="pwr-press"
             style={{ fontSize: 12.5, color: 'var(--text-1)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 7 }}
           >
-            <Icon name="alert-circle" size={14} color={color} />
+            <Icon name="circle-alert" size={14} color={color} />
             <span>{worstIssue}</span>
             <Icon name="chevron-right" size={13} color="var(--text-3)" />
           </Link>
         ) : (
           <div style={{ fontSize: 12.5, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 7 }}>
-            <Icon name="alert-circle" size={14} color={color} />
+            <Icon name="circle-alert" size={14} color={color} />
             {worstIssue}
           </div>
         )

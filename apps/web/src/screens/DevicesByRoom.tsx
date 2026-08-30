@@ -61,7 +61,7 @@ function RoomCard({ room, devices, rooms, canEdit, defaultOpen, onChanged }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px' }}>
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 1, minWidth: 0, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}>
           <span style={{ width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: isUnassigned ? 'var(--surface-2)' : 'var(--surface-3)', color: isUnassigned ? 'var(--text-3)' : 'var(--text-1)', flex: 'none' }}>
-            <Icon name={isUnassigned ? 'inbox' : (room.icon || 'home')} size={17} />
+            <Icon name={isUnassigned ? 'inbox' : (room.icon || 'house')} size={17} />
           </span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isUnassigned ? 'Unassigned' : room.name}</div>

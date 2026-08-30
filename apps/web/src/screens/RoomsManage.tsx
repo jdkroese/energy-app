@@ -19,8 +19,8 @@ import { RoomPicker } from '../components/RoomPicker';
 
 /** A small palette of room icons (Lucide names available in the Icon set). */
 const ROOM_ICONS = [
-  'home', 'sofa', 'bed', 'cooking-pot', 'bath', 'briefcase', 'door-open', 'car',
-  'tree-palm', 'baby', 'tv', 'lamp', 'utensils', 'wash-machine', 'dumbbell', 'warehouse',
+  'house', 'sofa', 'bed', 'cooking-pot', 'bath', 'briefcase', 'door-open', 'car',
+  'tree-palm', 'baby', 'tv', 'lamp', 'utensils', 'washing-machine', 'dumbbell', 'warehouse',
 ];
 
 function IconPicker({ value, onPick }: { value: string; onPick: (icon: string) => void }) {
@@ -72,7 +72,7 @@ function RoomRow({ room, first, canEdit, onChanged }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
         <button type="button" disabled={!canEdit} aria-label="Change icon" onClick={() => setIconOpen((v) => !v)}
           style={{ width: 34, height: 34, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--surface-3)', color: 'var(--text-1)', border: 'none', cursor: canEdit ? 'pointer' : 'default', flex: 'none' }}>
-          <Icon name={room.icon || 'home'} size={17} />
+          <Icon name={room.icon || 'house'} size={17} />
         </button>
 
         {editing ? (
@@ -123,13 +123,13 @@ const iconBtn = (off: boolean) => ({
 
 function CreateRoom({ onChanged }: { onChanged: () => void }) {
   const [name, setName] = useState('');
-  const [icon, setIcon] = useState('home');
+  const [icon, setIcon] = useState('house');
   const [busy, setBusy] = useState(false);
   const create = () => {
     const n = name.trim();
     if (!n) return;
     setBusy(true);
-    void api.rooms.create(n, icon).then(() => { setName(''); setIcon('home'); onChanged(); }).finally(() => setBusy(false));
+    void api.rooms.create(n, icon).then(() => { setName(''); setIcon('house'); onChanged(); }).finally(() => setBusy(false));
   };
   return (
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

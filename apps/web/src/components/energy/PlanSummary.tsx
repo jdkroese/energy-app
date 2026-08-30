@@ -146,7 +146,7 @@ export function ControlGrid({ plan }: { plan: BrainPlanResponse }) {
           zLayer="nested"
           size="md"
           tone="danger"
-          icon="alert-triangle"
+          icon="triangle-alert"
           title="Kill switch — disarm now?"
           footer={
             <>

@@ -96,7 +96,7 @@ export interface ErrorStateProps {
 
 /** Something-failed state with an optional retry. */
 export function ErrorState({
-  icon = 'alert-triangle',
+  icon = 'triangle-alert',
   title = 'Something went wrong',
   subtitle,
   onRetry,

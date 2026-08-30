@@ -220,7 +220,7 @@ export async function seedRoomsIfNeeded(): Promise<number> {
     if (!key) continue; // empty location → leave Unassigned
     let room = byKey.get(key);
     if (!room) {
-      room = { id: genId(), name: prettyRoomName(dev.rawLocation), icon: 'home', order: order++ };
+      room = { id: genId(), name: prettyRoomName(dev.rawLocation), icon: 'house', order: order++ };
       byKey.set(key, room);
     }
     assign.set(dev.id, room.id);

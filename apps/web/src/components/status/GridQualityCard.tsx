@@ -39,7 +39,7 @@ export function GridQualityCard({ live, monitor }: { live: LiveResponse; monitor
       </div>
       {over && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--text-2)', background: 'var(--danger-wash)', borderRadius: 'var(--radius-md)', padding: '9px 12px' }}>
-          <Icon name="alert-triangle" size={14} color="var(--danger)" />
+          <Icon name="triangle-alert" size={14} color="var(--danger)" />
           Grid voltage above {maxV} V — the Sonnen can trip on over-voltage. A full mains power-cycle usually clears it.
         </div>
       )}

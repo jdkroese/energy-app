@@ -69,7 +69,7 @@ export async function getRooms(): Promise<unknown> {
 
 // ---- CRUD -------------------------------------------------------------------
 
-const ICON_FALLBACK = 'home';
+const ICON_FALLBACK = 'house';
 
 export function createRoom(body: unknown): unknown {
   const b = (body ?? {}) as { name?: unknown; icon?: unknown };
