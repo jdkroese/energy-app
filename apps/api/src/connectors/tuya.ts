@@ -466,8 +466,11 @@ export function getDevices(): Promise<TuyaDevice[]> {
   if (!isConfigured()) {
     return localOn ? localFleetSnapshotCached() : Promise.resolve([]);
   }
-  if (Date.now() < quotaBlockedUntil) {
-    return localOn ? localFleetSnapshotCached() : Promise.resolve([]);
+  // During a quota cooldown, don't even attempt cloud when local can serve. When local is
+  // OFF, fall through to the cloud cache below instead — so this path stays byte-for-byte the
+  // pre-docs/49 behaviour (stale-while-revalidate grace, then the quota error), never [].
+  if (localOn && Date.now() < quotaBlockedUntil) {
+    return localFleetSnapshotCached();
   }
   // Serve an expired-but-recent snapshot instantly and refresh in the background, so a
   // slow Tuya Cloud response never blocks the Devices page. Writes call invalidateFleet,
