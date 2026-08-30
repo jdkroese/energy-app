@@ -6,6 +6,7 @@ import { probeAll } from './health-probe';
 import { getMonitoredBreaker } from '../connectors/tuya-voltage';
 import { expectMeaningfulProductionNow } from '../solar-daylight';
 import * as store from '../store';
+import { activeWaterAlerts } from '../control/water-detectors';
 
 export type Severity = 'danger' | 'warning' | 'info' | 'ok';
 
@@ -42,7 +43,17 @@ const RULE_META: Record<string, { icon: string; label: string }> = {
   'rule-inverter-imbalance': { icon: 'scale', label: 'Solar inverters producing unevenly' },
   'rule-tesla-solar-dark': { icon: 'zap-off', label: 'Tesla solar array dark (breaker/outage)' },
   'rule-sonnen-fault': { icon: 'battery-warning', label: 'Sonnen battery fault' },
+  'rule-water-continuous-flow': { icon: 'droplets', label: 'Continuous water flow (possible leak)' },
+  'rule-water-night-use': { icon: 'droplets', label: 'Unexplained night water use' },
+  'rule-water-daily-spike': { icon: 'droplets', label: 'Unexplained daily water spike' },
+  'rule-water-monthly-budget': { icon: 'droplets', label: 'On track to exceed monthly water budget' },
+  'rule-water-meter-silent': { icon: 'wifi-off', label: 'Water meter not reporting' },
 };
+
+/** critical/high water-detector severity → the classic Alert 'danger'/'warning' scale. */
+function waterSeverityToAlert(s: 'critical' | 'high' | 'medium'): Severity {
+  return s === 'medium' ? 'warning' : 'danger';
+}
 
 // ---- Grid-quality trip aggregation (rule-inverter-grid-quality) -------------
 // Voltage trips auto-recover in seconds, so we DON'T page on every flap. We track
@@ -558,6 +569,26 @@ export async function evaluateLiveAlerts(): Promise<Alert[]> {
         rule: 'rule-sonnen-fault',
       });
     }
+  }
+
+  // ---- Water detectors (docs/51 P2) -------------------------------------------
+  // The detectors themselves run on the water poll cadence (control/water-detectors.ts,
+  // hourly-ish data — no point re-evaluating every 60s alert-loop tick); here we just
+  // surface their CURRENT edge state as classic Alert entries, honouring the per-rule
+  // enable/disable toggle like every other rule.
+  for (const wa of activeWaterAlerts()) {
+    if (!ruleEnabled(wa.rule)) continue;
+    live.push({
+      id: wa.id,
+      severity: waterSeverityToAlert(wa.severity),
+      icon: RULE_META[wa.rule]?.icon ?? 'droplets',
+      title: wa.title,
+      sub: wa.sub,
+      device: 'Water meter',
+      ts: wa.sinceIso,
+      status: 'new',
+      rule: wa.rule,
+    });
   }
 
   return live;

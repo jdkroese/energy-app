@@ -109,6 +109,17 @@ import {
   startInverterHistory,
 } from "./control/inverter-history";
 import {
+  getWater,
+  getWaterHistory,
+  getWaterSettings,
+  setWaterSettings,
+  testContazara,
+  setContazara,
+} from "./routes/water";
+import { startWaterHistory, setOnNewData as setWaterOnNewData } from "./control/water-history";
+import { runWaterAttribution } from "./control/water-attribution";
+import { runWaterDetectors } from "./control/water-detectors";
+import {
   getLights,
   getLight,
   commandLight,
@@ -419,6 +430,36 @@ app.get(
 app.get(
   "/api/inverters",
   wrap(() => getInverters()),
+);
+
+// ---- Water (Contazara meter, docs/51) — READ-ONLY reads; admin-gated settings/connect ----
+// Literal sub-paths registered before the bare index so they're never shadowed.
+app.get(
+  "/api/water/history",
+  wrap((req) => getWaterHistory(req.query.range, req.query.offset)),
+);
+app.get(
+  "/api/water/settings",
+  wrap(() => getWaterSettings()),
+);
+app.post(
+  "/api/water/settings",
+  requireAdmin,
+  wrap((req) => setWaterSettings(req.body)),
+);
+app.get(
+  "/api/water",
+  wrap(() => getWater()),
+);
+app.post(
+  "/api/integrations/water/test",
+  requireAdmin,
+  wrap((req) => testContazara(req.body)),
+);
+app.post(
+  "/api/integrations/water",
+  requireAdmin,
+  wrap((req) => setContazara(req.body)),
 );
 
 app.get(
@@ -1866,6 +1907,24 @@ try {
 } catch (e) {
   console.error(
     "[energy-api] inverter-history init failed (history disabled, API unaffected):",
+    (e as Error).message,
+  );
+}
+
+// Start the water-meter (Contazara, docs/51) poll/backfill/prune loop. Additive +
+// READ-ONLY, shares the same fail-soft SQLite store. GATED: a no-op until the owner
+// enters credentials in Settings. Wired so a successful poll (new hourly data) kicks
+// the attribution pass then the observation detectors — both fail-soft, never thrown
+// into the armed control loop. Guarded so it can never throw into the boot path.
+try {
+  setWaterOnNewData(() => {
+    runWaterAttribution();
+    runWaterDetectors();
+  });
+  startWaterHistory();
+} catch (e) {
+  console.error(
+    "[energy-api] water-history init failed (water history disabled, API unaffected):",
     (e as Error).message,
   );
 }
