@@ -20,8 +20,9 @@ process.env.TUYA_LOCAL_ENABLED = '0';
 const tuya = await import('./tuya');
 const tuyaLocal = await import('./tuya-local');
 const store = await import('../store');
-// Boot decision (module-import-time `if (isLocalEnabled()) startDiscoveryListener()`) is made
-// with local hard-disabled above — restore to "unset" so the docs/52 getDevices() tests below
+// Local control is hard-disabled above only so nothing here consults the real store/state;
+// importing tuya-local no longer starts anything by itself (discovery is booted explicitly
+// from index.ts — see docs/53). Restore to "unset" so the docs/51 getDevices() tests below
 // can exercise real on/off semantics via the store, same pattern as tuya-local.test.ts.
 delete process.env.TUYA_LOCAL_ENABLED;
 const {

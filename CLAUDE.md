@@ -48,6 +48,19 @@ work, and broken deploys, every session MUST follow these. Detail: `docs/18-mult
 6. **Activate the shared git guard once per clone:** `git config core.hooksPath scripts/githooks`
    (the helper-made worktrees inherit it automatically). It blocks force/stale pushes to `main`.
 
+## Tests — `pnpm test` (Node's runner via tsx, NOT vitest)
+
+`pnpm test` from the repo root runs the whole API suite (~47 files / 590 tests, ~4s). Single
+file while iterating: `cd apps/api && node --import tsx --test src/path/to.test.ts`.
+
+**Never start a timer, socket or loop as an import side effect** — only an explicit
+`startX()`/`bootX()` called from `apps/api/src/index.ts` may do that. A single import-time
+`startDiscoveryListener()` in `tuya-local.ts` kept the event loop alive in every process that
+imported it, hanging seven unrelated test files (all assertions passing, process never
+exiting) and making a full-suite run impossible until 2026-08-31. Full story, and how to
+diagnose the next one: `docs/53-api-test-suite.md`. Do not reach for `--test-force-exit` —
+it hides this exact bug.
+
 ## Formatting — do NOT run Prettier blind (standing rule)
 
 `package.json` ships a `format` script (`prettier --write .`) and Prettier as a devDep, but

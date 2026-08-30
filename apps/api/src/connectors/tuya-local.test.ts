@@ -29,11 +29,12 @@ const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuya-local-test-'));
 process.env.DATA_DIR = scratchDir;
 // isLocalEnabled() now also reads the persisted store (default-ON semantics — see
 // tuya-local.ts). Point the store at a scratch file BEFORE anything imports it, so this
-// suite never touches the real dev/prod state.json. Also hard-disable local via the env
-// kill-switch for the module's own import-time boot check (`if (isLocalEnabled())
-// startDiscoveryListener()`), so importing tuya-local below never opens real UDP sockets —
-// the env var is restored to "unset" right after that import completes; individual tests
-// below set/restore it again to exercise the real on/off semantics.
+// suite never touches the real dev/prod state.json. Local is also hard-disabled via the env
+// kill-switch so no test in here reaches the network; importing tuya-local itself is inert
+// either way, since discovery is now started explicitly from index.ts rather than as an
+// import side effect (see docs/53 and tuya-local-boot.test.ts). The env var is restored to
+// "unset" right after that import completes; individual tests below set/restore it again to
+// exercise the real on/off semantics.
 process.env.STATE_FILE = path.join(scratchDir, 'state.json');
 process.env.TUYA_LOCAL_ENABLED = '0';
 
