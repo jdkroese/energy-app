@@ -1671,6 +1671,19 @@ export interface TuyaIntegrationStatus {
   error: string | null;
   /** Count of paired devices not yet surfaced by a shipped category screen. */
   needsSetupCount?: number;
+  /** docs/51 Change 1 — manual (LAN-only) fleet listing: default ON, undefined/true = on,
+   *  explicit false = off (cloud-primary, docs/49 behaviour). */
+  fleetManual?: boolean;
+}
+
+/** POST /api/integrations/tuya/sync — docs/51 Change 1's "Sync from Tuya cloud" button: one
+ *  explicit cloud fleet refresh. */
+export interface TuyaFleetSyncResult {
+  ts: string;
+  devices: number;
+  /** Cloud device ids the local registry doesn't know about yet — still need the harvest ops
+   *  flow (key capture) before they can go local. */
+  newIds: string[];
 }
 
 /** GET/PUT /api/integrations/tuya/local — LOCAL (LAN) control diagnostics + the reversible

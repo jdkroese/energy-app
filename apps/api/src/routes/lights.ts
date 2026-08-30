@@ -222,6 +222,9 @@ export async function getTuyaIntegration(): Promise<unknown> {
     needsSetupCount,
     categories,
     error,
+    // docs/51 Change 1 — default ON; undefined/true = on, explicit false = off (see
+    // fleetManualEnabled() in tuya.ts, the single source of truth this mirrors for display).
+    fleetManual: t?.fleetManual !== false,
   };
 }
 
@@ -246,7 +249,9 @@ export async function setTuyaIntegration(
 
   store.update((s) => {
     s.integrations = s.integrations ?? { intesis: null };
-    s.integrations.tuya = { region, accessId, accessSecret };
+    // Preserve the OTHER tuya settings (localControl, fleetManual, sceneControllersEnabled) —
+    // a "Change project"/reconnect must not silently reset unrelated reversible toggles.
+    s.integrations.tuya = { ...(s.integrations.tuya ?? {}), region, accessId, accessSecret };
   });
   tuya.invalidateFleet();
   return getTuyaIntegration();
@@ -283,6 +288,29 @@ export function setTuyaLocalControl(enabledRaw: unknown): unknown {
 export async function captureTuyaLocalDpMaps(): Promise<unknown> {
   const result = await tuya.captureDpMaps();
   return { ts: new Date().toISOString(), ...result };
+}
+
+/** PUT /api/integrations/tuya/fleet-manual — docs/51 Change 1: reversible on/off for the
+ *  manual (LAN-only) fleet listing. Persisted, default ON — see fleetManualEnabled() in
+ *  tuya.ts, the single source of truth this toggle drives. Invalidates the fleet cache so
+ *  flipping OFF re-fetches cloud promptly instead of waiting out the local-snapshot TTL. */
+export function setTuyaFleetManual(enabledRaw: unknown): unknown {
+  if (typeof enabledRaw !== 'boolean') throw badInput('enabled must be a boolean');
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.tuya = { ...(s.integrations.tuya ?? {}), fleetManual: enabledRaw };
+  });
+  tuya.invalidateFleet();
+  return getTuyaIntegration();
+}
+
+/** POST /api/integrations/tuya/sync — docs/51 Change 1's "Sync from Tuya cloud" button: the
+ *  ONLY routine cloud fleet call once fleetManual is ON. Admin-gated at the route (index.ts).
+ *  Note: this only refreshes cloud-known identity/status — fully LAN-enabling a brand-new
+ *  device (`newIds` in the result) still needs the existing harvest ops flow (key capture). */
+export async function syncTuyaFleet(): Promise<unknown> {
+  if (!tuya.isConfigured()) throw badInput('Tuya not connected');
+  return tuya.syncFleetFromCloud();
 }
 
 // ---- Scenes -----------------------------------------------------------------

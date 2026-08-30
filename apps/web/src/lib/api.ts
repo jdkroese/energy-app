@@ -53,6 +53,7 @@ import type {
   TuyaIntegrationStatus,
   TuyaLocalStatus,
   TuyaCaptureDpMapsResult,
+  TuyaFleetSyncResult,
   SpeakersResponse,
   AlarmStatus,
   AlarmConfig,
@@ -1046,6 +1047,14 @@ export const api = {
         "/api/integrations/tuya/local/capture-dpmaps",
         {},
       ),
+    // Manual (LAN-only) fleet listing — reversible Settings toggle + the explicit one-shot
+    // cloud refresh (docs/51 Change 1).
+    tuyaFleetManualSet: (enabled: boolean) =>
+      putJSON<TuyaIntegrationStatus>("/api/integrations/tuya/fleet-manual", {
+        enabled,
+      }),
+    tuyaSync: () =>
+      postJSON<TuyaFleetSyncResult>("/api/integrations/tuya/sync", {}),
 
     // Configurable connections (Sonnen / Weather / Tesla).
     config: () => getJSON<IntegrationsConfig>("/api/integrations/config"),
