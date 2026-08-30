@@ -489,19 +489,27 @@ export function setWaterSettings(body: unknown): unknown {
     if (b.tariff) {
       const tf = b.tariff;
       const c = s.water.tariff;
-      if (isNum(tf.fixedEurMonth)) c.fixedEurMonth = clamp(tf.fixedEurMonth, 0, 1000);
-      if (tf.block1) {
-        if (isNum(tf.block1.upToM3)) c.block1.upToM3 = clamp(tf.block1.upToM3, 0, 10000);
-        if (isNum(tf.block1.eurM3)) c.block1.eurM3 = clamp(tf.block1.eurM3, 0, 100);
-      }
-      if (tf.block2) {
-        if (isNum(tf.block2.upToM3)) c.block2.upToM3 = clamp(tf.block2.upToM3, 0, 10000);
-        if (isNum(tf.block2.eurM3)) c.block2.eurM3 = clamp(tf.block2.eurM3, 0, 100);
-      }
-      if (tf.block3 && isNum(tf.block3.eurM3)) c.block3.eurM3 = clamp(tf.block3.eurM3, 0, 100);
-      if (isNum(tf.sewerEurM3)) c.sewerEurM3 = clamp(tf.sewerEurM3, 0, 100);
-      if (isNum(tf.canonEurM3)) c.canonEurM3 = clamp(tf.canonEurM3, 0, 100);
+      if (isNum(tf.periodMonths)) c.periodMonths = clamp(tf.periodMonths, 1, 12);
+      if (isNum(tf.supplyFixedEurPeriod)) c.supplyFixedEurPeriod = clamp(tf.supplyFixedEurPeriod, 0, 1000);
+      if (isNum(tf.sanitationFixedEurPeriod)) c.sanitationFixedEurPeriod = clamp(tf.sanitationFixedEurPeriod, 0, 1000);
+      if (isNum(tf.sanitationEurM3)) c.sanitationEurM3 = clamp(tf.sanitationEurM3, 0, 100);
       if (isNum(tf.ivaPct)) c.ivaPct = clamp(tf.ivaPct, 0, 100);
+      // Blocks are replaced wholesale (not merged) — a partial merge could leave the
+      // list unordered or without an open-ended final block, which would silently stop
+      // billing above the last bound. Normalised on read by hydrateWater().
+      if (Array.isArray(tf.supplyBlocks) && tf.supplyBlocks.length > 0) {
+        const bounded = tf.supplyBlocks
+          .filter((x) => x && typeof x === 'object' && isNum(x.eurM3))
+          .map((x) => ({
+            upToM3: isNum(x.upToM3) && x.upToM3 > 0 ? clamp(x.upToM3, 0, 100000) : null,
+            eurM3: clamp(x.eurM3, 0, 100),
+          }));
+        if (bounded.length > 0) {
+          const withBound = bounded.filter((x) => x.upToM3 !== null).sort((a, z) => (a.upToM3 as number) - (z.upToM3 as number));
+          const open = bounded.find((x) => x.upToM3 === null) ?? { upToM3: null, eurM3: bounded[bounded.length - 1].eurM3 };
+          c.supplyBlocks = [...withBound, open];
+        }
+      }
     }
     return s.water;
   });

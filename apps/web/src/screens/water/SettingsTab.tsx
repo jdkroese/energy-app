@@ -28,17 +28,55 @@ function errMsg(e: unknown): string {
   return e instanceof ApiError ? e.message : 'Something went wrong — try again';
 }
 
-function calcBill(t: WaterTariff, m3: number) {
-  const b1 = Math.max(0, Math.min(m3, t.block1.upToM3));
-  const b2 = Math.max(0, Math.min(m3 - t.block1.upToM3, Math.max(0, t.block2.upToM3 - t.block1.upToM3)));
-  const b3 = Math.max(0, m3 - t.block2.upToM3);
-  const consumption = b1 * t.block1.eurM3 + b2 * t.block2.eurM3 + b3 * t.block3.eurM3;
-  const sewerage = m3 * t.sewerEurM3;
-  const canon = m3 * t.canonEurM3;
-  const preTax = t.fixedEurMonth + consumption + sewerage + canon;
-  const iva = preTax * (t.ivaPct / 100);
-  return { b1, b2, b3, consumption, sewerage, canon, preTax, iva, total: preTax + iva };
+/* Mirrors apps/api/src/control/water-tariff.ts. AMJASA bills bimonthly, IVA
+ * applies to the supply half only, and sanitation has its own standing charge —
+ * so this is NOT "sum everything, then add VAT". */
+function calcBill(t: WaterTariff, m3: number, months = 1) {
+  const vol = Math.max(0, m3);
+  const fixedShare = months / (t.periodMonths > 0 ? t.periodMonths : 1);
+  const blocks = t.supplyBlocks?.length ? t.supplyBlocks : [{ upToM3: null, eurM3: 0 }];
+
+  const parts: { label: string; m3: number; eur: number }[] = [];
+  let lower = 0;
+  let remaining = vol;
+  for (const b of blocks) {
+    if (remaining <= 0) break;
+    const span = b.upToM3 === null ? Infinity : Math.max(0, b.upToM3 - lower);
+    const take = Math.min(remaining, span);
+    if (take > 0) {
+      const label =
+        blocks.length === 1
+          ? 'Water consumed'
+          : b.upToM3 === null
+            ? `Water consumed (above ${lower} m³)`
+            : `Water consumed (${lower}–${b.upToM3} m³)`;
+      parts.push({ label, m3: take, eur: take * b.eurM3 });
+      remaining -= take;
+    }
+    if (b.upToM3 === null) break;
+    lower = b.upToM3;
+  }
+
+  const supplyFixed = t.supplyFixedEurPeriod * fixedShare;
+  const supplyVolume = parts.reduce((a, x) => a + x.eur, 0);
+  const supplyBase = supplyFixed + supplyVolume;
+  const iva = supplyBase * (t.ivaPct / 100);
+  const sanitationFixed = t.sanitationFixedEurPeriod * fixedShare;
+  const sanitationVolume = vol * t.sanitationEurM3;
+  const sanitationBase = sanitationFixed + sanitationVolume;
+
+  return {
+    parts,
+    supplyFixed,
+    supplyBase,
+    iva,
+    sanitationFixed,
+    sanitationVolume,
+    sanitationBase,
+    total: supplyBase + iva + sanitationBase,
+  };
 }
+
 
 export function WaterSettingsTab({
   ctx,
@@ -335,18 +373,15 @@ function TariffCard({ settings, isAdmin, monthM3, onSaved }: { settings: WaterSe
         {saved && <Badge tone="water" variant="soft">saved</Badge>}
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--text-2)', marginBottom: 12 }}>
-        every figure below is a placeholder until a real AMJASA bill is entered — cost figures elsewhere in Water are labelled as estimates
+        from AMJASA factura 3/1836657 (Jul–Aug 2026). AMJASA bills every {t.periodMonths} months; IVA applies to the water half only — the EPSAR sanitation half is exempt.
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-        <Input label="Service charge (€)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.fixedEurMonth} onChange={(e) => set({ fixedEurMonth: Number(e.target.value) })} />
-        <Input label="Block 1 up to (m³)" type="number" min={0} disabled={!isAdmin} value={t.block1.upToM3} onChange={(e) => set({ block1: { ...t.block1, upToM3: Number(e.target.value) } })} />
-        <Input label="Block 1 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block1.eurM3} onChange={(e) => set({ block1: { ...t.block1, eurM3: Number(e.target.value) } })} />
-        <Input label="Block 2 up to (m³)" type="number" min={0} disabled={!isAdmin} value={t.block2.upToM3} onChange={(e) => set({ block2: { ...t.block2, upToM3: Number(e.target.value) } })} />
-        <Input label="Block 2 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block2.eurM3} onChange={(e) => set({ block2: { ...t.block2, eurM3: Number(e.target.value) } })} />
-        <Input label="Block 3 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block3.eurM3} onChange={(e) => set({ block3: { eurM3: Number(e.target.value) } })} />
-        <Input label="Sewerage (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.sewerEurM3} onChange={(e) => set({ sewerEurM3: Number(e.target.value) })} />
-        <Input label="Canon saneamiento (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.canonEurM3} onChange={(e) => set({ canonEurM3: Number(e.target.value) })} />
-        <Input label="IVA (%)" type="number" min={0} step={1} disabled={!isAdmin} value={t.ivaPct} onChange={(e) => set({ ivaPct: Number(e.target.value) })} />
+        <Input label={`Water standing charge (€ / ${t.periodMonths} months)`} type="number" min={0} step={0.01} disabled={!isAdmin} value={t.supplyFixedEurPeriod} onChange={(e) => set({ supplyFixedEurPeriod: Number(e.target.value) })} />
+        <Input label="Water rate (€/m³)" type="number" min={0} step={0.001} disabled={!isAdmin} value={t.supplyBlocks[0]?.eurM3 ?? 0} onChange={(e) => set({ supplyBlocks: [{ upToM3: null, eurM3: Number(e.target.value) }] })} />
+        <Input label={`EPSAR standing charge (€ / ${t.periodMonths} months)`} type="number" min={0} step={0.01} disabled={!isAdmin} value={t.sanitationFixedEurPeriod} onChange={(e) => set({ sanitationFixedEurPeriod: Number(e.target.value) })} />
+        <Input label="EPSAR rate (€/m³)" type="number" min={0} step={0.001} disabled={!isAdmin} value={t.sanitationEurM3} onChange={(e) => set({ sanitationEurM3: Number(e.target.value) })} />
+        <Input label="Billing period (months)" type="number" min={1} max={12} step={1} disabled={!isAdmin} value={t.periodMonths} onChange={(e) => set({ periodMonths: Number(e.target.value) })} />
+        <Input label="IVA on water (%)" type="number" min={0} step={1} disabled={!isAdmin} value={t.ivaPct} onChange={(e) => set({ ivaPct: Number(e.target.value) })} />
       </div>
 
       {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 10 }}>{err}</div>}
@@ -360,13 +395,13 @@ function TariffCard({ settings, isAdmin, monthM3, onSaved }: { settings: WaterSe
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-1)' }}>
         <Eyebrow>Estimated bill this month · {monthM3.toFixed(1)} m³</Eyebrow>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
-          <BillRow label="Service charge" value={t.fixedEurMonth} />
-          <BillRow label={`Block 1 (${bill.b1.toFixed(1)} m³ × €${t.block1.eurM3.toFixed(2)})`} value={bill.b1 * t.block1.eurM3} />
-          <BillRow label={`Block 2 (${bill.b2.toFixed(1)} m³ × €${t.block2.eurM3.toFixed(2)})`} value={bill.b2 * t.block2.eurM3} />
-          <BillRow label={`Block 3 (${bill.b3.toFixed(1)} m³ × €${t.block3.eurM3.toFixed(2)})`} value={bill.b3 * t.block3.eurM3} />
-          <BillRow label="Sewerage" value={bill.sewerage} />
-          <BillRow label="Canon de saneamiento" value={bill.canon} />
-          <BillRow label={`IVA (${t.ivaPct}%)`} value={bill.iva} />
+          <BillRow label="Water standing charge" value={bill.supplyFixed} />
+          {bill.parts.map((p) => (
+            <BillRow key={p.label} label={`${p.label} (${p.m3.toFixed(1)} m³)`} value={p.eur} />
+          ))}
+          <BillRow label={`IVA ${t.ivaPct}% (water only)`} value={bill.iva} />
+          <BillRow label="EPSAR standing charge (exempt)" value={bill.sanitationFixed} />
+          <BillRow label={`EPSAR sanitation (${monthM3.toFixed(1)} m³, exempt)`} value={bill.sanitationVolume} />
           <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, marginTop: 3, borderTop: '1px solid var(--border-1)', fontSize: 14, fontWeight: 700 }}>
             <span>Estimated total</span>
             <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--water)' }}>€{bill.total.toFixed(2)}</span>

@@ -2858,14 +2858,25 @@ export interface WaterThresholds {
 
 /** Spain/AMJASA tariff (docs/52 §3 P3) — every default is a placeholder pending
  *  a real bill (docs/52 D5); the Settings tab labels cost figures as estimates. */
+export interface WaterTariffBlock {
+  /** Upper bound of this block in m³, or null for the final open-ended block. */
+  upToM3: number | null;
+  eurM3: number;
+}
+
+/* Mirrors WaterTariff in apps/api/src/store.ts — keep the two in step.
+ * Shaped around how AMJASA actually bills (factura 3/1836657): bimonthly
+ * periods, a VAT-exempt EPSAR sanitation portion, and a standing charge on
+ * both halves. */
 export interface WaterTariff {
-  fixedEurMonth: number;
-  block1: { upToM3: number; eurM3: number };
-  block2: { upToM3: number; eurM3: number };
-  /** The top/marginal block — what a leak actually costs. */
-  block3: { eurM3: number };
-  sewerEurM3: number;
-  canonEurM3: number;
+  /** Months per billing period (AMJASA: 2). Standing charges are per period. */
+  periodMonths: number;
+  supplyFixedEurPeriod: number;
+  /** Progressive; a single open-ended entry means a flat rate. */
+  supplyBlocks: WaterTariffBlock[];
+  sanitationFixedEurPeriod: number;
+  sanitationEurM3: number;
+  /** Applied to the SUPPLY portion only — EPSAR sanitation is VAT-exempt. */
   ivaPct: number;
 }
 
@@ -2889,11 +2900,7 @@ export type WaterSettingsPatch = Partial<{
   serial: string;
   pollHours: number;
   thresholds: Partial<WaterThresholds>;
-  tariff: Partial<Omit<WaterTariff, 'block1' | 'block2' | 'block3'>> & {
-    block1?: Partial<WaterTariff['block1']>;
-    block2?: Partial<WaterTariff['block2']>;
-    block3?: Partial<WaterTariff['block3']>;
-  };
+  tariff: Partial<WaterTariff>;
 }>;
 
 export interface WaterSettingsSaveResponse {

@@ -223,9 +223,35 @@ BI-WATER app can push notifications. Do we mirror those values, ignore them, or 
 to them? (Writing is unverified — we only captured reads.) **Recommend: read and
 display them for reference, own our own thresholds, do not write.**
 
-**D5 · Tariff figures.** Every rate in the mockup is a **placeholder**, not a published
-AMJASA rate. Need a real bill to populate blocks, sewerage, canon and IVA. Until then
-cost figures should be labelled as estimates in the UI.
+**D5 · Tariff figures. RESOLVED 2026-08-31** from AMJASA **factura 3/1836657** (period
+JULIO–AGOSTO 2026, meter P23EA822644C / 15 mm, 152 m³). The real structure is not the
+one the placeholder model assumed:
+
+| Line | Rate | Notes |
+|---|---|---|
+| Supply standing charge ("Entre 13mm y 15mm") | **27,34 € / 2 months** | by meter calibre |
+| Supply consumption | **1,86 €/m³** | flat — one line for all 152 m³, no blocks |
+| EPSAR sanitation standing charge | **7,30 € / 2 months** | |
+| EPSAR sanitation consumption | **0,412 €/m³** | |
+| IVA | **10%, supply portion ONLY** | EPSAR is "Base exenta de IVA" |
+
+Reconciles to the cent: 27,34 + 282,72 = 310,06; IVA 31,01; EPSAR 7,30 + 62,62 = 69,92
+exempt; **TOTAL 410,99**. Asserted in `water-tariff.test.ts` — if that test ever fails,
+the model has drifted from the real bill.
+
+Three consequences the original model got wrong, worth ~11% at low consumption:
+billing is **bimonthly** (standing charges pro-rate), **IVA is partial**, and sanitation
+has **its own standing charge**. The tariff model was reshaped accordingly.
+
+Not modelled deliberately: the "CUOTA EPSAR (18/18)" line (23,93 €) is the final
+instalment of a deferred charge under Decreto Ley 19/2022 — a temporary catch-up, not a
+recurring tariff.
+
+**Still open:** whether AMJASA has consumption blocks at all. This household consumes
+~152 m³ per bimonthly period, so it may simply sit permanently in a top block that the
+bill prints as a single line. `supplyBlocks` is a list precisely so blocks can be added
+if a future, lower-consumption bill ever shows a different unit price — which is exactly
+what would happen if the leak gets fixed.
 
 **D6 · Poll cadence.** Data is hourly-read, ~daily-upload. Every 6 h is plenty and
 cheap. Worth confirming there is no rate limit we should respect — we have no

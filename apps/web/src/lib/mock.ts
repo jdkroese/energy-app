@@ -521,14 +521,14 @@ export const MOCK_WATER_SETTINGS: WaterSettingsResponse = {
     dailySpikeFactor: 3,
     meterSilentHours: 36,
   },
-  // PLACEHOLDER rates (docs/52 D5) — not real AMJASA figures.
+  // Real AMJASA rates from factura 3/1836657 (Jul–Aug 2026), mirroring
+  // defaultWaterTariff() in apps/api/src/store.ts.
   tariff: {
-    fixedEurMonth: 7.2,
-    block1: { upToM3: 15, eurM3: 0.62 },
-    block2: { upToM3: 30, eurM3: 1.08 },
-    block3: { eurM3: 1.86 },
-    sewerEurM3: 0.28,
-    canonEurM3: 0.35,
+    periodMonths: 2,
+    supplyFixedEurPeriod: 27.34,
+    supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+    sanitationFixedEurPeriod: 7.3,
+    sanitationEurM3: 0.412,
     ivaPct: 10,
   },
 };
