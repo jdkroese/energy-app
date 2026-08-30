@@ -106,8 +106,10 @@ export function WaterAlerts({ ctx, snapshot }: { ctx: ShellContext; snapshot: Wa
     return {
       label: h.labels[bestI],
       irrigationL: bestV,
-      nightFloorLph: h.nightBaseline[bestI] ?? 0,
-      thresholdLph: s.thresholds.quietHourFloorLph,
+      // nightBaseline is the night slot's litres with irrigation removed — a
+      // volume, not a rate — so it is judged against the night tolerance.
+      nightResidualL: h.nightBaseline[bestI] ?? 0,
+      toleranceL: s.thresholds.nightToleranceL,
     };
   }, [monthHistory, s]);
 
@@ -170,9 +172,10 @@ export function WaterAlerts({ ctx, snapshot }: { ctx: ShellContext; snapshot: Wa
                   <div style={{ fontSize: 12.5, color: 'var(--text-2)', marginTop: 4, lineHeight: 1.6 }}>
                     <strong style={{ color: 'var(--text-1)' }}>{suppressedNight.label}</strong> logged{' '}
                     <strong style={{ color: 'var(--text-1)', fontFamily: 'var(--font-mono)' }}>{Math.round(suppressedNight.irrigationL).toLocaleString()} L</strong>{' '}
-                    from Rain Bird zones — a volume that would fail almost any fixed threshold. Once that's subtracted, the night floor was{' '}
-                    <strong style={{ color: 'var(--text-1)', fontFamily: 'var(--font-mono)' }}>{Math.round(suppressedNight.nightFloorLph)} L/h</strong>, under the{' '}
-                    {suppressedNight.thresholdLph} L/h continuous-flow floor — so nothing fired.
+                    from Rain Bird zones — a volume that would fail almost any fixed threshold. Once that's subtracted, the night's
+                    unexplained residual was{' '}
+                    <strong style={{ color: 'var(--text-1)', fontFamily: 'var(--font-mono)' }}>{Math.round(suppressedNight.nightResidualL)} L</strong>, under the{' '}
+                    {suppressedNight.toleranceL} L night tolerance — so nothing fired.
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 8 }}>
                     This is the point of attribution: a leak detector that alerts on every watering night gets muted within a week — this one doesn't.

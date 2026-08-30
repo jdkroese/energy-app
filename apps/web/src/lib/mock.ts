@@ -501,13 +501,17 @@ export function mockWaterHistory(range: string, offset = 0): WaterHistoryRespons
 
 export const MOCK_WATER_HISTORY: WaterHistoryResponse = mockWaterHistory('week', 0);
 
+/* The Settings tab seeds its editable connection form from this until the real
+ * response lands, so the credential fields MUST be blank here — a mock email or
+ * meter serial would render as though it were configured, and could be saved
+ * for real. Only the non-credential defaults below are safe to populate. */
 export const MOCK_WATER_SETTINGS: WaterSettingsResponse = {
   ts: new Date().toISOString(),
-  configured: true,
-  connected: true,
-  hasPassword: true,
-  email: 'j.kroese@levante.nl',
-  serial: 'P23EA822644C',
+  configured: false,
+  connected: false,
+  hasPassword: false,
+  email: '',
+  serial: '',
   pollHours: 6,
   thresholds: {
     quietHourFloorLph: 5,
