@@ -29,13 +29,13 @@ function errMsg(e: unknown): string {
 }
 
 function calcBill(t: WaterTariff, m3: number) {
-  const b1 = Math.max(0, Math.min(m3, t.block1M3));
-  const b2 = Math.max(0, Math.min(m3 - t.block1M3, Math.max(0, t.block2M3 - t.block1M3)));
-  const b3 = Math.max(0, m3 - t.block2M3);
-  const consumption = b1 * t.block1RateEur + b2 * t.block2RateEur + b3 * t.block3RateEur;
-  const sewerage = m3 * t.sewerageRateEur;
-  const canon = m3 * t.canonSaneamientoRateEur;
-  const preTax = t.serviceChargeEur + consumption + sewerage + canon;
+  const b1 = Math.max(0, Math.min(m3, t.block1.upToM3));
+  const b2 = Math.max(0, Math.min(m3 - t.block1.upToM3, Math.max(0, t.block2.upToM3 - t.block1.upToM3)));
+  const b3 = Math.max(0, m3 - t.block2.upToM3);
+  const consumption = b1 * t.block1.eurM3 + b2 * t.block2.eurM3 + b3 * t.block3.eurM3;
+  const sewerage = m3 * t.sewerEurM3;
+  const canon = m3 * t.canonEurM3;
+  const preTax = t.fixedEurMonth + consumption + sewerage + canon;
   const iva = preTax * (t.ivaPct / 100);
   return { b1, b2, b3, consumption, sewerage, canon, preTax, iva, total: preTax + iva };
 }
@@ -224,12 +224,12 @@ function ThresholdsCard({ settings, isAdmin, onSaved }: { settings: WaterSetting
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--text-2)', marginBottom: 12 }}>on/off switches for each rule live on the Alerts tab — these are the numbers behind them</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-        <Input label="Continuous-flow floor (L/h)" type="number" min={0} disabled={!isAdmin} value={t.continuousFlow.floorLph} onChange={(e) => setT((p) => ({ ...p, continuousFlow: { ...p.continuousFlow, floorLph: Number(e.target.value) } }))} />
-        <Input label="Continuous-flow hours" type="number" min={1} disabled={!isAdmin} value={t.continuousFlow.hours} onChange={(e) => setT((p) => ({ ...p, continuousFlow: { ...p.continuousFlow, hours: Number(e.target.value) } }))} />
-        <Input label="Night-use tolerance (L)" type="number" min={0} disabled={!isAdmin} value={t.nightUse.toleranceL} onChange={(e) => setT((p) => ({ ...p, nightUse: { ...p.nightUse, toleranceL: Number(e.target.value) } }))} />
-        <Input label="Daily-spike multiplier" type="number" min={1} step={0.1} disabled={!isAdmin} value={t.dailySpike.multiplier} onChange={(e) => setT((p) => ({ ...p, dailySpike: { ...p.dailySpike, multiplier: Number(e.target.value) } }))} />
-        <Input label="Monthly budget (m³)" type="number" min={0} disabled={!isAdmin} value={t.monthlyBudget.budgetM3} onChange={(e) => setT((p) => ({ ...p, monthlyBudget: { ...p.monthlyBudget, budgetM3: Number(e.target.value) } }))} />
-        <Input label="Meter-silent hours" type="number" min={1} disabled={!isAdmin} value={t.meterSilent.hours} onChange={(e) => setT((p) => ({ ...p, meterSilent: { ...p.meterSilent, hours: Number(e.target.value) } }))} />
+        <Input label="Continuous-flow floor (L/h)" type="number" min={0} disabled={!isAdmin} value={t.quietHourFloorLph} onChange={(e) => setT((p) => ({ ...p, quietHourFloorLph: Number(e.target.value) }))} />
+        <Input label="Continuous-flow hours" type="number" min={1} disabled={!isAdmin} value={t.continuousFlowHours} onChange={(e) => setT((p) => ({ ...p, continuousFlowHours: Number(e.target.value) }))} />
+        <Input label="Night-use tolerance (L)" type="number" min={0} disabled={!isAdmin} value={t.nightToleranceL} onChange={(e) => setT((p) => ({ ...p, nightToleranceL: Number(e.target.value) }))} />
+        <Input label="Daily-spike multiplier" type="number" min={1} step={0.1} disabled={!isAdmin} value={t.dailySpikeFactor} onChange={(e) => setT((p) => ({ ...p, dailySpikeFactor: Number(e.target.value) }))} />
+        <Input label="Monthly budget (m³)" type="number" min={0} disabled={!isAdmin} value={t.monthlyBudgetM3} onChange={(e) => setT((p) => ({ ...p, monthlyBudgetM3: Number(e.target.value) }))} />
+        <Input label="Meter-silent hours" type="number" min={1} disabled={!isAdmin} value={t.meterSilentHours} onChange={(e) => setT((p) => ({ ...p, meterSilentHours: Number(e.target.value) }))} />
       </div>
       {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 10 }}>{err}</div>}
       {isAdmin && (
@@ -338,14 +338,14 @@ function TariffCard({ settings, isAdmin, monthM3, onSaved }: { settings: WaterSe
         every figure below is a placeholder until a real AMJASA bill is entered — cost figures elsewhere in Water are labelled as estimates
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-        <Input label="Service charge (€)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.serviceChargeEur} onChange={(e) => set({ serviceChargeEur: Number(e.target.value) })} />
-        <Input label="Block 1 up to (m³)" type="number" min={0} disabled={!isAdmin} value={t.block1M3} onChange={(e) => set({ block1M3: Number(e.target.value) })} />
-        <Input label="Block 1 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block1RateEur} onChange={(e) => set({ block1RateEur: Number(e.target.value) })} />
-        <Input label="Block 2 up to (m³)" type="number" min={0} disabled={!isAdmin} value={t.block2M3} onChange={(e) => set({ block2M3: Number(e.target.value) })} />
-        <Input label="Block 2 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block2RateEur} onChange={(e) => set({ block2RateEur: Number(e.target.value) })} />
-        <Input label="Block 3 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block3RateEur} onChange={(e) => set({ block3RateEur: Number(e.target.value) })} />
-        <Input label="Sewerage (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.sewerageRateEur} onChange={(e) => set({ sewerageRateEur: Number(e.target.value) })} />
-        <Input label="Canon saneamiento (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.canonSaneamientoRateEur} onChange={(e) => set({ canonSaneamientoRateEur: Number(e.target.value) })} />
+        <Input label="Service charge (€)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.fixedEurMonth} onChange={(e) => set({ fixedEurMonth: Number(e.target.value) })} />
+        <Input label="Block 1 up to (m³)" type="number" min={0} disabled={!isAdmin} value={t.block1.upToM3} onChange={(e) => set({ block1: { ...t.block1, upToM3: Number(e.target.value) } })} />
+        <Input label="Block 1 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block1.eurM3} onChange={(e) => set({ block1: { ...t.block1, eurM3: Number(e.target.value) } })} />
+        <Input label="Block 2 up to (m³)" type="number" min={0} disabled={!isAdmin} value={t.block2.upToM3} onChange={(e) => set({ block2: { ...t.block2, upToM3: Number(e.target.value) } })} />
+        <Input label="Block 2 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block2.eurM3} onChange={(e) => set({ block2: { ...t.block2, eurM3: Number(e.target.value) } })} />
+        <Input label="Block 3 rate (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.block3.eurM3} onChange={(e) => set({ block3: { eurM3: Number(e.target.value) } })} />
+        <Input label="Sewerage (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.sewerEurM3} onChange={(e) => set({ sewerEurM3: Number(e.target.value) })} />
+        <Input label="Canon saneamiento (€/m³)" type="number" min={0} step={0.01} disabled={!isAdmin} value={t.canonEurM3} onChange={(e) => set({ canonEurM3: Number(e.target.value) })} />
         <Input label="IVA (%)" type="number" min={0} step={1} disabled={!isAdmin} value={t.ivaPct} onChange={(e) => set({ ivaPct: Number(e.target.value) })} />
       </div>
 
@@ -360,10 +360,10 @@ function TariffCard({ settings, isAdmin, monthM3, onSaved }: { settings: WaterSe
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-1)' }}>
         <Eyebrow>Estimated bill this month · {monthM3.toFixed(1)} m³</Eyebrow>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
-          <BillRow label="Service charge" value={t.serviceChargeEur} />
-          <BillRow label={`Block 1 (${bill.b1.toFixed(1)} m³ × €${t.block1RateEur.toFixed(2)})`} value={bill.b1 * t.block1RateEur} />
-          <BillRow label={`Block 2 (${bill.b2.toFixed(1)} m³ × €${t.block2RateEur.toFixed(2)})`} value={bill.b2 * t.block2RateEur} />
-          <BillRow label={`Block 3 (${bill.b3.toFixed(1)} m³ × €${t.block3RateEur.toFixed(2)})`} value={bill.b3 * t.block3RateEur} />
+          <BillRow label="Service charge" value={t.fixedEurMonth} />
+          <BillRow label={`Block 1 (${bill.b1.toFixed(1)} m³ × €${t.block1.eurM3.toFixed(2)})`} value={bill.b1 * t.block1.eurM3} />
+          <BillRow label={`Block 2 (${bill.b2.toFixed(1)} m³ × €${t.block2.eurM3.toFixed(2)})`} value={bill.b2 * t.block2.eurM3} />
+          <BillRow label={`Block 3 (${bill.b3.toFixed(1)} m³ × €${t.block3.eurM3.toFixed(2)})`} value={bill.b3 * t.block3.eurM3} />
           <BillRow label="Sewerage" value={bill.sewerage} />
           <BillRow label="Canon de saneamiento" value={bill.canon} />
           <BillRow label={`IVA (${t.ivaPct}%)`} value={bill.iva} />

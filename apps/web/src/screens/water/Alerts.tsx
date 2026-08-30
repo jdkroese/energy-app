@@ -17,12 +17,15 @@ import type { ShellContext } from '../../components/shell/AppShell';
  * false-positive suppression this whole section exists to deliver).
  * ==========================================================================*/
 
-const RULE_META: { key: keyof WaterThresholds; label: string; icon: string; describe: (t: WaterThresholds) => string }[] = [
-  { key: 'continuousFlow', label: 'Continuous flow', icon: 'infinity', describe: (t) => `no hour below ${t.continuousFlow.floorLph} L/h for ${t.continuousFlow.hours}h · critical` },
-  { key: 'nightUse', label: 'Night use', icon: 'moon', describe: (t) => `night flow (irrigation removed) > ${t.nightUse.toleranceL} L` },
-  { key: 'dailySpike', label: 'Daily spike', icon: 'trending-up', describe: (t) => `a day > ${t.dailySpike.multiplier}× the 30-day median, unattributed` },
-  { key: 'monthlyBudget', label: 'Monthly budget', icon: 'calendar-days', describe: (t) => `projected month > ${t.monthlyBudget.budgetM3} m³ — warns on the trend, not the arrival` },
-  { key: 'meterSilent', label: 'Meter silent', icon: 'wifi-off', describe: (t) => `no new reading for ${t.meterSilent.hours}h — connector health, not a leak` },
+/* `rule` matches the `rule-water-*` ids in the API's RULE_META (routes/alerts.ts),
+ * which is the single source of truth for whether a rule is enabled — the
+ * thresholds below only say *where* each line sits, never whether it runs. */
+const RULE_META: { rule: string; label: string; icon: string; describe: (t: WaterThresholds) => string }[] = [
+  { rule: 'rule-water-continuous-flow', label: 'Continuous flow', icon: 'infinity', describe: (t) => `no hour below ${t.quietHourFloorLph} L/h for ${t.continuousFlowHours}h · critical` },
+  { rule: 'rule-water-night-use', label: 'Night use', icon: 'moon', describe: (t) => `night flow (irrigation removed) > ${t.nightToleranceL} L` },
+  { rule: 'rule-water-daily-spike', label: 'Daily spike', icon: 'trending-up', describe: (t) => `a day > ${t.dailySpikeFactor}× the 30-day median, unattributed` },
+  { rule: 'rule-water-monthly-budget', label: 'Monthly budget', icon: 'calendar-days', describe: (t) => `projected month > ${t.monthlyBudgetM3} m³ — warns on the trend, not the arrival` },
+  { rule: 'rule-water-meter-silent', label: 'Meter silent', icon: 'wifi-off', describe: (t) => `no new reading for ${t.meterSilentHours}h — connector health, not a leak` },
 ];
 
 const SEVERITY_TONE: Record<string, 'danger' | 'grid' | 'water' | 'neutral'> = {
@@ -46,8 +49,12 @@ export function WaterAlerts({ ctx, snapshot }: { ctx: ShellContext; snapshot: Wa
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
-  const { data: settings, refetch: refetchSettings } = usePolling(api.water.settings, 0);
+  const { data: settings } = usePolling(api.water.settings, 0);
   const s = settings ?? MOCK_WATER_SETTINGS;
+
+  // Rule on/off comes from the shared alert-rule store, not from water settings.
+  const { data: alerts, refetch: refetchAlerts } = usePolling(api.alerts, 30_000);
+  const alertRules = alerts?.rules ?? [];
 
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -65,11 +72,14 @@ export function WaterAlerts({ ctx, snapshot }: { ctx: ShellContext; snapshot: Wa
     }
   };
 
-  const toggleRule = async (key: keyof WaterThresholds, enabled: boolean) => {
-    setBusy(`rule-${key}`);
+  /* Enable/disable lives in the shared alert-rule store (the same `rule-water-*`
+   * ids the API registers in RULE_META), NOT in the water thresholds — so this
+   * switch and Settings ▸ Notifications stay one setting, not two. */
+  const toggleRule = async (ruleId: string, enabled: boolean) => {
+    setBusy(`rule-${ruleId}`);
     try {
-      await api.water.saveSettings({ thresholds: { [key]: { enabled } } });
-      await refetchSettings();
+      await api.setRule(ruleId, enabled);
+      await refetchAlerts();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Could not save the rule');
     } finally {
@@ -97,7 +107,7 @@ export function WaterAlerts({ ctx, snapshot }: { ctx: ShellContext; snapshot: Wa
       label: h.labels[bestI],
       irrigationL: bestV,
       nightFloorLph: h.nightBaseline[bestI] ?? 0,
-      thresholdLph: s.thresholds.continuousFlow.floorLph,
+      thresholdLph: s.thresholds.quietHourFloorLph,
     };
   }, [monthHistory, s]);
 
@@ -182,10 +192,10 @@ export function WaterAlerts({ ctx, snapshot }: { ctx: ShellContext; snapshot: Wa
         <Card padded style={{ marginTop: 8 }}>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {RULE_META.map((m, i) => {
-              const rule = s.thresholds[m.key];
+              const rule = alertRules.find((r) => r.id === m.rule);
               return (
                 <div
-                  key={m.key}
+                  key={m.rule}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -201,7 +211,7 @@ export function WaterAlerts({ ctx, snapshot }: { ctx: ShellContext; snapshot: Wa
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{m.label}</div>
                     <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>{m.describe(s.thresholds)}</div>
                   </div>
-                  <Switch checked={rule.enabled} disabled={!isAdmin || busy === `rule-${m.key}`} onChange={(e) => void toggleRule(m.key, e.currentTarget.checked)} />
+                  <Switch checked={rule?.enabled ?? true} disabled={!isAdmin || busy === `rule-${m.rule}`} onChange={(e) => void toggleRule(m.rule, e.currentTarget.checked)} />
                 </div>
               );
             })}

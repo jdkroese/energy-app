@@ -2840,26 +2840,32 @@ export interface WaterHistoryResponse {
 
 /** Detection-rule thresholds (docs/51 §3 P2's five detectors), each independently
  *  enable-able — the Alerts tab's per-rule switches read/write this object. */
+/* Mirrors WaterThresholds in apps/api/src/store.ts — keep the two in step.
+ * Flat, with no per-detector `enabled` flag: enable/disable already lives in the
+ * `rule-water-*` entries in RULE_META (routes/alerts.ts), so duplicating it here
+ * would give one switch two sources of truth. */
 export interface WaterThresholds {
-  continuousFlow: { enabled: boolean; hours: number; floorLph: number };
-  nightUse: { enabled: boolean; toleranceL: number };
-  dailySpike: { enabled: boolean; multiplier: number };
-  monthlyBudget: { enabled: boolean; budgetM3: number };
-  meterSilent: { enabled: boolean; hours: number };
+  /** Hourly litres floor below which a house counts as "quiet" at least once a night. */
+  quietHourFloorLph: number;
+  /** Consecutive hours the floor must stay uncrossed before the leak alert fires. */
+  continuousFlowHours: number;
+  /** Night-slot (00:00–05:59) litres, AFTER subtracting attributed irrigation. */
+  nightToleranceL: number;
+  monthlyBudgetM3: number;
+  dailySpikeFactor: number;
+  meterSilentHours: number;
 }
 
 /** Spain/AMJASA tariff (docs/51 §3 P3) — every default is a placeholder pending
  *  a real bill (docs/51 D5); the Settings tab labels cost figures as estimates. */
 export interface WaterTariff {
-  serviceChargeEur: number;
-  block1M3: number;
-  block1RateEur: number;
-  block2M3: number;
-  block2RateEur: number;
-  /** Rate above block2M3 (the top/marginal block — what a leak actually costs). */
-  block3RateEur: number;
-  sewerageRateEur: number;
-  canonSaneamientoRateEur: number;
+  fixedEurMonth: number;
+  block1: { upToM3: number; eurM3: number };
+  block2: { upToM3: number; eurM3: number };
+  /** The top/marginal block — what a leak actually costs. */
+  block3: { eurM3: number };
+  sewerEurM3: number;
+  canonEurM3: number;
   ivaPct: number;
 }
 
@@ -2882,14 +2888,12 @@ export type WaterSettingsPatch = Partial<{
   password: string;
   serial: string;
   pollHours: number;
-  thresholds: Partial<{
-    continuousFlow: Partial<WaterThresholds['continuousFlow']>;
-    nightUse: Partial<WaterThresholds['nightUse']>;
-    dailySpike: Partial<WaterThresholds['dailySpike']>;
-    monthlyBudget: Partial<WaterThresholds['monthlyBudget']>;
-    meterSilent: Partial<WaterThresholds['meterSilent']>;
-  }>;
-  tariff: Partial<WaterTariff>;
+  thresholds: Partial<WaterThresholds>;
+  tariff: Partial<Omit<WaterTariff, 'block1' | 'block2' | 'block3'>> & {
+    block1?: Partial<WaterTariff['block1']>;
+    block2?: Partial<WaterTariff['block2']>;
+    block3?: Partial<WaterTariff['block3']>;
+  };
 }>;
 
 export interface WaterSettingsSaveResponse {

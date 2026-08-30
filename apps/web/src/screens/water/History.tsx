@@ -39,8 +39,8 @@ export function WaterHistory({ ctx }: { ctx: ShellContext }) {
 
   const { data: settings } = usePolling(api.water.settings, 0);
   const s = settings ?? MOCK_WATER_SETTINGS;
-  const nightToleranceL = s.thresholds.nightUse.toleranceL;
-  const floorLph = s.thresholds.continuousFlow.floorLph;
+  const nightToleranceL = s.thresholds.nightToleranceL;
+  const floorLph = s.thresholds.quietHourFloorLph;
 
   const maxBack = MAX_BACK[range.toLowerCase()] ?? 0;
   const hasPrev = offset > -maxBack;
