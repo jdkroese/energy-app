@@ -34,6 +34,7 @@ export type EventCategory =
   | 'arbitrage'
   | 'grid'
   | 'solar'
+  | 'water'
   | 'connectivity'
   | 'security'
   | 'kitchen'

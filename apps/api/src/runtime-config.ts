@@ -166,3 +166,30 @@ export function isolarcloudConfig(): IsolarcloudConfig | null {
     ...(c?.serialMap && typeof c.serialMap === 'object' ? { serialMap: c.serialMap } : {}),
   };
 }
+
+/**
+ * Contazara CZ3000 water-meter config (docs/51). Read from the Settings store
+ * (store.integrations.contazara) with an env fallback. Returns `null` when
+ * incomplete so the connector no-ops (disabled/gated until the owner enters
+ * credentials). The password is never returned by the config route.
+ */
+export interface ContazaraConfig {
+  email: string;
+  password: string;
+  serial: string;
+  /** How often the backfill/poll coordinator re-fetches (hours). Default 6 (docs/51 D6). */
+  pollHours: number;
+}
+
+const CONTAZARA_DEFAULT_POLL_HOURS = 6;
+
+export function contazaraConfig(): ContazaraConfig | null {
+  const c = store.get().integrations?.contazara;
+  const email = c?.email?.trim() || process.env.CONTAZARA_EMAIL?.trim() || '';
+  const password = c?.password || process.env.CONTAZARA_PASSWORD || '';
+  const serial = c?.serial?.trim() || process.env.CONTAZARA_SERIAL?.trim() || '';
+  const rawPollHours = typeof c?.pollHours === 'number' ? c.pollHours : Number(process.env.CONTAZARA_POLL_HOURS);
+  const pollHours = Number.isFinite(rawPollHours) && rawPollHours > 0 ? rawPollHours : CONTAZARA_DEFAULT_POLL_HOURS;
+  if (!email || !password || !serial) return null;
+  return { email, password, serial, pollHours: Math.max(1, Math.min(24, pollHours)) };
+}
