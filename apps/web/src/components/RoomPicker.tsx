@@ -38,7 +38,7 @@ export function RoomPicker({
   if (disabled) {
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: compact ? 11.5 : 13, color: 'var(--text-2)' }}>
-        <Icon name={current?.icon ?? 'home'} size={compact ? 13 : 14} color="var(--text-3)" />
+        <Icon name={current?.icon ?? 'house'} size={compact ? 13 : 14} color="var(--text-3)" />
         {current?.name ?? 'Unassigned'}
       </span>
     );
@@ -54,7 +54,7 @@ export function RoomPicker({
     if (!n) return;
     setBusy(true);
     void api.rooms
-      .create(n, 'home')
+      .create(n, 'house')
       .then((res) => api.devices.setRoom(deviceId, res.room.id))
       .then(() => { setCreating(false); setName(''); onChanged(); })
       .finally(() => setBusy(false));

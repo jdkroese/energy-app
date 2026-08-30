@@ -3137,7 +3137,7 @@ function hydrateRooms(p: unknown): Record<string, Room> {
     out[id] = {
       id,
       name: r.name.trim(),
-      icon: typeof r.icon === "string" && r.icon ? r.icon : "home",
+      icon: typeof r.icon === "string" && r.icon ? r.icon : "house",
       order: typeof r.order === "number" ? r.order : i,
     };
     i++;

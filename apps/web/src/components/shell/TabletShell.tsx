@@ -30,7 +30,7 @@ import { CookScreen } from '../../screens/kitchen/Cook';
 type TabId = 'home' | 'lights' | 'climate' | 'shades' | 'kitchen';
 
 const TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: 'home', label: 'Home', icon: 'home' },
+  { id: 'home', label: 'Home', icon: 'house' },
   { id: 'lights', label: 'Lights', icon: 'lightbulb' },
   { id: 'climate', label: 'Climate', icon: 'thermometer' },
   { id: 'shades', label: 'Shades', icon: 'blinds' },

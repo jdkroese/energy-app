@@ -230,7 +230,7 @@ function deriveInsight(d: LiveResponse): Insight {
     const when = h > 0 ? `${h}h ${m}m` : `${m}m`;
     return {
       tone: 'grid',
-      icon: 'alert-triangle',
+      icon: 'triangle-alert',
       title: 'Both full · peak ahead',
       body: (
         <>

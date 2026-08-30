@@ -316,7 +316,7 @@ export const MOCK_ALERTS: AlertsResponse = {
   rules: [
     { id: 'r1', icon: 'power', label: 'Tesla power-off / dropout', enabled: true },
     { id: 'r2', icon: 'battery-warning', label: 'Backup reserve below 15%', enabled: true },
-    { id: 'r3', icon: 'alert-triangle', label: 'Sonnen fault or alarm', enabled: true },
+    { id: 'r3', icon: 'triangle-alert', label: 'Sonnen fault or alarm', enabled: true },
     { id: 'r4', icon: 'plug-zap', label: 'Abnormal grid-charging', enabled: true },
     { id: 'r5', icon: 'cloud-sun', label: 'Optimizer notices', enabled: false },
   ],

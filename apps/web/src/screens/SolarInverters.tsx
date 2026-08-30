@@ -122,7 +122,7 @@ function InverterCard({ inv }: { inv: InverterView }) {
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Icon name="check-circle" size={14} color="var(--solar)" />
+            <Icon name="circle-check" size={14} color="var(--solar)" />
             No active faults
           </span>
         )}

@@ -277,7 +277,7 @@ export function EditRuleOverlay({
             </div>
           ))}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: windowsOverlap ? 'var(--grid)' : 'var(--solar-dim)' }}>
-            <Icon name={windowsOverlap ? 'alert-triangle' : 'check'} size={12} color={windowsOverlap ? 'var(--grid)' : 'var(--solar)'} />
+            <Icon name={windowsOverlap ? 'triangle-alert' : 'check'} size={12} color={windowsOverlap ? 'var(--grid)' : 'var(--solar)'} />
             {windowsOverlap ? 'Windows overlap — fix before saving.' : 'No overlaps — colliding windows are blocked on save.'}
           </div>
         </div>
@@ -328,7 +328,7 @@ export function EditRuleOverlay({
 
       {err && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid var(--border-grid-soft)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
-          <Icon name="alert-triangle" size={14} color="var(--grid)" />{err}
+          <Icon name="triangle-alert" size={14} color="var(--grid)" />{err}
         </div>
       )}
 

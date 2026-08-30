@@ -250,7 +250,7 @@ function EnergyReports({ ctx, tabs }: { ctx: ShellContext; tabs?: ReactNode }) {
     <Card
       title="Production vs consumption"
       subtitle={ctx.desktop ? `${periodTitle} · kWh · ${h.totals.selfSufficiencyPct}% autonomy` : undefined}
-      icon={ctx.desktop ? <Icon name="bar-chart-3" /> : undefined}
+      icon={ctx.desktop ? <Icon name="chart-column" /> : undefined}
       style={ctx.desktop ? undefined : { padding: 16 }}
       actions={
         ctx.desktop ? (
@@ -290,7 +290,7 @@ function EnergyReports({ ctx, tabs }: { ctx: ShellContext; tabs?: ReactNode }) {
     <Card
       title={ctx.desktop ? 'Consumption by load' : undefined}
       subtitle={ctx.desktop ? 'all-electric' : undefined}
-      icon={ctx.desktop ? <Icon name="pie-chart" /> : undefined}
+      icon={ctx.desktop ? <Icon name="chart-pie" /> : undefined}
       actions={ctx.desktop ? <Badge tone="battery" variant="soft">estimated</Badge> : undefined}
       style={ctx.desktop ? undefined : { padding: 16 }}
     >

@@ -367,7 +367,7 @@ export function MusicPanel({ speakers, canControl, wide, hideSpeakerControl }: {
         <>
           {!premium && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-2)', background: 'var(--surface-2)' }}>
-              <Icon name="alert-triangle" size={15} color="var(--grid)" />
+              <Icon name="triangle-alert" size={15} color="var(--grid)" />
               <div style={{ fontSize: 12, color: 'var(--text-2)' }}>Spotify Premium is required to play on speakers. You can still browse and search.</div>
             </div>
           )}

@@ -384,7 +384,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
       <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Eyebrow>Alerts &amp; recent errors</Eyebrow>
         {activeAlerts.length === 0 && rejected.length === 0 ? (
-          <EmptyState icon="check-circle" iconTone="solar" title="All clear." subtitle="No active alerts or rejected commands." style={{ padding: '24px 16px' }} />
+          <EmptyState icon="circle-check" iconTone="solar" title="All clear." subtitle="No active alerts or rejected commands." style={{ padding: '24px 16px' }} />
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {activeAlerts.map((a) => (
@@ -395,7 +395,7 @@ export function SystemStatus({ ctx }: { ctx: ShellContext }) {
                 onClick={() => setDetail({ title: a.title, summary: a.sub || a.title, href: '/automations?tab=events', hrefLabel: 'Open Events' })}
                 style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 12px', textAlign: 'left', width: '100%', cursor: 'pointer', color: 'inherit', font: 'inherit' }}
               >
-                <Icon name={a.icon || 'alert-triangle'} size={16} color={a.severity === 'danger' ? 'var(--danger)' : 'var(--grid)'} />
+                <Icon name={a.icon || 'triangle-alert'} size={16} color={a.severity === 'danger' ? 'var(--danger)' : 'var(--grid)'} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600 }}>{a.title}</div>
                   {a.sub && <div style={{ fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.sub}</div>}

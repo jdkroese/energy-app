@@ -266,7 +266,7 @@ export function DeviceDetail({ ctx }: { ctx: ShellContext }) {
 
       {cmdErr && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--grid)', background: 'var(--grid-wash)', border: '1px solid var(--border-grid-soft)', borderRadius: 'var(--radius-md)', padding: '8px 12px' }}>
-          <Icon name="alert-triangle" size={14} color="var(--grid)" />
+          <Icon name="triangle-alert" size={14} color="var(--grid)" />
           <span>Couldn&apos;t send — {cmdErr}.</span>
         </div>
       )}

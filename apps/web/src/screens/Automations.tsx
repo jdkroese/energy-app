@@ -435,7 +435,7 @@ function ArbitrageEffectivenessCard({ stats, events }: { stats?: ArbitrageStats;
     <Card padded style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
       {/* header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Icon name="line-chart" size={19} color={tone} />
+        <Icon name="chart-line" size={19} color={tone} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 600 }}>Arbitrage effectiveness</div>
           <div style={{ fontSize: 11, color: 'var(--text-3)' }}>

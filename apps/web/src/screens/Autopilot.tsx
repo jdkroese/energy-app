@@ -60,7 +60,7 @@ function ConfirmModal({ confirm, busy, onClose }: { confirm: Confirm; busy: bool
       zLayer="nested"
       size="md"
       tone={confirm.danger ? 'danger' : 'battery'}
-      icon={confirm.danger ? 'alert-triangle' : 'send'}
+      icon={confirm.danger ? 'triangle-alert' : 'send'}
       title={confirm.title}
       footer={
         <>
@@ -535,7 +535,7 @@ export function Autopilot({ ctx, tab: tabProp, embedded = false }: { ctx: ShellC
       <div style={{ position: 'fixed', right: 18, bottom: 18, zIndex: 1020, display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none' }}>
         {toasts.map((t) => (
           <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 'var(--radius-md)', fontSize: 13, maxWidth: 360, background: 'var(--surface-1)', border: `1px solid ${t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)'}`, color: t.kind === 'ok' ? 'var(--solar)' : 'var(--danger)', boxShadow: 'var(--shadow-2)' }}>
-            <Icon name={t.kind === 'ok' ? 'check-circle' : 'alert-octagon'} size={16} />
+            <Icon name={t.kind === 'ok' ? 'circle-check' : 'octagon-alert'} size={16} />
             <span style={{ color: 'var(--text-1)' }}>{t.text}</span>
           </div>
         ))}
