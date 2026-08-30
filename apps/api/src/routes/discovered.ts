@@ -278,8 +278,14 @@ export async function getConfigured(): Promise<unknown> {
   }
   const byId = new Map(all.map((d) => [d.id, d]));
 
+  // docs/51 Change 2: `all` already excludes sub-devices/the gateway, but a configured id
+  // missing from it falls back to a direct per-device read below (self-heal for a device
+  // whose cloud link dropped) — that direct read is NOT filtered, so a scene switch set up
+  // BEFORE this change would otherwise reappear here through that back door. Drop it first.
+  const configuredEntries = Object.entries(onboarding.configured).filter(([id]) => !tuya.isKnownExcludedId(id));
+
   const devices: ConfiguredDeviceView[] = await Promise.all(
-    Object.entries(onboarding.configured).map(async ([id, cfg]) => {
+    configuredEntries.map(async ([id, cfg]) => {
       // Prefer the bulk fleet entry; if this configured device is missing from it (e.g. its
       // cloud link dropped so it fell out of /associated-users/devices), recover it with a
       // direct per-device read so it still renders with its real caps + last-known state.

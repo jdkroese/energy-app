@@ -406,8 +406,23 @@ export interface IntegrationsState {
    *  (docs/44 Phase 2, tuya-local.ts) — undefined/true = on (the default, now that
    *  it's hardware-verified), explicit false = off. Lets local control be enabled on
    *  the production mini without editing its launchd plist (TUYA_LOCAL_ENABLED env
-   *  var still overrides this on top — see isLocalEnabled() in tuya-local.ts). */
-  tuya?: { region?: string; accessId?: string; accessSecret?: string; localControl?: boolean };
+   *  var still overrides this on top — see isLocalEnabled() in tuya-local.ts).
+   *  `fleetManual` (docs/51 Change 1) — undefined/true = on (the owner's explicit
+   *  default): the fleet LIST is served from the local LAN snapshot only, never
+   *  auto-polling cloud; explicit false = off (docs/49 cloud-primary behaviour). See
+   *  fleetManualEnabled()/getDevices() in tuya.ts.
+   *  `sceneControllersEnabled` (docs/51 Change 3) — undefined/false = OFF (the new
+   *  default): the scene-controller coordinator's 5s cloud device-logs poll never
+   *  runs; explicit true = on (the old always-polling behaviour). See
+   *  controller-coordinator.ts. */
+  tuya?: {
+    region?: string;
+    accessId?: string;
+    accessSecret?: string;
+    localControl?: boolean;
+    fleetManual?: boolean;
+    sceneControllersEnabled?: boolean;
+  };
   /** Sungrow solar inverters — the two WiNet-S dongles (one per SG5.0RS), keyed on
    *  dongle IP. Read-only LAN integration (docs/36); env is the fallback. */
   sungrow?: { dongles?: { ip: string; name?: string; ratedKw?: number }[] } | null;

@@ -31,6 +31,18 @@ const TICK_MS = 5_000;
 const LOG_LOOKBACK_MS = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 
+// docs/51 Change 3: the scene switch is a Zigbee sub-device dropped from the rest of the Home
+// app (docs/51 Change 2) — its whole-fleet cloud device-logs poll must stop by default too, so
+// steady-state cloud usage is zero. `integrations.tuya.sceneControllersEnabled` is the
+// reversible Settings toggle: undefined/false = OFF (the new default — zero device-logs
+// calls), explicit true = the old always-on behaviour. Checked BOTH here (so an already-armed
+// interval no-ops every tick when off) and in startControllerCoordinator() below (so the
+// interval isn't even armed at boot when off — no wasted 5s timer firing a no-op forever).
+/** Exported for tests. */
+export function sceneControlEnabled(): boolean {
+  return store.get().integrations.tuya?.sceneControllersEnabled === true;
+}
+
 /** Match a `switch_mode{N}` DP code → its 1-based button index, or null. */
 function buttonIndexOf(code: string): number | null {
   const m = /^switch_mode(\d+)$/.exec(code);
@@ -146,20 +158,23 @@ async function processController(deviceId: string, online: boolean): Promise<voi
   }
 }
 
-async function tick(): Promise<void> {
+/** Exported for tests. */
+export async function tick(): Promise<void> {
   try {
+    if (!sceneControlEnabled()) return; // docs/51 Change 3 — off by default, zero cloud calls
     if (!tuya.isConfigured()) return;
     const ids = Object.keys(store.get().sceneControllers).filter(
       (id) => store.get().sceneControllers[id]?.enabled,
     );
     if (ids.length === 0) return;
 
-    // Resolve the live fleet so we only poll logs for switches that exist + are 'wxkg'.
-    const all = await tuya.getDevices();
-    const byId = new Map(all.map((d) => [d.id, d]));
-
+    // Per-controller direct reads (NOT the bulk tuya.getDevices() fleet listing): docs/51
+    // Change 2 drops sub-devices/gateway from that listing unconditionally at the fleet
+    // boundary, so a wxkg scene switch would never be found there any more. getDeviceDirect()
+    // is a single-device cloud read (its own 20s/300s cache) untouched by that filter — the
+    // right tool here since this loop only ever needs the handful of ids that are enabled.
     for (const id of ids) {
-      const d = byId.get(id);
+      const d = await tuya.getDeviceDirect(id);
       // Only a real, category-'wxkg' device gets log-polled (defensive — a binding could
       // outlive its device or be mis-targeted). Each controller is independently guarded.
       if (!d || d.category !== 'wxkg') continue;
@@ -172,6 +187,22 @@ async function tick(): Promise<void> {
 
 export function startControllerCoordinator(): void {
   if (timer) return;
+  if (!sceneControlEnabled()) {
+    // docs/51 Change 3: don't even arm the interval when scene control is off — the scene
+    // switch left the app by owner decision, so this is the "zero device-logs calls" state
+    // by default, not just an idle no-op every 5s.
+    console.log('[scene-controller] coordinator disabled (integrations.tuya.sceneControllersEnabled is not true) — no interval armed');
+    return;
+  }
   timer = setInterval(() => void tick(), TICK_MS);
   console.log(`[scene-controller] coordinator started (every ${TICK_MS / 1000}s, gated on per-controller enabled)`);
+}
+
+/** Stop the coordinator's interval (graceful shutdown / tests). Exported so tests can verify
+ *  start/stop without leaking a live timer across test files. */
+export function stopControllerCoordinator(): void {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
 }

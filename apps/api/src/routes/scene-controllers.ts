@@ -6,6 +6,7 @@
 import * as store from '../store';
 import * as tuya from '../connectors/tuya';
 import type { TuyaDevice } from '../connectors/tuya';
+import { startControllerCoordinator, stopControllerCoordinator } from '../control/controller-coordinator';
 
 function badInput(msg: string): Error & { code: string } {
   const e = new Error(msg) as Error & { code: string };
@@ -44,14 +45,23 @@ function viewFor(deviceId: string, ctrl: store.SceneController, d: TuyaDevice | 
 export async function listSceneControllers(): Promise<unknown> {
   const controllers = store.get().sceneControllers;
   const ids = Object.keys(controllers);
-  let byId = new Map<string, TuyaDevice>();
+  const byId = new Map<string, TuyaDevice>();
   if (tuya.isConfigured() && ids.length > 0) {
-    try {
-      const all = await tuya.getDevices();
-      byId = new Map(all.map((d) => [d.id, d]));
-    } catch {
-      /* fleet read failed — still return bindings, just unresolved (online:false). */
-    }
+    // docs/51 Change 2 drops the wxkg scene switch from the bulk tuya.getDevices() listing
+    // unconditionally, so it would never resolve via the bulk map any more — this admin page
+    // is the one place that's WRONG for (it's the binding UI for a device the app otherwise
+    // hides). Resolve each controller id directly instead — getDeviceDirect() is per-id and
+    // not filtered, mirroring the same fix in controller-coordinator.ts's tick().
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const d = await tuya.getDeviceDirect(id);
+          if (d) byId.set(id, d);
+        } catch {
+          /* leave unresolved (online:false) — still return the bindings below */
+        }
+      }),
+    );
   }
   const list = ids.map((id) => viewFor(id, controllers[id], byId.get(id)));
   return { ts: new Date().toISOString(), connected: tuya.isConfigured(), controllers: list };
@@ -151,4 +161,20 @@ export function removeSceneController(deviceId: string): void {
   store.update((s) => {
     delete s.sceneControllers[id];
   });
+}
+
+/** PUT /api/integrations/tuya/scene-controllers — docs/51 Change 3: reversible on/off for the
+ *  scene-controller coordinator's cloud device-logs poll. Persisted, default OFF. Starts/stops
+ *  the coordinator's interval immediately (idempotent either way) so the toggle takes effect
+ *  without an app restart — see sceneControlEnabled()/startControllerCoordinator() in
+ *  controller-coordinator.ts. Bindings + watermarks are never touched — only the poll. */
+export function setSceneControllersEnabled(enabledRaw: unknown): unknown {
+  if (typeof enabledRaw !== 'boolean') throw badInput('enabled must be a boolean');
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.tuya = { ...(s.integrations.tuya ?? {}), sceneControllersEnabled: enabledRaw };
+  });
+  if (enabledRaw) startControllerCoordinator();
+  else stopControllerCoordinator();
+  return { ts: new Date().toISOString(), sceneControllersEnabled: enabledRaw };
 }

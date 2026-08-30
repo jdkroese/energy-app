@@ -20,7 +20,41 @@ process.env.TUYA_LOCAL_ENABLED = '0';
 const tuya = await import('./tuya');
 const tuyaLocal = await import('./tuya-local');
 const store = await import('../store');
-const { parseThingModelDpMap, normCode, dpMapsFor, localFleetSnapshot, mapWithConcurrency, captureDpMaps } = tuya;
+// Boot decision (module-import-time `if (isLocalEnabled()) startDiscoveryListener()`) is made
+// with local hard-disabled above — restore to "unset" so the docs/51 getDevices() tests below
+// can exercise real on/off semantics via the store, same pattern as tuya-local.test.ts.
+delete process.env.TUYA_LOCAL_ENABLED;
+const {
+  parseThingModelDpMap,
+  normCode,
+  dpMapsFor,
+  localFleetSnapshot,
+  mapWithConcurrency,
+  captureDpMaps,
+  getDevices,
+  isExcludedSubOrGateway,
+  isKnownExcludedId,
+  syncFleetFromCloud,
+  invalidateFleet,
+} = tuya;
+
+/** docs/51 test helper: set local (LAN) control on/off via the store (the env kill-switch is
+ *  deleted above so this takes effect). */
+function setLocalControl(enabled: boolean): void {
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.tuya = { ...(s.integrations.tuya ?? {}), localControl: enabled };
+  });
+}
+
+/** docs/51 test helper: set the manual (LAN-only) fleet toggle via the store.
+ *  `undefined` restores the default (ON). */
+function setFleetManual(enabled: boolean | undefined): void {
+  store.update((s) => {
+    s.integrations = s.integrations ?? { intesis: null };
+    s.integrations.tuya = { ...(s.integrations.tuya ?? {}), fleetManual: enabled };
+  });
+}
 
 // A real Tuya thing-model payload (trimmed) for a `cz` metering plug — the `model` field is
 // itself a JSON string, and each property carries `abilityId` (the local dp number).
@@ -337,6 +371,176 @@ test('captureDpMaps: a device the cloud has no thing-model for counts as failed,
     assert.equal(result.captured, 0);
     assert.equal(result.failed, 2, 'an empty resolved map counts as a failure to capture, not a silent success');
     assert.deepEqual(result.failedIds.sort(), ['bf-cap-empty', 'bf-cap-ok']);
+  } finally {
+    mock.restore();
+  }
+});
+
+// ---- docs/51: manual (LAN-only) fleet + sub-device/gateway exclusion --------------------
+// Mocks global.fetch to stand in for BOTH the token endpoint and the cloud fleet endpoints
+// (bulk associated-users listing + the per-device direct read) so every assertion below can
+// see EXACTLY which URLs (if any) were hit — the whole point of docs/51 Change 1 is that a
+// manual+local-on getDevices() call must hit none of them at all.
+
+function installFleetFetchMock(opts: {
+  bulkDevices?: Array<Record<string, unknown>>;
+  directDevices?: Record<string, Record<string, unknown>>;
+}): { calls: string[]; restore: () => void } {
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: string | URL) => {
+    const u = String(url);
+    calls.push(u);
+    const json = async (body: unknown) => ({ ok: true, json: async () => body }) as unknown as Response;
+    if (u.includes('/v1.0/token')) {
+      return json({ success: true, result: { access_token: 'tok', expire_time: 7200, uid: 'u1' } });
+    }
+    if (u.includes('/v1.0/iot-01/associated-users/devices')) {
+      return json({ success: true, result: { devices: opts.bulkDevices ?? [], has_more: false } });
+    }
+    const directMatch = /\/v1\.0\/devices\/([^/?]+)$/.exec(u);
+    if (directMatch) {
+      const d = opts.directDevices?.[directMatch[1]];
+      return d ? json({ success: true, result: d }) : json({ success: false, code: 1, msg: 'not found' });
+    }
+    return json({ success: false, code: 999, msg: `unmocked url in test: ${u}` });
+  }) as typeof fetch;
+  return { calls, restore: () => { globalThis.fetch = original; } };
+}
+
+test('isExcludedSubOrGateway: true for a gateway category (wg2) or an id cross-referenced as a sub-device, false otherwise', () => {
+  const gateway = { id: 'bf-gw-pure-1', name: 'Gateway', category: 'wg2', online: true, status: [] };
+  const sceneSwitch = { id: 'bf-sw-pure-1', name: 'Scene Switch', category: 'wxkg', online: true, status: [] };
+  const plug = { id: 'bf-plug-pure-1', name: 'Plug', category: 'cz', online: true, status: [] };
+  const subIds = new Set(['bf-sw-pure-1']);
+  assert.equal(isExcludedSubOrGateway(gateway, subIds), true, 'gateway category (wg2) excluded');
+  assert.equal(isExcludedSubOrGateway(sceneSwitch, subIds), true, 'cross-referenced sub-device id excluded');
+  assert.equal(isExcludedSubOrGateway(plug, subIds), false);
+});
+
+test('isKnownExcludedId: true for a registry sub-device or gateway id (zero cloud calls), false for a normal or unknown id', () => {
+  fs.writeFileSync(
+    path.join(scratchDir, 'tuya-local.json'),
+    JSON.stringify({
+      devices: [
+        { id: 'bf-known-sub-1', name: 'Sub', category: 'wxkg', localKey: '', lanIp: '', version: '', sub: true },
+        { id: 'bf-known-gw-1', name: 'GW', category: 'wg2', localKey: '', lanIp: '', version: '', sub: false },
+        { id: 'bf-known-normal-1', name: 'Normal', category: 'cz', localKey: '', lanIp: '', version: '', sub: false },
+      ],
+    }),
+  );
+  tuyaLocal.reloadRegistry();
+  assert.equal(isKnownExcludedId('bf-known-sub-1'), true);
+  assert.equal(isKnownExcludedId('bf-known-gw-1'), true);
+  assert.equal(isKnownExcludedId('bf-known-normal-1'), false);
+  assert.equal(isKnownExcludedId('bf-totally-unknown-1'), false, 'unclassifiable ids are never excluded by guess');
+});
+
+test('getDevices(): cloud path drops the gateway (wg2) + a registry-flagged sub-device, keeps a normal device (docs/51 Change 2)', async () => {
+  setTuyaCreds();
+  setFleetManual(false); // exercise the cloud path directly
+  setLocalControl(false);
+  invalidateFleet();
+  fs.writeFileSync(
+    path.join(scratchDir, 'tuya-local.json'),
+    JSON.stringify({ devices: [{ id: 'bf-sw-drop-1', name: 'Scene Switch', category: 'wxkg', localKey: '', lanIp: '', version: '', sub: true }] }),
+  );
+  tuyaLocal.reloadRegistry();
+
+  const mock = installFleetFetchMock({
+    bulkDevices: [
+      { id: 'bf-normal-drop-1', name: 'Plug', category: 'cz', online: true, status: [] },
+      { id: 'bf-gw-drop-1', name: 'Gateway', category: 'wg2', online: true, status: [] },
+      { id: 'bf-sw-drop-1', name: 'Scene Switch', category: 'wxkg', online: true, status: [] },
+    ],
+  });
+  try {
+    const ids = (await getDevices()).map((d) => d.id);
+    assert.ok(ids.includes('bf-normal-drop-1'), 'an ordinary device is kept');
+    assert.ok(!ids.includes('bf-gw-drop-1'), 'the gateway (wg2) is dropped');
+    assert.ok(!ids.includes('bf-sw-drop-1'), 'the sub-device (cross-referenced by id) is dropped');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('getDevices(): fleetManual ON (default) + local ON — zero cloud calls, serves the LAN snapshot only (acceptance #1)', async () => {
+  setTuyaCreds();
+  setFleetManual(undefined); // undefined = default = ON
+  setLocalControl(true);
+  invalidateFleet();
+  fs.writeFileSync(
+    path.join(scratchDir, 'tuya-local.json'),
+    JSON.stringify({
+      devices: [{ id: 'bf-manual-cap-1', name: 'Manual Cap', category: 'kg', localKey: '0123456789abcdef', lanIp: '127.0.0.1', version: '3.3', sub: false }],
+    }),
+  );
+  tuyaLocal.reloadRegistry();
+  tuyaLocal.setDpMap('bf-manual-cap-1', new Map([['switch_1', 1]]));
+
+  const mock = installFleetFetchMock({ bulkDevices: [{ id: 'bf-should-never-appear-1', name: 'X', category: 'cz', online: true, status: [] }] });
+  try {
+    const devices = await getDevices();
+    assert.deepEqual(devices.map((d) => d.id), ['bf-manual-cap-1'], 'served from the local snapshot only');
+    assert.equal(mock.calls.length, 0, 'zero cloud calls — not even a token fetch');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('getDevices(): fleetManual ON + local OFF is contradictory — falls through to the cloud path, never an empty fleet', async () => {
+  setTuyaCreds();
+  setFleetManual(true);
+  setLocalControl(false);
+  invalidateFleet();
+  const mock = installFleetFetchMock({ bulkDevices: [{ id: 'bf-fallback-cloud-1', name: 'Cloud', category: 'cz', online: true, status: [] }] });
+  try {
+    const devices = await getDevices();
+    assert.deepEqual(devices.map((d) => d.id), ['bf-fallback-cloud-1']);
+    assert.ok(mock.calls.some((u) => u.includes('associated-users')), 'cloud fleet endpoint was hit');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('getDevices(): fleetManual OFF preserves the pre-docs/51 cloud-primary behaviour regardless of local (acceptance #6)', async () => {
+  setTuyaCreds();
+  setFleetManual(false);
+  setLocalControl(true);
+  invalidateFleet();
+  const mock = installFleetFetchMock({ bulkDevices: [{ id: 'bf-legacy-cloud-1', name: 'Legacy', category: 'cz', online: true, status: [] }] });
+  try {
+    const devices = await getDevices();
+    assert.deepEqual(devices.map((d) => d.id), ['bf-legacy-cloud-1']);
+    assert.ok(mock.calls.some((u) => u.includes('associated-users')), 'cloud-primary path used, unaffected by local being on');
+  } finally {
+    mock.restore();
+  }
+});
+
+test('syncFleetFromCloud(): exactly one cloud fleet refresh; newIds are cloud devices the local registry does not know yet', async () => {
+  setTuyaCreds();
+  setFleetManual(undefined);
+  setLocalControl(true);
+  invalidateFleet();
+  fs.writeFileSync(
+    path.join(scratchDir, 'tuya-local.json'),
+    JSON.stringify({ devices: [{ id: 'bf-sync-known-1', name: 'Known', category: 'cz', localKey: '', lanIp: '', version: '', sub: false }] }),
+  );
+  tuyaLocal.reloadRegistry();
+
+  const mock = installFleetFetchMock({
+    bulkDevices: [
+      { id: 'bf-sync-known-1', name: 'Known', category: 'cz', online: true, status: [] },
+      { id: 'bf-sync-new-1', name: 'Brand New', category: 'cz', online: true, status: [] },
+    ],
+  });
+  try {
+    const result = await syncFleetFromCloud();
+    assert.equal(result.devices, 2);
+    assert.deepEqual(result.newIds, ['bf-sync-new-1']);
+    const bulkCalls = mock.calls.filter((u) => u.includes('associated-users'));
+    assert.equal(bulkCalls.length, 1, 'exactly one cloud fleet refresh');
   } finally {
     mock.restore();
   }

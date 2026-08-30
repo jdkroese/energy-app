@@ -276,6 +276,52 @@ function normalizeRaw(d: TuyaRawDevice): TuyaDevice {
   };
 }
 
+// ---- Sub-device / gateway exclusion (docs/51 Change 2) -----------------------------------
+// Owner decision (2026-08-30): the scene switch (a Zigbee sub-device behind the gateway) and
+// the gateway itself stay in the Tuya app only — they never appear anywhere in the Home app
+// (Devices, onboarding "needs setup", rooms). Applied ONCE here at the fleet boundary
+// (listDevices' cloud path + localFleetSnapshot's LAN path below) so every consumer inherits
+// it for free, rather than each surface re-implementing its own filter.
+//
+// Gateway category confirmed against this fleet by inspection, not guessed: categorize()
+// (bottom of this file) falls back to the literal `Other (${d.category})` label for any code
+// missing from CATEGORY_LABELS, and the owner's Settings chip reads "Other (wg2)" — so the raw
+// Tuya category code IS `wg2`. Kept as a small allowlist (not "assume anything unmapped is a
+// gateway") so an unrelated future category never gets silently dropped from the app.
+const EXCLUDED_GATEWAY_CATEGORIES = new Set(['wg2']);
+
+/** Ids the LOCAL registry marks as Zigbee/BLE sub-devices (tuya-local.ts's `sub` flag) — the
+ *  CLOUD `TuyaDevice` shape has no such flag of its own, so cross-reference by id. */
+function subDeviceIds(): Set<string> {
+  return new Set(tuyaLocal.listRegistry().filter((e) => e.sub).map((e) => e.id));
+}
+
+/** True when `d` must be dropped from every Home-app surface (docs/51 Change 2): a Zigbee/BLE
+ *  sub-device (cross-referenced by id via `subIds`) or a gateway/hub category. Exported for
+ *  tests. */
+export function isExcludedSubOrGateway(d: TuyaDevice, subIds: Set<string>): boolean {
+  return subIds.has(d.id) || EXCLUDED_GATEWAY_CATEGORIES.has(d.category);
+}
+
+/** Drop sub-devices + gateway categories from a cloud fleet listing. */
+function dropSubAndGateway(devices: TuyaDevice[]): TuyaDevice[] {
+  const subIds = subDeviceIds();
+  return devices.filter((d) => !isExcludedSubOrGateway(d, subIds));
+}
+
+/** True when `id` is a KNOWN sub-device or gateway per the LOCAL registry — usable with zero
+ *  cloud calls (unlike checking a fetched TuyaDevice's category). A few "already configured"
+ *  surfaces (e.g. GET /api/devices/configured) fall back to tuya.getDeviceDirect() to recover
+ *  a device that's missing from the bulk fleet — which, unlike listDevices()/getDevices()
+ *  above, is deliberately NOT filtered (the scene-controller coordinator relies on that to
+ *  keep resolving a wxkg switch when re-enabled). Those surfaces call this first so a
+ *  configured scene switch/gateway doesn't reappear through that back door. An id the local
+ *  registry has never heard of returns false (nothing to classify it by). Exported for tests. */
+export function isKnownExcludedId(id: string): boolean {
+  const entry = tuyaLocal.listRegistry().find((e) => e.id === id);
+  return !!entry && (entry.sub || EXCLUDED_GATEWAY_CATEGORIES.has(entry.category));
+}
+
 /**
  * Enumerate every device linked to the connected Cloud project's app account,
  * paginated. Status is returned inline, so this doubles as a fleet read.
@@ -294,7 +340,8 @@ async function listDevices(): Promise<TuyaDevice[]> {
     if (!r.has_more || !r.last_row_key) break;
     lastRowKey = r.last_row_key;
   }
-  return supplementDroppedDevices(out);
+  const supplemented = await supplementDroppedDevices(out);
+  return dropSubAndGateway(supplemented);
 }
 
 // ---- Fleet self-heal --------------------------------------------------------
@@ -418,7 +465,18 @@ export async function mapWithConcurrency<T, R>(
 export async function localFleetSnapshot(): Promise<TuyaDevice[]> {
   const entries = tuyaLocal
     .listRegistry()
-    .filter((e) => tuyaLocal.isLocalCapable(e.id) && tuyaLocal.getDpMap(e.id) !== null);
+    // docs/51 Change 2: sub-devices are already excluded via isLocalCapable (a Zigbee/BLE
+    // sub-device is never locally capable — see tuya-local.ts's capabilityBlockReason), but
+    // the explicit `!e.sub` mirrors dropSubAndGateway's predicate for clarity/defense; the
+    // gateway category check is NOT otherwise implied by isLocalCapable (a gateway that
+    // somehow had a key+ip+dp-map would still pass it), so it needs its own check here.
+    .filter(
+      (e) =>
+        !e.sub &&
+        !EXCLUDED_GATEWAY_CATEGORIES.has(e.category) &&
+        tuyaLocal.isLocalCapable(e.id) &&
+        tuyaLocal.getDpMap(e.id) !== null,
+    );
 
   return mapWithConcurrency(entries, LOCAL_FLEET_CONCURRENCY, async (entry): Promise<TuyaDevice> => {
     const maps = tuyaLocal.getDpMap(entry.id); // pure map read, no I/O — safe to call again per-device
@@ -439,13 +497,13 @@ const FLEET_TTL_MS = 20_000;
 // (getStatus/sendCommands — both already local-first) no longer need the FLEET listing
 // refreshed every 20s; that 20s cloud poll is exactly what exhausted a fresh dev account's
 // monthly quota in ~10 days (docs/49 "Problem"). Conservative choice per the brief: cloud
-// stays PRIMARY for the full fleet whenever it's healthy — so sub-devices (Zigbee/BLE, never
-// locally reachable, the app's only INPUT devices) keep appearing exactly as before;
-// localFleetSnapshot() above never lists them. Only the REFRESH CADENCE changes: 5 minutes
-// instead of 20s while local control is enabled. Local is reached for only on an outright
-// cloud failure (not configured, quota-blocked, or listDevices() itself throwing) — that's
-// what turns a blackout into a non-event without risking a sub-device regression during
-// normal operation. This cadence (20s -> 5min) is the exact number to verify on the mini.
+// stays PRIMARY for the full fleet whenever it's healthy. Only the REFRESH CADENCE changes:
+// 5 minutes instead of 20s while local control is enabled. Local is reached for only on an
+// outright cloud failure (not configured, quota-blocked, or listDevices() itself throwing) —
+// that's what turns a blackout into a non-event. This cadence (20s -> 5min) is the exact
+// number to verify on the mini. (docs/51 Change 1 adds a THIRD mode on top of this — see
+// fleetManualEnabled()/getDevices() below — where local is served unconditionally, never on
+// a cadence at all.)
 const FLEET_TTL_LOCAL_HEALTHY_MS = 300_000;
 
 function localFleetSnapshotCached(): Promise<TuyaDevice[]> {
@@ -455,14 +513,32 @@ function localFleetSnapshotCached(): Promise<TuyaDevice[]> {
   return cached(LOCAL_FLEET_KEY, 20_000, localFleetSnapshot);
 }
 
-/** Cached fleet snapshot. Cloud-primary whenever a project is configured and not
- *  quota-blocked (refresh cadence depends on whether local control is enabled — see
- *  FLEET_TTL_LOCAL_HEALTHY_MS above); falls back to the LOCAL LAN snapshot (docs/49 Change 2)
- *  on any cloud failure, or when no project is configured at all but local control is on.
- *  With local control OFF this is byte-for-byte the pre-docs/49 cloud-only behaviour —
- *  isLocalEnabled() short-circuits every local branch before it does anything. */
+// docs/51 Change 1: manual (LAN-only) fleet — a persisted, reversible Settings toggle. DEFAULT
+// ON (the owner's explicit 2026-08-30 request: the Home app should make no ROUTINE cloud
+// calls at all). Same undefined/true-is-on convention as tuya-local.ts's isLocalEnabled():
+// only an explicit `false` turns it off. Read fresh from the store on every call (cheap —
+// store.get() is an in-memory cache) so a runtime Settings toggle takes effect immediately.
+function fleetManualEnabled(): boolean {
+  return store.get().integrations.tuya?.fleetManual !== false;
+}
+
+/** Cached fleet snapshot. THREE modes, checked in order:
+ *  1. docs/51 Change 1 — fleetManual ON + local control ON: ALWAYS serve the local LAN
+ *     snapshot, never touching cloud automatically (routine cloud usage becomes zero; the only
+ *     cloud fleet call left is the explicit POST /api/integrations/tuya/sync below). Manual
+ *     with local OFF is contradictory — falls through to the unchanged cloud path instead of
+ *     silently showing an empty fleet.
+ *  2. Cloud-primary whenever a project is configured and not quota-blocked (refresh cadence
+ *     depends on whether local control is enabled — see FLEET_TTL_LOCAL_HEALTHY_MS above);
+ *     falls back to the LOCAL LAN snapshot (docs/49 Change 2) on any cloud failure, or when no
+ *     project is configured at all but local control is on.
+ *  3. With fleetManual OFF and local control OFF this is byte-for-byte the pre-docs/49
+ *     cloud-only behaviour — both short-circuit before doing anything. */
 export function getDevices(): Promise<TuyaDevice[]> {
   const localOn = tuyaLocal.isLocalEnabled();
+  if (fleetManualEnabled() && localOn) {
+    return localFleetSnapshotCached();
+  }
   if (!isConfigured()) {
     return localOn ? localFleetSnapshotCached() : Promise.resolve([]);
   }
@@ -484,6 +560,35 @@ export function invalidateFleet(): void {
   invalidate(FLEET_KEY);
   invalidate(LOCAL_FLEET_KEY);
   invalidateSupplement();
+}
+
+export interface FleetSyncResult {
+  ts: string;
+  devices: number;
+  /** Cloud device ids not already known to the local registry (tuya-local.json) — a genuinely
+   *  brand-new device the harvest ops flow (key capture) hasn't picked up yet. */
+  newIds: string[];
+}
+
+/**
+ * POST /api/integrations/tuya/sync (docs/51 Change 1) — the ONLY routine cloud fleet call left
+ * once fleetManual is ON: invalidates every cached fleet snapshot, then performs exactly ONE
+ * fresh cloud listDevices() call (via the same cached() call getDevices()'s cloud branch uses,
+ * so it warms FLEET_KEY too — any surface reading through getDevices() next on a cloud-primary
+ * path sees the fresh names/newly-appeared devices immediately instead of waiting out a TTL).
+ * `newIds` flags devices the cloud reports that the local registry doesn't know about yet —
+ * fully LAN-enabling one of those still needs the existing harvest ops flow (key capture);
+ * this endpoint only refreshes cloud-known identity/status, never touches tuya-local.json.
+ */
+export async function syncFleetFromCloud(): Promise<FleetSyncResult> {
+  invalidateFleet();
+  const localOn = tuyaLocal.isLocalEnabled();
+  const fresh = await cached(FLEET_KEY, localOn ? FLEET_TTL_LOCAL_HEALTHY_MS : FLEET_TTL_MS, listDevices, {
+    staleMs: 300_000,
+  });
+  const known = new Set(tuyaLocal.listRegistry().map((e) => e.id));
+  const newIds = fresh.map((d) => d.id).filter((id) => !known.has(id));
+  return { ts: new Date().toISOString(), devices: fresh.length, newIds };
 }
 
 /**
