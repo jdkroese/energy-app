@@ -102,6 +102,12 @@ export interface LocalDeviceEntry {
   sub: boolean;
   online: boolean;
   productId: string;
+  /** Cloud `code` -> local LAN `dp` index (docs/49 Change 1) — captured once via
+   *  tuya.ts's dpMapsFor() (a cloud thing-model fetch) and persisted here so the mapping
+   *  never needs the cloud again: the DP layout is immutable per device. Absent until
+   *  captured; `getDpMap`/`setDpMap` below are the only accessors — this field is never
+   *  read directly outside this module. */
+  dpMap?: Record<string, number>;
 }
 
 function readJsonFile(file: string): unknown {
@@ -114,6 +120,27 @@ function readJsonFile(file: string): unknown {
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
+}
+
+/** Tolerant parse of a persisted `dpMap` field: an object of string code -> finite-number
+ *  dp, dropping any non-finite/malformed entry rather than throwing. Returns `undefined`
+ *  (never an empty object) when nothing usable survives, so `getDpMap` can treat "absent"
+ *  and "empty" the same way. Exported for tests. */
+export function parseDpMap(v: unknown): Record<string, number> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, number> = {};
+  let any = false;
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    // Only an actual number, or a string that IS one — never coerce null/boolean/
+    // object/array (Number(null) === 0 would otherwise silently manufacture a fake dp 0).
+    if (typeof val !== 'number' && typeof val !== 'string') continue;
+    const n = Number(val);
+    if (Number.isFinite(n)) {
+      out[k] = n;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
 }
 
 /**
@@ -141,6 +168,7 @@ export function loadRegistryFromFile(file: string): LocalDeviceEntry[] {
       sub: rec.sub === true,
       online: rec.online === true,
       productId: str(rec.productId),
+      dpMap: parseDpMap(rec.dpMap),
     });
   }
   return out;
@@ -155,6 +183,66 @@ export function reloadRegistry(): void {
   registry.clear();
   for (const entry of loadRegistryFromFile(CACHE_FILE)) registry.set(entry.id, entry);
   registryLoadedAt = Date.now();
+}
+
+/** Snapshot of every registry entry — server-internal only (never route this straight out
+ *  to a client; it carries `localKey`). Used by tuya.ts's local fleet fallback (docs/49
+ *  Change 2) and dp-map capture (Change 4) to enumerate the harvested fleet without this
+ *  module reaching back into `./tuya` (see the module banner's one-directional-import note). */
+export function listRegistry(): LocalDeviceEntry[] {
+  return [...registry.values()];
+}
+
+// ---- Persisted dp-map (docs/49 Change 1) -----------------------------------------------
+// The cloud/local dp mapping never changes for a given device, so once captured (via a
+// single cloud thing-model fetch — see tuya.ts's dpMapsFor) it is stored here and persisted
+// to CACHE_FILE, removing the SECOND hidden cloud dependency a blackout used to hit (the
+// first being the fleet listing itself — see localFleetSnapshot in tuya.ts). Pure map<->
+// record conversion; no network I/O anywhere in this section.
+
+function dpMapToRecord(codeToDp: Map<string, number>): Record<string, number> {
+  const rec: Record<string, number> = {};
+  for (const [code, dp] of codeToDp) rec[code] = dp;
+  return rec;
+}
+
+function sameDpMap(a: Record<string, number> | undefined, b: Record<string, number>): boolean {
+  if (!a) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return bKeys.every((k) => a[k] === b[k]);
+}
+
+/** The persisted dp-map for a device, in both directions — `null` when nothing has been
+ *  captured yet (an absent or empty map are treated the same). No network I/O; tuya.ts's
+ *  dpMapsFor() is the only thing that ever populates this (via setDpMap below). */
+export function getDpMap(id: string): { codeToDp: Map<string, number>; dpToCode: Map<number, string> } | null {
+  const rec = registry.get(id)?.dpMap;
+  if (!rec || Object.keys(rec).length === 0) return null;
+  const codeToDp = new Map<string, number>();
+  const dpToCode = new Map<number, string>();
+  for (const [code, dp] of Object.entries(rec)) {
+    codeToDp.set(code, dp);
+    dpToCode.set(dp, code);
+  }
+  return { codeToDp, dpToCode };
+}
+
+/** Persist a freshly-resolved dp-map (cloud `code` -> local `dp`) onto the registry entry
+ *  and schedule a write-back to CACHE_FILE. No-op for an unknown device, an empty map (a
+ *  transient cloud miss must never wedge a device with a blank persisted map), or a map
+ *  that's unchanged from what's already stored (avoids a needless disk write on every
+ *  process-lifetime cache warm). Storage direction is code->dp only — `getDpMap` derives
+ *  the reverse direction on read, so there is exactly one source of truth on disk. */
+export function setDpMap(id: string, codeToDp: Map<string, number>): void {
+  if (codeToDp.size === 0) return;
+  const entry = registry.get(id);
+  if (!entry) return;
+  const rec = dpMapToRecord(codeToDp);
+  if (sameDpMap(entry.dpMap, rec)) return;
+  registry.set(id, { ...entry, dpMap: rec });
+  schedulePersist();
 }
 
 // ---- Health / circuit breaker --------------------------------------------------------
@@ -996,6 +1084,7 @@ function schedulePersist(): void {
         sub: d.sub,
         online: d.online,
         productId: d.productId,
+        ...(d.dpMap && Object.keys(d.dpMap).length > 0 ? { dpMap: d.dpMap } : {}),
       }));
       fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(CACHE_FILE, JSON.stringify({ ...prior, discoveredAt: new Date().toISOString(), devices }, null, 2));
@@ -1083,12 +1172,25 @@ export interface LocalDiagnosticsDevice {
   transport: 'tuyapi' | 'native-gcm' | null;
   lastOk: string | null;
   failures: number;
+  /** Whether a cloud/local dp-map has been captured + persisted for this device (docs/49
+   *  Change 1/4) — the second hidden cloud dependency a blackout used to hit. True here
+   *  means getStatus/sendCommands for this device need zero cloud calls once it's also
+   *  `localCapable`. */
+  dpMapCaptured: boolean;
 }
 
 export interface LocalDiagnostics {
   enabled: boolean;
   loadedAt: string | null;
-  totals: { devices: number; capable: number; healthy: number; unsupportedVersion: number };
+  totals: {
+    devices: number;
+    capable: number;
+    healthy: number;
+    unsupportedVersion: number;
+    /** How many registry devices have a persisted dp-map — what Settings → Tuya's
+     *  "dp-maps captured: N / M devices" line reads (docs/49 Change 4). */
+    dpMapsCaptured: number;
+  };
   /** Source ips heard broadcasting a v3.5-shaped (AES-GCM) discovery frame that don't
    *  (yet) match any known device's lanIp — i.e. "something is alive here" even though the
    *  payload can't be decrypted to learn which device it is. */
@@ -1114,6 +1216,7 @@ export function getDiagnostics(): LocalDiagnostics {
         transport: capable ? pickLocalTransport(d.version) : null,
         lastOk: h?.lastOkAt ? new Date(h.lastOkAt).toISOString() : null,
         failures: h?.consecutiveFailures ?? 0,
+        dpMapCaptured: !!(d.dpMap && Object.keys(d.dpMap).length > 0),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -1123,13 +1226,14 @@ export function getDiagnostics(): LocalDiagnostics {
     (d) => computeLocalCapable(d) && computeCanAttempt(health.get(d.id), now),
   ).length;
   const unsupportedVersion = devices.filter((d) => d.reason === 'unsupported-version').length;
+  const dpMapsCaptured = devices.filter((d) => d.dpMapCaptured).length;
   const knownLanIps = new Set([...registry.values()].map((d) => d.lanIp).filter(Boolean));
   const v35SightingsUncorrelated = [...v35SightingsByIp.keys()].filter((ip) => !knownLanIps.has(ip));
 
   return {
     enabled: isLocalEnabled(),
     loadedAt: registryLoadedAt ? new Date(registryLoadedAt).toISOString() : null,
-    totals: { devices: devices.length, capable, healthy, unsupportedVersion },
+    totals: { devices: devices.length, capable, healthy, unsupportedVersion, dpMapsCaptured },
     v35SightingsUncorrelated,
     devices,
   };

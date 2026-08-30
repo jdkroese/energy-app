@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState, type CSSProperties, type ReactNode
 import { api, auth, ApiError } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_SETTINGS } from '../lib/mock';
-import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaAccountStatus, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, TuyaLocalStatus, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AdminUser } from '../lib/types';
+import type { Channels, ChannelType, IntegrationsConfig, IntegrationStatus, KitchenIntelligence, MercadonaAccountStatus, MercadonaStatus, OtpChannel, ProbeResult, RainbirdIntegrationStatus, SettingsResponse, SessionsResponse, TuyaIntegrationStatus, TuyaLocalStatus, TuyaCaptureDpMapsResult, SonosIntegrationStatus, SpotifyStatus, AlarmConfig, UserRole, AdminUser } from '../lib/types';
 import { ALARM_BLINK_FLOOR_MS } from '../lib/types';
 import { Card, Icon, Eyebrow, Switch, Input, Button, Select, Badge, Slider, ScreenHeader } from '../components/ui';
 import { StaleBanner } from './_shared';
@@ -1543,6 +1543,9 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
   const [editing, setEditing] = useState(false);
   const [localStatus, setLocalStatus] = useState<TuyaLocalStatus | null>(null);
   const [localBusy, setLocalBusy] = useState(false);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureResult, setCaptureResult] = useState<TuyaCaptureDpMapsResult | null>(null);
+  const [captureErr, setCaptureErr] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -1573,6 +1576,23 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
       /* leave the switch reflecting last-known state on failure */
     } finally {
       setLocalBusy(false);
+    }
+  };
+
+  // docs/49 Change 4 — one-shot dp-map capture: front-loads local-control coverage for the
+  // whole fleet in one pass while cloud is briefly alive, so a later IoT-Core quota blackout
+  // needs zero cloud calls to keep controlling LAN-capable devices.
+  const captureDpMaps = async () => {
+    setCaptureBusy(true);
+    setCaptureErr(null);
+    try {
+      const r = await api.integrations.tuyaCaptureDpMaps();
+      setCaptureResult(r);
+      await loadLocal();
+    } catch (e) {
+      setCaptureErr((e as Error).message || 'Capture failed');
+    } finally {
+      setCaptureBusy(false);
     }
   };
 
@@ -1676,6 +1696,28 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
               disabled={!isAdmin || localBusy}
               onChange={(e) => void toggleLocal(e.target.checked)}
             />
+          </div>
+        )}
+
+        {connected && localStatus && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 0', borderTop: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+              dp-maps captured: {localStatus.totals.dpMapsCaptured} / {localStatus.totals.devices} devices
+            </div>
+            {isAdmin && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <Button size="sm" variant="secondary" loading={captureBusy} onClick={() => void captureDpMaps()}>
+                  Capture LAN control maps
+                </Button>
+                {captureResult && (
+                  <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+                    {captureResult.captured} captured · {captureResult.alreadyHad} already had it
+                    {captureResult.failed ? ` · ${captureResult.failed} failed` : ''}
+                  </span>
+                )}
+              </div>
+            )}
+            {captureErr && <div style={{ fontSize: 11.5, color: 'var(--danger)' }}>{captureErr}</div>}
           </div>
         )}
 
