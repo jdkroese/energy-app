@@ -26,10 +26,15 @@ export const NAV_TOP: NavItem[] = [
 export const NAV_DEVICES: NavItem[] = [
   // Energy hub = solar generation (Sungrow inverters) + battery storage (Sonnen + Tesla).
   { to: '/batteries', label: 'Energy', icon: 'zap' },
+  // Water hub (docs/51) = the BI-WATER meter + Irrigation (merged from the former
+  // standalone /irrigation page — same pattern as Solar Inverters -> Energy).
+  // A resource hub like Energy, so it sits right after it — not a device category.
+  // 'waves', NOT 'droplet'/'droplets' — droplets was the old Irrigating icon and
+  // two near-identical drop glyphs this close in the rail would misread.
+  { to: '/water', label: 'Water', icon: 'waves' },
   { to: '/devices?type=lighting', label: 'Lighting', icon: 'lightbulb' },
   { to: '/devices?type=cooling', label: 'Cooling', icon: 'snowflake' },
   { to: '/devices?type=heating', label: 'Heating', icon: 'flame' },
-  { to: '/irrigation', label: 'Irrigating', icon: 'droplets' },
   { to: '/devices', label: 'Other devices', icon: 'layout-grid' },
 ];
 
