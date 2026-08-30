@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ensureDsStyles } from './dsStyles';
 
 type Props = {
-  tone?: 'solar' | 'battery' | 'grid' | 'home' | 'danger' | 'neutral';
+  tone?: 'solar' | 'battery' | 'grid' | 'home' | 'water' | 'danger' | 'neutral';
   variant?: 'soft' | 'solid';
   icon?: ReactNode;
   className?: string;

@@ -1,7 +1,7 @@
 import type { CSSProperties, HTMLAttributes, ReactNode } from 'react';
 import { ensureDsStyles } from './dsStyles';
 
-export type Accent = 'solar' | 'battery' | 'grid' | 'home' | 'ev' | 'danger';
+export type Accent = 'solar' | 'battery' | 'grid' | 'home' | 'ev' | 'water' | 'danger';
 
 type Props = {
   title?: ReactNode;

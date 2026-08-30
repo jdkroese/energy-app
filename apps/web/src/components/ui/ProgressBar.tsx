@@ -7,6 +7,7 @@ const TONE: Record<string, string> = {
   grid: 'var(--grid)',
   home: 'var(--home)',
   ev: 'var(--ev)',
+  water: 'var(--water)',
   accent: 'var(--accent)',
   danger: 'var(--danger)',
 };
