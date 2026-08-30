@@ -14,6 +14,9 @@ import type {
   LiveResponse,
   ScenariosResponse,
   SettingsResponse,
+  WaterResponse,
+  WaterHistoryResponse,
+  WaterSettingsResponse,
 } from './types';
 
 function series(n: number, base: number, amp: number, seed: number): number[] {
@@ -392,4 +395,136 @@ export const MOCK_SCENARIOS: ScenariosResponse = {
     { id: 'storm', name: 'Storm / backup', icon: 'cloud-lightning', active: false, weights: { save: 30, self: 50, indep: 60, comfort: 55 }, reserve: 80, dynReserve: true, gridCharge: true, exportRule: 'Never', ev: 'Off', precondition: true, activation: 'Auto', trigger: 'Auto-activates on a storm forecast' },
     { id: 'evnight', name: 'Cheap-night EV', icon: 'plug-zap', active: false, weights: { save: 80, self: 55, indep: 45, comfort: 45 }, reserve: 18, dynReserve: false, gridCharge: true, exportRule: 'PV only', ev: 'P3 night', precondition: false, activation: 'Schedule', trigger: 'Nightly 00:00–08:00 (P3)' },
   ],
+};
+
+/* ---- Water (docs/51) — attribution-first mock, shaped by the real captured
+ * August 2026 pattern: irrigation dominates (~77% of the month), a healthy quiet
+ * hour clears near-zero every night, and unexplained litres stay a small residual
+ * rather than a headline number. Used only until the owner connects the meter
+ * (WaterResponse.configured=false is the real first-deploy state — see Water.tsx). */
+const WATER_NIGHT_IRRIGATION_LPH = [1620, 1840, 1710, 1490, 260, 40]; // 00:00–05:59
+const WATER_DAY_HOUSEHOLD_LPH = [8, 14, 46, 92, 118, 74, 58, 96, 142, 168, 121, 66, 41, 22, 12, 9, 6, 3];
+const mockWaterHours = Array.from({ length: 24 }, (_, h) => {
+  const irrigationL = h < 6 ? WATER_NIGHT_IRRIGATION_LPH[h] : 0;
+  const householdL = h < 6 ? Math.round(4 + h * 2) : WATER_DAY_HOUSEHOLD_LPH[h - 6];
+  const unexplainedL = h === 23 ? 2 : Math.round(householdL * 0.03);
+  return { h, totalL: irrigationL + householdL + unexplainedL, householdL, irrigationL, unexplainedL, reported: true };
+});
+const mockWaterTotals = mockWaterHours.reduce(
+  (acc, b) => ({ totalL: acc.totalL + b.totalL, householdL: acc.householdL + b.householdL, irrigationL: acc.irrigationL + b.irrigationL, unexplainedL: acc.unexplainedL + b.unexplainedL }),
+  { totalL: 0, householdL: 0, irrigationL: 0, unexplainedL: 0 },
+);
+
+export const MOCK_WATER: WaterResponse = {
+  ts: new Date().toISOString(),
+  configured: true,
+  connected: true,
+  lastError: null,
+  meter: { serial: 'P23EA822644C', model: 'Contazara CZ3000', address: 'Cami de la Fontana, Jávea', indexL: 812_430_000, lastReadingIso: new Date(Date.now() - 4 * 3_600_000).toISOString(), staleHours: 4 },
+  today: { dateIso: new Date().toISOString().slice(0, 10), ...mockWaterTotals, hours: mockWaterHours },
+  quietHour: { lowestLph: 40, atHour: 5, hoursSinceBelowFloor: 0, floorLph: 60, ok: true },
+  month: { m3: 77.7, householdM3: 16.9, irrigationM3: 59.8, unexplainedM3: 1.0, expectedM3: 17.4, costEur: 118.4, budgetM3: 85, projectedM3: 80.2 },
+  zones: [
+    { id: 'rb-1', name: 'Front lawn', lpm: 14.2, samples: 22, learned: true },
+    { id: 'rb-2', name: 'Olive grove', lpm: 9.6, samples: 18, learned: true },
+    { id: 'rb-3', name: 'Herb beds', lpm: 4.1, samples: 6, learned: true },
+    { id: 'rb-4', name: 'Back terrace pots', lpm: 3.0, samples: 0, learned: false },
+  ],
+  activeAlerts: [],
+};
+
+function waterHistoryLabels(range: string, n: number): string[] {
+  if (range === 'day') return Array.from({ length: n }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+  if (range === 'week') return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  if (range === 'year') return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return Array.from({ length: n }, (_, i) => String(i + 1));
+}
+
+/** Builds a plausible 30-ish-day mock series: mostly modest household use, a
+ *  handful of big irrigation nights (every 3rd day), and a persistently-small
+ *  unexplained residual (the "healthy house" case — see docs/51 §1). */
+function mockWaterSeries(n: number): { total: number[]; household: number[]; irrigation: number[]; unexplained: number[] } {
+  const household: number[] = [];
+  const irrigation: number[] = [];
+  const unexplained: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const h = 380 + Math.round(60 * Math.sin(i / 2.3));
+    const irr = i % 3 === 0 ? 5400 + Math.round(900 * Math.cos(i)) : 0;
+    const u = Math.round(h * 0.03);
+    household.push(h);
+    irrigation.push(irr);
+    unexplained.push(u);
+  }
+  const total = household.map((h, i) => h + irrigation[i] + unexplained[i]);
+  return { total, household, irrigation, unexplained };
+}
+
+export function mockWaterHistory(range: string, offset = 0): WaterHistoryResponse {
+  const n = range === 'day' ? 24 : range === 'week' ? 7 : range === 'year' ? 12 : 30;
+  const series = mockWaterSeries(n);
+  const cumActual: number[] = [];
+  const cumExpected: number[] = [];
+  let ra = 0;
+  let re = 0;
+  for (let i = 0; i < n; i++) {
+    ra += series.total[i];
+    re += series.household[i] + (i % 3 === 0 ? series.irrigation[i] * 0.97 : 0); // expected trails actual by ~the unexplained sliver
+    cumActual.push(ra);
+    cumExpected.push(Math.round(re));
+  }
+  const totals = {
+    totalL: series.total.reduce((a, b) => a + b, 0),
+    householdL: series.household.reduce((a, b) => a + b, 0),
+    irrigationL: series.irrigation.reduce((a, b) => a + b, 0),
+    unexplainedL: series.unexplained.reduce((a, b) => a + b, 0),
+    costEur: 0,
+  };
+  totals.costEur = Math.round((totals.totalL / 1000) * 1.6 * 100) / 100;
+  return {
+    ts: new Date().toISOString(),
+    range: (range as WaterHistoryResponse['range']) ?? 'week',
+    offset,
+    label: range === 'day' ? 'Today' : range === 'week' ? 'This week' : range === 'year' ? 'This year' : 'This month',
+    labels: waterHistoryLabels(range, n),
+    series,
+    cumulative: { actual: cumActual, expected: cumExpected },
+    dayparts: {
+      night: series.household.map((_, i) => 40 + (i % 3 === 0 ? 30 : 0)),
+      morning: series.household.map((h) => Math.round(h * 0.32)),
+      afternoon: series.household.map((h) => Math.round(h * 0.28)),
+      evening: series.household.map((h) => Math.round(h * 0.4)),
+    },
+    nightBaseline: series.household.map((_, i) => 40 + (i % 7 === 5 ? 55 : 0)),
+    totals,
+  };
+}
+
+export const MOCK_WATER_HISTORY: WaterHistoryResponse = mockWaterHistory('week', 0);
+
+export const MOCK_WATER_SETTINGS: WaterSettingsResponse = {
+  ts: new Date().toISOString(),
+  configured: true,
+  connected: true,
+  hasPassword: true,
+  email: 'j.kroese@levante.nl',
+  serial: 'P23EA822644C',
+  pollHours: 6,
+  thresholds: {
+    continuousFlow: { enabled: true, hours: 4, floorLph: 60 },
+    nightUse: { enabled: true, toleranceL: 150 },
+    dailySpike: { enabled: true, multiplier: 3 },
+    monthlyBudget: { enabled: true, budgetM3: 85 },
+    meterSilent: { enabled: true, hours: 30 },
+  },
+  tariff: {
+    serviceChargeEur: 6.2,
+    block1M3: 10,
+    block1RateEur: 0.45,
+    block2M3: 20,
+    block2RateEur: 0.95,
+    block3RateEur: 1.85,
+    sewerageRateEur: 0.32,
+    canonSaneamientoRateEur: 0.18,
+    ivaPct: 10,
+  },
 };

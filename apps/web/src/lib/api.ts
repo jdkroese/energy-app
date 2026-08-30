@@ -106,6 +106,13 @@ import type {
   IrrigationZoneDetailResponse,
   IrrigationLever,
   RainbirdIntegrationStatus,
+  WaterResponse,
+  WaterHistoryResponse,
+  WaterHistoryRange,
+  WaterSettingsResponse,
+  WaterSettingsPatch,
+  WaterSettingsSaveResponse,
+  WaterIntegrationTestResponse,
   IrrigationPlanResponse,
   IrrigationActiveResponse,
   IrrigationMode,
@@ -1122,6 +1129,15 @@ export const api = {
       ),
     disconnectRainbird: () =>
       delJSON<{ ok: boolean }>("/api/integrations/rainbird"),
+
+    // BI-WATER / Contazara water meter (docs/51). Admin-only; password is
+    // write-only (omit to keep the stored one, same convention as Rain Bird).
+    // Both are POST per the API contract (docs/51 §2), not PUT like most other
+    // connectors — matched exactly since the API side is built by another agent.
+    testWater: (body: { email?: string; password?: string; serial?: string }) =>
+      postJSON<WaterIntegrationTestResponse>("/api/integrations/water/test", body),
+    setWater: (body: { email?: string; password?: string; serial?: string; pollHours?: number }) =>
+      postJSON<WaterIntegrationTestResponse>("/api/integrations/water", body),
   },
 
   schedules: {
@@ -1228,6 +1244,18 @@ export const api = {
     remove: (id: string) => delJSON<{ ok: boolean }>(`/api/rooms/${enc(id)}`),
     allOff: (id: string, scope: "all" | "lights" = "all") =>
       postJSON<RoomAllOffResponse>(`/api/rooms/${enc(id)}/all-off`, { scope }),
+  },
+
+  /* ---- Water (BI-WATER / Contazara meter, docs/51); reads any-authed, Settings admin ---- */
+  water: {
+    snapshot: () => getJSON<WaterResponse>("/api/water"),
+    history: (range: WaterHistoryRange | string, offset = 0) =>
+      getJSON<WaterHistoryResponse>(
+        `/api/water/history?range=${enc(range)}&offset=${enc(String(offset))}`,
+      ),
+    settings: () => getJSON<WaterSettingsResponse>("/api/water/settings"),
+    saveSettings: (patch: WaterSettingsPatch) =>
+      postJSON<WaterSettingsSaveResponse>("/api/water/settings", patch),
   },
 };
 

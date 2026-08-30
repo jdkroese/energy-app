@@ -2196,6 +2196,7 @@ export type EventCategory =
   | 'blinds'
   | 'ev'
   | 'irrigation'
+  | 'water'
   | 'arbitrage'
   | 'grid'
   | 'solar'
@@ -2691,4 +2692,215 @@ export interface LibraryGenerateStatusResponse {
 export interface LibraryGenerateStartResponse extends LibraryGenerateStatusResponse {
   ok: boolean;
   reason?: string;
+}
+
+/* ============================================================================
+ * Water (docs/51) — BI-WATER / Contazara CZ3000 NB-IoT meter. Attribution-first:
+ * every litre the meter measures is split into irrigation (reconciled against
+ * logged Rain Bird zone sessions) / household / unexplained — unexplained litres
+ * are the product. Reads any-authed; Settings writes are admin. Mirrors the
+ * contract in apps/api/src/routes/water.ts (built by a separate agent — the
+ * inner shapes of `thresholds`/`tariff` aren't spelled out in the contract, so
+ * they're defined here to the shape the Settings/Alerts tabs need).
+ * ==========================================================================*/
+
+export interface WaterMeter {
+  serial: string;
+  model: string;
+  address: string;
+  indexL: number;
+  lastReadingIso: string | null;
+  /** Hours since the meter last reported — the connector is a ~daily-upload feed,
+   *  not live, so this (not a green dot) is the honest freshness signal. */
+  staleHours: number | null;
+}
+
+/** One hour of GET /api/water `today.hours` — the meter's own hourly buckets. */
+export interface WaterHourBucket {
+  h: number; // 0–23
+  totalL: number;
+  householdL: number;
+  irrigationL: number;
+  unexplainedL: number;
+  /** False for hours the meter hasn't uploaded yet (hourly-read, ~daily-upload cadence). */
+  reported: boolean;
+}
+
+export interface WaterToday {
+  dateIso: string;
+  totalL: number;
+  householdL: number;
+  irrigationL: number;
+  unexplainedL: number;
+  hours: WaterHourBucket[];
+}
+
+/** The leak detector's core signal (docs/51 §1): the lowest single-hour reading
+ *  in the rolling 24h window. A healthy house hits ~0 at some point every night;
+ *  a leaking one has a floor that never clears. */
+export interface WaterQuietHour {
+  lowestLph: number;
+  atHour: number | null;
+  hoursSinceBelowFloor: number | null;
+  floorLph: number;
+  ok: boolean;
+}
+
+export interface WaterMonth {
+  m3: number;
+  householdM3: number;
+  irrigationM3: number;
+  unexplainedM3: number;
+  expectedM3: number;
+  costEur: number;
+  budgetM3: number;
+  projectedM3: number;
+}
+
+/** A Rain Bird zone's learned flow rate, from hours where exactly one zone ran
+ *  alone (docs/51 §3 P2). `learned=false` means it's still the configured default. */
+export interface WaterZoneAttribution {
+  id: string;
+  name: string;
+  lpm: number;
+  samples: number;
+  learned: boolean;
+}
+
+export type WaterAlertSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export interface WaterActiveAlert {
+  id: string;
+  rule: string;
+  severity: WaterAlertSeverity;
+  title: string;
+  sub: string;
+  sinceIso: string;
+}
+
+export interface WaterResponse {
+  ts: string;
+  /** False until credentials are saved in Settings — the owner hasn't connected
+   *  yet, so this is the state the app is actually in on first deploy. */
+  configured: boolean;
+  connected: boolean;
+  lastError: string | null;
+  meter: WaterMeter | null;
+  today: WaterToday;
+  quietHour: WaterQuietHour;
+  month: WaterMonth;
+  zones: WaterZoneAttribution[];
+  activeAlerts: WaterActiveAlert[];
+}
+
+export type WaterHistoryRange = 'day' | 'week' | 'month' | 'year';
+
+/** Fixed stack order irrigation -> household -> unexplained (index.css comment) —
+ *  keep every consumer of this series in that order. */
+export interface WaterHistorySeries {
+  total: number[];
+  household: number[];
+  irrigation: number[];
+  unexplained: number[];
+}
+
+/** Cumulative "measured vs accounted for" curve for the Overview chart. */
+export interface WaterCumulative {
+  actual: number[];
+  expected: number[];
+}
+
+export interface WaterDayparts {
+  night: number[];
+  morning: number[];
+  afternoon: number[];
+  evening: number[];
+}
+
+export interface WaterHistoryTotals {
+  totalL: number;
+  householdL: number;
+  irrigationL: number;
+  unexplainedL: number;
+  costEur: number;
+}
+
+export interface WaterHistoryResponse {
+  ts: string;
+  range: WaterHistoryRange;
+  offset: number;
+  label: string;
+  labels: string[];
+  series: WaterHistorySeries;
+  cumulative: WaterCumulative;
+  dayparts: WaterDayparts;
+  nightBaseline: number[];
+  totals: WaterHistoryTotals;
+}
+
+/** Detection-rule thresholds (docs/51 §3 P2's five detectors), each independently
+ *  enable-able — the Alerts tab's per-rule switches read/write this object. */
+export interface WaterThresholds {
+  continuousFlow: { enabled: boolean; hours: number; floorLph: number };
+  nightUse: { enabled: boolean; toleranceL: number };
+  dailySpike: { enabled: boolean; multiplier: number };
+  monthlyBudget: { enabled: boolean; budgetM3: number };
+  meterSilent: { enabled: boolean; hours: number };
+}
+
+/** Spain/AMJASA tariff (docs/51 §3 P3) — every default is a placeholder pending
+ *  a real bill (docs/51 D5); the Settings tab labels cost figures as estimates. */
+export interface WaterTariff {
+  serviceChargeEur: number;
+  block1M3: number;
+  block1RateEur: number;
+  block2M3: number;
+  block2RateEur: number;
+  /** Rate above block2M3 (the top/marginal block — what a leak actually costs). */
+  block3RateEur: number;
+  sewerageRateEur: number;
+  canonSaneamientoRateEur: number;
+  ivaPct: number;
+}
+
+export interface WaterSettingsResponse {
+  ts: string;
+  configured: boolean;
+  connected: boolean;
+  hasPassword: boolean;
+  email: string;
+  serial: string;
+  pollHours: number;
+  thresholds: WaterThresholds;
+  tariff: WaterTariff;
+}
+
+/** PATCH-style save body — all fields optional, password omitted keeps the
+ *  stored one (same convention as RainbirdConnection/setSonnen/etc). */
+export type WaterSettingsPatch = Partial<{
+  email: string;
+  password: string;
+  serial: string;
+  pollHours: number;
+  thresholds: Partial<{
+    continuousFlow: Partial<WaterThresholds['continuousFlow']>;
+    nightUse: Partial<WaterThresholds['nightUse']>;
+    dailySpike: Partial<WaterThresholds['dailySpike']>;
+    monthlyBudget: Partial<WaterThresholds['monthlyBudget']>;
+    meterSilent: Partial<WaterThresholds['meterSilent']>;
+  }>;
+  tariff: Partial<WaterTariff>;
+}>;
+
+export interface WaterSettingsSaveResponse {
+  ok: boolean;
+  detail: string;
+}
+
+/** POST /api/integrations/water(/test) — same ProbeResult shape as every other
+ *  connector, plus an optional meter probe echo on success. */
+export interface WaterIntegrationTestResponse {
+  ok: boolean;
+  detail: string;
+  meter?: { serial: string; indexL: number } | null;
 }
