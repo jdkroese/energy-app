@@ -1,65 +1,147 @@
-// Unit tests for the water tariff/cost maths (docs/52 P3). Run with:
+// Run with:
 //   node --import tsx --test src/control/water-tariff.test.ts
+// (Node built-in runner via tsx, NOT vitest.)
+//
+// The anchor for this suite is a REAL AMJASA bill — factura 3/1836657, period
+// JULIO–AGOSTO 2026, meter P23EA822644C (15 mm), 152 m³. If costFor() ever stops
+// reproducing that bill to the cent, the tariff model has drifted from reality.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { costFor, marginalCostFor } from './water-tariff';
+import { costFor, marginalCostFor, marginalCostForLitres } from './water-tariff';
 import { defaultWaterTariff } from '../store';
+import type { WaterTariff } from '../store';
 
-const TARIFF = defaultWaterTariff();
+const AMJASA = defaultWaterTariff();
 
-test('costFor bills 0 m3 as just the fixed service charge', () => {
-  const c = costFor(0, TARIFF);
-  assert.equal(c.lines.length, 1);
-  assert.equal(c.lines[0].label, 'Fixed service charge');
-  assert.equal(c.subtotalEur, TARIFF.fixedEurMonth);
-  assert.equal(c.ivaEur, Math.round(TARIFF.fixedEurMonth * (TARIFF.ivaPct / 100) * 100) / 100);
+/* ---- the real bill ------------------------------------------------------- */
+
+test('reproduces AMJASA factura 3/1836657 (152 m³, bimonthly) to the cent', () => {
+  const b = costFor(152, AMJASA, 2);
+  // Abastecimiento: 27,34 standing + 152 × 1,86 = 282,72  ->  310,06
+  assert.equal(b.supplyBaseEur, 310.06);
+  // IVA 10% on the supply portion only
+  assert.equal(b.ivaEur, 31.01);
+  // EPSAR: 7,30 standing + 152 × 0,412 = 62,62  ->  69,92, VAT-exempt
+  assert.equal(b.sanitationBaseEur, 69.92);
+  // TOTAL FACTURA on the bill
+  assert.equal(b.totalEur, 410.99);
 });
 
-test('costFor bills progressively across blocks (10 m3 stays entirely in block 1)', () => {
-  const c = costFor(10, TARIFF);
-  const b1 = c.lines.find((l) => l.label.startsWith('Block 1'));
-  assert.ok(b1);
-  assert.equal(b1!.m3, 10);
-  assert.equal(c.lines.find((l) => l.label.startsWith('Block 2')), undefined);
+test('IVA is charged on the supply portion ONLY — EPSAR sanitation is exempt', () => {
+  const b = costFor(152, AMJASA, 2);
+  // If IVA were (wrongly) applied to everything it would be 38,00, not 31,01.
+  assert.equal(b.ivaEur, 31.01);
+  assert.notEqual(b.ivaEur, Math.round((b.subtotalEur * 0.1 + Number.EPSILON) * 100) / 100);
+  const exempt = b.lines.filter((l) => !l.taxable).map((l) => l.label);
+  assert.deepEqual(exempt, ['Sanitation standing charge (EPSAR)', 'Sanitation (EPSAR)']);
 });
 
-test('costFor splits consumption across all three blocks when it spans them', () => {
-  // block1 upTo=15, block2 upTo=30 -> 40 m3 spans all three blocks.
-  const c = costFor(40, TARIFF);
-  const b1 = c.lines.find((l) => l.label.startsWith('Block 1'))!;
-  const b2 = c.lines.find((l) => l.label.startsWith('Block 2'))!;
-  const b3 = c.lines.find((l) => l.label.startsWith('Block 3'))!;
-  assert.equal(b1.m3, 15);
-  assert.equal(b2.m3, 15); // 30-15
-  assert.equal(b3.m3, 10); // 40-30
-  // Each block priced at its OWN rate, not the marginal rate applied to everything.
-  assert.equal(b1.eur, Math.round(15 * TARIFF.block1.eurM3 * 100) / 100);
-  assert.equal(b2.eur, Math.round(15 * TARIFF.block2.eurM3 * 100) / 100);
-  assert.equal(b3.eur, Math.round(10 * TARIFF.block3.eurM3 * 100) / 100);
+test('standing charges are per BILLING PERIOD, so one month carries half of each', () => {
+  const oneMonth = costFor(0, AMJASA, 1);
+  const twoMonths = costFor(0, AMJASA, 2);
+  // 27,34 + 7,30 across a 2-month period -> half each in a 1-month estimate.
+  assert.equal(oneMonth.supplyBaseEur, 13.67);
+  assert.equal(oneMonth.sanitationBaseEur, 3.65);
+  assert.equal(twoMonths.supplyBaseEur, 27.34);
+  assert.equal(twoMonths.sanitationBaseEur, 7.3);
 });
 
-test('costFor adds sewerage + canon on the FULL consumption, then applies IVA on the subtotal', () => {
-  const c = costFor(20, TARIFF);
-  const sewer = c.lines.find((l) => l.label === 'Sewerage')!;
-  const canon = c.lines.find((l) => l.label === 'Canon de saneamiento')!;
-  assert.equal(sewer.m3, 20);
-  assert.equal(canon.m3, 20);
-  const rawSubtotal = c.lines.reduce((s, l) => s + l.eur, 0);
-  assert.ok(Math.abs(rawSubtotal - c.subtotalEur) < 0.02);
-  assert.equal(c.totalEur, Math.round((c.subtotalEur + c.ivaEur) * 100) / 100);
+test('zero consumption still bills the pro-rated standing charges, never negative', () => {
+  const b = costFor(0, AMJASA, 1);
+  assert.ok(b.totalEur > 0);
+  assert.equal(b.totalEur, round2(13.67 * 1.1 + 3.65));
+  const neg = costFor(-50, AMJASA, 1);
+  assert.equal(neg.totalEur, b.totalEur, 'negative m³ is clamped to zero, not refunded');
 });
 
-test('marginalCostFor prices the NEXT litre at the TOP applicable block', () => {
-  // At 5 m3 (inside block 1), the marginal rate is block1's rate + sewer + canon (+IVA).
-  const low = marginalCostFor(5, TARIFF);
-  const expectedLow = Math.round((TARIFF.block1.eurM3 + TARIFF.sewerEurM3 + TARIFF.canonEurM3) * (1 + TARIFF.ivaPct / 100) * 100) / 100;
-  assert.equal(low, expectedLow);
+/* ---- supply is a flat rate today, but blocks must still work -------------- */
 
-  // At 50 m3 (past block2.upToM3), the marginal rate is block3's (highest) rate.
-  const high = marginalCostFor(50, TARIFF);
-  const expectedHigh = Math.round((TARIFF.block3.eurM3 + TARIFF.sewerEurM3 + TARIFF.canonEurM3) * (1 + TARIFF.ivaPct / 100) * 100) / 100;
-  assert.equal(high, expectedHigh);
-  assert.ok(high > low, 'waste at high consumption must cost more per litre than at low consumption');
+test('a single open-ended block bills as a flat rate across all consumption', () => {
+  const b = costFor(152, AMJASA, 2);
+  const vol = b.lines.filter((l) => l.rateEurM3 !== null && l.taxable);
+  assert.equal(vol.length, 1, 'flat tariff produces exactly one consumption line');
+  assert.equal(vol[0].label, 'Water consumed');
+  assert.equal(vol[0].m3, 152);
+  assert.equal(vol[0].eur, 282.72);
 });
+
+test('progressive blocks bill each m³ at the rate of the block it falls in', () => {
+  const blocked: WaterTariff = {
+    ...AMJASA,
+    supplyBlocks: [
+      { upToM3: 15, eurM3: 1 },
+      { upToM3: 30, eurM3: 2 },
+      { upToM3: null, eurM3: 3 },
+    ],
+  };
+  // 40 m³ = 15×1 + 15×2 + 10×3 = 75
+  const b = costFor(40, blocked, 2);
+  const vol = b.lines.filter((l) => l.rateEurM3 !== null && l.taxable);
+  assert.equal(vol.length, 3);
+  assert.deepEqual(
+    vol.map((l) => [l.m3, l.eur]),
+    [
+      [15, 15],
+      [15, 30],
+      [10, 30],
+    ],
+  );
+});
+
+test('consumption inside the first block does not touch later blocks', () => {
+  const blocked: WaterTariff = {
+    ...AMJASA,
+    supplyBlocks: [
+      { upToM3: 15, eurM3: 1 },
+      { upToM3: null, eurM3: 3 },
+    ],
+  };
+  const vol = costFor(10, blocked, 2).lines.filter((l) => l.rateEurM3 !== null && l.taxable);
+  assert.equal(vol.length, 1);
+  assert.equal(vol[0].eur, 10);
+});
+
+/* ---- marginal cost: what a leak actually costs ---------------------------- */
+
+test('marginal cost prices the next m³ at the top block + IVA, plus exempt sanitation', () => {
+  // 1,86 × 1,10 = 2,046  +  0,412 exempt  =  2,458 €/m³
+  assert.equal(marginalCostFor(152, AMJASA), 2.46);
+});
+
+test('marginal cost climbs with consumption when blocks are configured', () => {
+  const blocked: WaterTariff = {
+    ...AMJASA,
+    sanitationEurM3: 0,
+    ivaPct: 0,
+    supplyBlocks: [
+      { upToM3: 15, eurM3: 1 },
+      { upToM3: 30, eurM3: 2 },
+      { upToM3: null, eurM3: 3 },
+    ],
+  };
+  assert.equal(marginalCostFor(5, blocked), 1);
+  assert.equal(marginalCostFor(20, blocked), 2);
+  assert.equal(marginalCostFor(50, blocked), 3);
+});
+
+test('a continuous 0.6 L/min leak is priced at the margin, not the average rate', () => {
+  // 36 L/h × 24 h = 864 L/day at 2,458 €/m³ exact
+  assert.equal(marginalCostForLitres(864, 152, AMJASA), 2.12);
+  // ~30 days unattended = 25,920 L
+  assert.equal(marginalCostForLitres(864 * 30, 152, AMJASA), 63.71);
+});
+
+test('per-litre pricing does not compound the cent-rounding of the per-m³ rate', () => {
+  // The exact rate is 2,458 €/m³; rounding to 2,46 first and then scaling would
+  // overstate a 25,920 L leak by ~5 cents.
+  const exact = marginalCostForLitres(25_920, 152, AMJASA);
+  const naive = round2((marginalCostFor(152, AMJASA) / 1000) * 25_920);
+  assert.equal(exact, 63.71);
+  assert.notEqual(exact, naive);
+});
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}

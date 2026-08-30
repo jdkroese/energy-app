@@ -136,25 +136,63 @@ export function defaultWaterThresholds(): WaterThresholds {
  * published AMJASA rate — the owner must supply a real bill to populate these (docs/52
  * D5). Cost figures derived from these defaults must be labelled as estimates in the UI.
  */
+export interface WaterTariffBlock {
+  /** Upper bound of this block in m³, or null for the final open-ended block. */
+  upToM3: number | null;
+  eurM3: number;
+}
+
+/**
+ * AMJASA's actual billing structure, read off factura 3/1836657 (29/07/2026).
+ * Three things about it that a naive tariff model gets wrong:
+ *
+ *  1. AMJASA bills BIMONTHLY, so both standing charges are per 2-month period,
+ *     not per month.
+ *  2. The EPSAR sanitation block is **VAT-exempt** ("Base exenta de IVA"). IVA
+ *     applies to the supply (abastecimiento) portion ONLY.
+ *  3. Sanitation has its own standing charge, not just a volumetric rate.
+ *
+ * Applying one IVA rate to everything and treating the standing charge as
+ * monthly is wrong by ~11% at low consumption; it only looks right near the
+ * bill's own 152 m³ because the two errors cancel there.
+ */
 export interface WaterTariff {
-  fixedEurMonth: number;
-  block1: { upToM3: number; eurM3: number };
-  block2: { upToM3: number; eurM3: number };
-  block3: { eurM3: number };
-  sewerEurM3: number;
-  canonEurM3: number;
+  /** Months per billing period (AMJASA: 2 — bimonthly). Standing charges are per period. */
+  periodMonths: number;
+  /** Supply standing charge per billing period, set by meter calibre. */
+  supplyFixedEurPeriod: number;
+  /** Supply volumetric rate(s), progressive. A single open-ended entry = a flat rate. */
+  supplyBlocks: WaterTariffBlock[];
+  /** EPSAR sanitation standing charge per billing period. */
+  sanitationFixedEurPeriod: number;
+  /** EPSAR sanitation volumetric rate. */
+  sanitationEurM3: number;
+  /** IVA %, applied to the SUPPLY portion only — sanitation is exempt. */
   ivaPct: number;
 }
 
-/** PLACEHOLDER tariff defaults (docs/52 D5) — not real AMJASA rates. */
+/**
+ * REAL AMJASA rates, from factura 3/1836657 (period JULIO–AGOSTO 2026, 152 m³,
+ * meter P23EA822644C / 15 mm). Reconciles to the cent against that bill:
+ * supply 27,34 + 152×1,86 = 310,06; IVA 10% = 31,01; EPSAR 7,30 + 152×0,412 =
+ * 69,92 exempt; total 410,99.
+ *
+ * Supply is billed as a single flat rate — that bill shows one consumption line
+ * at 1,86 €/m³ for all 152 m³, not a progressive split. If a future (lower-
+ * consumption) bill ever shows a different unit price, AMJASA does have blocks
+ * and they should be added to supplyBlocks then.
+ *
+ * NOT modelled, deliberately: the "CUOTA EPSAR (18/18)" line (23,93) is the last
+ * instalment of a deferred charge under Decreto Ley 19/2022 — a temporary
+ * catch-up, not a recurring tariff.
+ */
 export function defaultWaterTariff(): WaterTariff {
   return {
-    fixedEurMonth: 7.2,
-    block1: { upToM3: 15, eurM3: 0.62 },
-    block2: { upToM3: 30, eurM3: 1.08 },
-    block3: { eurM3: 1.86 },
-    sewerEurM3: 0.28,
-    canonEurM3: 0.35,
+    periodMonths: 2,
+    supplyFixedEurPeriod: 27.34,
+    supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+    sanitationFixedEurPeriod: 7.3,
+    sanitationEurM3: 0.412,
     ivaPct: 10,
   };
 }
@@ -2930,22 +2968,27 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
     dailySpikeFactor: clampNum(t.dailySpikeFactor, base.thresholds.dailySpikeFactor, 1, 20),
     meterSilentHours: clampNum(t.meterSilentHours, base.thresholds.meterSilentHours, 1, 720),
   };
-  const b1 = tar.block1 ?? ({} as Partial<WaterTariff['block1']>);
-  const b2 = tar.block2 ?? ({} as Partial<WaterTariff['block2']>);
-  const b3 = tar.block3 ?? ({} as Partial<WaterTariff['block3']>);
+  // Blocks must stay ordered and end open-ended, or costFor would silently stop
+  // billing above the last bound. Anything malformed falls back to the default.
+  let supplyBlocks = base.tariff.supplyBlocks;
+  if (Array.isArray(tar.supplyBlocks) && tar.supplyBlocks.length > 0) {
+    const cleaned = tar.supplyBlocks
+      .filter((b): b is WaterTariffBlock => Boolean(b) && typeof b === 'object')
+      .map((b) => ({
+        upToM3: typeof b.upToM3 === 'number' && Number.isFinite(b.upToM3) && b.upToM3 > 0 ? Math.min(b.upToM3, 100000) : null,
+        eurM3: clampNum(b.eurM3, 0, 0, 100),
+      }));
+    // Bounded blocks first, ascending; exactly one open-ended block, last.
+    const bounded = cleaned.filter((b) => b.upToM3 !== null).sort((a, b) => (a.upToM3 as number) - (b.upToM3 as number));
+    const open = cleaned.find((b) => b.upToM3 === null) ?? { upToM3: null, eurM3: cleaned[cleaned.length - 1].eurM3 };
+    supplyBlocks = [...bounded, open];
+  }
   const tariff: WaterTariff = {
-    fixedEurMonth: clampNum(tar.fixedEurMonth, base.tariff.fixedEurMonth, 0, 1000),
-    block1: {
-      upToM3: clampNum(b1.upToM3, base.tariff.block1.upToM3, 0, 10000),
-      eurM3: clampNum(b1.eurM3, base.tariff.block1.eurM3, 0, 100),
-    },
-    block2: {
-      upToM3: clampNum(b2.upToM3, base.tariff.block2.upToM3, 0, 10000),
-      eurM3: clampNum(b2.eurM3, base.tariff.block2.eurM3, 0, 100),
-    },
-    block3: { eurM3: clampNum(b3.eurM3, base.tariff.block3.eurM3, 0, 100) },
-    sewerEurM3: clampNum(tar.sewerEurM3, base.tariff.sewerEurM3, 0, 100),
-    canonEurM3: clampNum(tar.canonEurM3, base.tariff.canonEurM3, 0, 100),
+    periodMonths: clampNum(tar.periodMonths, base.tariff.periodMonths, 1, 12),
+    supplyFixedEurPeriod: clampNum(tar.supplyFixedEurPeriod, base.tariff.supplyFixedEurPeriod, 0, 1000),
+    supplyBlocks,
+    sanitationFixedEurPeriod: clampNum(tar.sanitationFixedEurPeriod, base.tariff.sanitationFixedEurPeriod, 0, 1000),
+    sanitationEurM3: clampNum(tar.sanitationEurM3, base.tariff.sanitationEurM3, 0, 100),
     ivaPct: clampNum(tar.ivaPct, base.tariff.ivaPct, 0, 100),
   };
   const zoneFlowOverrides: Record<string, number> = {};
