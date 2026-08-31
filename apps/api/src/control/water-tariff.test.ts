@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { costFor, marginalCostFor, marginalCostForLitres, bandCliff, bandFor } from './water-tariff';
-import { defaultWaterTariff } from '../store';
+import { defaultWaterTariff, hydrateWaterForTest as hydrateForTest } from '../store';
 import type { WaterTariff } from '../store';
 
 const AMJASA = defaultWaterTariff();
@@ -190,3 +190,55 @@ test('per-litre pricing does not compound the cent-rounding of the per-m³ rate'
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
+
+/* ---- migration off the flat placeholder ---------------------------------- */
+
+test('an install that stored the flat 1,86 band is migrated to the real band table', () => {
+  // What PR #248 persisted before the banding rule was discovered.
+  const stored = {
+    // Deliberately the PRE-blockMode shape, as found on disk.
+    periodMonths: 2,
+    supplyFixedEurPeriod: 27.34,
+    supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+    sanitationFixedEurPeriod: 7.3,
+    sanitationEurM3: 0.412,
+    ivaPct: 10,
+  };
+  const hydrated = hydrateForTest({ tariff: stored as unknown as WaterTariff });
+  assert.equal(hydrated.tariff.blockMode, 'all-at-last');
+  assert.equal(hydrated.tariff.supplyBlocks.length, 4);
+  // 25 m3 must now cost 25 x 0,63 — not 25 x 1,86 as the stored flat band would charge.
+  const vol = costFor(25, hydrated.tariff, 2).lines.find((l) => l.rateEurM3 !== null && l.taxable);
+  assert.equal(vol?.eur, 15.75);
+});
+
+test('migration keeps the standing charges and IVA the owner may have tuned', () => {
+  const hydrated = hydrateForTest({
+    tariff: {
+      periodMonths: 2,
+      supplyFixedEurPeriod: 48.6, // a bigger meter calibre
+      supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+      sanitationFixedEurPeriod: 7.3,
+      sanitationEurM3: 0.5,
+      ivaPct: 21,
+    } as unknown as WaterTariff,
+  });
+  assert.equal(hydrated.tariff.supplyFixedEurPeriod, 48.6);
+  assert.equal(hydrated.tariff.sanitationEurM3, 0.5);
+  assert.equal(hydrated.tariff.ivaPct, 21);
+  assert.equal(hydrated.tariff.supplyBlocks.length, 4, 'but the band table is still corrected');
+});
+
+test('an already-migrated tariff is left exactly alone', () => {
+  const current = defaultWaterTariff();
+  const custom = {
+    ...current,
+    supplyBlocks: [
+      { upToM3: 20, eurM3: 0.5 },
+      { upToM3: null, eurM3: 2.5 },
+    ],
+  };
+  const hydrated = hydrateForTest({ tariff: custom });
+  assert.equal(hydrated.tariff.supplyBlocks.length, 2, 'hand-edited bands survive');
+  assert.equal(hydrated.tariff.supplyBlocks[1].eurM3, 2.5);
+});

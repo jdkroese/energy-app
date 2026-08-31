@@ -157,6 +157,13 @@ export interface WaterTariffBlock {
  * bill's own 152 m³ because the two errors cancel there.
  */
 export interface WaterTariff {
+  /**
+   * Bumped when the SHIPPED tariff facts change (rates, bands, how bands apply) so a
+   * persisted older tariff is migrated rather than silently kept. Without this, the
+   * instance that already stored the flat placeholder would never pick up the real
+   * band table — the stored value always wins over a changed default.
+   */
+  rev?: number;
   /** Months per billing period (AMJASA: 2 — bimonthly). Standing charges are per period. */
   periodMonths: number;
   /** Supply standing charge per billing period, set by meter calibre. */
@@ -199,8 +206,12 @@ export interface WaterTariff {
  * instalment of a deferred charge under Decreto Ley 19/2022 — a temporary
  * catch-up, not a recurring tariff.
  */
+/** Current shipped tariff revision — see WaterTariff.rev. */
+export const WATER_TARIFF_REV = 2;
+
 export function defaultWaterTariff(): WaterTariff {
   return {
+    rev: WATER_TARIFF_REV,
     periodMonths: 2,
     supplyFixedEurPeriod: 27.34, // calibre "> 13 ≤ 15" mm
     blockMode: 'all-at-last',
@@ -3001,6 +3012,25 @@ function hydrate(raw: unknown): StoreSchema {
   };
 }
 
+function hydrateWaterHistory(p: Partial<WaterHistoryConfig> | undefined, base: WaterHistoryConfig): WaterHistoryConfig {
+  const h = p ?? ({} as Partial<WaterHistoryConfig>);
+  return {
+    backfillDailyMonths: clampNum(h.backfillDailyMonths, base.backfillDailyMonths, 1, 120),
+    backfillHourlyDays: clampNum(h.backfillHourlyDays, base.backfillHourlyDays, 1, 1000),
+    retainHourlyDays: clampNum(h.retainHourlyDays, base.retainHourlyDays, 7, 3650),
+  };
+}
+
+function hydrateZoneFlow(p: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (p && typeof p === 'object') {
+    for (const [id, v] of Object.entries(p as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[id] = v;
+    }
+  }
+  return out;
+}
+
 /** Coerce persisted water-section config, clamping thresholds/tariff to sane ranges. */
 function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): WaterState {
   if (!p || typeof p !== 'object') return structuredClone(base);
@@ -3014,6 +3044,35 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
     dailySpikeFactor: clampNum(t.dailySpikeFactor, base.thresholds.dailySpikeFactor, 1, 20),
     meterSilentHours: clampNum(t.meterSilentHours, base.thresholds.meterSilentHours, 1, 720),
   };
+  /* One-time migration. Revisions before 2 predate the discovery that AMJASA prices
+   * every m³ at the band the total reaches (their tariff: "Se facturarán todos los m³ al
+   * mismo precio que el último m³ consumido"); those installs stored a single flat band,
+   * which overcharges every volume below the top band. The band table and mode are
+   * published policy rather than user data — and the old UI never let anyone enter bands
+   * by hand — so replacing them is safe. Everything the owner CAN edit is preserved. */
+  const storedRev = typeof tar.rev === 'number' ? tar.rev : 0;
+  if (storedRev < WATER_TARIFF_REV) {
+    const migrated = defaultWaterTariff();
+    return {
+      thresholds,
+      billingAnchorDay:
+        typeof p.billingAnchorDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.billingAnchorDay)
+          ? p.billingAnchorDay
+          : base.billingAnchorDay,
+      history: hydrateWaterHistory(p.history, base.history),
+      tariff: {
+        ...migrated,
+        // Keep anything the owner may legitimately have tuned.
+        periodMonths: clampNum(tar.periodMonths, migrated.periodMonths, 1, 12),
+        supplyFixedEurPeriod: clampNum(tar.supplyFixedEurPeriod, migrated.supplyFixedEurPeriod, 0, 1000),
+        sanitationFixedEurPeriod: clampNum(tar.sanitationFixedEurPeriod, migrated.sanitationFixedEurPeriod, 0, 1000),
+        sanitationEurM3: clampNum(tar.sanitationEurM3, migrated.sanitationEurM3, 0, 100),
+        ivaPct: clampNum(tar.ivaPct, migrated.ivaPct, 0, 100),
+      },
+      zoneFlowOverrides: hydrateZoneFlow(p.zoneFlowOverrides),
+    };
+  }
+
   // Blocks must stay ordered and end open-ended, or costFor would silently stop
   // billing above the last bound. Anything malformed falls back to the default.
   let supplyBlocks = base.tariff.supplyBlocks;
@@ -3030,6 +3089,7 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
     supplyBlocks = [...bounded, open];
   }
   const tariff: WaterTariff = {
+    rev: WATER_TARIFF_REV,
     periodMonths: clampNum(tar.periodMonths, base.tariff.periodMonths, 1, 12),
     blockMode: tar.blockMode === 'progressive' || tar.blockMode === 'all-at-last' ? tar.blockMode : base.tariff.blockMode,
     supplyFixedEurPeriod: clampNum(tar.supplyFixedEurPeriod, base.tariff.supplyFixedEurPeriod, 0, 1000),
@@ -3038,18 +3098,8 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
     sanitationEurM3: clampNum(tar.sanitationEurM3, base.tariff.sanitationEurM3, 0, 100),
     ivaPct: clampNum(tar.ivaPct, base.tariff.ivaPct, 0, 100),
   };
-  const zoneFlowOverrides: Record<string, number> = {};
-  if (p.zoneFlowOverrides && typeof p.zoneFlowOverrides === 'object') {
-    for (const [id, v] of Object.entries(p.zoneFlowOverrides)) {
-      if (typeof v === 'number' && Number.isFinite(v) && v > 0) zoneFlowOverrides[id] = v;
-    }
-  }
-  const h = p.history ?? ({} as Partial<WaterHistoryConfig>);
-  const history: WaterHistoryConfig = {
-    backfillDailyMonths: clampNum(h.backfillDailyMonths, base.history.backfillDailyMonths, 1, 120),
-    backfillHourlyDays: clampNum(h.backfillHourlyDays, base.history.backfillHourlyDays, 1, 1000),
-    retainHourlyDays: clampNum(h.retainHourlyDays, base.history.retainHourlyDays, 7, 3650),
-  };
+  const zoneFlowOverrides = hydrateZoneFlow(p.zoneFlowOverrides);
+  const history = hydrateWaterHistory(p.history, base.history);
   const billingAnchorDay =
     typeof p.billingAnchorDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.billingAnchorDay)
       ? p.billingAnchorDay
@@ -3940,4 +3990,9 @@ export function update<T = void>(mutator: (state: StoreSchema) => T): T {
 /** Test/diagnostic helper — drop the cache so the next get() re-reads disk. */
 export function _resetCache(): void {
   cache = null;
+}
+
+/** Test seam: exercise the persisted-water-config migration without touching disk. */
+export function hydrateWaterForTest(p: Partial<WaterState>): WaterState {
+  return hydrateWater(p, defaultWaterState());
 }
