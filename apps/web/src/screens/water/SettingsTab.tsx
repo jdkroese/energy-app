@@ -109,6 +109,7 @@ export function WaterSettingsTab({
     <div style={{ display: 'flex', flexDirection: 'column', gap: wide ? 16 : 14 }}>
       <ConnectionCard settings={s} isAdmin={isAdmin} onSaved={() => { refetch(); onSaved(); }} />
       <MeterCard snapshot={snapshot} />
+      <HistoryCard settings={s} isAdmin={isAdmin} onSaved={refetch} />
       <ThresholdsCard settings={s} isAdmin={isAdmin} onSaved={refetch} />
       <ChannelsCard isAdmin={isAdmin} />
       <TariffCard settings={s} isAdmin={isAdmin} monthM3={snapshot.month.m3} onSaved={refetch} />
@@ -488,6 +489,121 @@ function BillRow({ label, value }: { label: string; value: number }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-2)' }}>
       <span>{label}</span>
       <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{value.toFixed(2)}</span>
+    </div>
+  );
+}
+
+// ---- History & billing period --------------------------------------------
+
+/**
+ * How far back to import, how long to keep it, and where the billing period starts.
+ * The backfill is deliberately one-shot, so widening the window alone would never
+ * fetch the older data — hence the explicit re-import action.
+ */
+function HistoryCard({ settings, isAdmin, onSaved }: { settings: WaterSettingsResponse; isAdmin: boolean; onSaved: () => void }) {
+  const [h, setH] = useState(settings.history);
+  const [anchor, setAnchor] = useState(settings.billingAnchorDay);
+  const [busy, setBusy] = useState<'save' | 'reimport' | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setH(settings.history);
+    setAnchor(settings.billingAnchorDay);
+  }, [settings.history, settings.billingAnchorDay]);
+
+  const save = async () => {
+    setBusy('save');
+    setErr(null);
+    setMsg(null);
+    try {
+      await api.water.saveSettings({ history: h, billingAnchorDay: anchor });
+      setMsg('Saved');
+      onSaved();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reimport = async () => {
+    setBusy('reimport');
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await api.water.reimportHistory();
+      setMsg(r.detail);
+      onSaved();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const b = settings.backfill;
+
+  return (
+    <Card padded>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--water-wash)', color: 'var(--water)', flex: 'none' }}>
+          <Icon name="calendar-days" size={16} />
+        </span>
+        <div>
+          <div style={{ fontSize: 14.5, fontWeight: 600 }}>History &amp; billing period</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>how far back to import, and when a period starts</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11.5, color: 'var(--text-2)', margin: '10px 0 12px', lineHeight: 1.6 }}>
+        Contazara serves daily readings much further back than hourly ones, so these are separate.
+        Daily rows drive the year view and same-period-last-year; hourly rows are what the leak
+        detectors read.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <Input label="Import daily (months)" type="number" min={1} max={120} disabled={!isAdmin} value={h.backfillDailyMonths} onChange={(e) => setH((p) => ({ ...p, backfillDailyMonths: Number(e.target.value) }))} />
+        <Input label="Import hourly (days)" type="number" min={1} max={1000} disabled={!isAdmin} value={h.backfillHourlyDays} onChange={(e) => setH((p) => ({ ...p, backfillHourlyDays: Number(e.target.value) }))} />
+        <Input label="Keep hourly for (days)" type="number" min={7} max={3650} disabled={!isAdmin} value={h.retainHourlyDays} onChange={(e) => setH((p) => ({ ...p, retainHourlyDays: Number(e.target.value) }))} />
+        <Input label="Billing period starts" type="date" disabled={!isAdmin} value={anchor} onChange={(e) => setAnchor(e.target.value)} />
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.55 }}>
+        Any known meter-read date works — AMJASA reads on the 1st of odd months, and every
+        period boundary is stepped from here in {settings.tariff.periodMonths}-month jumps.
+      </div>
+
+      <div style={{ marginTop: 12, paddingTop: 11, borderTop: '1px solid var(--border-1)', display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <DetailLine label="Daily readings stored" value={b.dailyRows > 0 ? `${b.dailyRows.toLocaleString()} days${b.oldestDay ? ` · back to ${b.oldestDay}` : ''}` : 'none yet'} />
+        <DetailLine label="Hourly readings stored" value={b.hourlyRows > 0 ? `${b.hourlyRows.toLocaleString()} hours` : 'none yet'} />
+        <DetailLine label="Initial import" value={b.dailyDone ? 'complete' : b.dailyRows > 0 ? 'in progress' : 'not started'} />
+      </div>
+
+      {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 10 }}>{err}</div>}
+      {msg && <div style={{ fontSize: 11.5, color: 'var(--solar)', marginTop: 10 }}>{msg}</div>}
+
+      {isAdmin && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void save()}>Save</Button>
+          <Button size="sm" variant="secondary" loading={busy === 'reimport'} onClick={() => void reimport()}>Re-import history</Button>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.55 }}>
+        Re-importing fills gaps rather than replacing anything — existing readings are matched by
+        date and left alone. It runs in the background over the next few polls, paced to be polite
+        to Contazara.
+      </div>
+    </Card>
+  );
+}
+
+/** Label/value row used by the meter and history cards. */
+function DetailLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 }}>
+      <span style={{ color: 'var(--text-3)' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)', textAlign: 'right' }}>{value}</span>
     </div>
   );
 }

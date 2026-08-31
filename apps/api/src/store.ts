@@ -219,8 +219,32 @@ export function defaultWaterTariff(): WaterTariff {
 
 /** Water section settings (docs/52): detector thresholds + tariff + per-zone manual
  *  flow-rate overrides (L/min) used until a zone's learned flow is trusted. */
+/**
+ * How much history to pull from Contazara, and how long to keep it. The API serves
+ * daily readings much further back than hourly ones, so these are separate knobs —
+ * `backfillDailyMonths` sets how far the year view and same-period-last-year comparison
+ * can reach, `backfillHourlyDays` how far the leak detectors can look back.
+ */
+export interface WaterHistoryConfig {
+  backfillDailyMonths: number;
+  backfillHourlyDays: number;
+  /** Raw hourly retention (days). Daily rows are kept forever. */
+  retainHourlyDays: number;
+}
+
+export function defaultWaterHistory(): WaterHistoryConfig {
+  return { backfillDailyMonths: 24, backfillHourlyDays: 90, retainHourlyDays: 400 };
+}
+
 export interface WaterState {
   thresholds: WaterThresholds;
+  /**
+   * A known meter-read date "YYYY-MM-DD" that starts a billing period. AMJASA reads on
+   * the 1st of odd months — factura 3/1836657 ran 01/05/2026 -> 01/07/2026 — so every
+   * period boundary can be stepped from here in `tariff.periodMonths` jumps.
+   */
+  billingAnchorDay: string;
+  history: WaterHistoryConfig;
   tariff: WaterTariff;
   /** zoneId -> manual L/min override (docs/52 "fall back to a manual per-zone L/min entry"). */
   zoneFlowOverrides: Record<string, number>;
@@ -230,6 +254,8 @@ export function defaultWaterState(): WaterState {
   return {
     thresholds: defaultWaterThresholds(),
     tariff: defaultWaterTariff(),
+    billingAnchorDay: '2026-07-01',
+    history: defaultWaterHistory(),
     zoneFlowOverrides: {},
   };
 }
@@ -3018,7 +3044,17 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
       if (typeof v === 'number' && Number.isFinite(v) && v > 0) zoneFlowOverrides[id] = v;
     }
   }
-  return { thresholds, tariff, zoneFlowOverrides };
+  const h = p.history ?? ({} as Partial<WaterHistoryConfig>);
+  const history: WaterHistoryConfig = {
+    backfillDailyMonths: clampNum(h.backfillDailyMonths, base.history.backfillDailyMonths, 1, 120),
+    backfillHourlyDays: clampNum(h.backfillHourlyDays, base.history.backfillHourlyDays, 1, 1000),
+    retainHourlyDays: clampNum(h.retainHourlyDays, base.history.retainHourlyDays, 7, 3650),
+  };
+  const billingAnchorDay =
+    typeof p.billingAnchorDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.billingAnchorDay)
+      ? p.billingAnchorDay
+      : base.billingAnchorDay;
+  return { thresholds, tariff, billingAnchorDay, history, zoneFlowOverrides };
 }
 
 /** Coerce + migrate persisted irrigation state onto fresh defaults. Defensive: an on-disk

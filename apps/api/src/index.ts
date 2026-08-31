@@ -112,6 +112,7 @@ import {
   getWater,
   getWaterHistory,
   getWaterSettings,
+  reimportWaterHistory,
   setWaterSettings,
   testContazara,
   setContazara,
@@ -437,6 +438,11 @@ app.get(
 app.get(
   "/api/water/history",
   wrap((req) => getWaterHistory(req.query.range, req.query.offset)),
+);
+app.post(
+  "/api/water/history/reimport",
+  requireAdmin,
+  wrap(() => reimportWaterHistory()),
 );
 app.get(
   "/api/water/settings",

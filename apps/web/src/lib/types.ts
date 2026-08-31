@@ -2778,6 +2778,29 @@ export interface WaterActiveAlert {
   sinceIso: string;
 }
 
+/**
+ * AMJASA bills bimonthly and prices EVERY m³ at the band the period total reaches, so
+ * the billing period — not the calendar month — is the unit that decides what water
+ * costs. `cliff` is the actionable part: crossing a band boundary re-prices the whole
+ * period, so one m³ can cost tens of euros and shaving a few can save far more.
+ */
+export interface WaterBillingPeriod {
+  startIso: string;
+  endIso: string;
+  months: number;
+  daysElapsed: number;
+  daysTotal: number;
+  m3ToDate: number;
+  projectedM3: number;
+  bandRateEurM3: number;
+  projectedCostEur: number;
+  cliff: {
+    m3ToNextBandDown: number | null;
+    savingEur: number | null;
+    nextM3CostEur: number;
+  };
+}
+
 export interface WaterResponse {
   ts: string;
   /** False until credentials are saved in Settings — the owner hasn't connected
@@ -2790,7 +2813,9 @@ export interface WaterResponse {
   quietHour: WaterQuietHour;
   month: WaterMonth;
   zones: WaterZoneAttribution[];
-  activeAlerts: WaterActiveAlert[];
+  activeAlerts: WaterActiveAlert[];  /** Current AMJASA billing period. null when the meter isn't configured. */
+  period: WaterBillingPeriod | null;
+
 }
 
 export type WaterHistoryRange = 'day' | 'week' | 'month' | 'year';
@@ -2895,6 +2920,25 @@ export interface WaterSettingsResponse {
   pollHours: number;
   thresholds: WaterThresholds;
   tariff: WaterTariff;
+  /** A known meter-read date that starts a billing period (AMJASA: 1st of odd months). */
+  billingAnchorDay: string;
+  history: WaterHistoryConfig;
+  backfill: WaterBackfillStatus;
+}
+
+export interface WaterHistoryConfig {
+  backfillDailyMonths: number;
+  backfillHourlyDays: number;
+  /** Raw hourly retention (days). Daily rows are kept forever. */
+  retainHourlyDays: number;
+}
+
+export interface WaterBackfillStatus {
+  dailyDone: boolean;
+  hourlyCursor: string | null;
+  oldestDay: string | null;
+  dailyRows: number;
+  hourlyRows: number;
 }
 
 /** PATCH-style save body — all fields optional, password omitted keeps the
@@ -2905,6 +2949,8 @@ export type WaterSettingsPatch = Partial<{
   serial: string;
   pollHours: number;
   thresholds: Partial<WaterThresholds>;
+  billingAnchorDay: string;
+  history: Partial<WaterHistoryConfig>;
   tariff: Partial<WaterTariff>;
 }>;
 

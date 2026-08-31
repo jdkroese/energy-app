@@ -20,10 +20,19 @@ import { db, getMeta, setMeta, type MeteringDb } from '../db/sqlite';
 import * as contazara from '../connectors/contazara';
 import { contazaraConfig, type ContazaraConfig } from '../runtime-config';
 import { madridDateKey } from '../history5m';
+import * as store from '../store';
+
+/** Owner-configurable history window (Settings ▸ Water ▸ History). Read at call time,
+ *  never captured, so changing it takes effect on the next poll without a restart. */
+function historyCfg(): store.WaterHistoryConfig {
+  try {
+    return store.get().water.history;
+  } catch {
+    return store.defaultWaterHistory();
+  }
+}
 
 const HOUR_SEC = 3600;
-const BACKFILL_DAILY_MONTHS = 24;
-const BACKFILL_HOURLY_DAYS = 90;
 const BACKFILL_STEP_DELAY_MS = 400; // rate-polite — sequential, small delay between calls
 const POLL_CHECK_MS = 15 * 60_000; // how often we check "is it time to poll yet"
 
@@ -116,8 +125,9 @@ function rollupDailyFromHourlyGaps(handle: MeteringDb, nowSec: number): void {
 
 function prune(handle: MeteringDb, nowSec: number): void {
   try {
-    handle.prepare('DELETE FROM water_hourly WHERE bucket_ts < ?').run(nowSec - 3 * 365 * 24 * 3600); // 3y
-    handle.prepare('DELETE FROM water_attribution WHERE bucket_ts < ?').run(nowSec - 3 * 365 * 24 * 3600);
+    const retainSec = historyCfg().retainHourlyDays * 24 * 3600;
+    handle.prepare('DELETE FROM water_hourly WHERE bucket_ts < ?').run(nowSec - retainSec);
+    handle.prepare('DELETE FROM water_attribution WHERE bucket_ts < ?').run(nowSec - retainSec);
     // water_daily kept forever (matches the design brief); water_zone_flow is a live
     // running-average table (no time-based prune).
   } catch (e) {
@@ -432,7 +442,7 @@ async function backfillDaily(cfg: ContazaraConfig): Promise<void> {
   const now = new Date();
   // Chunk into ~90-day windows (rate-polite + defensive against an undocumented range cap).
   const CHUNK_DAYS = 90;
-  let cursor = new Date(monthsAgoYYYYMMDD(BACKFILL_DAILY_MONTHS, now).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'));
+  let cursor = new Date(monthsAgoYYYYMMDD(historyCfg().backfillDailyMonths, now).replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3'));
   const end = now;
   while (cursor.getTime() < end.getTime()) {
     const chunkEnd = new Date(Math.min(cursor.getTime() + CHUNK_DAYS * 86_400_000, end.getTime()));
@@ -447,7 +457,7 @@ async function backfillDaily(cfg: ContazaraConfig): Promise<void> {
     await sleep(BACKFILL_STEP_DELAY_MS);
   }
   setMeta('water_backfill_daily_done', '1');
-  console.log('[water-history] daily backfill complete (24 months)');
+  console.log(`[water-history] daily backfill complete (${historyCfg().backfillDailyMonths} months)`);
 }
 
 async function backfillHourly(cfg: ContazaraConfig): Promise<void> {
@@ -457,8 +467,8 @@ async function backfillHourly(cfg: ContazaraConfig): Promise<void> {
   if (!meter) return;
   const now = new Date();
   // Cursor = the oldest day already backfilled (YYYYMMDD); walk backwards from "yesterday"
-  // toward BACKFILL_HOURLY_DAYS ago, one day at a time, so a restart resumes cleanly.
-  const oldestTarget = new Date(now.getTime() - BACKFILL_HOURLY_DAYS * 86_400_000);
+  // toward the configured hourly-backfill horizon, one day at a time, so a restart resumes cleanly.
+  const oldestTarget = new Date(now.getTime() - historyCfg().backfillHourlyDays * 86_400_000);
   let cursorStr = getMeta('water_backfill_hourly_cursor');
   let cursor = cursorStr ? new Date(cursorStr.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')) : new Date(now.getTime() - 86_400_000);
   let stepsThisRun = 0;
@@ -526,6 +536,52 @@ export function startWaterHistory(): void {
 }
 
 /** TEST ONLY: force an immediate poll regardless of cadence. */
+/**
+ * Clear the backfill cursors so the next poll re-imports history from scratch, using
+ * whatever window is configured now. Needed because the backfill is deliberately
+ * one-shot: without this, widening `backfillDailyMonths` would never fetch the older
+ * data the owner just asked for.
+ *
+ * Non-destructive: existing rows are left alone and re-upserted by primary key, so a
+ * re-import fills gaps rather than dropping history on the floor.
+ */
+export function resetBackfill(): { ok: boolean; detail: string } {
+  const handle = db();
+  if (!handle) return { ok: false, detail: 'metering database unavailable' };
+  try {
+    setMeta('water_backfill_daily_done', '');
+    setMeta('water_backfill_hourly_cursor', '');
+    const cfg = historyCfg();
+    return {
+      ok: true,
+      detail: `history re-import queued — ${cfg.backfillDailyMonths} months of daily and ${cfg.backfillHourlyDays} days of hourly readings will be pulled on the next poll`,
+    };
+  } catch (e) {
+    return { ok: false, detail: (e as Error).message };
+  }
+}
+
+/** Where the one-time backfill has got to, for the Settings ▸ History card. */
+export function backfillStatus(): { dailyDone: boolean; hourlyCursor: string | null; oldestDay: string | null; dailyRows: number; hourlyRows: number } {
+  const handle = db();
+  if (!handle) return { dailyDone: false, hourlyCursor: null, oldestDay: null, dailyRows: 0, hourlyRows: 0 };
+  try {
+    const oldest = handle.prepare('SELECT MIN(day) AS d FROM water_daily').get() as { d: string | null } | undefined;
+    const dRows = handle.prepare('SELECT COUNT(*) AS n FROM water_daily').get() as { n: number } | undefined;
+    const hRows = handle.prepare('SELECT COUNT(*) AS n FROM water_hourly').get() as { n: number } | undefined;
+    const cur = getMeta('water_backfill_hourly_cursor');
+    return {
+      dailyDone: getMeta('water_backfill_daily_done') === '1',
+      hourlyCursor: cur && cur.length > 0 ? cur : null,
+      oldestDay: oldest?.d ?? null,
+      dailyRows: dRows?.n ?? 0,
+      hourlyRows: hRows?.n ?? 0,
+    };
+  } catch {
+    return { dailyDone: false, hourlyCursor: null, oldestDay: null, dailyRows: 0, hourlyRows: 0 };
+  }
+}
+
 export function pollNowForTest(): Promise<void> {
   return pollOnce();
 }
