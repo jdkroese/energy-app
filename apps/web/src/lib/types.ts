@@ -237,13 +237,34 @@ export interface VoltageHistoryResponse {
   breaker: { id: string; name: string } | null;
 }
 
+/** One day of the 5-day outlook attached to GET /api/weather/current. */
+export interface WeatherDay {
+  date: string;
+  tMaxC: number;
+  precipMm: number;
+  precipProbabilityPct: number;
+  sunshineHours: number;
+  humidityPct: number;
+  cloudPct: number;
+}
+
 /** GET /api/weather/current — cheap current-conditions read for the TopBar weather
- *  pill. Null fields mean the upstream fetch failed — fail soft, never show a fake
- *  reading. */
+ *  pill, plus a 5-day outlook for its hover/tap panel. Every field except `ts` and
+ *  `daily` is independently nullable — the upstream fetch can fail per-field, so
+ *  render fails soft field-by-field and never shows a fake reading. `daily` is `[]`
+ *  when the outlook fetch failed (current-conditions can still render alone). */
 export interface CurrentWeatherResponse {
   ts: string;
   temperatureC: number | null;
   windSpeedKmh: number | null;
+  apparentC: number | null;
+  humidityPct: number | null;
+  cloudPct: number | null;
+  precipMm: number | null;
+  isDay: boolean | null;
+  weatherCode: number | null;
+  /** Up to 5 days, oldest first. Empty when the outlook fetch failed. */
+  daily: WeatherDay[];
 }
 
 // ---- Circuit-breaker usage metering (docs/28) ------------------------------
@@ -2783,6 +2804,8 @@ export interface WaterActiveAlert {
  * the billing period — not the calendar month — is the unit that decides what water
  * costs. `cliff` is the actionable part: crossing a band boundary re-prices the whole
  * period, so one m³ can cost tens of euros and shaving a few can save far more.
+ *
+ * Consumed by both the Water screen and the TopBar water pill.
  */
 export interface WaterBillingPeriod {
   startIso: string;
@@ -2813,9 +2836,9 @@ export interface WaterResponse {
   quietHour: WaterQuietHour;
   month: WaterMonth;
   zones: WaterZoneAttribution[];
-  activeAlerts: WaterActiveAlert[];  /** Current AMJASA billing period. null when the meter isn't configured. */
+  activeAlerts: WaterActiveAlert[];
+  /** Current AMJASA billing period; null when the meter isn't configured. */
   period: WaterBillingPeriod | null;
-
 }
 
 export type WaterHistoryRange = 'day' | 'week' | 'month' | 'year';
