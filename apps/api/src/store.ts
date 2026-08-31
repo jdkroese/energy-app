@@ -579,11 +579,11 @@ export interface IntegrationsState {
    *  it's hardware-verified), explicit false = off. Lets local control be enabled on
    *  the production mini without editing its launchd plist (TUYA_LOCAL_ENABLED env
    *  var still overrides this on top — see isLocalEnabled() in tuya-local.ts).
-   *  `fleetManual` (docs/52 Change 1) — undefined/true = on (the owner's explicit
+   *  `fleetManual` (docs/51 Change 1) — undefined/true = on (the owner's explicit
    *  default): the fleet LIST is served from the local LAN snapshot only, never
    *  auto-polling cloud; explicit false = off (docs/49 cloud-primary behaviour). See
    *  fleetManualEnabled()/getDevices() in tuya.ts.
-   *  `sceneControllersEnabled` (docs/52 Change 3) — undefined/false = OFF (the new
+   *  `sceneControllersEnabled` (docs/51 Change 3) — undefined/false = OFF (the new
    *  default): the scene-controller coordinator's 5s cloud device-logs poll never
    *  runs; explicit true = on (the old always-polling behaviour). See
    *  controller-coordinator.ts. */

@@ -1546,7 +1546,7 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
   const [captureBusy, setCaptureBusy] = useState(false);
   const [captureResult, setCaptureResult] = useState<TuyaCaptureDpMapsResult | null>(null);
   const [captureErr, setCaptureErr] = useState<string | null>(null);
-  // docs/52 Change 1 — manual (LAN-only) fleet: the toggle + explicit "Sync from Tuya cloud".
+  // docs/51 Change 1 — manual (LAN-only) fleet: the toggle + explicit "Sync from Tuya cloud".
   const [fleetManualBusy, setFleetManualBusy] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncResult, setSyncResult] = useState<TuyaFleetSyncResult | null>(null);
@@ -1584,7 +1584,7 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
     }
   };
 
-  // docs/52 Change 1 — manual (LAN-only) fleet: default ON, reversible.
+  // docs/51 Change 1 — manual (LAN-only) fleet: default ON, reversible.
   const toggleFleetManual = async (enabled: boolean) => {
     setFleetManualBusy(true);
     try {
@@ -1729,7 +1729,7 @@ function TuyaConnection({ first, open, onToggle }: { first?: boolean; open: bool
           </div>
         )}
 
-        {/* docs/52 Change 1 — manual (LAN-only) fleet: default ON. With local LAN control also
+        {/* docs/51 Change 1 — manual (LAN-only) fleet: default ON. With local LAN control also
             on, the fleet LIST is served from the LAN snapshot only; cloud is touched ONLY when
             "Sync from Tuya cloud" below is pressed. */}
         {connected && status && (

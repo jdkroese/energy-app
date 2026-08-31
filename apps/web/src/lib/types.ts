@@ -1692,12 +1692,12 @@ export interface TuyaIntegrationStatus {
   error: string | null;
   /** Count of paired devices not yet surfaced by a shipped category screen. */
   needsSetupCount?: number;
-  /** docs/52 Change 1 — manual (LAN-only) fleet listing: default ON, undefined/true = on,
+  /** docs/51 Change 1 — manual (LAN-only) fleet listing: default ON, undefined/true = on,
    *  explicit false = off (cloud-primary, docs/49 behaviour). */
   fleetManual?: boolean;
 }
 
-/** POST /api/integrations/tuya/sync — docs/52 Change 1's "Sync from Tuya cloud" button: one
+/** POST /api/integrations/tuya/sync — docs/51 Change 1's "Sync from Tuya cloud" button: one
  *  explicit cloud fleet refresh. */
 export interface TuyaFleetSyncResult {
   ts: string;
