@@ -247,15 +247,35 @@ Not modelled deliberately: the "CUOTA EPSAR (18/18)" line (23,93 €) is the fin
 instalment of a deferred charge under Decreto Ley 19/2022 — a temporary catch-up, not a
 recurring tariff.
 
-**Still open:** whether AMJASA has consumption blocks at all. This household consumes
-~152 m³ per bimonthly period, so it may simply sit permanently in a top block that the
-bill prints as a single line. `supplyBlocks` is a list precisely so blocks can be added
-if a future, lower-consumption bill ever shows a different unit price — which is exactly
-what would happen if the leak gets fixed.
+**RESOLVED 2026-08-31 — AMJASA DOES have bands, and they are not progressive.**
+The owner suspected a higher price at high use and was right. AMJASA's published tariff
+(B.O.P. Alicante 174, 10/09/2008) states the rule outright:
 
-**D6 · Poll cadence.** Data is hourly-read, ~daily-upload. Every 6 h is plenty and
-cheap. Worth confirming there is no rate limit we should respect — we have no
-documentation, only captured traffic.
+> *"Se facturarán todos los m³ al mismo precio que el último m³ consumido."*
+
+Bands, per bimonthly period:
+
+| Band | Rate |
+|---|---|
+| 0–10 m³ | 0,15 €/m³ |
+| 11–40 m³ | 0,63 €/m³ |
+| 41–70 m³ | 1,37 €/m³ |
+| over 71 m³ | **1,86 €/m³** |
+
+The bill's own arithmetic confirms the rule: progressive would give
+`10×0,15 + 30×0,63 + 30×1,37 + 82×1,86 = 214,02`, but it charges `152 × 1,86 = 282,72`.
+
+**This makes the band boundaries cliffs, and the cliff is the product.** Crossing one
+re-prices the *whole period*, so one m³ at the 70→71 boundary costs **€39,78**, and
+shaving this household's 152 m³ down to 70 would save roughly **€239 per period** — far
+more than those cubic metres contain. That figure, not the marginal rate, is what belongs
+in front of someone deciding whether to chase a leak, and the Overview surfaces it.
+
+Modelled as `blockMode: 'all-at-last' | 'progressive'` so a genuinely progressive tariff
+still works. A `rev` field migrates installs that stored the earlier flat placeholder —
+without it a stored value would win over the corrected default and the owner would have
+kept being billed against a single flat rate (which overcharges every volume below the
+top band, by 195% at 25 m³).
 
 ---
 
@@ -284,3 +304,31 @@ documentation, only captured traffic.
 4. P2 attribution + detectors, shadow-log for one irrigation cycle before enabling
    fan-out — same discipline as the rule engine (docs/40).
 5. P3 tariff + ET feedback.
+
+---
+
+## 9. Delivered beyond the original brief (2026-08-31)
+
+Five owner requests, all shipped:
+
+1. **Water figures in the header, beside the weather.** A pill showing today's litres with
+   an explicit age. Deliberately **not** framed as live: the Contazara meter reports hourly
+   totals uploaded roughly once a day, so there is no instantaneous flow to show and the
+   panel says so in as many words. Hidden entirely when the meter isn't configured.
+2. **The weather pill expands** on hover/focus (tap on mobile) into current detail —
+   temperature, feels-like, wind, humidity, cloud, precipitation — plus a 5-day outlook.
+   It reuses the irrigation coordinator's *cached* outlook, so it costs no extra
+   Open-Meteo calls. Both pills share one `HoverPanel` primitive.
+3. **Real AMJASA tariff** — see D5 above.
+4. **History is configurable**: how many months of daily and days of hourly to import, and
+   how long to retain hourly rows, with an explicit re-import action (the backfill is
+   one-shot, so widening the window alone would never fetch the older data). Re-import
+   fills gaps rather than replacing.
+5. **The bimonthly billing period is now first-class** — `control/water-billing.ts` steps
+   periods from a known read date, and `GET /api/water` returns the window, consumption to
+   date, straight-line projection, the band that projection lands in, projected bill and
+   the cliff.
+
+**Known gap:** the weather pill is desktop-only, as it was before — the mobile header
+already carries per-screen content and stacking a second pill risked overflow at 375px.
+The water pill *is* on mobile. Worth revisiting if the owner wants weather there too.
