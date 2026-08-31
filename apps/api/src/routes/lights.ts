@@ -222,7 +222,7 @@ export async function getTuyaIntegration(): Promise<unknown> {
     needsSetupCount,
     categories,
     error,
-    // docs/52 Change 1 — default ON; undefined/true = on, explicit false = off (see
+    // docs/51 Change 1 — default ON; undefined/true = on, explicit false = off (see
     // fleetManualEnabled() in tuya.ts, the single source of truth this mirrors for display).
     fleetManual: t?.fleetManual !== false,
   };
@@ -290,7 +290,7 @@ export async function captureTuyaLocalDpMaps(): Promise<unknown> {
   return { ts: new Date().toISOString(), ...result };
 }
 
-/** PUT /api/integrations/tuya/fleet-manual — docs/52 Change 1: reversible on/off for the
+/** PUT /api/integrations/tuya/fleet-manual — docs/51 Change 1: reversible on/off for the
  *  manual (LAN-only) fleet listing. Persisted, default ON — see fleetManualEnabled() in
  *  tuya.ts, the single source of truth this toggle drives. Invalidates the fleet cache so
  *  flipping OFF re-fetches cloud promptly instead of waiting out the local-snapshot TTL. */
@@ -304,7 +304,7 @@ export function setTuyaFleetManual(enabledRaw: unknown): unknown {
   return getTuyaIntegration();
 }
 
-/** POST /api/integrations/tuya/sync — docs/52 Change 1's "Sync from Tuya cloud" button: the
+/** POST /api/integrations/tuya/sync — docs/51 Change 1's "Sync from Tuya cloud" button: the
  *  ONLY routine cloud fleet call once fleetManual is ON. Admin-gated at the route (index.ts).
  *  Note: this only refreshes cloud-known identity/status — fully LAN-enabling a brand-new
  *  device (`newIds` in the result) still needs the existing harvest ops flow (key capture). */

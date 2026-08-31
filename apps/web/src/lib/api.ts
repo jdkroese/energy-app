@@ -1055,7 +1055,7 @@ export const api = {
         {},
       ),
     // Manual (LAN-only) fleet listing — reversible Settings toggle + the explicit one-shot
-    // cloud refresh (docs/52 Change 1).
+    // cloud refresh (docs/51 Change 1).
     tuyaFleetManualSet: (enabled: boolean) =>
       putJSON<TuyaIntegrationStatus>("/api/integrations/tuya/fleet-manual", {
         enabled,
