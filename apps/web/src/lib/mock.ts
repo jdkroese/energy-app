@@ -431,6 +431,18 @@ export const MOCK_WATER: WaterResponse = {
     { id: 'rb-4', name: 'Back terrace pots', lpm: 3.0, samples: 0, learned: false },
   ],
   activeAlerts: [],
+  period: {
+    startIso: '2026-07-01',
+    endIso: '2026-09-01',
+    months: 2,
+    daysElapsed: 31,
+    daysTotal: 62,
+    m3ToDate: 140.2,
+    projectedM3: 280.4,
+    bandRateEurM3: 1.86,
+    projectedCostEur: 706.3,
+    cliff: { m3ToNextBandDown: 210.4, savingEur: 480.9, nextM3CostEur: 2.46 },
+  },
 };
 
 function waterHistoryLabels(range: string, n: number): string[] {
@@ -526,9 +538,18 @@ export const MOCK_WATER_SETTINGS: WaterSettingsResponse = {
   tariff: {
     periodMonths: 2,
     supplyFixedEurPeriod: 27.34,
-    supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+    blockMode: 'all-at-last',
+    supplyBlocks: [
+      { upToM3: 10, eurM3: 0.15 },
+      { upToM3: 40, eurM3: 0.63 },
+      { upToM3: 70, eurM3: 1.37 },
+      { upToM3: null, eurM3: 1.86 },
+    ],
     sanitationFixedEurPeriod: 7.3,
     sanitationEurM3: 0.412,
     ivaPct: 10,
   },
+  billingAnchorDay: '2026-07-01',
+  history: { backfillDailyMonths: 24, backfillHourlyDays: 90, retainHourlyDays: 400 },
+  backfill: { dailyDone: false, hourlyCursor: null, oldestDay: null, dailyRows: 0, hourlyRows: 0 },
 };

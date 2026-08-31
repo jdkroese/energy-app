@@ -171,6 +171,64 @@ export function WaterOverview({
           />
         </Card>
 
+        {/* Billing period — AMJASA bills bimonthly and prices EVERY m³ at the band the
+            period total reaches, so this, not the calendar month, is what decides cost. */}
+        {snapshot.period && (
+          <Card padded>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <span style={{ width: 34, height: 34, borderRadius: 10, display: 'grid', placeItems: 'center', background: 'var(--water-wash)', color: 'var(--water)', flex: 'none' }}>
+                <Icon name="receipt" size={17} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>This billing period</div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                  {fmtDay(snapshot.period.startIso)} – {fmtDay(snapshot.period.endIso)} · day {snapshot.period.daysElapsed} of {snapshot.period.daysTotal}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: wide ? 'repeat(3, 1fr)' : 'repeat(2, 1fr)', gap: 12 }}>
+              <Metric label="Used so far" value={`${snapshot.period.m3ToDate.toFixed(1)}`} unit="m³" />
+              <Metric label="On track for" value={`${snapshot.period.projectedM3.toFixed(0)}`} unit="m³" tone="water" />
+              <Metric label="Projected bill" value={`€${snapshot.period.projectedCostEur.toFixed(0)}`} unit="" />
+            </div>
+
+            <div style={{ marginTop: 12, paddingTop: 11, borderTop: '1px solid var(--border-1)' }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                Every m³ is billed at the band your period total reaches — currently{' '}
+                <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>
+                  €{snapshot.period.bandRateEurM3.toFixed(2)}/m³
+                </strong>
+                .
+              </div>
+              {snapshot.period.cliff.m3ToNextBandDown != null && snapshot.period.cliff.savingEur != null && (
+                <div
+                  style={{
+                    marginTop: 9,
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--solar-wash)',
+                    border: '1px solid var(--border-solar-soft)',
+                    fontSize: 12.5,
+                    color: 'var(--text-2)',
+                    lineHeight: 1.6,
+                  }}
+                >
+                  Use{' '}
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--solar)' }}>
+                    {snapshot.period.cliff.m3ToNextBandDown.toFixed(0)} m³
+                  </strong>{' '}
+                  less this period and the whole period re-prices a band lower — worth about{' '}
+                  <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--solar)' }}>
+                    €{snapshot.period.cliff.savingEur.toFixed(0)}
+                  </strong>
+                  , far more than those cubic metres cost on their own.
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
+
         {/* garden tonight */}
         <Card padded interactive onClick={onOpenIrrigation} style={{ cursor: 'pointer' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -199,6 +257,35 @@ export function WaterOverview({
             <div style={{ fontSize: 12.5, color: 'var(--text-2)' }}>Rain Bird isn't connected yet — open the Irrigation tab to set it up.</div>
           )}
         </Card>
+      </div>
+    </div>
+  );
+}
+
+/** "2026-07-01" -> "1 Jul" (Madrid dates come from the API already localised). */
+function fmtDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d} ${MON[m - 1]}`;
+}
+
+function Metric({ label, value, unit, tone }: { label: string; value: string; unit: string; tone?: 'water' }) {
+  return (
+    <div>
+      <div style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-3)' }}>{label}</div>
+      <div
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontVariantNumeric: 'tabular-nums',
+          fontSize: 21,
+          fontWeight: 600,
+          marginTop: 3,
+          color: tone === 'water' ? 'var(--water)' : 'var(--text-1)',
+        }}
+      >
+        {value}
+        {unit && <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 3 }}>{unit}</span>}
       </div>
     </div>
   );

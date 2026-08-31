@@ -157,11 +157,30 @@ export interface WaterTariffBlock {
  * bill's own 152 m³ because the two errors cancel there.
  */
 export interface WaterTariff {
+  /**
+   * Bumped when the SHIPPED tariff facts change (rates, bands, how bands apply) so a
+   * persisted older tariff is migrated rather than silently kept. Without this, the
+   * instance that already stored the flat placeholder would never pick up the real
+   * band table — the stored value always wins over a changed default.
+   */
+  rev?: number;
   /** Months per billing period (AMJASA: 2 — bimonthly). Standing charges are per period. */
   periodMonths: number;
   /** Supply standing charge per billing period, set by meter calibre. */
   supplyFixedEurPeriod: number;
-  /** Supply volumetric rate(s), progressive. A single open-ended entry = a flat rate. */
+  /**
+   * How the bands price consumption.
+   *
+   *  'all-at-last'  — EVERY m³ is billed at the rate of the band the total reaches.
+   *                   This is AMJASA's rule, stated verbatim in their tariff:
+   *                   "Se facturarán todos los m³ al mismo precio que el último m³
+   *                   consumido." It creates hard cliffs at each boundary.
+   *  'progressive'  — the usual utility model: each m³ billed at its own band's rate.
+   *
+   * Getting this wrong is not a rounding error. At 25 m³ the two differ by 195%.
+   */
+  blockMode: 'all-at-last' | 'progressive';
+  /** Consumption bands, ascending, final band open-ended (upToM3 null). */
   supplyBlocks: WaterTariffBlock[];
   /** EPSAR sanitation standing charge per billing period. */
   sanitationFixedEurPeriod: number;
@@ -170,6 +189,7 @@ export interface WaterTariff {
   /** IVA %, applied to the SUPPLY portion only — sanitation is exempt. */
   ivaPct: number;
 }
+
 
 /**
  * REAL AMJASA rates, from factura 3/1836657 (period JULIO–AGOSTO 2026, 152 m³,
@@ -186,21 +206,56 @@ export interface WaterTariff {
  * instalment of a deferred charge under Decreto Ley 19/2022 — a temporary
  * catch-up, not a recurring tariff.
  */
+/** Current shipped tariff revision — see WaterTariff.rev. */
+export const WATER_TARIFF_REV = 2;
+
 export function defaultWaterTariff(): WaterTariff {
   return {
+    rev: WATER_TARIFF_REV,
     periodMonths: 2,
-    supplyFixedEurPeriod: 27.34,
-    supplyBlocks: [{ upToM3: null, eurM3: 1.86 }],
+    supplyFixedEurPeriod: 27.34, // calibre "> 13 ≤ 15" mm
+    blockMode: 'all-at-last',
+    supplyBlocks: [
+      { upToM3: 10, eurM3: 0.15 },
+      { upToM3: 40, eurM3: 0.63 },
+      { upToM3: 70, eurM3: 1.37 },
+      { upToM3: null, eurM3: 1.86 },
+    ],
     sanitationFixedEurPeriod: 7.3,
     sanitationEurM3: 0.412,
     ivaPct: 10,
   };
 }
 
+
 /** Water section settings (docs/52): detector thresholds + tariff + per-zone manual
  *  flow-rate overrides (L/min) used until a zone's learned flow is trusted. */
+/**
+ * How much history to pull from Contazara, and how long to keep it. The API serves
+ * daily readings much further back than hourly ones, so these are separate knobs —
+ * `backfillDailyMonths` sets how far the year view and same-period-last-year comparison
+ * can reach, `backfillHourlyDays` how far the leak detectors can look back.
+ */
+export interface WaterHistoryConfig {
+  backfillDailyMonths: number;
+  backfillHourlyDays: number;
+  /** Raw hourly retention (days). Daily rows are kept forever. */
+  retainHourlyDays: number;
+}
+
+export function defaultWaterHistory(): WaterHistoryConfig {
+  return { backfillDailyMonths: 24, backfillHourlyDays: 90, retainHourlyDays: 400 };
+}
+
 export interface WaterState {
   thresholds: WaterThresholds;
+  /**
+   * A known meter-read date "YYYY-MM-DD" that starts a billing period. AMJASA reads on
+   * the 1st of odd months — factura 3/1836657 ran 01/05/2026 -> 01/07/2026 — so every
+   * period boundary can be stepped from here in `tariff.periodMonths` jumps.
+   */
+  billingAnchorDay: string;
+  history: WaterHistoryConfig;
   tariff: WaterTariff;
   /** zoneId -> manual L/min override (docs/52 "fall back to a manual per-zone L/min entry"). */
   zoneFlowOverrides: Record<string, number>;
@@ -210,6 +265,8 @@ export function defaultWaterState(): WaterState {
   return {
     thresholds: defaultWaterThresholds(),
     tariff: defaultWaterTariff(),
+    billingAnchorDay: '2026-07-01',
+    history: defaultWaterHistory(),
     zoneFlowOverrides: {},
   };
 }
@@ -2955,6 +3012,25 @@ function hydrate(raw: unknown): StoreSchema {
   };
 }
 
+function hydrateWaterHistory(p: Partial<WaterHistoryConfig> | undefined, base: WaterHistoryConfig): WaterHistoryConfig {
+  const h = p ?? ({} as Partial<WaterHistoryConfig>);
+  return {
+    backfillDailyMonths: clampNum(h.backfillDailyMonths, base.backfillDailyMonths, 1, 120),
+    backfillHourlyDays: clampNum(h.backfillHourlyDays, base.backfillHourlyDays, 1, 1000),
+    retainHourlyDays: clampNum(h.retainHourlyDays, base.retainHourlyDays, 7, 3650),
+  };
+}
+
+function hydrateZoneFlow(p: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (p && typeof p === 'object') {
+    for (const [id, v] of Object.entries(p as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[id] = v;
+    }
+  }
+  return out;
+}
+
 /** Coerce persisted water-section config, clamping thresholds/tariff to sane ranges. */
 function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): WaterState {
   if (!p || typeof p !== 'object') return structuredClone(base);
@@ -2968,6 +3044,35 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
     dailySpikeFactor: clampNum(t.dailySpikeFactor, base.thresholds.dailySpikeFactor, 1, 20),
     meterSilentHours: clampNum(t.meterSilentHours, base.thresholds.meterSilentHours, 1, 720),
   };
+  /* One-time migration. Revisions before 2 predate the discovery that AMJASA prices
+   * every m³ at the band the total reaches (their tariff: "Se facturarán todos los m³ al
+   * mismo precio que el último m³ consumido"); those installs stored a single flat band,
+   * which overcharges every volume below the top band. The band table and mode are
+   * published policy rather than user data — and the old UI never let anyone enter bands
+   * by hand — so replacing them is safe. Everything the owner CAN edit is preserved. */
+  const storedRev = typeof tar.rev === 'number' ? tar.rev : 0;
+  if (storedRev < WATER_TARIFF_REV) {
+    const migrated = defaultWaterTariff();
+    return {
+      thresholds,
+      billingAnchorDay:
+        typeof p.billingAnchorDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.billingAnchorDay)
+          ? p.billingAnchorDay
+          : base.billingAnchorDay,
+      history: hydrateWaterHistory(p.history, base.history),
+      tariff: {
+        ...migrated,
+        // Keep anything the owner may legitimately have tuned.
+        periodMonths: clampNum(tar.periodMonths, migrated.periodMonths, 1, 12),
+        supplyFixedEurPeriod: clampNum(tar.supplyFixedEurPeriod, migrated.supplyFixedEurPeriod, 0, 1000),
+        sanitationFixedEurPeriod: clampNum(tar.sanitationFixedEurPeriod, migrated.sanitationFixedEurPeriod, 0, 1000),
+        sanitationEurM3: clampNum(tar.sanitationEurM3, migrated.sanitationEurM3, 0, 100),
+        ivaPct: clampNum(tar.ivaPct, migrated.ivaPct, 0, 100),
+      },
+      zoneFlowOverrides: hydrateZoneFlow(p.zoneFlowOverrides),
+    };
+  }
+
   // Blocks must stay ordered and end open-ended, or costFor would silently stop
   // billing above the last bound. Anything malformed falls back to the default.
   let supplyBlocks = base.tariff.supplyBlocks;
@@ -2984,20 +3089,22 @@ function hydrateWater(p: Partial<WaterState> | undefined, base: WaterState): Wat
     supplyBlocks = [...bounded, open];
   }
   const tariff: WaterTariff = {
+    rev: WATER_TARIFF_REV,
     periodMonths: clampNum(tar.periodMonths, base.tariff.periodMonths, 1, 12),
+    blockMode: tar.blockMode === 'progressive' || tar.blockMode === 'all-at-last' ? tar.blockMode : base.tariff.blockMode,
     supplyFixedEurPeriod: clampNum(tar.supplyFixedEurPeriod, base.tariff.supplyFixedEurPeriod, 0, 1000),
     supplyBlocks,
     sanitationFixedEurPeriod: clampNum(tar.sanitationFixedEurPeriod, base.tariff.sanitationFixedEurPeriod, 0, 1000),
     sanitationEurM3: clampNum(tar.sanitationEurM3, base.tariff.sanitationEurM3, 0, 100),
     ivaPct: clampNum(tar.ivaPct, base.tariff.ivaPct, 0, 100),
   };
-  const zoneFlowOverrides: Record<string, number> = {};
-  if (p.zoneFlowOverrides && typeof p.zoneFlowOverrides === 'object') {
-    for (const [id, v] of Object.entries(p.zoneFlowOverrides)) {
-      if (typeof v === 'number' && Number.isFinite(v) && v > 0) zoneFlowOverrides[id] = v;
-    }
-  }
-  return { thresholds, tariff, zoneFlowOverrides };
+  const zoneFlowOverrides = hydrateZoneFlow(p.zoneFlowOverrides);
+  const history = hydrateWaterHistory(p.history, base.history);
+  const billingAnchorDay =
+    typeof p.billingAnchorDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.billingAnchorDay)
+      ? p.billingAnchorDay
+      : base.billingAnchorDay;
+  return { thresholds, tariff, billingAnchorDay, history, zoneFlowOverrides };
 }
 
 /** Coerce + migrate persisted irrigation state onto fresh defaults. Defensive: an on-disk
@@ -3883,4 +3990,9 @@ export function update<T = void>(mutator: (state: StoreSchema) => T): T {
 /** Test/diagnostic helper — drop the cache so the next get() re-reads disk. */
 export function _resetCache(): void {
   cache = null;
+}
+
+/** Test seam: exercise the persisted-water-config migration without touching disk. */
+export function hydrateWaterForTest(p: Partial<WaterState>): WaterState {
+  return hydrateWater(p, defaultWaterState());
 }

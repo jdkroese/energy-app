@@ -237,13 +237,34 @@ export interface VoltageHistoryResponse {
   breaker: { id: string; name: string } | null;
 }
 
+/** One day of the 5-day outlook attached to GET /api/weather/current. */
+export interface WeatherDay {
+  date: string;
+  tMaxC: number;
+  precipMm: number;
+  precipProbabilityPct: number;
+  sunshineHours: number;
+  humidityPct: number;
+  cloudPct: number;
+}
+
 /** GET /api/weather/current — cheap current-conditions read for the TopBar weather
- *  pill. Null fields mean the upstream fetch failed — fail soft, never show a fake
- *  reading. */
+ *  pill, plus a 5-day outlook for its hover/tap panel. Every field except `ts` and
+ *  `daily` is independently nullable — the upstream fetch can fail per-field, so
+ *  render fails soft field-by-field and never shows a fake reading. `daily` is `[]`
+ *  when the outlook fetch failed (current-conditions can still render alone). */
 export interface CurrentWeatherResponse {
   ts: string;
   temperatureC: number | null;
   windSpeedKmh: number | null;
+  apparentC: number | null;
+  humidityPct: number | null;
+  cloudPct: number | null;
+  precipMm: number | null;
+  isDay: boolean | null;
+  weatherCode: number | null;
+  /** Up to 5 days, oldest first. Empty when the outlook fetch failed. */
+  daily: WeatherDay[];
 }
 
 // ---- Circuit-breaker usage metering (docs/28) ------------------------------
@@ -2778,6 +2799,31 @@ export interface WaterActiveAlert {
   sinceIso: string;
 }
 
+/**
+ * AMJASA bills bimonthly and prices EVERY m³ at the band the period total reaches, so
+ * the billing period — not the calendar month — is the unit that decides what water
+ * costs. `cliff` is the actionable part: crossing a band boundary re-prices the whole
+ * period, so one m³ can cost tens of euros and shaving a few can save far more.
+ *
+ * Consumed by both the Water screen and the TopBar water pill.
+ */
+export interface WaterBillingPeriod {
+  startIso: string;
+  endIso: string;
+  months: number;
+  daysElapsed: number;
+  daysTotal: number;
+  m3ToDate: number;
+  projectedM3: number;
+  bandRateEurM3: number;
+  projectedCostEur: number;
+  cliff: {
+    m3ToNextBandDown: number | null;
+    savingEur: number | null;
+    nextM3CostEur: number;
+  };
+}
+
 export interface WaterResponse {
   ts: string;
   /** False until credentials are saved in Settings — the owner hasn't connected
@@ -2791,6 +2837,8 @@ export interface WaterResponse {
   month: WaterMonth;
   zones: WaterZoneAttribution[];
   activeAlerts: WaterActiveAlert[];
+  /** Current AMJASA billing period; null when the meter isn't configured. */
+  period: WaterBillingPeriod | null;
 }
 
 export type WaterHistoryRange = 'day' | 'week' | 'month' | 'year';
@@ -2872,7 +2920,12 @@ export interface WaterTariff {
   /** Months per billing period (AMJASA: 2). Standing charges are per period. */
   periodMonths: number;
   supplyFixedEurPeriod: number;
-  /** Progressive; a single open-ended entry means a flat rate. */
+  /**
+   * 'all-at-last' = every m³ billed at the band the total reaches (AMJASA's rule:
+   * "Se facturarán todos los m³ al mismo precio que el último m³ consumido").
+   * 'progressive' = each m³ at its own band's rate. At 25 m³ these differ by 195%.
+   */
+  blockMode: 'all-at-last' | 'progressive';
   supplyBlocks: WaterTariffBlock[];
   sanitationFixedEurPeriod: number;
   sanitationEurM3: number;
@@ -2890,6 +2943,25 @@ export interface WaterSettingsResponse {
   pollHours: number;
   thresholds: WaterThresholds;
   tariff: WaterTariff;
+  /** A known meter-read date that starts a billing period (AMJASA: 1st of odd months). */
+  billingAnchorDay: string;
+  history: WaterHistoryConfig;
+  backfill: WaterBackfillStatus;
+}
+
+export interface WaterHistoryConfig {
+  backfillDailyMonths: number;
+  backfillHourlyDays: number;
+  /** Raw hourly retention (days). Daily rows are kept forever. */
+  retainHourlyDays: number;
+}
+
+export interface WaterBackfillStatus {
+  dailyDone: boolean;
+  hourlyCursor: string | null;
+  oldestDay: string | null;
+  dailyRows: number;
+  hourlyRows: number;
 }
 
 /** PATCH-style save body — all fields optional, password omitted keeps the
@@ -2900,6 +2972,8 @@ export type WaterSettingsPatch = Partial<{
   serial: string;
   pollHours: number;
   thresholds: Partial<WaterThresholds>;
+  billingAnchorDay: string;
+  history: Partial<WaterHistoryConfig>;
   tariff: Partial<WaterTariff>;
 }>;
 

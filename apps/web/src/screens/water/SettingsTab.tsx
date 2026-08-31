@@ -36,44 +36,55 @@ function calcBill(t: WaterTariff, m3: number, months = 1) {
   const fixedShare = months / (t.periodMonths > 0 ? t.periodMonths : 1);
   const blocks = t.supplyBlocks?.length ? t.supplyBlocks : [{ upToM3: null, eurM3: 0 }];
 
+  const bandOf = (v: number) => blocks.find((b) => b.upToM3 === null || v <= b.upToM3) ?? blocks[blocks.length - 1];
+
   const parts: { label: string; m3: number; eur: number }[] = [];
-  let lower = 0;
-  let remaining = vol;
-  for (const b of blocks) {
-    if (remaining <= 0) break;
-    const span = b.upToM3 === null ? Infinity : Math.max(0, b.upToM3 - lower);
-    const take = Math.min(remaining, span);
-    if (take > 0) {
-      const label =
-        blocks.length === 1
-          ? 'Water consumed'
-          : b.upToM3 === null
-            ? `Water consumed (above ${lower} m³)`
-            : `Water consumed (${lower}–${b.upToM3} m³)`;
-      parts.push({ label, m3: take, eur: take * b.eurM3 });
-      remaining -= take;
+  if (vol > 0) {
+    if (t.blockMode === 'all-at-last') {
+      // AMJASA: every m³ at the price of the last m³ consumed.
+      const b = bandOf(vol);
+      parts.push({
+        label: b.upToM3 === null ? 'Water consumed — top band' : `Water consumed — ≤${b.upToM3} m³ band`,
+        m3: vol,
+        eur: vol * b.eurM3,
+      });
+    } else {
+      let lower = 0;
+      let remaining = vol;
+      for (const b of blocks) {
+        if (remaining <= 0) break;
+        const span = b.upToM3 === null ? Infinity : Math.max(0, b.upToM3 - lower);
+        const take = Math.min(remaining, span);
+        if (take > 0) {
+          parts.push({
+            label: b.upToM3 === null ? `Water consumed (above ${lower} m³)` : `Water consumed (${lower}–${b.upToM3} m³)`,
+            m3: take,
+            eur: take * b.eurM3,
+          });
+          remaining -= take;
+        }
+        if (b.upToM3 === null) break;
+        lower = b.upToM3;
+      }
     }
-    if (b.upToM3 === null) break;
-    lower = b.upToM3;
   }
 
   const supplyFixed = t.supplyFixedEurPeriod * fixedShare;
-  const supplyVolume = parts.reduce((a, x) => a + x.eur, 0);
-  const supplyBase = supplyFixed + supplyVolume;
+  const supplyBase = supplyFixed + parts.reduce((a, x) => a + x.eur, 0);
   const iva = supplyBase * (t.ivaPct / 100);
   const sanitationFixed = t.sanitationFixedEurPeriod * fixedShare;
   const sanitationVolume = vol * t.sanitationEurM3;
-  const sanitationBase = sanitationFixed + sanitationVolume;
 
   return {
     parts,
+    band: bandOf(vol),
     supplyFixed,
     supplyBase,
     iva,
     sanitationFixed,
     sanitationVolume,
-    sanitationBase,
-    total: supplyBase + iva + sanitationBase,
+    sanitationBase: sanitationFixed + sanitationVolume,
+    total: supplyBase + iva + sanitationFixed + sanitationVolume,
   };
 }
 
@@ -98,6 +109,7 @@ export function WaterSettingsTab({
     <div style={{ display: 'flex', flexDirection: 'column', gap: wide ? 16 : 14 }}>
       <ConnectionCard settings={s} isAdmin={isAdmin} onSaved={() => { refetch(); onSaved(); }} />
       <MeterCard snapshot={snapshot} />
+      <HistoryCard settings={s} isAdmin={isAdmin} onSaved={refetch} />
       <ThresholdsCard settings={s} isAdmin={isAdmin} onSaved={refetch} />
       <ChannelsCard isAdmin={isAdmin} />
       <TariffCard settings={s} isAdmin={isAdmin} monthM3={snapshot.month.m3} onSaved={refetch} />
@@ -377,11 +389,71 @@ function TariffCard({ settings, isAdmin, monthM3, onSaved }: { settings: WaterSe
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
         <Input label={`Water standing charge (€ / ${t.periodMonths} months)`} type="number" min={0} step={0.01} disabled={!isAdmin} value={t.supplyFixedEurPeriod} onChange={(e) => set({ supplyFixedEurPeriod: Number(e.target.value) })} />
-        <Input label="Water rate (€/m³)" type="number" min={0} step={0.001} disabled={!isAdmin} value={t.supplyBlocks[0]?.eurM3 ?? 0} onChange={(e) => set({ supplyBlocks: [{ upToM3: null, eurM3: Number(e.target.value) }] })} />
         <Input label={`EPSAR standing charge (€ / ${t.periodMonths} months)`} type="number" min={0} step={0.01} disabled={!isAdmin} value={t.sanitationFixedEurPeriod} onChange={(e) => set({ sanitationFixedEurPeriod: Number(e.target.value) })} />
         <Input label="EPSAR rate (€/m³)" type="number" min={0} step={0.001} disabled={!isAdmin} value={t.sanitationEurM3} onChange={(e) => set({ sanitationEurM3: Number(e.target.value) })} />
         <Input label="Billing period (months)" type="number" min={1} max={12} step={1} disabled={!isAdmin} value={t.periodMonths} onChange={(e) => set({ periodMonths: Number(e.target.value) })} />
         <Input label="IVA on water (%)" type="number" min={0} step={1} disabled={!isAdmin} value={t.ivaPct} onChange={(e) => set({ ivaPct: Number(e.target.value) })} />
+      </div>
+
+      {/* Consumption bands. AMJASA prices EVERY m³ at the band the total reaches, so
+          the boundaries are cliffs, not gentle steps — worth showing explicitly. */}
+      <div style={{ marginTop: 14 }}>
+        <Eyebrow>Consumption bands · per {t.periodMonths}-month period</Eyebrow>
+        <div style={{ fontSize: 11.5, color: 'var(--text-2)', margin: '6px 0 10px' }}>
+          {t.blockMode === 'all-at-last'
+            ? 'Every m³ is billed at the rate of the band your total reaches — so crossing a boundary re-prices the whole period.'
+            : 'Each m³ is billed at its own band’s rate.'}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {t.supplyBlocks.map((b, i) => {
+            const lower = i === 0 ? 0 : ((t.supplyBlocks[i - 1].upToM3 ?? 0) + 1);
+            const active = bill.band === b;
+            return (
+              <div
+                key={i}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 110px 110px',
+                  gap: 8,
+                  alignItems: 'center',
+                  padding: '7px 9px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: active ? 'var(--water-wash)' : 'transparent',
+                  border: `1px solid ${active ? 'var(--border-water)' : 'var(--border-1)'}`,
+                }}
+              >
+                <div style={{ fontSize: 12.5, color: active ? 'var(--water)' : 'var(--text-2)', fontWeight: active ? 600 : 400 }}>
+                  {b.upToM3 === null ? `Over ${lower - 1} m³` : `${lower}–${b.upToM3} m³`}
+                  {active && <span style={{ fontSize: 10.5, marginLeft: 7, opacity: 0.85 }}>you are here</span>}
+                </div>
+                <Input
+                  aria-label={`Band ${i + 1} upper bound in cubic metres`}
+                  type="number"
+                  min={0}
+                  disabled={!isAdmin || b.upToM3 === null}
+                  value={b.upToM3 ?? ''}
+                  placeholder="no limit"
+                  onChange={(e) => {
+                    const next = t.supplyBlocks.map((x, k) => (k === i ? { ...x, upToM3: Number(e.target.value) } : x));
+                    set({ supplyBlocks: next });
+                  }}
+                />
+                <Input
+                  aria-label={`Band ${i + 1} rate in euros per cubic metre`}
+                  type="number"
+                  min={0}
+                  step={0.001}
+                  disabled={!isAdmin}
+                  value={b.eurM3}
+                  onChange={(e) => {
+                    const next = t.supplyBlocks.map((x, k) => (k === i ? { ...x, eurM3: Number(e.target.value) } : x));
+                    set({ supplyBlocks: next });
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 10 }}>{err}</div>}
@@ -417,6 +489,121 @@ function BillRow({ label, value }: { label: string; value: number }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, color: 'var(--text-2)' }}>
       <span>{label}</span>
       <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{value.toFixed(2)}</span>
+    </div>
+  );
+}
+
+// ---- History & billing period --------------------------------------------
+
+/**
+ * How far back to import, how long to keep it, and where the billing period starts.
+ * The backfill is deliberately one-shot, so widening the window alone would never
+ * fetch the older data — hence the explicit re-import action.
+ */
+function HistoryCard({ settings, isAdmin, onSaved }: { settings: WaterSettingsResponse; isAdmin: boolean; onSaved: () => void }) {
+  const [h, setH] = useState(settings.history);
+  const [anchor, setAnchor] = useState(settings.billingAnchorDay);
+  const [busy, setBusy] = useState<'save' | 'reimport' | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setH(settings.history);
+    setAnchor(settings.billingAnchorDay);
+  }, [settings.history, settings.billingAnchorDay]);
+
+  const save = async () => {
+    setBusy('save');
+    setErr(null);
+    setMsg(null);
+    try {
+      await api.water.saveSettings({ history: h, billingAnchorDay: anchor });
+      setMsg('Saved');
+      onSaved();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reimport = async () => {
+    setBusy('reimport');
+    setErr(null);
+    setMsg(null);
+    try {
+      const r = await api.water.reimportHistory();
+      setMsg(r.detail);
+      onSaved();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const b = settings.backfill;
+
+  return (
+    <Card padded>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--water-wash)', color: 'var(--water)', flex: 'none' }}>
+          <Icon name="calendar-days" size={16} />
+        </span>
+        <div>
+          <div style={{ fontSize: 14.5, fontWeight: 600 }}>History &amp; billing period</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>how far back to import, and when a period starts</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11.5, color: 'var(--text-2)', margin: '10px 0 12px', lineHeight: 1.6 }}>
+        Contazara serves daily readings much further back than hourly ones, so these are separate.
+        Daily rows drive the year view and same-period-last-year; hourly rows are what the leak
+        detectors read.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <Input label="Import daily (months)" type="number" min={1} max={120} disabled={!isAdmin} value={h.backfillDailyMonths} onChange={(e) => setH((p) => ({ ...p, backfillDailyMonths: Number(e.target.value) }))} />
+        <Input label="Import hourly (days)" type="number" min={1} max={1000} disabled={!isAdmin} value={h.backfillHourlyDays} onChange={(e) => setH((p) => ({ ...p, backfillHourlyDays: Number(e.target.value) }))} />
+        <Input label="Keep hourly for (days)" type="number" min={7} max={3650} disabled={!isAdmin} value={h.retainHourlyDays} onChange={(e) => setH((p) => ({ ...p, retainHourlyDays: Number(e.target.value) }))} />
+        <Input label="Billing period starts" type="date" disabled={!isAdmin} value={anchor} onChange={(e) => setAnchor(e.target.value)} />
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.55 }}>
+        Any known meter-read date works — AMJASA reads on the 1st of odd months, and every
+        period boundary is stepped from here in {settings.tariff.periodMonths}-month jumps.
+      </div>
+
+      <div style={{ marginTop: 12, paddingTop: 11, borderTop: '1px solid var(--border-1)', display: 'flex', flexDirection: 'column', gap: 5 }}>
+        <DetailLine label="Daily readings stored" value={b.dailyRows > 0 ? `${b.dailyRows.toLocaleString()} days${b.oldestDay ? ` · back to ${b.oldestDay}` : ''}` : 'none yet'} />
+        <DetailLine label="Hourly readings stored" value={b.hourlyRows > 0 ? `${b.hourlyRows.toLocaleString()} hours` : 'none yet'} />
+        <DetailLine label="Initial import" value={b.dailyDone ? 'complete' : b.dailyRows > 0 ? 'in progress' : 'not started'} />
+      </div>
+
+      {err && <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 10 }}>{err}</div>}
+      {msg && <div style={{ fontSize: 11.5, color: 'var(--solar)', marginTop: 10 }}>{msg}</div>}
+
+      {isAdmin && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          <Button size="sm" variant="primary" loading={busy === 'save'} onClick={() => void save()}>Save</Button>
+          <Button size="sm" variant="secondary" loading={busy === 'reimport'} onClick={() => void reimport()}>Re-import history</Button>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8, lineHeight: 1.55 }}>
+        Re-importing fills gaps rather than replacing anything — existing readings are matched by
+        date and left alone. It runs in the background over the next few polls, paced to be polite
+        to Contazara.
+      </div>
+    </Card>
+  );
+}
+
+/** Label/value row used by the meter and history cards. */
+function DetailLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 12 }}>
+      <span style={{ color: 'var(--text-3)' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)', textAlign: 'right' }}>{value}</span>
     </div>
   );
 }

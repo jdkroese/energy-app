@@ -5,10 +5,11 @@
 import * as store from '../store';
 import * as contazara from '../connectors/contazara';
 import { contazaraConfig, type ContazaraConfig } from '../runtime-config';
-import { readHourly, readDaily, readWaterAttribution, readZoneFlow, lastPollStatus, pollNowForTest } from '../control/water-history';
+import { readHourly, readDaily, readWaterAttribution, readZoneFlow, lastPollStatus, pollNowForTest, resetBackfill, backfillStatus } from '../control/water-history';
 import { MIN_TRUSTED_SAMPLES } from '../control/water-attribution';
 import { projectMonthM3, activeWaterAlerts } from '../control/water-detectors';
-import { costFor } from '../control/water-tariff';
+import { costFor, bandFor, bandCliff } from '../control/water-tariff';
+import { billingPeriodFor, projectPeriodM3 } from '../control/water-billing';
 import { madridDayKey, madridLocalToEpochSec } from '../connectors/contazara';
 import type { WaterThresholds, WaterTariff } from '../store';
 
@@ -238,6 +239,34 @@ export async function getWater(): Promise<unknown> {
     };
   });
 
+  /* ---- Billing period (docs/52) --------------------------------------------
+   * AMJASA bills bimonthly and prices EVERY m³ at the band the period total reaches,
+   * so the calendar month is the wrong unit here: the band — and therefore the price of
+   * ALL the water — is decided across two months. Project it early enough to still act. */
+  const wcfg = store.get().water;
+  const bp = billingPeriodFor(now, wcfg.billingAnchorDay, wcfg.tariff.periodMonths);
+  const periodDaily = readDaily(bp.startDay, todayKey);
+  const periodL = periodDaily.reduce((sum, d) => sum + d.litres, 0);
+  const periodM3 = periodL / 1000;
+  const projectedPeriodM3 = projectPeriodM3(periodM3, bp);
+  const cliff = bandCliff(projectedPeriodM3, wcfg.tariff);
+  const period = {
+    startIso: bp.startDay,
+    endIso: bp.endDay,
+    months: bp.months,
+    daysElapsed: bp.daysElapsed,
+    daysTotal: bp.daysTotal,
+    m3ToDate: round3(periodM3),
+    projectedM3: projectedPeriodM3,
+    bandRateEurM3: bandFor(projectedPeriodM3, wcfg.tariff).block.eurM3,
+    projectedCostEur: costFor(projectedPeriodM3, wcfg.tariff, bp.months).totalEur,
+    cliff: {
+      m3ToNextBandDown: cliff.m3ToNextBandDown,
+      savingEur: cliff.savingEur,
+      nextM3CostEur: cliff.nextM3CostEur,
+    },
+  };
+
   return {
     ts: now.toISOString(),
     configured: true,
@@ -260,6 +289,7 @@ export async function getWater(): Promise<unknown> {
       hours,
     },
     quietHour,
+    period,
     month: {
       m3: round3(monthToDateL / 1000),
       householdM3: round3(monthSplit.householdL / 1000),
@@ -466,6 +496,9 @@ export function getWaterSettings(): unknown {
     ts: new Date().toISOString(),
     thresholds: w.thresholds,
     tariff: w.tariff,
+    billingAnchorDay: w.billingAnchorDay,
+    history: w.history,
+    backfill: backfillStatus(),
     hasPassword: Boolean(i?.password),
     email: i?.email?.trim() || '',
     serial: i?.serial?.trim() || '',
@@ -474,7 +507,12 @@ export function getWaterSettings(): unknown {
 }
 
 export function setWaterSettings(body: unknown): unknown {
-  const b = (body ?? {}) as { thresholds?: Partial<WaterThresholds>; tariff?: Partial<WaterTariff> };
+  const b = (body ?? {}) as {
+    thresholds?: Partial<WaterThresholds>;
+    tariff?: Partial<WaterTariff>;
+    billingAnchorDay?: string;
+    history?: Partial<store.WaterHistoryConfig>;
+  };
   const water = store.update((s) => {
     if (b.thresholds) {
       const th = b.thresholds;
@@ -490,6 +528,7 @@ export function setWaterSettings(body: unknown): unknown {
       const tf = b.tariff;
       const c = s.water.tariff;
       if (isNum(tf.periodMonths)) c.periodMonths = clamp(tf.periodMonths, 1, 12);
+      if (tf.blockMode === 'all-at-last' || tf.blockMode === 'progressive') c.blockMode = tf.blockMode;
       if (isNum(tf.supplyFixedEurPeriod)) c.supplyFixedEurPeriod = clamp(tf.supplyFixedEurPeriod, 0, 1000);
       if (isNum(tf.sanitationFixedEurPeriod)) c.sanitationFixedEurPeriod = clamp(tf.sanitationFixedEurPeriod, 0, 1000);
       if (isNum(tf.sanitationEurM3)) c.sanitationEurM3 = clamp(tf.sanitationEurM3, 0, 100);
@@ -510,6 +549,16 @@ export function setWaterSettings(body: unknown): unknown {
           c.supplyBlocks = [...withBound, open];
         }
       }
+    }
+    if (typeof b.billingAnchorDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.billingAnchorDay)) {
+      s.water.billingAnchorDay = b.billingAnchorDay;
+    }
+    if (b.history) {
+      const h = b.history;
+      const c = s.water.history;
+      if (isNum(h.backfillDailyMonths)) c.backfillDailyMonths = clamp(h.backfillDailyMonths, 1, 120);
+      if (isNum(h.backfillHourlyDays)) c.backfillHourlyDays = clamp(h.backfillHourlyDays, 1, 1000);
+      if (isNum(h.retainHourlyDays)) c.retainHourlyDays = clamp(h.retainHourlyDays, 7, 3650);
     }
     return s.water;
   });
@@ -574,4 +623,10 @@ export async function setContazara(raw?: unknown): Promise<unknown> {
   // the next scheduled cycle. Best-effort; never blocks the response.
   void pollNowForTest().catch((e) => console.error('[water] post-connect poll failed:', (e as Error).message));
   return { ok: true, detail: probe.detail };
+}
+
+/** POST /api/water/history/reimport — pull history again with the current window. */
+export function reimportWaterHistory(): unknown {
+  if (!contazaraConfig()) badInput('Connect the BI-WATER account first');
+  return resetBackfill();
 }

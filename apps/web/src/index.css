@@ -563,7 +563,9 @@ h1, h2, h3, h4, p {
    (pwr-shimmer), PlanTimeline draw/grow/pulse (pt-*), and the overlay
    fade/rise keyframes (vhFade/vhRise, ruleFade/ruleRise, mmFade/mmRise,
    installFade/installRise, setupFade, the shared Modal primitive's
-   pwrModalFade/pwrModalRise, and the shared PageTransition pwrPageEnter).
+   pwrModalFade/pwrModalRise, the shared PageTransition pwrPageEnter, and the
+   shared HoverPanel's mount fade (pwrHoverPanelIn, injected at runtime by
+   components/shell/HoverPanel.tsx).
    Functional spinners still resolve to a static state rather than looping. */
 @media (prefers-reduced-motion: reduce) {
   *,

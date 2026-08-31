@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { ScreenHeader } from '../components/ui';
 import { ThemeToggle } from '../components/shell/ThemeToggle';
+import { WaterPill } from '../components/shell/WaterPill';
 
 /**
  * Mobile screen header (eyebrow + h1), matching the *-mobile mockups.
@@ -11,6 +12,14 @@ import { ThemeToggle } from '../components/shell/ThemeToggle';
 export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; title: string; right?: ReactNode }) {
   // Integrate the theme-toggle PR's sun/moon control into the standardized
   // header (it sits just before the screen-supplied `right` slot, as before).
+  // Water pill added here (compact) so "always visible in the top section" is
+  // true on phones too, not just desktop — this is a global per-screen header,
+  // so it renders on every mobile screen. The weather pill stays desktop-only
+  // (TopBar): a phone-width header is already tight with title + per-screen
+  // `right` content (Avatar, badges, buttons on various screens) + this one
+  // new pill; adding a second trailing pill risked crowding/overflow on real
+  // 375px phones for no corresponding requirement (the brief only asked for
+  // water on mobile — weather's brief only touched the desktop TopBar).
   return (
     <ScreenHeader
       className="md:hidden"
@@ -19,6 +28,7 @@ export function MobileHeader({ eyebrow, title, right }: { eyebrow: ReactNode; ti
       right={
         <>
           <ThemeToggle />
+          <WaterPill compact />
           {right}
         </>
       }

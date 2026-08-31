@@ -1256,6 +1256,8 @@ export const api = {
     settings: () => getJSON<WaterSettingsResponse>("/api/water/settings"),
     saveSettings: (patch: WaterSettingsPatch) =>
       postJSON<WaterSettingsSaveResponse>("/api/water/settings", patch),
+    reimportHistory: () =>
+      postJSON<{ ok: boolean; detail: string }>('/api/water/history/reimport', {}),
   },
 };
 
