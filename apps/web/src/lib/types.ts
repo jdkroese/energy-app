@@ -237,13 +237,34 @@ export interface VoltageHistoryResponse {
   breaker: { id: string; name: string } | null;
 }
 
+/** One day of the 5-day outlook attached to GET /api/weather/current. */
+export interface WeatherDay {
+  date: string;
+  tMaxC: number;
+  precipMm: number;
+  precipProbabilityPct: number;
+  sunshineHours: number;
+  humidityPct: number;
+  cloudPct: number;
+}
+
 /** GET /api/weather/current — cheap current-conditions read for the TopBar weather
- *  pill. Null fields mean the upstream fetch failed — fail soft, never show a fake
- *  reading. */
+ *  pill, plus a 5-day outlook for its hover/tap panel. Every field except `ts` and
+ *  `daily` is independently nullable — the upstream fetch can fail per-field, so
+ *  render fails soft field-by-field and never shows a fake reading. `daily` is `[]`
+ *  when the outlook fetch failed (current-conditions can still render alone). */
 export interface CurrentWeatherResponse {
   ts: string;
   temperatureC: number | null;
   windSpeedKmh: number | null;
+  apparentC: number | null;
+  humidityPct: number | null;
+  cloudPct: number | null;
+  precipMm: number | null;
+  isDay: boolean | null;
+  weatherCode: number | null;
+  /** Up to 5 days, oldest first. Empty when the outlook fetch failed. */
+  daily: WeatherDay[];
 }
 
 // ---- Circuit-breaker usage metering (docs/28) ------------------------------
@@ -2778,6 +2799,19 @@ export interface WaterActiveAlert {
   sinceIso: string;
 }
 
+/** The current AMJASA billing period — the TopBar water pill's period line, plus
+ *  the "next band down" what-if the Water screen shows. `null` when not configured. */
+export interface WaterPeriod {
+  startIso: string;
+  endIso: string;
+  months: number;
+  m3ToDate: number;
+  projectedM3: number;
+  bandRateEurM3: number;
+  projectedCostEur: number;
+  cliff: { m3ToNextBandDown: number | null; savingEur: number | null; nextM3CostEur: number };
+}
+
 export interface WaterResponse {
   ts: string;
   /** False until credentials are saved in Settings — the owner hasn't connected
@@ -2791,6 +2825,8 @@ export interface WaterResponse {
   month: WaterMonth;
   zones: WaterZoneAttribution[];
   activeAlerts: WaterActiveAlert[];
+  /** Current billing period (docs/52 D5); null when not configured. */
+  period: WaterPeriod | null;
 }
 
 export type WaterHistoryRange = 'day' | 'week' | 'month' | 'year';
