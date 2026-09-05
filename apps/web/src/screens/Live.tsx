@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
 import { MOCK_LIVE, MOCK_HISTORY_DAY } from '../lib/mock';
@@ -7,14 +7,28 @@ import { Card, StatTile, Badge, Eyebrow, Icon } from '../components/ui';
 import { EnergyFlow, type FlowData, type FlowNode } from '../components/energy/EnergyFlow';
 import { DayChart } from '../components/energy/DayChart';
 import { VoltageHistoryOverlay } from '../components/energy/VoltageHistoryOverlay';
-import { TariffBand } from '../components/energy/TariffBand';
+import { VerdictHero, combinedSoc } from '../components/energy/VerdictHero';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { NotificationsWidget } from '../components/Notifications';
-import { usePlan, ControlGrid, PlanHero, PlanKpis, TodaysMoves } from '../components/energy/PlanSummary';
-import type { BrainPlanResponse } from '../lib/types';
+import { usePlan } from '../components/energy/PlanSummary';
+import { aggregateDay, bucketTime, eur, BAND_RATE, BAND_WORD } from '../lib/dayMetrics';
+import { useMediaQuery } from '../components/shell/useMediaQuery';
 import type { ShellContext } from '../components/shell/AppShell';
 
-const fmtKw = (kw: number) => (Math.abs(kw) >= 10 ? Math.abs(kw).toFixed(1) : Math.abs(kw).toFixed(1));
+/* ============================================================================
+ * Live (V2, docs/53) — "is the coordinator doing the right thing?", answered in
+ * the first second.
+ *
+ * Top to bottom: the VERDICT (what Autopilot is doing, why, how sure, and the
+ * next 24 h) · the live flow beside the day chart · six KPI tiles the day chart's
+ * scrub RETARGETS to any moment of the day · tariff + insight.
+ *
+ * Every number on the screen comes from ONE aggregate (lib/dayMetrics) so no two
+ * components can disagree — V1 computed self-sufficiency and "saved" two
+ * different ways on the same screen.
+ * ==========================================================================*/
+
+const fmtKw = (kw: number) => Math.abs(kw).toFixed(1);
 
 /**
  * Battery node for the live-flow diagram. The HERO readout is the live flow
@@ -33,7 +47,6 @@ function toFlow(d: LiveResponse): FlowData {
       // Show the true per-source split (2× Sungrow + Tesla) as inverter nodes
       // feeding the combined Solar node — whenever the backend sends real, named
       // arrays (the API now keeps the names at night too, with `est` values).
-      // The legacy single-letter A/B proxy stays on the compact layout.
       const named =
         d.solar.arrays && d.solar.arrays.length >= 2 && d.solar.arrays.every((a) => a.name.length > 1)
           ? d.solar.arrays
@@ -51,15 +64,17 @@ function toFlow(d: LiveResponse): FlowData {
     tesla: batteryNode('Tesla', d.tesla),
     // Grid + Home read from the TESLA GATEWAY meter — a separate metering domain
     // from Sonnen/Sungrow (which meter themselves), so the five flows around the
-    // hub don't always sum: the Tesla meter can't see the Sonnen/Sungrow side.
-    // The grid sub + the caption under the diagram make that explicit.
-    grid: { name: 'Grid', val: fmtKw(d.grid.kw), unit: 'kW', sub: (d.grid.dir === 'exporting' ? 'Export' : d.grid.dir === 'importing' ? 'Import' : 'Idle') + ' · Tesla meter', kw: d.grid.kw, dir: d.grid.dir },
+    // hub don't always sum. The caption under the diagram makes that explicit.
+    grid: {
+      name: 'Grid',
+      val: fmtKw(d.grid.kw),
+      unit: 'kW',
+      sub: `${d.grid.dir === 'exporting' ? 'Export' : d.grid.dir === 'importing' ? 'Import' : 'Idle'} · Tesla meter`,
+      kw: d.grid.kw,
+      dir: d.grid.dir,
+    },
     home: { name: 'Home', val: fmtKw(d.home.kw), unit: 'kW', sub: 'Load', kw: d.home.kw },
   };
-}
-
-function bandLabel(b: string) {
-  return b === 'P1' ? 'peak' : b === 'P2' ? 'shoulder' : 'off-peak';
 }
 
 /**
@@ -70,18 +85,19 @@ function bandLabel(b: string) {
  */
 function MeterDomainsNote() {
   return (
-    <div
-      style={{
-        marginTop: 6,
-        textAlign: 'center',
-        fontFamily: 'var(--font-mono)',
-        fontSize: 10,
-        lineHeight: 1.5,
-        color: 'var(--text-3)',
-      }}
-    >
+    <div style={{ marginTop: 6, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, lineHeight: 1.5, color: 'var(--text-3)' }}>
       Grid &amp; Home · Tesla gateway meter&ensp;—&ensp;Sonnen &amp; inverters metered separately
     </div>
+  );
+}
+
+/** A 5 px breathing dot — the honest "this is live" signal on a card head. */
+function LiveBadge() {
+  return (
+    <Badge tone="solar" variant="soft">
+      <i style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--solar)', animation: 'v2breathe 2.2s var(--ease-in-out) infinite' }} />
+      Live
+    </Badge>
   );
 }
 
@@ -89,41 +105,22 @@ function MeterDomainsNote() {
  * Live grid voltage KPI — reads `live.breaker` (a monitored Tuya breaker, category `tdq`)
  * for voltage (V, primary) + current (A) + power (W) in the footnote. Empty-states to "—"
  * when no breaker exposes cur_voltage. The value turns danger-toned when voltage leaves the
- * configured band (polled separately; defaults 190–240 V). Rendered in BOTH viewports.
+ * configured band (polled separately; defaults 190–240 V).
  */
-function GridVoltageStat({ live, size = 'md', wide = false }: { live: LiveResponse; size?: 'sm' | 'md'; wide?: boolean }) {
-  // Band rarely changes — a slow poll is enough; falls back to the 190–240 V default.
+function GridVoltageStat({ live, wide = false }: { live: LiveResponse; wide?: boolean }) {
   const { data } = usePolling<{ voltageMonitor: VoltageMonitor }>(api.voltageMonitor, 60_000);
   const band = data?.voltageMonitor ?? { enabled: true, minV: 190, maxV: 240 };
   const b = live.breaker;
   const [showHistory, setShowHistory] = useState(false);
 
-  // No configured breaker: a neutral, NON-clickable placeholder (no history to show).
   if (!b) {
-    return (
-      <StatTile
-        size={size}
-        label="Grid voltage"
-        value="—"
-        tone="grid"
-        icon={<Icon name="zap" />}
-        footnote="no breaker configured"
-      />
-    );
+    return <StatTile size="sm" label="Grid voltage" value="—" tone="grid" footnote="no breaker configured" />;
   }
 
-  // A configured breaker that momentarily lacks a reading (0 V): show "—" but still
-  // let the user open the 48h history (earlier readings may be recorded).
   const noLive = b.voltageV <= 0;
   const outOfBand = !noLive && (b.voltageV < band.minV || b.voltageV > band.maxV);
-  const value = noLive ? (
-    '—'
-  ) : outOfBand ? (
-    <span style={{ color: 'var(--danger)' }}>{b.voltageV}</span>
-  ) : (
-    b.voltageV
-  );
-  const detail = `${b.currentA.toFixed(1)} A · ${b.powerW} W`;
+  const value = noLive ? '—' : outOfBand ? <span style={{ color: 'var(--danger)' }}>{b.voltageV}</span> : b.voltageV;
+  const detail = `${b.currentA.toFixed(1)} A`;
   const footnote = noLive
     ? `band ${band.minV}–${band.maxV} V`
     : outOfBand
@@ -137,19 +134,9 @@ function GridVoltageStat({ live, size = 'md', wide = false }: { live: LiveRespon
         onClick={() => setShowHistory(true)}
         aria-label="Show 48-hour voltage history"
         title="Show 48-hour voltage history"
-        style={{
-          all: 'unset',
-          position: 'relative',
-          display: 'block',
-          width: '100%',
-          boxSizing: 'border-box',
-          cursor: 'pointer',
-          borderRadius: 'var(--radius-lg)',
-          textAlign: 'left',
-        }}
         className="pwr-voltage-tile"
+        style={{ all: 'unset', position: 'relative', display: 'block', width: '100%', boxSizing: 'border-box', cursor: 'pointer', borderRadius: 'var(--radius-lg)', textAlign: 'left' }}
       >
-        {/* subtle "view history" affordance, top-right of the tile */}
         <span
           aria-hidden
           className="pwr-voltage-tile__chart"
@@ -157,15 +144,7 @@ function GridVoltageStat({ live, size = 'md', wide = false }: { live: LiveRespon
         >
           <Icon name="activity" size={14} />
         </span>
-        <StatTile
-          size={size}
-          label="Grid voltage"
-          value={value}
-          unit="V"
-          tone="grid"
-          icon={<Icon name="zap" />}
-          footnote={footnote}
-        />
+        <StatTile size="sm" label="Grid voltage" value={value} unit="V" tone="grid" footnote={footnote} />
       </button>
       {showHistory && <VoltageHistoryOverlay wide={wide} onClose={() => setShowHistory(false)} />}
     </>
@@ -173,335 +152,237 @@ function GridVoltageStat({ live, size = 'md', wide = false }: { live: LiveRespon
 }
 
 interface Insight {
-  tone: 'solar' | 'battery' | 'grid';
+  tone: 'solar' | 'grid' | 'home';
   icon: string;
   title: string;
-  body: ReactNode;
+  body: string;
 }
 
-const HEADROOM = 96; // SoC% below which a battery still has capacity to store
-
-/** Compute the "Why this matters" insight from the live snapshot. */
-function deriveInsight(d: LiveResponse): Insight {
-  const { grid, sonnen, tesla, tariff } = d;
-  const exporting = grid.dir === 'exporting' && grid.kw > 0.1;
-  const hasHeadroom = sonnen.soc < HEADROOM || tesla.soc < HEADROOM;
-  const bothFull = sonnen.soc >= HEADROOM && tesla.soc >= HEADROOM;
-  const discharging = sonnen.dir === 'discharging' || tesla.dir === 'discharging';
-  const exportEur = tariff.band === 'P1' ? 0.029 : 0.003;
-
-  // 1) Discharging during the P1 peak — covering the peak from batteries.
-  if (tariff.band === 'P1' && discharging) {
+/** Three variants, chosen from the LIVE state — same gate as the verdict. */
+function deriveInsight(d: LiveResponse, selfPct: number): Insight {
+  const grid = d.grid.dir === 'importing' ? d.grid.kw : d.grid.dir === 'exporting' ? -d.grid.kw : 0;
+  const discharging = d.sonnen.dir === 'discharging' || d.tesla.dir === 'discharging';
+  const soc = combinedSoc(d);
+  if (grid < -0.2 && soc < 96)
     return {
-      tone: 'battery',
-      icon: 'battery-charging',
-      title: 'Covering the peak',
-      body: (
-        <>
-          Running the house from the batteries through the{' '}
-          <span style={{ color: 'var(--grid)' }}>P1 peak</span> — near{' '}
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--solar)' }}>€0</span> grid import at €
-          {tariff.rateEur.toFixed(3)}/kWh.
-        </>
-      ),
-    };
-  }
-
-  // 2) Exporting while there's still headroom to store it.
-  if (exporting && hasHeadroom) {
-    return {
-      tone: 'solar',
+      tone: 'grid',
       icon: 'upload',
       title: 'Surplus going cheap',
-      body: (
-        <>
-          Exporting{' '}
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{grid.kw.toFixed(1)} kW</span> at ≈€
-          {exportEur.toFixed(3)} — there's still capacity to store it instead.
-        </>
-      ),
+      body: `Exporting ${Math.abs(grid).toFixed(1)} kW at ≈€0.003 while there is still ${Math.max(0, 100 - soc)}% of headroom in the packs.`,
     };
-  }
-
-  // 3) Both full and a P1 peak is near — nothing reserved.
-  if (bothFull && tariff.nextBand === 'P1') {
-    const h = Math.floor(tariff.minsToNext / 60);
-    const m = tariff.minsToNext % 60;
-    const when = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  if (discharging)
     return {
-      tone: 'grid',
-      icon: 'triangle-alert',
-      title: 'Both full · peak ahead',
-      body: (
-        <>
-          Both batteries full and the <span style={{ color: 'var(--grid)' }}>P1 peak</span> lands in{' '}
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{when}</span> — nothing held back yet.
-        </>
-      ),
+      tone: 'home',
+      icon: 'battery-charging',
+      title: 'Covering the peak',
+      body: `Running the house from the batteries through the ${d.tariff.band} band — near €0 grid import at €${d.tariff.rateEur.toFixed(3)}/kWh.`,
     };
-  }
-
-  // 4) Both full, exporting (no peak imminent).
-  if (bothFull && exporting) {
-    return {
-      tone: 'grid',
-      icon: 'upload',
-      title: 'Nowhere left to store',
-      body: (
-        <>
-          Both batteries full · exporting{' '}
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--grid)' }}>{grid.kw.toFixed(1)} kW</span> at ≈€
-          {exportEur.toFixed(3)}/kWh — banked sun has nowhere to go.
-        </>
-      ),
-    };
-  }
-
-  // 5) Neutral — self-sufficiency framing.
   return {
-    tone: 'battery',
+    tone: 'solar',
     icon: 'leaf',
     title: 'Running on your own power',
-    body: (
-      <>
-        Solar and storage are covering the house ·{' '}
-        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{d.today.selfSufficiencyPct}%</span>{' '}
-        self-sufficient today on the {tariff.band} band.
-      </>
-    ),
+    body: `Solar and storage are covering the house · ${selfPct}% self-sufficient so far today on the ${d.tariff.band} band.`,
   };
 }
 
-/**
- * Day-chart card: owns the day-offset state, fetches /api/history/day for the
- * current offset, and paginates with the prev/next arrows. Falls back to mock
- * data when the API isn't reachable so the chart always renders.
- */
-function DayChartCard({ height, subtitle }: { height: number; subtitle: string }) {
-  const [offset, setOffset] = useState(0);
-  const fetcher = useCallback(() => api.historyDay(offset), [offset]);
-  const { data, loading } = usePolling<HistoryDayResponse>(
-    fetcher,
-    offset === 0 ? 60_000 : 0,
-    [offset],
-  );
-  const day = data ?? MOCK_HISTORY_DAY;
+function InsightCard({ live, selfPct, pad }: { live: LiveResponse; selfPct: number; pad: number }) {
+  const ins = deriveInsight(live, selfPct);
   return (
-    <Card title="Production & consumption" subtitle={subtitle} icon={<Icon name="activity" />}>
-      <DayChart
-        day={day}
-        height={height}
-        loading={loading}
-        onPrev={() => day.hasPrev && setOffset((o) => o - 1)}
-        onNext={() => day.hasNext && setOffset((o) => o + 1)}
-      />
+    <Card accent={ins.tone} padded={false} style={{ padding: pad, display: 'flex', flexDirection: 'column', gap: 9 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <span style={{ width: 30, height: 30, borderRadius: 'var(--radius-lg)', display: 'grid', placeItems: 'center', background: `var(--${ins.tone}-wash)`, color: `var(--${ins.tone})` }}>
+          <Icon name={ins.icon} size={17} />
+        </span>
+        <Eyebrow>Why this matters</Eyebrow>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 600 }}>{ins.title}</div>
+      <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.55, textWrap: 'pretty' }}>{ins.body}</div>
+      <div style={{ marginTop: 'auto', paddingTop: 6, fontSize: 12, color: 'var(--text-3)' }}>
+        Advisory — the coordinator plans, holds capacity for the evening.
+      </div>
     </Card>
+  );
+}
+
+/** Tariff card — the band now, the day's shape, and what the evening block is worth. */
+function TariffCard({ live, tariff24, pad }: { live: LiveResponse; tariff24: number[]; pad: number }) {
+  const t = live.tariff;
+  const hour = new Date(live.ts).getHours();
+  const bandColor = t.band === 'P1' ? 'var(--band-p1)' : t.band === 'P3' ? 'var(--band-p3)' : 'var(--text-1)';
+  const cells = ['var(--band-p3)', 'var(--band-p2)', 'var(--band-p1)'];
+  const ratio = (BAND_RATE.P1 / BAND_RATE.P3).toFixed(1);
+  const delta = (BAND_RATE.P1 - BAND_RATE.P3).toFixed(3);
+  return (
+    <Card padded={false} style={{ padding: pad, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+        <Eyebrow>Tariff · 2.0TD</Eyebrow>
+        <span className="pwr-mono" style={{ fontSize: 12, color: 'var(--grid)' }}>
+          Next · {t.nextBand} in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 9 }}>
+        <span className="pwr-mono" style={{ fontSize: 30, fontWeight: 600, color: bandColor }}>{t.band}</span>
+        <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
+          {BAND_WORD[t.band]} · <span className="pwr-mono" style={{ color: 'var(--text-1)' }}>€{t.rateEur.toFixed(3)}</span>/kWh
+        </span>
+      </div>
+      <div style={{ display: 'flex', height: 12, gap: 2, borderRadius: 'var(--radius-sm)', overflow: 'hidden' }} aria-hidden>
+        {Array.from({ length: 24 }).map((_, h) => {
+          const b = tariff24[h] ?? 0;
+          const cur = hour === h;
+          return (
+            <i
+              key={h}
+              style={{ flex: 1, background: cells[b], opacity: cur ? 1 : 0.42, color: cells[b], boxShadow: cur ? '0 0 10px currentColor' : 'none', borderRadius: 2 }}
+            />
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-3)', flexWrap: 'wrap' }}>
+        {(['P1 peak', 'P2 shoulder', 'P3 off-peak'] as const).map((l, i) => (
+          <span key={l} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <i style={{ width: 8, height: 8, borderRadius: 2, background: cells[2 - i] }} />
+            {l}
+          </span>
+        ))}
+      </div>
+      <div style={{ marginTop: 'auto', paddingTop: 8, fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5, textWrap: 'pretty' }}>
+        The evening P1 block is {ratio}× the off-peak rate. Every kWh the batteries cover between 18:00 and 22:00 is
+        worth €{delta} more than one covered in the P3 valley.
+      </div>
+    </Card>
+  );
+}
+
+/** The six actuals tiles — all six read the same aggregate, retargeted by the scrub. */
+function KpiRow({ live, day, scrub, cols, gap, pad }: {
+  live: LiveResponse;
+  day: HistoryDayResponse;
+  scrub: number | null;
+  cols: number;
+  gap: number;
+  pad: number;
+}) {
+  const agg = useMemo(() => aggregateDay(day, scrub ?? undefined), [day, scrub]);
+  const when = scrub == null ? 'today' : `by ${bucketTime(scrub)}`;
+  const tiles: { label: string; value: ReactNode; unit?: string; foot: string; tone: 'solar' | 'home' | 'grid' | 'battery' }[] = [
+    { label: 'Produced', value: agg.producedKwh.toFixed(1), unit: 'kWh', foot: when, tone: 'solar' },
+    { label: 'Consumed', value: agg.consumedKwh.toFixed(1), unit: 'kWh', foot: when, tone: 'home' },
+    { label: 'Exported', value: agg.exportedKwh.toFixed(1), unit: 'kWh', foot: 'to grid', tone: 'grid' },
+    { label: 'Self-sufficiency', value: String(agg.selfSufficiencyPct), unit: '%', foot: 'load met without the grid', tone: 'battery' },
+    { label: 'Saved', value: eur(agg.savedEur), foot: 'vs grid-only', tone: 'solar' },
+  ];
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))`, gap, animation: 'v2rise .5s var(--ease-out) .18s' }}>
+      {tiles.map((t) => (
+        <Card key={t.label} interactive padded={false} style={{ padding: pad }}>
+          <StatTile size="sm" label={t.label} value={t.value} unit={t.unit} tone={t.tone} footnote={t.foot} />
+        </Card>
+      ))}
+      <Card interactive padded={false} style={{ padding: pad }}>
+        <GridVoltageStat live={live} wide={cols > 2} />
+      </Card>
+    </div>
   );
 }
 
 export function Live({ ctx }: { ctx: ShellContext }) {
   const { data, loading, stale, updatedAt } = usePolling<LiveResponse>(api.live, 10_000);
+  const { data: dayData } = usePolling<HistoryDayResponse>(api.historyDayToday, 60_000);
   const { plan } = usePlan();
-  const d = data || (loading ? null : MOCK_LIVE);
-  const live = d || MOCK_LIVE;
-  const flow = toFlow(live);
-  const t = live.tariff;
-  const hour = new Date(live.ts).getHours();
+  // The 1180 px breakpoint below which the two-column rows collapse to one and
+  // the KPI row goes 6 → 3.
+  const roomy = useMediaQuery('(min-width: 1180px)');
 
-  if (ctx.desktop) return <LiveDesktop live={live} flow={flow} plan={plan} stale={stale} />;
+  // Scrubbing the day chart retargets the KPI row — cause and effect across two
+  // components, which is the whole point of the interaction. The screen owns it.
+  const [scrub, setScrub] = useState<number | null>(null);
+
+  const live = data || (loading ? null : MOCK_LIVE) || MOCK_LIVE;
+  const day = dayData ?? MOCK_HISTORY_DAY;
+  const flow = toFlow(live);
+  const agg = useMemo(() => aggregateDay(day), [day]);
+  const wide = ctx.desktop;
+
+  const gap = !wide ? 12 : roomy ? 18 : 16;
+  const cardPad = !wide ? 16 : roomy ? 20 : 18;
+  const tilePad = !wide ? 13 : roomy ? 16 : 15;
+  const kpiCols = !wide ? 2 : roomy ? 6 : 3;
+  const kpiGap = !wide ? 10 : roomy ? 14 : 12;
+  const chartH = !wide ? 190 : roomy ? 300 : 240;
+  const oneCol = !wide || !roomy;
+  const chartSub = `today · 15-min · measured to ${day.nowIndex != null ? bucketTime(day.nowIndex) : '—'}, forecast after`;
+
+  const body = (
+    <>
+      {stale && <StaleBanner updatedAt={updatedAt} />}
+
+      <VerdictHero live={live} plan={plan} agg={agg} wide={wide} roomy={wide && roomy} />
+
+      {/* flow + day chart */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: oneCol ? '1fr' : 'minmax(0,2fr) minmax(0,3fr)',
+          gap,
+          alignItems: 'stretch',
+        }}
+      >
+        <Card
+          accent="solar"
+          title="Live energy flow"
+          subtitle="Tesla gateway + Sonnen · 10 s"
+          actions={<LiveBadge />}
+          style={{ display: 'flex', flexDirection: 'column', animation: 'v2rise .5s var(--ease-out) .06s' }}
+        >
+          <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+            <EnergyFlow flow={flow} size={wide ? 'lg' : 'sm'} />
+          </div>
+          <MeterDomainsNote />
+        </Card>
+
+        <Card
+          title="The day, measured and forecast"
+          subtitle={chartSub}
+          actions={
+            <div style={{ display: 'flex', gap: 13, fontSize: 11.5, color: 'var(--text-2)' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <i style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--series-production)' }} />Solar
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <i style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--series-consumption)' }} />Load
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <i style={{ width: 9, height: 2, borderRadius: 2, background: 'var(--series-soc-combined)' }} />SoC
+              </span>
+            </div>
+          }
+          style={{ display: 'flex', flexDirection: 'column', animation: 'v2rise .5s var(--ease-out) .12s' }}
+        >
+          <DayChart day={day} height={chartH} scrub={scrub} onScrub={setScrub} />
+        </Card>
+      </div>
+
+      <KpiRow live={live} day={day} scrub={scrub} cols={kpiCols} gap={kpiGap} pad={tilePad} />
+
+      {/* tariff + insight */}
+      <div style={{ display: 'grid', gridTemplateColumns: oneCol ? '1fr' : '1fr 1fr', gap, animation: 'v2rise .5s var(--ease-out) .24s' }}>
+        <TariffCard live={live} tariff24={plan.tariff} pad={cardPad} />
+        <InsightCard live={live} selfPct={agg.selfSufficiencyPct} pad={cardPad} />
+      </div>
+
+      <NotificationsWidget />
+    </>
+  );
+
+  if (wide) {
+    return <div style={{ display: 'flex', flexDirection: 'column', gap }}>{body}</div>;
+  }
 
   return (
     <>
-      <MobileHeader eyebrow="Live · Jávea · 26° sunny" title="Your home" right={<Avatar />} />
-      {stale && <StaleBanner updatedAt={updatedAt} />}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 14px 22px' }}>
-        {/* 24 h plan — lead */}
-        <PlanHero plan={plan} wide={false} />
-
-        {/* live flow */}
-        <Card accent="solar" glow style={{ padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-            <Eyebrow>Live flow</Eyebrow>
-            <Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>
-              Live
-            </Badge>
-          </div>
-          <EnergyFlow flow={flow} />
-          <MeterDomainsNote />
-        </Card>
-
-        {/* forecast — production & consumption (measured + forecast) */}
-        <DayChartCard height={190} subtitle="today · 5-min · measured + forecast · kW left · SoC % right" />
-
-        {/* today totals */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} />
-          </Card>
-          <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Consumed" value={live.today.consumedKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="plug" />} />
-          </Card>
-          <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Grid feed-in" value={live.today.gridFeedInKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="upload" />} />
-          </Card>
-          <Card style={{ padding: 14 }}>
-            <StatTile size="sm" label="Self-sufficiency" value={String(live.today.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} />
-          </Card>
-          <div style={{ gridColumn: 'span 2' }}>
-            <Card glow accent="solar" style={{ padding: 14 }}>
-              <StatTile size="sm" label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
-            </Card>
-          </div>
-          <div style={{ gridColumn: 'span 2' }}>
-            <Card accent="grid" style={{ padding: 14 }}>
-              <GridVoltageStat live={live} size="sm" />
-            </Card>
-          </div>
-        </div>
-
-        {/* forecast KPIs */}
-        <PlanKpis plan={plan} wide={false} />
-
-        {/* autopilot state + today's moves */}
-        <ControlGrid plan={plan} />
-        <TodaysMoves plan={plan} />
-
-        {/* tariff */}
-        <Card style={{ padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Eyebrow>Tariff · 2.0TD</Eyebrow>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--grid)' }}>
-              Next · {t.nextBand} in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 26, fontWeight: 600 }}>{t.band}</span>
-            <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
-              {bandLabel(t.band)} · <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{t.rateEur.toFixed(3)}</span>/kWh
-            </span>
-          </div>
-          <TariffBand current={hour} />
-        </Card>
-
-        {/* insight */}
-        {(() => {
-          const ins = deriveInsight(live);
-          return (
-            <Card accent={ins.tone} style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                <span style={{ width: 28, height: 28, borderRadius: 8, display: 'grid', placeItems: 'center', background: `var(--${ins.tone}-wash)`, color: `var(--${ins.tone})` }}>
-                  <Icon name={ins.icon} size={16} />
-                </span>
-                <Eyebrow>Why this matters</Eyebrow>
-              </div>
-              <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.5 }}>{ins.body}</div>
-            </Card>
-          );
-        })()}
-
-        {/* notifications — moved down */}
-        <NotificationsWidget />
-      </div>
+      <MobileHeader eyebrow="Live overview" title="Your home, right now" right={<Avatar />} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap, padding: '8px 14px 22px' }}>{body}</div>
     </>
-  );
-}
-
-function LiveDesktop({ live, flow, plan, stale }: { live: LiveResponse; flow: FlowData; plan: BrainPlanResponse; stale: boolean }) {
-  const t = live.tariff;
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {stale && <StaleBanner updatedAt={null} />}
-
-      {/* 24 h plan — lead */}
-      <PlanHero plan={plan} wide />
-
-      {/* live energy flow (40%) · forecast — production & consumption (60%) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)', gap: 20, alignItems: 'stretch' }}>
-        <Card
-          title="Live energy flow"
-          subtitle="Updated just now"
-          accent="solar"
-          icon={<Icon name="zap" />}
-          actions={<Badge tone="solar" variant="soft" icon={<Icon name="radio" size={12} />}>Live</Badge>}
-          style={{ display: 'flex', flexDirection: 'column' }}
-        >
-          <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-            <EnergyFlow flow={flow} size="lg" />
-          </div>
-          <MeterDomainsNote />
-        </Card>
-        <DayChartCard height={300} subtitle="today · 5-min · measured + forecast · kW left · SoC % right" />
-      </div>
-
-      {/* today's actuals — 6 KPI tiles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 14 }}>
-        <Card>
-          <StatTile label="Produced today" value={live.today.producedKwh.toFixed(1)} unit="kWh" tone="solar" icon={<Icon name="sun" />} footnote="today" />
-        </Card>
-        <Card>
-          <StatTile label="Consumed today" value={live.today.consumedKwh.toFixed(1)} unit="kWh" tone="home" icon={<Icon name="plug" />} footnote="today" />
-        </Card>
-        <Card>
-          <StatTile label="Grid feed-in" value={live.today.gridFeedInKwh.toFixed(1)} unit="kWh" tone="grid" icon={<Icon name="upload" />} footnote="exported today" />
-        </Card>
-        <Card>
-          <StatTile label="Self-sufficiency" value={String(live.today.selfSufficiencyPct)} unit="%" tone="battery" icon={<Icon name="leaf" />} footnote="solar + stored" />
-        </Card>
-        <Card>
-          <StatTile label="Saved today" value={`€${live.today.savedEur.toFixed(2)}`} tone="solar" icon={<Icon name="piggy-bank" />} footnote="vs grid-only" />
-        </Card>
-        {/* Live grid voltage/current/power (#77) */}
-        <Card>
-          <GridVoltageStat live={live} wide />
-        </Card>
-      </div>
-
-      {/* forecast KPIs */}
-      <PlanKpis plan={plan} wide />
-
-      {/* autopilot state + today's moves */}
-      <ControlGrid plan={plan} />
-      <TodaysMoves plan={plan} />
-
-      {/* Tariff + Insight */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        <Card style={{ display: 'flex', flexDirection: 'column' }}>
-          <Eyebrow>Tariff · 2.0TD</Eyebrow>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 600 }}>{t.band}</span>
-            <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
-              {bandLabel(t.band)} · <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>€{t.rateEur.toFixed(3)}</span>/kWh
-            </span>
-          </div>
-          <TariffBand current={new Date(live.ts).getHours()} height={10} />
-          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--grid)', fontFamily: 'var(--font-mono)' }}>
-            Next · {t.nextBand} in {Math.floor(t.minsToNext / 60)}h {t.minsToNext % 60}m
-          </div>
-        </Card>
-        <InsightCard live={live} />
-      </div>
-
-      {/* notifications — moved down */}
-      <NotificationsWidget />
-    </div>
-  );
-}
-
-function InsightCard({ live }: { live: LiveResponse }) {
-  const ins = deriveInsight(live);
-  return (
-    <Card accent={ins.tone} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: `var(--${ins.tone}-wash)`, color: `var(--${ins.tone})` }}>
-          <Icon name={ins.icon} size={17} />
-        </span>
-        <Eyebrow>Why this matters</Eyebrow>
-      </div>
-      <div style={{ fontSize: 15, color: 'var(--text-1)', lineHeight: 1.5, fontWeight: 600 }}>{ins.title}</div>
-      <div style={{ fontSize: 14, color: 'var(--text-1)', lineHeight: 1.5 }}>{ins.body}</div>
-      <div style={{ marginTop: 'auto', fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 7 }}>
-        <Icon name="cpu" size={14} /> Advisory — the coordinator plans, holds capacity for the evening.
-      </div>
-    </Card>
   );
 }

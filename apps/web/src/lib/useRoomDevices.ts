@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { usePolling } from './usePolling';
 import { api } from './api';
+import { powerCap } from './capabilities';
 import type {
   DevicesResponse, LightsResponse, BlindsResponse, ConfiguredResponse,
 } from './types';
@@ -30,6 +31,14 @@ export interface UnifiedDevice {
   /** True when this device carries a sensitive action cap (lock/siren/gate) — excluded
    *  from room All-off and badged in the UI. */
   sensitive: boolean;
+  /** Room temperature this device reports (climate only); null everywhere else. */
+  tempC: number | null;
+  /**
+   * Power lever for this device, or null when it has none (blinds have no on/off)
+   * or must not be flipped from a room grid (a sensitive lock/siren/gate cap).
+   * Writes are admin + arm gated server-side exactly as on the typed screens.
+   */
+  toggle: ((next: boolean) => Promise<unknown>) | null;
 }
 
 const KIND_META: Record<UnifiedKind, { icon: string; hue: string }> = {
@@ -60,30 +69,40 @@ export function useRoomDevices(pollMs = 20_000): RoomDevicesData {
       out.push({
         id: d.id, name: d.name, kind, ...KIND_META[kind],
         roomId: d.roomId ?? null, power: d.power, href: `/devices/${d.id}`, sensitive: false,
+        tempC: d.currentTempC ?? null,
+        toggle: (next) => api.devices.command(d.id, 'power', next),
       });
     }
     for (const u of lights?.devices ?? []) {
       out.push({
         id: u.id, name: u.name, kind: 'lighting', ...KIND_META.lighting,
         roomId: u.roomId ?? null, power: u.power, href: '/devices?type=lighting', sensitive: false,
+        tempC: null,
+        toggle: (next) => api.lights.command(u.id, 'power', next),
       });
     }
     for (const u of blinds?.devices ?? []) {
       out.push({
         id: u.id, name: u.name, kind: 'blinds', ...KIND_META.blinds,
         roomId: u.roomId ?? null, power: (u.positionPct ?? 0) > 2, href: '/devices?type=blinds', sensitive: false,
+        // A blind has no on/off — open/close/stop live on its own screen.
+        tempC: null, toggle: null,
       });
     }
     for (const c of configured?.devices ?? []) {
       // Configured-as-lighting devices are already surfaced in the lights fleet; skip dups.
       if (c.typeId === 'lighting' && out.some((x) => x.id === c.id)) continue;
       const kind: UnifiedKind = c.typeId === 'lighting' ? 'lighting' : 'switching';
-      const sw = c.capabilities.find((cap) => cap.kind === 'switch' && !cap.readOnly);
+      const sw = powerCap(c.capabilities.filter((cap) => !cap.readOnly));
       const power = sw ? c.values[sw.dp] === true : false;
       const sensitive = c.capabilities.some((cap) => cap.sensitive === true);
       out.push({
         id: c.id, name: c.name, kind, ...KIND_META[kind],
         roomId: c.roomId ?? null, power, href: `/devices/generic/${c.id}`, sensitive,
+        tempC: null,
+        // A sensitive cap (lock / siren / gate) is never a room-grid switch — those
+        // stay behind their own confirm on the device page.
+        toggle: sw && !sensitive ? (next) => api.devices.commandCap(c.id, sw.dp, sw.kind, next) : null,
       });
     }
     return out;

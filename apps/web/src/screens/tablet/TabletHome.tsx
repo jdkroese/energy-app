@@ -5,8 +5,10 @@ import { useAuth } from '../../auth/AuthProvider';
 import type {
   BlindUnit,
   BlindsResponse,
+  BrainPlanResponse,
   DeviceView,
   DevicesResponse,
+  HistoryDayResponse,
   HomeScenesResponse,
   LightUnit,
   LightsResponse,
@@ -14,8 +16,10 @@ import type {
   RadioFavoritesResponse,
   SpeakersResponse,
 } from '../../lib/types';
-import { Icon } from '../../components/ui';
+import { Badge, Card, Eyebrow, Icon } from '../../components/ui';
 import { EnergyFlow, type FlowData } from '../../components/energy/EnergyFlow';
+import { combinedSoc, deriveVerdict } from '../../components/energy/VerdictHero';
+import { aggregateDay, eur } from '../../lib/dayMetrics';
 import { HomeSceneBuilder } from '../../components/home/HomeSceneBuilder';
 import { BigToggle } from './TabletLights';
 import { OrderStatusCard, QuickAddGrid, TonightCard, WeekStrip, useTonight } from './kitchenWidgets';
@@ -59,32 +63,13 @@ export function TabletHome() {
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   const date = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 
-  const battSoc = live ? Math.round((live.sonnen.soc + live.tesla.soc) / 2) : null;
-
   return (
     <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* glance strip */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 600, letterSpacing: '-0.02em' }}>{time}</span>
-          <div style={{ lineHeight: 1.3 }}>
-            <div style={{ fontSize: 14, color: 'var(--text-1)' }}>{date}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-              <Icon name="sun" size={13} /> Jávea · 26° clear
-            </div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {live && (
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--solar)', background: 'var(--solar-wash)', border: '1px solid var(--border-1)', padding: '6px 12px', borderRadius: 'var(--radius-pill)' }}>
-              {live.tariff.band} · {bandWord(live.tariff.band)} · €{live.tariff.rateEur.toFixed(3)}
-            </span>
-          )}
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)' }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--solar)' }} /> Online
-          </span>
-        </div>
-      </div>
+      {/* The V2 wall board (docs/53): clock + verdict + four glanceable tiles beside
+          the live flow. Everything the room needs from across the kitchen, in one
+          screenful. The Tonight / Scenes / Favorites sections below are the
+          reach-out-and-touch half of the wall tablet and are unchanged. */}
+      <KioskBoard live={live ?? null} time={time} date={date} />
 
       {/* Tonight (Kitchen Hub P3, v4 mockup frame 5): dinner card + the kitchen quick column */}
       <div style={{ display: 'flex', gap: 18, alignItems: 'stretch', flexWrap: 'wrap' }}>
@@ -98,21 +83,6 @@ export function TabletHome() {
         </div>
       </div>
 
-      {/* status tiles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-        <StatTileBig label="Solar now" icon="sun" tone="var(--solar)" value={live ? fmtKw(live.solar.kw) : '—'} unit="kW" />
-        <StatTileBig label="Batteries" icon="battery-charging" tone="var(--battery)" value={battSoc != null ? String(battSoc) : '—'} unit="%" />
-        <StatTileBig label="Grid" icon={live?.grid.dir === 'exporting' ? 'upload' : 'download'} tone="var(--grid)" value={live ? fmtKw(live.grid.kw) : '—'} unit={live?.grid.dir === 'exporting' ? 'kW out' : live?.grid.dir === 'importing' ? 'kW in' : 'kW'} />
-        <StatTileBig label="Saved today" icon="piggy-bank" tone="var(--solar)" value={live ? `€${live.today.savedEur.toFixed(2)}` : '—'} unit="" />
-      </div>
-
-      {/* live flow */}
-      {live && (
-        <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 16, display: 'flex', justifyContent: 'center' }}>
-          <EnergyFlow flow={toFlow(live)} size="lg" />
-        </div>
-      )}
-
       {/* scenes */}
       <ScenesRow isAdmin={isAdmin} />
 
@@ -122,16 +92,103 @@ export function TabletHome() {
   );
 }
 
-function StatTileBig({ label, icon, tone, value, unit }: { label: string; icon: string; tone: string; value: string; unit: string }) {
+/* ---- V2 wall board -------------------------------------------------------- */
+
+/**
+ * The kiosk's first screen: the verdict, big enough to read from the doorway,
+ * beside the live flow. It shares deriveVerdict() with the Live screen, so the
+ * wall and the phone can never disagree about what Autopilot is doing.
+ */
+function KioskBoard({ live, time, date }: { live: LiveResponse | null; time: string; date: string }) {
+  const { data: plan } = usePolling<BrainPlanResponse>(api.brainPlan, 60_000);
+  const { data: day } = usePolling<HistoryDayResponse>(api.historyDayToday, 60_000);
+
+  if (!live) return null;
+
+  const now = plan?.now ?? new Date().getHours();
+  const next = plan?.actions.find((a) => a.startH > now) ?? plan?.actions[0] ?? null;
+  const hhmm = (h: number) =>
+    String(Math.floor(h) % 24).padStart(2, '0') + ':' + String(Math.round((h % 1) * 60) % 60).padStart(2, '0');
+  const v = deriveVerdict(live, next?.title ?? null, next ? hhmm(next.startH) : null);
+  const agg = day ? aggregateDay(day) : null;
+
+  const tiles: { label: string; value: string; unit: string; tone: string }[] = [
+    { label: 'Solar', value: fmtKw(live.solar.kw), unit: 'kW', tone: 'solar' },
+    { label: 'Load', value: fmtKw(live.home.kw), unit: 'kW', tone: 'home' },
+    { label: 'Storage', value: String(combinedSoc(live)), unit: '%', tone: 'battery' },
+    { label: 'Saved', value: agg ? eur(agg.savedEur) : `€${live.today.savedEur.toFixed(2)}`, unit: '', tone: 'solar' },
+  ];
+
   return (
-    <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-lg)', padding: 16 }}>
-      <div style={{ fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Icon name={icon} size={14} color={tone} /> {label}
+    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0,1.12fr) minmax(0,.88fr)', gap: 20, alignItems: 'stretch' }}>
+      {/* The wall's one decorative layer — a slow drift so the board reads as live
+          from across the room without anything actually moving. */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: '-40% -12% auto -12%',
+          height: '110%',
+          background:
+            'radial-gradient(55% 60% at 28% 45%, var(--solar-wash), transparent 70%), radial-gradient(50% 60% at 80% 25%, var(--battery-wash), transparent 70%)',
+          filter: 'blur(34px)',
+          animation: 'v2amb 30s var(--ease-in-out) infinite',
+          pointerEvents: 'none',
+        }}
+      />
+
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+        <div style={{ animation: 'v2rise .5s var(--ease-out)' }}>
+          <div className="pwr-mono" style={{ fontSize: 60, fontWeight: 500, letterSpacing: '-.02em', lineHeight: 1 }}>{time}</div>
+          <div style={{ fontSize: 14, color: 'var(--text-2)', marginTop: 4 }}>
+            {date} · {live.tariff.band} {bandWord(live.tariff.band)} · €{live.tariff.rateEur.toFixed(3)}/kWh
+          </div>
+        </div>
+
+        <Card
+          accent={v.tone}
+          glow
+          padded={false}
+          style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 11, justifyContent: 'center', animation: 'v2rise .5s var(--ease-out) .08s' }}
+        >
+          <Eyebrow>Autopilot · {v.state}</Eyebrow>
+          <div style={{ fontSize: 32, fontWeight: 600, letterSpacing: '-.02em', lineHeight: 1.15, textWrap: 'pretty' }}>{v.title}</div>
+          <div style={{ fontSize: 15, color: 'var(--text-2)', lineHeight: 1.5, textWrap: 'pretty' }}>{v.because}</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
+            <Badge tone="solar" variant="soft">Self-sufficient {agg ? agg.selfSufficiencyPct : live.today.selfSufficiencyPct}%</Badge>
+            <Badge tone="battery" variant="soft">Storage {combinedSoc(live)}%</Badge>
+          </div>
+        </Card>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, animation: 'v2rise .5s var(--ease-out) .16s' }}>
+          {tiles.map((t) => (
+            <Card key={t.label} padded={false} style={{ padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--text-2)' }}>{t.label}</div>
+              <div className="pwr-mono" style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 10, fontWeight: 500, color: `var(--${t.tone})`, lineHeight: 1 }}>
+                <span style={{ fontSize: 24 }}>{t.value}</span>
+                {t.unit && <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{t.unit}</span>}
+              </div>
+            </Card>
+          ))}
+        </div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 600, color: tone }}>{value}</span>
-        {unit && <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{unit}</span>}
-      </div>
+
+      <Card
+        accent="solar"
+        title="Live flow"
+        subtitle="10-second polling"
+        actions={
+          <Badge tone="solar" variant="soft">
+            <i style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--solar)', animation: 'v2breathe 2.2s var(--ease-in-out) infinite' }} />
+            Live
+          </Badge>
+        }
+        style={{ position: 'relative', display: 'flex', flexDirection: 'column', minWidth: 0, animation: 'v2rise .5s var(--ease-out) .12s' }}
+      >
+        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+          <EnergyFlow flow={toFlow(live)} size="lg" />
+        </div>
+      </Card>
     </div>
   );
 }

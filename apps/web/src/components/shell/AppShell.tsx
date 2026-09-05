@@ -10,7 +10,6 @@ const TabletShell = lazy(() => import('./TabletShell').then((m) => ({ default: m
 import { MobileAlarmFab } from './NavAlarm';
 import { MobileMiniPlayer } from './NavMiniPlayer';
 import { MobileWatering } from './NavIrrigation';
-import { SegmentedControl } from '../ui/SegmentedControl';
 import { useMediaQuery } from './useMediaQuery';
 import { settingsTabsFor, settingsTabFromParam } from './nav';
 import { useKiosk } from '../../lib/kiosk';
@@ -19,7 +18,7 @@ import { useAuth } from '../../auth/AuthProvider';
 /** Per-route desktop TopBar metadata. */
 const META: Record<string, { eyebrow: string; title: string }> = {
   '/': { eyebrow: 'Live overview', title: 'Your home, right now' },
-  '/reports': { eyebrow: 'Reports', title: 'Reports' },
+  '/reports': { eyebrow: 'Reports', title: 'Where the money went' },
   '/batteries': { eyebrow: 'Energy', title: 'Solar & batteries' },
   '/devices': { eyebrow: 'Home', title: 'Devices' },
   '/water': { eyebrow: 'Water', title: 'Every litre, accounted for' },
@@ -39,7 +38,7 @@ const RAIL_KEY = 'power.rail.expanded';
 export interface ShellContext {
   /** true on desktop (≥ md) */
   desktop: boolean;
-  /** reports range, shared so the TopBar control drives the screen */
+  /** reports range, shared so the screen's range switcher survives navigation */
   range: string;
   setRange: (r: string) => void;
   /** active Settings sub-tab, shared so the TopBar tab strip drives the screen */
@@ -107,28 +106,16 @@ export function AppShell({ children }: { children: (ctx: ShellContext) => ReactN
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
           <TopBar
             eyebrow={meta.eyebrow}
-            title={
-              location.pathname === '/reports'
-                ? range === 'Hour'
-                  ? 'Past hour'
-                  : range === 'Day'
-                    ? 'Today'
-                    : `This ${range.toLowerCase()}`
-                : location.pathname === '/settings'
-                  ? activeSettingsTab
-                  : meta.title
-            }
-            actions={
-              location.pathname === '/reports' ? (
-                <SegmentedControl options={['Hour', 'Day', 'Week', 'Month', 'Year']} value={range} onChange={setRange} size="sm" />
-              ) : null
-            }
+            title={location.pathname === '/settings' ? activeSettingsTab : meta.title}
           />
-          <div style={{ flex: 1, overflowY: 'auto', padding: '22px 28px 40px' }}>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
             {/* Keyed on pathname so the body re-animates on each navigation. The
                 persistent shell (Rail / TopBar) above stays steady — only this
-                scroll-container body fades+rises in. */}
-            <PageTransition key={location.pathname}>{children(ctx)}</PageTransition>
+                scroll-container body fades+rises in. The 1360 px measure keeps a
+                six-across KPI row readable on an ultrawide (docs/53). */}
+            <div style={{ padding: '22px 28px 44px', maxWidth: 1360, width: '100%', boxSizing: 'border-box' }}>
+              <PageTransition key={location.pathname}>{children(ctx)}</PageTransition>
+            </div>
           </div>
         </div>
       </div>

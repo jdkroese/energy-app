@@ -329,6 +329,9 @@ export const api = {
     getJSON<HistoryDayResponse>(
       `/api/history/day?offset=${enc(String(offset))}`,
     ),
+  /** Today's day chart. A STABLE reference so usePolling's last-good cache can key
+   *  on it — the Live screen remounts on every navigation back to "/". */
+  historyDayToday: () => getJSON<HistoryDayResponse>("/api/history/day?offset=0"),
   alerts: () => getJSON<AlertsResponse>("/api/alerts"),
   settings: () => getJSON<SettingsResponse>("/api/settings"),
   brainPlan: () => getJSON<BrainPlanResponse>("/api/brain/plan"),

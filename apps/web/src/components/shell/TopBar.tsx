@@ -1,8 +1,30 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ScreenHeader } from '../ui';
 import { ThemeToggle } from './ThemeToggle';
 import { WeatherPill } from './WeatherPill';
 import { WaterPill } from './WaterPill';
+
+/**
+ * Live clock pill — a 6 px breathing solar dot beside the wall time. It is the
+ * cheapest possible proof that the page in front of you is live and not a stale
+ * tab left open overnight (docs/53).
+ */
+function ClockPill() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 20_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <span className="pwr-badge pwr-badge--soft" data-tone="solar" style={{ gap: 7 }}>
+      <i
+        aria-hidden
+        style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--solar)', boxShadow: '0 0 8px var(--solar)', animation: 'v2breathe 2.2s var(--ease-in-out) infinite' }}
+      />
+      {now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+    </span>
+  );
+}
 
 type Props = {
   eyebrow: string;
@@ -33,6 +55,7 @@ export function TopBar({ eyebrow, title, actions }: Props) {
           <ThemeToggle />
           <WeatherPill />
           <WaterPill />
+          <ClockPill />
           <div
             style={{
               width: 36,

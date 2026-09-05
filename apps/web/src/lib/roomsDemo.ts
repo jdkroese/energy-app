@@ -56,7 +56,8 @@ export function roomsDemoDevices(): UnifiedDevice[] {
       blinds: { icon: 'blinds', hue: 'var(--ev)', href: '/devices?type=blinds' },
       switching: { icon: 'toggle-right', hue: 'var(--battery)', href: `/devices/generic/${id}` },
     };
-    return { id, name, kind, ...meta[kind], roomId, power, sensitive };
+    // Demo fixture: no live temperature, and toggles are inert (nothing to write to).
+    return { id, name, kind, ...meta[kind], roomId, power, sensitive, tempC: null, toggle: null };
   };
   return [
     // Living room — climate + light + blind (the AC and light both said "Living room").

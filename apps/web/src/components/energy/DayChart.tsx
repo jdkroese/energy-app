@@ -1,717 +1,325 @@
-import { useId, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import type { HistoryDayResponse, TariffBandSegment } from '../../lib/types';
-import { useTheme } from '../../lib/ThemeProvider';
+import { useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import type { Band, HistoryDayResponse } from '../../lib/types';
+import { BAND_RATE, DAY_BUCKETS, bandAtHour, bucketTime, peakProduction } from '../../lib/dayMetrics';
 
 /* ============================================================================
- * DayChart — the Live screen's "Production & consumption" day chart.
+ * DayChart (V2, docs/53) — "The day, measured and forecast".
  *
- * 5-minute resolution (288 buckets/day) with a MEASURED vs FORECAST split at
- * "now": left of the now-line is measured (solid lines, production a filled
- * area); right of it is forecast (dashed lines on a faintly shaded panel). Dual
- * axis (kW left, SoC % right), a bottom tariff strip (P1/P2/P3), a peak-
- * production marker, an interactive hover crosshair + tooltip, pill-chip legend
- * toggles, prev/next day navigation, and a forecast on/off toggle.
+ * One SVG, `viewBox="0 0 1000 300"`, `preserveAspectRatio="none"`, so the plot
+ * stretches to the card. Every stroke carries `vector-effect="non-scaling-stroke"`
+ * so the non-uniform scale doesn't distort line weights; the axis labels live in
+ * HTML BELOW the SVG rather than inside it, for the same reason.
  *
- * Self-contained: it consumes a HistoryDayResponse and renders an SVG plot with
- * an HTML overlay for crisp tooltips. Power design tokens only.
+ * Layer order, back to front: tariff-band grounds · grid lines · forecast veil ·
+ * consumption area · production area · forecast production area · forecast lines ·
+ * measured lines (draw in on mount) · SoC track · now line · crosshair.
+ *
+ * The headline interaction is the SCRUB: a transparent crosshair overlay reports
+ * the moment under the pointer to the parent, which retargets the KPI row to that
+ * timestamp. Cause and effect across two components — that is the whole point, so
+ * the scrub index is owned by the screen, not by this chart.
+ *
+ * The API delivers 288 five-minute buckets; the curves are drawn at the design's
+ * 15-minute resolution (96 points, each the mean of three buckets) — dense enough
+ * to read as a continuous line, small enough that a 10 s poll doesn't rebuild
+ * four 12 kB path strings every tick.
  * ==========================================================================*/
 
-const N = 288; // 5-min buckets/day
-const W = 1000; // SVG user-space width (stretched to container)
+const W = 1000;
+const H = 300;
+/** Drawn points (15-min); 3 API buckets each. */
+const P = 96;
+const PER_POINT = DAY_BUCKETS / P;
 
-// ---- Series catalogue ------------------------------------------------------
-
-type SeriesKey =
-  | 'production'
-  | 'consumption'
-  | 'charge'
-  | 'discharge'
-  | 'gridExport'
-  | 'gridImport'
-  | 'socCombined'
-  | 'socSonnen'
-  | 'socTesla';
-
-interface SeriesDef {
-  key: SeriesKey;
-  /** Source field in HistoryDayResponse.series / .forecast. */
-  field:
-    | 'solarKw'
-    | 'homeKw'
-    | 'chargeKw'
-    | 'dischargeKw'
-    | 'gridExportKw'
-    | 'gridImportKw'
-    | 'combinedSoc'
-    | 'sonnenSoc'
-    | 'teslaSoc';
-  label: string;
-  /** CSS custom property (without var()) that holds this series' colour. */
-  colorVar: string;
-  axis: 'power' | 'soc';
-  kind: 'area' | 'line';
-  dash?: boolean;
-  defaultOn: boolean;
+/** Midpoint-cubic smoothing — the same curve shape the design prototype used. */
+function smooth(pts: [number, number][]): string {
+  if (pts.length === 0) return '';
+  let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const cx = ((a[0] + b[0]) / 2).toFixed(1);
+    d += ` C${cx} ${a[1].toFixed(1)} ${cx} ${b[1].toFixed(1)} ${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
+  }
+  return d;
 }
 
-const SERIES: SeriesDef[] = [
-  { key: 'production', field: 'solarKw', label: 'Production', colorVar: '--series-production', axis: 'power', kind: 'area', defaultOn: true },
-  { key: 'consumption', field: 'homeKw', label: 'Consumption', colorVar: '--series-consumption', axis: 'power', kind: 'line', defaultOn: true },
-  { key: 'charge', field: 'chargeKw', label: 'Charging', colorVar: '--series-charge', axis: 'power', kind: 'line', defaultOn: true },
-  { key: 'discharge', field: 'dischargeKw', label: 'Discharging', colorVar: '--series-discharge', axis: 'power', kind: 'line', defaultOn: false },
-  { key: 'gridExport', field: 'gridExportKw', label: 'Grid feed-in', colorVar: '--series-grid-export', axis: 'power', kind: 'line', defaultOn: false },
-  { key: 'gridImport', field: 'gridImportKw', label: 'Grid buy', colorVar: '--series-grid-import', axis: 'power', kind: 'line', defaultOn: false },
-  { key: 'socCombined', field: 'combinedSoc', label: 'SoC · combined', colorVar: '--series-soc-combined', axis: 'soc', kind: 'line', defaultOn: true },
-  { key: 'socSonnen', field: 'sonnenSoc', label: 'SoC · Sonnen', colorVar: '--series-soc-sonnen', axis: 'soc', kind: 'line', dash: true, defaultOn: false },
-  { key: 'socTesla', field: 'teslaSoc', label: 'SoC · Tesla', colorVar: '--series-soc-tesla', axis: 'soc', kind: 'line', dash: true, defaultOn: false },
-];
-
-const BAND_VAR: Record<string, string> = {
-  P1: '--band-p1',
-  P2: '--band-p2',
-  P3: '--band-p3',
-};
-const BAND_LABEL: Record<string, string> = { P1: 'peak', P2: 'shoulder', P3: 'valley' };
-
-/* Series/band colours live as CSS vars (so a future light theme can override
- * them). SVG needs concrete values, so resolve the tokens to hex via
- * getComputedStyle. Fallbacks keep dark-theme output identical if a var is
- * missing (e.g. during SSR/first paint). */
-const COLOR_FALLBACK: Record<string, string> = {
-  '--series-production': '#2ee6a0',
-  '--series-consumption': '#c4a6ff',
-  '--series-charge': '#38d9f5',
-  '--series-discharge': '#f5736b',
-  '--series-grid-export': '#f5a524',
-  '--series-grid-import': '#ff6b8a',
-  '--series-soc-combined': '#2dd4bf',
-  '--series-soc-sonnen': '#8bd450',
-  '--series-soc-tesla': '#5ac8fa',
-  '--band-p1': '#f5a524',
-  '--band-p2': '#5f7672',
-  '--band-p3': '#2ee6a0',
-};
-
-function resolveToken(name: string): string {
-  const fallback = COLOR_FALLBACK[name] ?? '#5f7672';
-  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback;
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
+/** Close a curve down to the baseline so it can be filled as an area. */
+function close(d: string, x0: number, x1: number): string {
+  return d ? `${d} L${x1.toFixed(1)} ${H} L${x0.toFixed(1)} ${H} Z` : '';
 }
 
-// ---- Helpers ---------------------------------------------------------------
-
-function niceMaxOf(values: number[]): number {
-  const m = Math.max(1, ...values.filter((v) => Number.isFinite(v)));
-  // Round up to a friendly step.
-  const pow = Math.pow(10, Math.floor(Math.log10(m)));
-  const n = m / pow;
-  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
-  return step * pow;
+/** Mean of a 5-min series over the three buckets behind drawn point `k`. */
+function meanAt(series: readonly (number | null)[] | undefined, k: number): number {
+  if (!series) return 0;
+  let sum = 0;
+  let n = 0;
+  for (let i = k * PER_POINT; i < (k + 1) * PER_POINT; i++) {
+    const v = series[i];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      sum += v;
+      n++;
+    }
+  }
+  return n ? sum / n : 0;
 }
 
-function bucketTime(i: number): string {
-  const mins = i * 5;
-  const hh = Math.floor(mins / 60);
-  const mm = mins % 60;
-  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-}
+const X = (k: number) => (k / P) * W;
 
-const X_TICKS = [0, 48, 96, 144, 192, 240, 288]; // every 4h
-
-// ---- Component -------------------------------------------------------------
-
-export function DayChart({
-  day,
-  height = 240,
-  onPrev,
-  onNext,
-  loading = false,
-}: {
+export interface DayChartProps {
   day: HistoryDayResponse;
+  /** Plot height in px — 300 desktop / 240 narrow / 190 phone. */
   height?: number;
-  onPrev?: () => void;
-  onNext?: () => void;
-  loading?: boolean;
-}) {
-  const uid = 'd' + useId().replace(/:/g, '');
-  const svgRef = useRef<SVGSVGElement | null>(null);
+  /** Scrubbed 5-minute bucket index, or null when reading live. */
+  scrub: number | null;
+  /** Reports the 5-minute bucket under the pointer (null on leave). */
+  onScrub: (index: number | null) => void;
+}
 
-  // Active resolved theme — drives re-resolution of the CSS-var → hex colours
-  // below, so the SVG re-colours when the user switches dark ⇄ light.
-  const { resolved: theme } = useTheme();
+export function DayChart({ day, height = 300, scrub, onScrub }: DayChartProps) {
+  const overlay = useRef<HTMLDivElement>(null);
+  const nowIndex = day.nowIndex;
+  const hasNow = nowIndex != null;
+  // Drawn-point index of "now"; a past day is entirely measured.
+  const nowK = hasNow ? Math.max(0, Math.min(P, Math.round(nowIndex / PER_POINT))) : P;
 
-  // Resolve series/band CSS tokens to concrete colours for the SVG. Memoized on
-  // `theme` so a theme switch re-reads the (now light/dark) token values.
-  const colorOf = useMemo(() => {
-    const m = new Map<SeriesKey, string>();
-    for (const s of SERIES) m.set(s.key, resolveToken(s.colorVar));
-    return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [theme]);
-  const bandColor = useMemo(
-    () => ({
-      P1: resolveToken(BAND_VAR.P1),
-      P2: resolveToken(BAND_VAR.P2),
-      P3: resolveToken(BAND_VAR.P3),
-    } as Record<string, string>),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [theme],
-  );
-  const productionColor = colorOf.get('production') ?? COLOR_FALLBACK['--series-production'];
+  const model = useMemo(() => {
+    const s = day.series;
+    const f = day.forecast;
 
-  const [hidden, setHidden] = useState<Set<SeriesKey>>(
-    () => new Set(SERIES.filter((s) => !s.defaultOn).map((s) => s.key)),
-  );
-  const [showForecast, setShowForecast] = useState(true);
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-
-  const toggle = (k: SeriesKey) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
-      return next;
-    });
-
-  const isToday = day.nowIndex != null;
-  const nowIdx = day.nowIndex ?? N;
-  const forecastOn = showForecast && isToday && day.forecast != null;
-
-  // Geometry.
-  const H = height;
-  const padTop = 16;
-  const padBottom = 22; // room for x labels
-  const stripH = 6; // tariff strip
-  const plotTop = padTop;
-  const plotBottom = H - padBottom - stripH - 4;
-  const plotH = plotBottom - plotTop;
-  const x = (i: number) => (i / (N - 1)) * W;
-  const nowX = x(nowIdx);
-
-  const visible = useMemo(() => SERIES.filter((s) => !hidden.has(s.key)), [hidden]);
-
-  // Merge measured + (optional) forecast into one 288-length array per series.
-  const merged = useMemo(() => {
-    const m = new Map<SeriesKey, (number | null)[]>();
-    for (const s of SERIES) {
-      const meas = day.series[s.field] ?? [];
-      const fc = forecastOn ? day.forecast?.[s.field] ?? [] : [];
-      const arr: (number | null)[] = new Array(N).fill(null);
-      for (let i = 0; i < N; i++) {
-        if (i < nowIdx) {
-          arr[i] = typeof meas[i] === 'number' ? meas[i] : null;
-        } else {
-          const fv = fc[i];
-          arr[i] = typeof fv === 'number' ? fv : typeof meas[i] === 'number' ? meas[i] : null;
-        }
-      }
-      m.set(s.key, arr);
+    // Measured up to now, forecast after. A past day has no forecast at all.
+    const prod: number[] = [];
+    const cons: number[] = [];
+    const soc: number[] = [];
+    for (let k = 0; k < P; k++) {
+      const measured = k <= nowK;
+      prod.push(measured ? meanAt(s.solarKw, k) : meanAt(f?.solarKw, k));
+      cons.push(measured ? meanAt(s.homeKw, k) : meanAt(f?.homeKw, k));
+      soc.push(measured ? meanAt(s.combinedSoc, k) : meanAt(f?.combinedSoc, k));
     }
-    return m;
-  }, [day, forecastOn, nowIdx]);
 
-  // kW axis max from visible power series (measured + forecast both count).
-  const niceMax = useMemo(() => {
-    const vals: number[] = [];
-    for (const s of visible) {
-      if (s.axis !== 'power') continue;
-      for (const v of merged.get(s.key) ?? []) if (typeof v === 'number') vals.push(v);
-    }
-    return niceMaxOf(vals);
-  }, [visible, merged]);
+    const yMax = Math.max(1, ...prod, ...cons) * 1.16;
+    const Y = (v: number) => H - (v / yMax) * (H - 14) - 6;
+    const socY = (v: number) => H - 62 - (v / 100) * 178;
 
-  const hasSoc = visible.some((s) => s.axis === 'soc');
+    const mPts = (arr: number[], to: number) =>
+      arr.slice(0, to + 1).map((v, k) => [X(k), Y(v)] as [number, number]);
+    const fPts = (arr: number[], from: number) =>
+      arr.slice(from).map((v, i) => [X(from + i), Y(v)] as [number, number]);
 
-  const yOf = (s: SeriesDef, v: number) =>
-    s.axis === 'soc'
-      ? plotTop + (1 - v / 100) * plotH
-      : plotTop + (1 - v / niceMax) * plotH;
+    const prodLine = smooth(mPts(prod, nowK));
+    const consLine = smooth(mPts(cons, nowK));
+    const prodFcLine = nowK < P - 1 ? smooth(fPts(prod, nowK)) : '';
+    const consFcLine = nowK < P - 1 ? smooth(fPts(cons, nowK)) : '';
 
-  // Build measured + forecast path strings for a series (split at nowIdx so the
-  // measured part is solid and the forecast part dashed).
-  function paths(s: SeriesDef) {
-    const arr = merged.get(s.key) ?? [];
-    const measPts: Array<[number, number]> = [];
-    const fcPts: Array<[number, number]> = [];
-    for (let i = 0; i < N; i++) {
-      const v = arr[i];
-      if (typeof v !== 'number') continue;
-      const p: [number, number] = [x(i), yOf(s, v)];
-      if (i <= nowIdx) measPts.push(p);
-      if (forecastOn && i >= nowIdx) fcPts.push(p);
-    }
-    const toLine = (pts: Array<[number, number]>) =>
-      pts.length
-        ? pts.map((p, k) => `${k ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ')
-        : '';
-    const measLine = toLine(measPts);
-    let area = '';
-    if (s.kind === 'area' && measPts.length) {
-      const lastX = measPts[measPts.length - 1][0].toFixed(1);
-      const firstX = measPts[0][0].toFixed(1);
-      area = `${measLine} L${lastX} ${plotBottom} L${firstX} ${plotBottom} Z`;
-    }
-    return { measLine, fcLine: toLine(fcPts), area };
-  }
-
-  // Draw areas first so lines stay readable on top.
-  const drawOrder = useMemo(
-    () => [...visible].sort((a, b) => (a.kind === 'area' ? 0 : 1) - (b.kind === 'area' ? 0 : 1)),
-    [visible],
-  );
-
-  // Path geometry is the expensive part (288-point strings per series) but it
-  // only depends on the data + scale, NOT on hover. Memoize it so moving the
-  // pointer — which updates hoverIdx on every pixel — re-renders just the
-  // crosshair/tooltip instead of rebuilding every series path each frame.
-  const seriesPaths = useMemo(
-    () => drawOrder.map((s) => ({ s, ...paths(s) })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [drawOrder, merged, niceMax, forecastOn, nowIdx, plotTop, plotH, plotBottom],
-  );
-
-  // Peak measured production marker.
-  const peak = useMemo(() => {
-    const prod = day.series.solarKw ?? [];
-    let bi = -1;
-    let bv = -Infinity;
-    const limit = isToday ? nowIdx : N - 1;
-    for (let i = 0; i <= limit && i < prod.length; i++) {
-      if (typeof prod[i] === 'number' && prod[i] > bv) {
-        bv = prod[i];
-        bi = i;
+    // Contiguous tariff runs become one <rect> each (P2 draws as nothing).
+    const bands: { x: number; w: number; fill: string }[] = [];
+    let start = 0;
+    for (let h = 1; h <= 24; h++) {
+      if (h === 24 || bandAtHour(day.tariffBands, h) !== bandAtHour(day.tariffBands, start)) {
+        const b = bandAtHour(day.tariffBands, start);
+        bands.push({
+          x: (start / 24) * W,
+          w: ((h - start) / 24) * W,
+          fill: b === 'P1' ? 'var(--band-p1-fill)' : b === 'P3' ? 'var(--band-p3-fill)' : 'transparent',
+        });
+        start = h;
       }
     }
-    return bi >= 0 && bv > 0.05 ? { i: bi, v: bv } : null;
-  }, [day, isToday, nowIdx]);
 
-  const grids = [0, 0.25, 0.5, 0.75, 1];
+    return {
+      prod,
+      cons,
+      soc,
+      Y,
+      bands,
+      prodLine,
+      consLine,
+      prodFcLine,
+      consFcLine,
+      prodArea: close(prodLine, 0, X(nowK)),
+      consArea: close(consLine, 0, X(nowK)),
+      prodFcArea: close(prodFcLine, X(nowK), W),
+      socLine: smooth(soc.map((v, k) => [X(k), socY(v)] as [number, number])),
+    };
+  }, [day, nowK]);
 
-  // Hover → nearest 5-min bucket.
-  function onMove(e: ReactPointerEvent<SVGSVGElement>) {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const frac = (e.clientX - rect.left) / rect.width;
-    const i = Math.max(0, Math.min(N - 1, Math.round(frac * (N - 1))));
-    setHoverIdx(i);
-  }
+  // The tooltip reads the scrubbed sample; with no scrub it sits at "now".
+  const scrubK = scrub == null ? null : Math.max(0, Math.min(P - 1, Math.round(scrub / PER_POINT)));
+  const tipK = scrubK ?? Math.min(P - 1, nowK);
+  const tipIndex = scrub ?? (nowIndex ?? (P - 1) * PER_POINT);
+  const tipBand: Band = bandAtHour(day.tariffBands, (tipIndex * 5) / 60);
+  const gridKw =
+    (day.series.gridImportKw[tipIndex] ?? 0) - (day.series.gridExportKw[tipIndex] ?? 0);
+  const peak = peakProduction(day);
 
-  const hoverIsForecast = hoverIdx != null && isToday && hoverIdx > nowIdx;
-  const hoverX = hoverIdx != null ? x(hoverIdx) : 0;
-  const hoverPct = hoverIdx != null ? (hoverIdx / (N - 1)) * 100 : 0;
+  const move = (e: ReactMouseEvent<HTMLDivElement>) => {
+    const r = overlay.current?.getBoundingClientRect();
+    if (!r || r.width === 0) return;
+    const frac = (e.clientX - r.left) / r.width;
+    onScrub(Math.max(0, Math.min(DAY_BUCKETS - 1, Math.round(frac * (DAY_BUCKETS - 1)))));
+  };
 
-  // Tooltip rows for the hovered bucket.
-  const hoverRows =
-    hoverIdx == null
-      ? []
-      : visible
-          .map((s) => {
-            const v = merged.get(s.key)?.[hoverIdx];
-            if (typeof v !== 'number') return null;
-            return {
-              key: s.key,
-              label: s.label,
-              color: colorOf.get(s.key) ?? COLOR_FALLBACK[s.colorVar],
-              text: s.axis === 'soc' ? `${Math.round(v)}%` : `${v.toFixed(2)} kW`,
-            };
-          })
-          .filter((r): r is NonNullable<typeof r> => r != null);
+  const tipStyle: CSSProperties = {
+    position: 'absolute',
+    top: 6,
+    left: `clamp(0px, calc(${((tipK / P) * 100).toFixed(2)}% - 86px), calc(100% - 172px))`,
+    width: 172,
+    padding: '9px 11px',
+    borderRadius: 'var(--radius-md)',
+    background: 'var(--surface-pop)',
+    border: '1px solid var(--border-2)',
+    boxShadow: 'var(--shadow-pop)',
+    pointerEvents: 'none',
+    opacity: scrubK == null ? 0 : 1,
+    transform: scrubK == null ? 'translateY(-4px)' : 'none',
+    transition: 'opacity .15s var(--ease-out), transform .15s var(--ease-out)',
+  };
 
-  const ariaLabel =
-    `Production, consumption, battery flow and state of charge for ${day.date}` +
-    (isToday ? ', measured so far plus forecast for the rest of the day' : ', measured');
+  const rows: { label: string; value: string; dot: CSSProperties }[] = [
+    { label: 'Solar', value: `${model.prod[tipK].toFixed(1)} kW`, dot: sq('var(--solar)') },
+    { label: 'Load', value: `${model.cons[tipK].toFixed(1)} kW`, dot: sq('var(--home)') },
+    { label: 'Storage', value: `${Math.round(model.soc[tipK])} %`, dot: { width: 8, height: 2, borderRadius: 2, background: 'var(--series-soc-combined)', flex: 'none' } },
+    { label: gridKw >= 0 ? 'Import' : 'Export', value: `${Math.abs(gridKw).toFixed(1)} kW`, dot: sq('var(--grid)') },
+  ];
 
   return (
-    <div>
-      {/* top bar: day nav + forecast toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <NavBtn label="Previous day" dir="prev" disabled={!day.hasPrev || loading} onClick={onPrev} />
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-1)', minWidth: 116, textAlign: 'center' }}>
-            {isToday ? 'Today' : day.date}
-          </span>
-          <NavBtn label="Next day" dir="next" disabled={!day.hasNext || loading} onClick={onNext} />
-        </div>
-        {isToday && day.forecast != null && (
-          <button
-            type="button"
-            onClick={() => setShowForecast((v) => !v)}
-            aria-pressed={showForecast}
-            title={showForecast ? 'Hide forecast' : 'Show forecast'}
-            style={chip(showForecast)}
-          >
-            <span aria-hidden style={{ width: 12, height: 0, borderTop: `2px dashed var(--text-2)` }} />
-            Forecast
-          </button>
-        )}
-      </div>
-
-      {/* legend — click a chip to show/hide that series */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 12 }}>
-        {SERIES.map((s) => {
-          const off = hidden.has(s.key);
-          const c = colorOf.get(s.key) ?? COLOR_FALLBACK[s.colorVar];
-          return (
-            <button
-              key={s.key}
-              type="button"
-              onClick={() => toggle(s.key)}
-              aria-pressed={!off}
-              title={off ? `Show ${s.label}` : `Hide ${s.label}`}
-              style={chip(!off)}
-            >
-              <span
-                aria-hidden
-                style={{
-                  width: 12,
-                  height: s.kind === 'area' ? 10 : 3,
-                  borderRadius: s.kind === 'area' ? 3 : 2,
-                  background: s.dash
-                    ? undefined
-                    : c,
-                  backgroundImage: s.dash
-                    ? `repeating-linear-gradient(90deg, ${c} 0 4px, transparent 4px 7px)`
-                    : undefined,
-                }}
-              />
-              <span style={{ textDecoration: off ? 'line-through' : 'none' }}>{s.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div style={{ position: 'relative' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ position: 'relative', flex: 1 }}>
         <svg
-          ref={svgRef}
           viewBox={`0 0 ${W} ${H}`}
-          width="100%"
-          height={H}
           preserveAspectRatio="none"
+          style={{ display: 'block', width: '100%', height }}
           role="img"
-          aria-label={ariaLabel}
-          style={{ display: 'block', overflow: 'visible', touchAction: 'none' }}
-          onPointerMove={onMove}
-          onPointerLeave={() => setHoverIdx(null)}
+          aria-label="Production and consumption across the day, measured then forecast"
         >
           <defs>
-            {drawOrder
-              .filter((s) => s.kind === 'area')
-              .map((s) => (
-                <linearGradient key={s.key} id={`${uid}-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={colorOf.get(s.key)} stopOpacity="0.24" />
-                  <stop offset="100%" stopColor={colorOf.get(s.key)} stopOpacity="0" />
-                </linearGradient>
-              ))}
+            <linearGradient id="v2prod" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--solar)" stopOpacity=".45" />
+              <stop offset="100%" stopColor="var(--solar)" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="v2cons" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--home)" stopOpacity=".22" />
+              <stop offset="100%" stopColor="var(--home)" stopOpacity="0" />
+            </linearGradient>
           </defs>
 
-          {/* forecast shaded panel (right of now) */}
-          {forecastOn && nowX < W && (
-            <rect
-              x={nowX}
-              y={plotTop}
-              width={W - nowX}
-              height={plotH}
-              fill="var(--grid-line)"
-            />
-          )}
-
-          {/* horizontal gridlines + axes (kW left, % right) */}
-          {grids.map((g, i) => {
-            const yy = plotTop + g * plotH;
-            return (
-              <g key={i}>
-                <line x1="0" y1={yy} x2={W} y2={yy} stroke="var(--grid-line)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <text x="4" y={yy - 4} fill="var(--text-3)" style={{ font: '500 13px var(--font-mono)' }}>
-                  {Math.round(niceMax * (1 - g))}
-                </text>
-                {hasSoc && (
-                  <text x={W - 4} y={yy - 4} textAnchor="end" fill="var(--text-3)" style={{ font: '500 13px var(--font-mono)' }}>
-                    {Math.round(100 * (1 - g))}%
-                  </text>
-                )}
-              </g>
-            );
-          })}
-
-          {/* series (measured solid + forecast dashed) */}
-          {seriesPaths.map(({ s, measLine, fcLine, area }) => {
-            const c = colorOf.get(s.key);
-            return (
-              <g key={s.key}>
-                {s.kind === 'area' && area && <path d={area} fill={`url(#${uid}-${s.key})`} />}
-                {measLine && (
-                  <path
-                    d={measLine}
-                    fill="none"
-                    stroke={c}
-                    strokeWidth={s.dash ? 1.8 : 2.2}
-                    strokeDasharray={s.dash ? '5 5' : undefined}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                    vectorEffect="non-scaling-stroke"
-                  />
-                )}
-                {forecastOn && fcLine && (
-                  <path
-                    d={fcLine}
-                    fill="none"
-                    stroke={c}
-                    strokeWidth={1.8}
-                    strokeDasharray="4 4"
-                    strokeOpacity={0.85}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                    vectorEffect="non-scaling-stroke"
-                  />
-                )}
-              </g>
-            );
-          })}
-
-          {/* peak-production marker */}
-          {peak && !hidden.has('production') && (
-            <g>
-              <circle cx={x(peak.i)} cy={yOf(SERIES[0], peak.v)} r="3.2" fill={productionColor} stroke="var(--bg-1, #06090b)" strokeWidth="1.5" />
-            </g>
-          )}
-
-          {/* now marker (today only) */}
-          {isToday && (
-            <line
-              x1={nowX}
-              y1={plotTop - 6}
-              x2={nowX}
-              y2={plotBottom}
-              stroke="var(--text-2)"
-              strokeWidth="1.5"
-              strokeDasharray="4 4"
-              vectorEffect="non-scaling-stroke"
-            />
-          )}
-
-          {/* hover crosshair + dots */}
-          {hoverIdx != null && (
-            <g>
-              <line x1={hoverX} y1={plotTop} x2={hoverX} y2={plotBottom} stroke="var(--text-1)" strokeOpacity="0.35" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-              {visible.map((s) => {
-                const v = merged.get(s.key)?.[hoverIdx];
-                if (typeof v !== 'number') return null;
-                return <circle key={s.key} cx={hoverX} cy={yOf(s, v)} r="2.8" fill={colorOf.get(s.key)} stroke="var(--bg-1, #06090b)" strokeWidth="1.2" />;
-              })}
-            </g>
-          )}
-
-          {/* tariff strip along the bottom of the plot */}
-          {day.tariffBands.map((seg, i) => (
-            <TariffSeg key={i} seg={seg} y={plotBottom + 4} h={stripH} fill={bandColor[seg.band] ?? bandColor.P2} />
+          {model.bands.map((b, i) => (
+            <rect key={i} x={b.x} y={0} width={b.w} height={H} fill={b.fill} />
           ))}
-
-          {/* x axis (hours) */}
-          {X_TICKS.map((i, k, a) => (
-            <text
-              key={i}
-              x={x(Math.min(i, N - 1))}
-              y={H - 4}
-              textAnchor={k === 0 ? 'start' : k === a.length - 1 ? 'end' : 'middle'}
-              fill="var(--text-3)"
-              style={{ font: '500 13px var(--font-mono)' }}
-            >
-              {String(Math.min(24, i / 12)).padStart(2, '0')}
-            </text>
+          {[0.25, 0.5, 0.75].map((f) => (
+            <line key={f} x1={0} y1={H * f} x2={W} y2={H * f} stroke="var(--grid-line)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
           ))}
+          {hasNow && nowK < P && (
+            <rect x={X(nowK)} y={0} width={W - X(nowK)} height={H} fill="var(--chart-forecast-veil)" />
+          )}
+
+          <path d={model.consArea} fill="url(#v2cons)" />
+          <path d={model.prodArea} fill="url(#v2prod)" />
+          {model.prodFcArea && <path d={model.prodFcArea} fill="url(#v2prod)" opacity=".28" />}
+          {model.prodFcLine && (
+            <path d={model.prodFcLine} fill="none" stroke="var(--solar)" strokeWidth={2} strokeDasharray="5 5" opacity=".6" vectorEffect="non-scaling-stroke" />
+          )}
+          {model.consFcLine && (
+            <path d={model.consFcLine} fill="none" stroke="var(--home)" strokeWidth={1.6} strokeDasharray="4 5" opacity=".55" vectorEffect="non-scaling-stroke" />
+          )}
+          <path
+            d={model.prodLine}
+            fill="none"
+            stroke="var(--solar)"
+            strokeWidth={2.4}
+            vectorEffect="non-scaling-stroke"
+            style={{ filter: 'drop-shadow(0 0 5px color-mix(in srgb, var(--solar) 60%, transparent))', strokeDasharray: 3000, animation: 'v2draw 1.5s var(--ease-out)' }}
+          />
+          <path
+            d={model.consLine}
+            fill="none"
+            stroke="var(--home)"
+            strokeWidth={1.9}
+            vectorEffect="non-scaling-stroke"
+            style={{ strokeDasharray: 3000, animation: 'v2draw 1.7s var(--ease-out) .1s' }}
+          />
+          <path
+            d={model.socLine}
+            fill="none"
+            stroke="var(--series-soc-combined)"
+            strokeWidth={1.6}
+            strokeDasharray="1 6"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+            opacity=".95"
+          />
+          {hasNow && (
+            <line x1={X(nowK)} y1={0} x2={X(nowK)} y2={H} stroke="var(--solar)" strokeWidth={1} vectorEffect="non-scaling-stroke" opacity=".55" />
+          )}
+          {scrubK != null && (
+            <line x1={X(scrubK)} y1={0} x2={X(scrubK)} y2={H} stroke="var(--text-1)" strokeWidth={1} vectorEffect="non-scaling-stroke" opacity=".55" />
+          )}
         </svg>
 
-        {/* FORECAST label (HTML overlay, crisp) */}
-        {forecastOn && nowX < W * 0.95 && (
+        {/* "now" dot, pinned to the production curve. HTML so the ping ring stays
+            circular under the SVG's non-uniform scale. */}
+        {hasNow && (
           <div
+            aria-hidden
             style={{
               position: 'absolute',
-              top: 2,
-              left: `calc(${(nowIdx / (N - 1)) * 100}% + 6px)`,
-              fontFamily: 'var(--font-mono)',
-              fontSize: 9.5,
-              fontWeight: 700,
-              letterSpacing: 0.8,
-              color: 'var(--text-3)',
+              left: `${((nowK / P) * 100).toFixed(2)}%`,
+              top: `calc(${((model.Y(model.prod[Math.min(P - 1, nowK)]) / H) * 100).toFixed(2)}% - 5px)`,
+              width: 10,
+              height: 10,
+              marginLeft: -5,
+              borderRadius: '50%',
+              background: 'var(--solar)',
+              boxShadow: '0 0 12px var(--solar)',
               pointerEvents: 'none',
             }}
           >
-            FORECAST
+            <i style={{ position: 'absolute', inset: 0, borderRadius: '50%', background: 'var(--solar)', animation: 'v2ping 2.4s var(--ease-out) infinite' }} />
           </div>
         )}
 
-        {/* now time label */}
-        {isToday && (
-          <div
-            style={{
-              position: 'absolute',
-              top: -3,
-              left: `${(nowIdx / (N - 1)) * 100}%`,
-              transform: 'translateX(-50%)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              fontWeight: 600,
-              color: 'var(--text-2)',
-              background: 'var(--bg-1, #06090b)',
-              padding: '1px 5px',
-              borderRadius: 5,
-              border: '1px solid var(--border-1)',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none',
-            }}
-          >
-            {bucketTime(nowIdx)}
+        <div style={tipStyle}>
+          <div className="pwr-mono" style={{ fontSize: 12, color: 'var(--text-1)', marginBottom: 5 }}>
+            {bucketTime(tipIndex)} · {tipBand} · €{BAND_RATE[tipBand].toFixed(3)}
           </div>
-        )}
-
-        {/* peak label */}
-        {peak && !hidden.has('production') && (
-          <div
-            style={{
-              position: 'absolute',
-              top: `calc(${(yOf(SERIES[0], peak.v) / H) * 100}% - 18px)`,
-              left: `${(peak.i / (N - 1)) * 100}%`,
-              transform: 'translateX(-50%)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              fontWeight: 600,
-              color: 'var(--series-production)',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none',
-            }}
-          >
-            {peak.v.toFixed(1)} kW
-          </div>
-        )}
-
-        {/* hover tooltip (HTML overlay) */}
-        {hoverIdx != null && hoverRows.length > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              top: 6,
-              left: `${hoverPct}%`,
-              transform: `translateX(${hoverPct > 60 ? '-105%' : '5%'})`,
-              minWidth: 150,
-              background: 'var(--surface-3, #1b262b)',
-              border: '1px solid var(--border-1)',
-              borderRadius: 8,
-              padding: '7px 9px',
-              pointerEvents: 'none',
-              zIndex: 2,
-              boxShadow: 'var(--shadow-2)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 5 }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
-                {bucketTime(hoverIdx)}
-              </span>
-              <span
-                style={{
-                  fontSize: 9.5,
-                  fontWeight: 700,
-                  letterSpacing: 0.6,
-                  textTransform: 'uppercase',
-                  color: hoverIsForecast ? 'var(--grid)' : 'var(--text-3)',
-                }}
-              >
-                {hoverIsForecast ? 'forecast' : 'measured'}
-              </span>
+          {rows.map((r) => (
+            <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, marginTop: 3 }}>
+              <i style={r.dot} />
+              <span style={{ color: 'var(--text-2)' }}>{r.label}</span>
+              <span className="pwr-mono" style={{ marginLeft: 'auto', color: 'var(--text-1)' }}>{r.value}</span>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {hoverRows.map((r) => (
-                <div key={r.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-2)' }}>
-                    <span aria-hidden style={{ width: 8, height: 8, borderRadius: 2, background: r.color }} />
-                    {r.label}
-                  </span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-1)' }}>{r.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          ))}
+        </div>
+
+        <div
+          ref={overlay}
+          onMouseMove={move}
+          onMouseLeave={() => onScrub(null)}
+          style={{ position: 'absolute', inset: 0, cursor: 'crosshair' }}
+        />
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 9.5, color: 'var(--text-3)' }}>
+        {['00', '04', '08', '12', '16', '20', '24'].map((l) => (
+          <span key={l}>{l}</span>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', paddingTop: 6, borderTop: '1px solid var(--border-1)' }}>
+        <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+          {scrub == null
+            ? 'Drag across the chart to read any moment of the day.'
+            : `Reading ${bucketTime(scrub)} — release to return to live.`}
+        </span>
+        {peak && (
+          <span className="pwr-badge pwr-badge--soft" data-tone="grid" style={{ marginLeft: 'auto' }}>
+            Peak {peak.kw.toFixed(1)} kW at {peak.at}
+          </span>
         )}
       </div>
     </div>
   );
 }
 
-// ---- Small pieces ----------------------------------------------------------
-
-function TariffSeg({ seg, y, h, fill }: { seg: TariffBandSegment; y: number; h: number; fill: string }) {
-  const x0 = (seg.startH / 24) * W;
-  const x1 = (seg.endH / 24) * W;
-  return (
-    <rect
-      x={x0}
-      y={y}
-      width={Math.max(0, x1 - x0)}
-      height={h}
-      rx={1.5}
-      fill={fill}
-      fillOpacity={0.28}
-    >
-      <title>{`${seg.band} · ${BAND_LABEL[seg.band] ?? ''} ${String(seg.startH).padStart(2, '0')}:00–${String(seg.endH).padStart(2, '0')}:00`}</title>
-    </rect>
-  );
-}
-
-function NavBtn({
-  label,
-  dir,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  dir: 'prev' | 'next';
-  disabled?: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      style={{
-        width: 26,
-        height: 26,
-        display: 'grid',
-        placeItems: 'center',
-        borderRadius: 7,
-        border: '1px solid var(--border-1)',
-        background: 'var(--surface-1, #0f1619)',
-        color: disabled ? 'var(--text-3)' : 'var(--text-1)',
-        cursor: disabled ? 'default' : 'pointer',
-        opacity: disabled ? 0.4 : 1,
-        padding: 0,
-      }}
-    >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        {dir === 'prev' ? <polyline points="15 18 9 12 15 6" /> : <polyline points="9 18 15 12 9 6" />}
-      </svg>
-    </button>
-  );
-}
-
-function chip(on: boolean): CSSProperties {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '4px 9px',
-    borderRadius: 999,
-    border: '1px solid var(--border-1)',
-    background: on ? 'var(--surface-1, #0f1619)' : 'transparent',
-    color: on ? 'var(--text-1)' : 'var(--text-3)',
-    fontSize: 12,
-    fontWeight: 500,
-    lineHeight: 1.2,
-    cursor: 'pointer',
-    opacity: on ? 1 : 0.6,
-    transition: 'opacity .12s, background .12s',
-  };
-}
+const sq = (c: string): CSSProperties => ({ width: 8, height: 8, borderRadius: 2, background: c, flex: 'none' });

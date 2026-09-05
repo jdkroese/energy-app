@@ -1,20 +1,26 @@
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { usePolling } from '../lib/usePolling';
-import { MOCK_BATTERIES } from '../lib/mock';
-import type { BatteriesResponse, BatteryDetail, FlowDir } from '../lib/types';
-import { Card, StatTile, RadialGauge, ProgressBar, Badge, StatusDot, Icon, Eyebrow } from '../components/ui';
+import { MOCK_BATTERIES, MOCK_HISTORY_DAY, MOCK_LIVE } from '../lib/mock';
+import type { BatteriesResponse, BatteryDetail, FlowDir, HistoryDayResponse, LiveResponse } from '../lib/types';
+import { Badge, Card, Eyebrow, Icon } from '../components/ui';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
-import { SolarGenerationSection } from './SolarInverters';
+import { SolarInverterRows } from './SolarInverters';
+import { aggregateDay, bandAtHour } from '../lib/dayMetrics';
+import { useMediaQuery } from '../components/shell/useMediaQuery';
 import type { ShellContext } from '../components/shell/AppShell';
 
 /* ============================================================================
- * Energy hub (/batteries) — the house's generation + storage in one place, told
- * as an energy-flow story: SOLAR GENERATION (the Sungrow inverters) on top, then
- * BATTERY STORAGE (Sonnen + Tesla) below. The two batteries have deliberately
- * different roles (Sonnen = fast self-consumption actuator, Tesla = backup +
- * policy), so their cards surface different things; each opens a detail page.
- * (Merged from the former standalone Solar Inverters + Charging pages.)
+ * Energy (V2, docs/53) — the state of storage, and whether the packs are being
+ * used well.
+ *
+ * A storage HERO answers "how much is left, and how far does it get me" in one
+ * sentence, with the day's SoC trace over the tariff bands behind it. Then one
+ * card per pack — they have deliberately different roles (Sonnen = fast
+ * self-consumption actuator, Tesla = backup + policy), so the cards are toned
+ * differently and each opens its detail page. Solar generation closes the screen
+ * as a production-share row.
  * ==========================================================================*/
 
 export interface PowerState {
@@ -31,10 +37,9 @@ export function powerState(power: { kw: number; dir: FlowDir }): PowerState {
 
 const toneVar = (t: string) => (t === 'neutral' ? 'var(--text-3)' : `var(--${t})`);
 
-/** Live power pill — "Charging · 2.1 kW" with a tone dot. */
+/** Live power pill — "Charging · 2.1 kW" with a tone dot. Used by BatteryDetail. */
 export function PowerPill({ power }: { power: { kw: number; dir: FlowDir } }) {
   const ps = powerState(power);
-  const c = toneVar(ps.tone);
   return (
     <span
       style={{
@@ -44,139 +49,240 @@ export function PowerPill({ power }: { power: { kw: number; dir: FlowDir } }) {
         padding: '4px 9px',
         borderRadius: 'var(--radius-pill)',
         background: ps.tone === 'neutral' ? 'var(--surface-3)' : `var(--${ps.tone}-wash)`,
-        color: c,
+        color: toneVar(ps.tone),
         fontSize: 12,
         fontWeight: 600,
       }}
     >
       <Icon name={ps.icon} size={13} />
       {ps.label}
-      {power.dir !== 'idle' && (
-        <span style={{ fontFamily: 'var(--font-mono)' }}>· {power.kw.toFixed(1)} kW</span>
-      )}
+      {power.dir !== 'idle' && <span style={{ fontFamily: 'var(--font-mono)' }}>· {power.kw.toFixed(1)} kW</span>}
     </span>
   );
 }
 
-function healthTone(h: number | null): 'solar' | 'grid' | 'danger' {
-  if (h == null) return 'grid';
-  if (h >= 90) return 'solar';
-  if (h >= 75) return 'grid';
-  return 'danger';
+/** Signed pack flow, positive = charging. */
+const signedKw = (p: { kw: number; dir: FlowDir }) =>
+  p.dir === 'charging' ? Math.abs(p.kw) : p.dir === 'discharging' ? -Math.abs(p.kw) : 0;
+
+const fmtSigned = (kw: number) => (kw > 0.05 ? `+${kw.toFixed(1)}` : kw < -0.05 ? `−${Math.abs(kw).toFixed(1)}` : '0.0');
+
+/** Each pack's own tone — Sonnen is the battery actuator, Tesla the policy pack. */
+const packTone = (id: string): 'battery' | 'ev' => (id === 'tesla' ? 'ev' : 'battery');
+
+const PACK_NOTE: Record<string, string> = {
+  sonnen: 'Cycled first each evening — the cheaper cycle per kWh through the pack.',
+  tesla: 'Holds the backup reserve. Its gateway meter also provides the Grid and Home readings.',
+};
+
+/** The day's combined-SoC trace over tariff-band grounds, at sparkline scale. */
+function SocTrace({ day }: { day: HistoryDayResponse }) {
+  const W = 1000;
+  const H = 90;
+  const path = useMemo(() => {
+    const soc = day.series.combinedSoc;
+    const last = day.nowIndex ?? soc.length - 1;
+    const pts: string[] = [];
+    for (let i = 0; i <= last; i += 3) {
+      const x = (i / 288) * W;
+      const y = 86 - ((soc[i] ?? 0) / 100) * 78;
+      pts.push(`${pts.length === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`);
+    }
+    return pts.join(' ');
+  }, [day]);
+
+  const bands = useMemo(() => {
+    const out: { x: number; w: number; fill: string }[] = [];
+    let start = 0;
+    for (let h = 1; h <= 24; h++) {
+      if (h === 24 || bandAtHour(day.tariffBands, h) !== bandAtHour(day.tariffBands, start)) {
+        const b = bandAtHour(day.tariffBands, start);
+        out.push({
+          x: (start / 24) * W,
+          w: ((h - start) / 24) * W,
+          fill: b === 'P1' ? 'var(--band-p1-fill)' : b === 'P3' ? 'var(--band-p3-fill)' : 'transparent',
+        });
+        start = h;
+      }
+    }
+    return out;
+  }, [day]);
+
+  const nowX = day.nowIndex != null ? (day.nowIndex / 288) * W : null;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block', width: '100%', height: 80 }} aria-hidden>
+      {bands.map((b, i) => (
+        <rect key={i} x={b.x} y={0} width={b.w} height={H} fill={b.fill} />
+      ))}
+      <path d={path} fill="none" stroke="var(--series-soc-combined)" strokeWidth={2} vectorEffect="non-scaling-stroke" style={{ filter: 'drop-shadow(0 0 5px color-mix(in srgb, var(--series-soc-combined) 55%, transparent))' }} />
+      {nowX != null && <line x1={nowX} y1={0} x2={nowX} y2={H} stroke="var(--solar)" strokeWidth={1} vectorEffect="non-scaling-stroke" opacity=".5" />}
+    </svg>
+  );
 }
 
-function BatteryCard({ b, onOpen }: { b: BatteryDetail; onOpen: () => void }) {
+function StorageHero({ view, live, day, wide, roomy, pad, gap }: {
+  view: BatteriesResponse;
+  live: LiveResponse;
+  day: HistoryDayResponse;
+  /** Desktop (>= 768 px). */
+  wide: boolean;
+  /** Desktop AND wider than the 1180 px two-column breakpoint. */
+  roomy: boolean;
+  pad: number;
+  gap: number;
+}) {
+  const { combined } = view;
+  const soc = Math.round(combined.soc);
+  const R = 43;
+  const C = 2 * Math.PI * R;
+
+  const agg = aggregateDay(day);
+  const solarChargedPct = agg.chargeKwh > 0.2 ? Math.round((1 - agg.chargeImportKwh / agg.chargeKwh) * 100) : null;
+  const roundTrip = view.batteries.map((b) => b.roundTripPct).filter((v): v is number => v != null);
+  const roundTripPct = roundTrip.length ? Math.round(roundTrip.reduce((s, v) => s + v, 0) / roundTrip.length) : null;
+
+  // "Enough to carry the house to HH:MM" — stored energy against the load the
+  // house is pulling right now. Only claimed while the packs are actually
+  // carrying the house, and only when the runway lands TONIGHT: past ~14 h the
+  // clock time would silently mean tomorrow, which reads as a much smaller
+  // reserve than it is, so the sentence switches to plain hours.
+  const discharging = view.batteries.some((b) => b.power.dir === 'discharging');
+  const runwayH = combined.storedKwh / Math.max(0.3, live.home.kw);
+  const until = new Date(Date.now() + runwayH * 3600_000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const headline = !discharging
+    ? `Storage at ${soc}% · ${combined.storedKwh.toFixed(1)} kWh banked.`
+    : runwayH <= 14
+      ? `${combined.storedKwh.toFixed(1)} kWh left — enough to carry the house to ${until}.`
+      : `${combined.storedKwh.toFixed(1)} kWh left — about ${Math.round(runwayH)} h at the load right now.`;
+
+  const names = view.batteries.map((b) => b.name).join(' + ');
+
   return (
     <Card
-      interactive
       accent="battery"
-      padded
-      onClick={onOpen}
-      style={{ display: 'flex', flexDirection: 'column', gap: 14, cursor: 'pointer' }}
+      glow
+      padded={false}
+      style={{
+        padding: pad,
+        display: 'grid',
+        gridTemplateColumns: roomy ? 'auto 1fr' : '1fr',
+        gap,
+        alignItems: 'center',
+        animation: 'v2rise .5s var(--ease-out)',
+      }}
     >
-      {/* header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-        <span
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: 11,
-            display: 'grid',
-            placeItems: 'center',
-            background: 'var(--battery-wash)',
-            color: 'var(--battery)',
-            flex: 'none',
-          }}
-        >
-          <Icon name={b.hasBackup ? 'battery-full' : 'battery-charging'} size={20} />
-        </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15.5, fontWeight: 700, letterSpacing: '-.01em' }}>{b.name}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {b.vendor}
-          </div>
-        </div>
-        <StatusDot tone={b.online ? 'battery' : 'offline'} live={b.online}>
-          {b.online ? 'Online' : 'Offline'}
-        </StatusDot>
-      </div>
-
-      {/* gauge + key state */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <RadialGauge value={b.soc} tone="battery" size={104} label={b.role.split(' ')[0]} />
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 9 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600 }}>{b.kwh.toFixed(1)}</span>
-            <span style={{ fontSize: 12, color: 'var(--text-2)' }}>/ {b.usableKwh} kWh stored</span>
-          </div>
-          <PowerPill power={b.power} />
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <Badge tone="neutral" variant="soft" icon={<Icon name="settings-2" size={11} />}>
-              {b.mode}
-            </Badge>
-            {b.hasBackup && b.reservePct != null && (
-              <Badge tone="battery" variant="soft" icon={<Icon name="shield-check" size={11} />}>
-                {b.reservePct}% reserve
-              </Badge>
-            )}
-            {!b.hasBackup && (
-              <Badge tone="neutral" variant="soft" icon={<Icon name="zap" size={11} />}>
-                No backup
-              </Badge>
-            )}
-          </div>
+      <div style={{ position: 'relative', width: 150, height: 150, justifySelf: 'center' }}>
+        <svg viewBox="0 0 100 100" style={{ width: 150, height: 150, transform: 'rotate(-90deg)' }} aria-hidden>
+          <circle cx="50" cy="50" r={R} fill="none" stroke="var(--surface-4)" strokeWidth="6" />
+          <circle
+            cx="50"
+            cy="50"
+            r={R}
+            fill="none"
+            stroke="var(--battery)"
+            strokeWidth="6"
+            strokeLinecap="round"
+            strokeDasharray={`${((C * soc) / 100).toFixed(1)} ${C.toFixed(1)}`}
+            style={{ filter: 'drop-shadow(0 0 7px var(--battery))', transition: 'stroke-dasharray .6s var(--ease-out)' }}
+          />
+        </svg>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <span className="pwr-mono" style={{ fontSize: 34, fontWeight: 500 }}>
+            {soc}
+            <small style={{ fontSize: 15, color: 'var(--text-2)' }}>%</small>
+          </span>
+          <span style={{ fontSize: 9, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--text-3)' }}>combined</span>
         </div>
       </div>
 
-      {/* health */}
-      <ProgressBar
-        height={6}
-        tone={healthTone(b.health)}
-        value={b.health ?? 100}
-        label="State of health"
-        showValue
-        valueText={b.health != null ? `${b.health}%` : 'Nominal'}
-      />
-
-      {/* footer — today throughput + open affordance */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          paddingTop: 11,
-          borderTop: '1px solid var(--border-1)',
-          fontSize: 12,
-          color: 'var(--text-2)',
-        }}
-      >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-          <Icon name="arrow-down-to-line" size={13} color="var(--solar)" />
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{b.todayInKwh.toFixed(1)}</span> in
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-          <Icon name="arrow-up-from-line" size={13} color="var(--battery)" />
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{b.todayOutKwh.toFixed(1)}</span> out
-        </span>
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--battery)', fontWeight: 600 }}>
-          Detail <Icon name="chevron-right" size={15} />
-        </span>
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Eyebrow>Storage</Eyebrow>
+        <div style={{ fontSize: !wide ? 25 : roomy ? 32 : 27, fontWeight: 600, letterSpacing: '-.02em', lineHeight: 1.15, textWrap: 'pretty' }}>{headline}</div>
+        <div style={{ fontSize: 14, color: 'var(--text-2)', lineHeight: 1.55, textWrap: 'pretty' }}>
+          {combined.usableKwh.toFixed(0)} kWh usable across {names}. The coordinator treats them as one pool but cycles the
+          Sonnen first — it is the cheaper cycle.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {roundTripPct != null && <Badge tone="battery" variant="soft">Round-trip {roundTripPct}%</Badge>}
+          {solarChargedPct != null && <Badge tone="solar" variant="soft">Solar-charged {solarChargedPct}%</Badge>}
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
+            <span>State of charge · today</span>
+            <span className="pwr-mono">{Math.round(day.series.combinedSoc[0] ?? 0)} % → {soc} %</span>
+          </div>
+          <SocTrace day={day} />
+        </div>
       </div>
     </Card>
   );
 }
 
-function CombinedSummary({ d, wide }: { d: BatteriesResponse; wide: boolean }) {
-  const { combined } = d;
+function PackCard({ b, pad, onOpen }: { b: BatteryDetail; pad: number; onOpen: () => void }) {
+  const tone = packTone(b.id);
+  const ps = powerState(b.power);
+  const kw = signedKw(b.power);
   return (
-    <Card accent="battery" glow padded style={{ display: 'flex', alignItems: 'center', gap: wide ? 22 : 16 }}>
-      <RadialGauge value={combined.soc} tone="battery" size={wide ? 116 : 96} label="Combined" />
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: wide ? 'repeat(3,1fr)' : '1fr 1fr', gap: 12 }}>
-        <StatTile size="sm" label="Stored now" value={combined.storedKwh.toFixed(1)} unit="kWh" tone="battery" icon={<Icon name="battery-charging" />} />
-        <StatTile size="sm" label="Usable" value={combined.usableKwh.toFixed(1)} unit="kWh" tone="neutral" icon={<Icon name="database" />} />
-        <div style={{ gridColumn: wide ? 'auto' : 'span 2' }}>
-          <StatTile size="sm" label="Devices" value="2" tone="solar" icon={<Icon name="layers" />} footnote="Sonnen + Tesla" />
+    <Card
+      interactive
+      accent={tone}
+      padded={false}
+      onClick={onOpen}
+      style={{ padding: pad, display: 'flex', flexDirection: 'column', gap: 14, cursor: 'pointer', animation: 'v2rise .5s var(--ease-out) .08s' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+        <span style={{ width: 34, height: 34, borderRadius: 11, display: 'grid', placeItems: 'center', background: `var(--${tone}-wash)`, color: `var(--${tone})`, flex: 'none' }}>
+          <Icon name="battery-charging" size={18} />
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{b.name}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {b.vendor} · {b.usableKwh} kWh
+          </div>
         </div>
+        <span style={{ marginLeft: 'auto' }}>
+          <Badge tone={b.online ? tone : 'neutral'} variant="soft">{b.online ? ps.label : 'Offline'}</Badge>
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+        <span className="pwr-mono" style={{ fontSize: 38, fontWeight: 500, color: `var(--${tone})` }}>{fmtSigned(kw)}</span>
+        <span className="pwr-mono" style={{ fontSize: 13, color: 'var(--text-2)' }}>kW · {b.kwh.toFixed(1)} kWh stored</span>
+      </div>
+
+      <div style={{ height: 9, borderRadius: 999, background: 'var(--surface-4)', overflow: 'hidden' }}>
+        <i
+          style={{
+            display: 'block',
+            height: '100%',
+            width: `${Math.max(0, Math.min(100, b.soc))}%`,
+            background: `var(--${tone})`,
+            borderRadius: 999,
+            boxShadow: `0 0 12px var(--${tone})`,
+            transition: 'width .6s var(--ease-out)',
+          }}
+        />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
+        {[
+          { k: 'Cycles', v: b.cyclesTotal != null ? b.cyclesTotal.toLocaleString() : '—' },
+          { k: 'Throughput', v: b.throughputKwh != null ? `${(b.throughputKwh / 1000).toFixed(1)} MWh` : '—' },
+          { k: 'Health', v: b.health != null ? `${b.health}%` : '—' },
+        ].map((s) => (
+          <div key={s.k}>
+            <div style={{ fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--text-3)', fontWeight: 600 }}>{s.k}</div>
+            <div className="pwr-mono" style={{ fontSize: 14, marginTop: 3 }}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5, textWrap: 'pretty' }}>
+        {PACK_NOTE[b.id] ?? b.role}
+        {b.hasBackup && b.backupKwh != null && (
+          <> Backup holds {b.backupKwh.toFixed(1)} kWh{b.backupHours != null ? ` ≈ ${b.backupHours} h` : ''}.</>
+        )}
       </div>
     </Card>
   );
@@ -185,76 +291,38 @@ function CombinedSummary({ d, wide }: { d: BatteriesResponse; wide: boolean }) {
 export function Batteries({ ctx }: { ctx: ShellContext }) {
   const nav = useNavigate();
   const { data, loading, stale, updatedAt } = usePolling<BatteriesResponse>(api.batteries, 15_000);
-  const d = data || (loading ? null : MOCK_BATTERIES);
-  const view = d || MOCK_BATTERIES;
+  const { data: liveData } = usePolling<LiveResponse>(api.live, 15_000);
+  const { data: dayData } = usePolling<HistoryDayResponse>(api.historyDayToday, 60_000);
+  const roomy = useMediaQuery('(min-width: 1180px)');
+
+  const view = data || (loading ? null : MOCK_BATTERIES) || MOCK_BATTERIES;
+  const live = liveData ?? MOCK_LIVE;
+  const day = dayData ?? MOCK_HISTORY_DAY;
   const wide = ctx.desktop;
 
-  const cards = (
-    <div style={{ display: 'grid', gridTemplateColumns: wide ? '1fr 1fr' : '1fr', gap: wide ? 18 : 12 }}>
-      {view.batteries.map((b) => (
-        <BatteryCard key={b.id} b={b} onOpen={() => nav(`/batteries/${b.id}`)} />
-      ))}
-    </div>
-  );
+  const gap = !wide ? 12 : roomy ? 18 : 16;
+  const pad = !wide ? 16 : roomy ? 20 : 18;
+  const twoCol = wide && roomy;
 
-  // Battery storage section (existing content, now under its own heading).
-  const batterySection = (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: wide ? 14 : 10 }}>
-      <Eyebrow>Battery storage</Eyebrow>
+  const body = (
+    <>
       {stale && <StaleBanner updatedAt={updatedAt} />}
-      <CombinedSummary d={view} wide={wide} />
-      {cards}
-      <BackupNote view={view} />
-    </section>
-  );
-
-  // Solar generation section (the Sungrow inverters), self-contained.
-  const solarSection = (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: wide ? 14 : 10 }}>
-      <Eyebrow>Solar generation</Eyebrow>
-      <SolarGenerationSection ctx={ctx} />
-    </section>
-  );
-
-  // Generation → storage, top to bottom.
-  if (wide) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
-        {solarSection}
-        {batterySection}
+      <StorageHero view={view} live={live} day={day} wide={wide} roomy={twoCol} pad={pad} gap={gap} />
+      <div style={{ display: 'grid', gridTemplateColumns: twoCol ? '1fr 1fr' : '1fr', gap }}>
+        {view.batteries.map((b) => (
+          <PackCard key={b.id} b={b} pad={pad} onOpen={() => nav(`/batteries/${b.id}`)} />
+        ))}
       </div>
-    );
-  }
+      <SolarInverterRows pad={pad} />
+    </>
+  );
+
+  if (wide) return <div style={{ display: 'flex', flexDirection: 'column', gap }}>{body}</div>;
 
   return (
     <>
-      <MobileHeader eyebrow="Energy · Jávea" title="Solar & storage" right={<Avatar />} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, padding: '8px 14px 22px' }}>
-        {solarSection}
-        {batterySection}
-      </div>
+      <MobileHeader eyebrow="Energy" title="Solar & batteries" right={<Avatar />} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap, padding: '8px 14px 22px' }}>{body}</div>
     </>
-  );
-}
-
-/** A small honest footnote about the backup asymmetry between the two batteries. */
-function BackupNote({ view }: { view: BatteriesResponse }) {
-  const tesla = view.batteries.find((b) => b.id === 'tesla');
-  if (!tesla) return null;
-  return (
-    <Card padded style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-      <span style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--battery-wash)', color: 'var(--battery)', flex: 'none' }}>
-        <Icon name="shield-check" size={16} />
-      </span>
-      <div style={{ fontSize: 12.5, color: 'var(--text-2)', lineHeight: 1.5 }}>
-        Backup runs on the <strong style={{ color: 'var(--text-1)' }}>Tesla only</strong> — the Sonnen has no backup module.{' '}
-        {tesla.backupKwh != null && (
-          <>
-            Holding <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--battery)' }}>{tesla.backupKwh.toFixed(1)} kWh</span>
-            {tesla.backupHours != null && <> · ≈ {tesla.backupHours} h autonomy</>}.
-          </>
-        )}
-      </div>
-    </Card>
   );
 }

@@ -97,7 +97,7 @@ export function Water({ ctx }: { ctx: ShellContext }) {
   ) : tab === 'alerts' ? (
     <WaterAlerts ctx={ctx} snapshot={view} />
   ) : (
-    <WaterOverview ctx={ctx} snapshot={view} onOpenIrrigation={() => setTab('irrigation')} />
+    <WaterOverview ctx={ctx} snapshot={view} onOpenIrrigation={() => setTab('irrigation')} onOpenAlerts={() => setTab('alerts')} />
   );
 
   const body = (

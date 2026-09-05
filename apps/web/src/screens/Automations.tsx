@@ -11,6 +11,7 @@ import type {
 import { isTariffArbitrage } from '../lib/types';
 import { Card, Icon, Button, Switch, SegmentedControl, Slider, Eyebrow } from '../components/ui';
 import { AutomationRow } from '../components/AutomationRow';
+import { usePlan, PlanHero, PlanKpis, TodaysMoves } from '../components/energy/PlanSummary';
 import { MobileHeader, Avatar, StaleBanner } from './_shared';
 import { SchedulesPanel } from './Schedules';
 import { EventViewer } from './EventViewer';
@@ -728,11 +729,14 @@ function SoakRuleCard({ rule, live, canWrite, onSave }: {
 }
 
 /* ============================================================================
- * Automations Summary — the section's at-a-glance hub. The forward-looking 24 h
- * plan, forecast KPIs and live "today's moves" now live on the Live dashboard;
- * this tab summarises everything that RUNS the home (Smart Rules · Schedules ·
- * Events · Status) and links into each. Every tile is a button that jumps to its
- * tab — except Battery autopilot, whose panel lives at /settings?tab=autopilot.
+ * Automations Summary — the section's at-a-glance hub.
+ *
+ * It LEADS with the brain's forward-looking 24 h plan (moved off Live in V2,
+ * docs/53 — Live now leads with a verdict about the present and carries the plan
+ * as a ribbon), then summarises everything that RUNS the home (Smart Rules ·
+ * Schedules · Events · Status) and links into each. Every tile is a button that
+ * jumps to its tab — except Battery autopilot, whose panel lives at
+ * /settings?tab=autopilot.
  * ==========================================================================*/
 function SummaryChip({ children, tone }: { children: ReactNode; tone?: string }) {
   return (
@@ -765,6 +769,7 @@ function AutomationsSummary({ wide, setTab, ctrl, climateAutomations, arbAutomat
   climateAutomations: Automation[]; arbAutomations: Automation[]; climateStatus: DevicesStatus | null;
 }) {
   const navigate = useNavigate();
+  const { plan } = usePlan();
   const { data: schedData } = usePolling<SchedulesResponse>(api.schedules.list, 0);
   const schedules = schedData?.schedules ?? [];
   const schedOn = schedules.filter((s) => s.enabled).length;
@@ -798,11 +803,15 @@ function AutomationsSummary({ wide, setTab, ctrl, climateAutomations, arbAutomat
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <PlanHero plan={plan} wide={wide} />
+      <PlanKpis plan={plan} wide={wide} />
+      <TodaysMoves plan={plan} />
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'var(--surface-2)', border: '1px solid var(--border-1)', borderRadius: 'var(--radius-md)', padding: '10px 13px' }}>
         <Icon name="info" size={15} color="var(--text-3)" />
         <span style={{ fontSize: 11.5, color: 'var(--text-2)' }}>
-          The next-24 h plan, forecast KPIs and live moves now live on the{' '}
-          <Link to="/" style={{ color: 'var(--solar)' }}>Live</Link> dashboard. This is the control room for everything that runs your home.
+          What the coordinator is doing <em>right now</em> — and why — leads the{' '}
+          <Link to="/" style={{ color: 'var(--solar)' }}>Live</Link> dashboard. Below is the control room for everything that runs your home.
         </span>
       </div>
 
