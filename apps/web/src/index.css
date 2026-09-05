@@ -90,6 +90,10 @@
   /* faint tariff-band column washes (Track F: PlanTimeline BANDFILL) */
   --band-p1-fill: rgba(245, 165, 36, 0.10);
   --band-p3-fill: rgba(46, 230, 160, 0.05);
+  /* The day chart's "everything right of now is a forecast" veil (docs/53).
+     A token, not a literal: on the light theme a near-black scrim reads as a
+     dead grey block over half the plot. */
+  --chart-forecast-veil: rgba(6, 9, 11, 0.45);
 
   /* tinted washes */
   --solar-wash: rgba(46, 230, 160, 0.12);
@@ -319,6 +323,7 @@
   --band-p3: #0a8f63;
   --band-p1-fill: rgba(138, 90, 10, 0.10);
   --band-p3-fill: rgba(10, 143, 99, 0.07);
+  --chart-forecast-veil: rgba(20, 30, 33, 0.05);
 
   /* tinted washes — hue at ~10–12% on white */
   --solar-wash: rgba(10, 143, 99, 0.10);
@@ -511,6 +516,29 @@ h1, h2, h3, h4, p {
   from { opacity: 0; transform: translateY(7px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* ---- V2 control-room motion (docs/53) ------------------------------------
+   Shared keyframes for the Home V2 screens. Deliberately NO fill-mode at the
+   call sites: with a delay plus `both` an element sits at opacity:0 before the
+   animation starts, which is also how it renders in a static capture — so the
+   section is visible before and after, and only *moves* in between.
+   The global reduced-motion gate at the bottom of this file collapses them all. */
+@keyframes v2rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+/* Ambient wash behind the verdict hero / kiosk — the ONLY decorative gradient
+   in the system, and it exists because glow means "live". */
+@keyframes v2amb {
+  0%   { transform: translate3d(-3%, 0, 0) scale(1); }
+  50%  { transform: translate3d(4%, 3%, 0) scale(1.14); }
+  100% { transform: translate3d(-3%, 0, 0) scale(1); }
+}
+/* "Now" dot on the day chart. */
+@keyframes v2ping { 0% { opacity: .8; transform: scale(1); } 70% { opacity: 0; transform: scale(3.2); } 100% { opacity: 0; transform: scale(3.2); } }
+/* Line draw-in for the measured production/consumption curves. */
+@keyframes v2draw { from { stroke-dashoffset: 3000; } to { stroke-dashoffset: 0; } }
+/* Bars grow up from their baseline. */
+@keyframes v2grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+/* Live dots (top-bar clock, card "Live" badges). */
+@keyframes v2breathe { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
 
 /* ---- Map (Leaflet) — Site location picker -------------------------------- */
 .pwr-map {
